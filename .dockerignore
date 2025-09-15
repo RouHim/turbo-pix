@@ -1,0 +1,43 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Git
+.git/
+.gitignore
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+app.log
+
+# Database files (will be created at runtime)
+data/*.db
+
+# Documentation
+README.md
+PROJECT_PLAN.md
+AGENTS.md
+
+# Test files
+tests/
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Development files
+.clinerules-*

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  turbopix:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./static:/app/static:ro
+    environment:
+      - RUST_LOG=info
+      - TURBO_PIX_PHOTO_PATHS=/photos
+    restart: unless-stopped

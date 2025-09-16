@@ -159,8 +159,9 @@ class PhotoGrid {
         const gridRowSpan = Math.ceil(200 / aspectRatio / 10);
         card.style.gridRowEnd = `span ${Math.max(gridRowSpan, 15)}`;
 
+        // Create card with thumbnail URL for lazy loading
         card.innerHTML = `
-            <div class="photo-card-image-container" data-src="${utils.getPhotoUrl(photo.id)}">
+            <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo.id, 'medium')}">
                 <div class="photo-card-placeholder"></div>
             </div>
             <div class="photo-card-overlay">
@@ -213,7 +214,11 @@ class PhotoGrid {
         if (!src || container.dataset.loaded) return;
 
         try {
-            const img = utils.createLazyImage(src, '', 'photo-card-image');
+            // Create image directly instead of using utils.createLazyImage() to avoid intersection observer conflicts
+            const img = document.createElement('img');
+            img.src = src;
+            img.alt = '';
+            img.className = 'photo-card-image';
             
             img.onload = () => {
                 const placeholder = container.querySelector('.photo-card-placeholder');
@@ -396,6 +401,9 @@ class PhotoGrid {
         });
     }
 }
+
+// Make PhotoGrid available globally
+window.PhotoGrid = PhotoGrid;
 
 // Initialize global photo grid when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {

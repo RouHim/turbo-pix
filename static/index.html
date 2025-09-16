@@ -1,118 +1,123 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TurboPix</title>
-    <link rel="stylesheet" href="/css/main.css">
-    <link rel="stylesheet" href="/css/components.css">
-    <link rel="stylesheet" href="/css/responsive.css">
-</head>
-<body>
+    <link rel="stylesheet" href="/css/main.css" />
+    <link rel="stylesheet" href="/css/components.css" />
+    <link rel="stylesheet" href="/css/responsive.css" />
+  </head>
+  <body>
     <div id="app">
-        <header class="header">
-            <div class="header-content">
-                <h1 class="logo">📸 TurboPix</h1>
-                <div class="search-container">
-                    <input type="text" id="search-input" placeholder="Search photos..." class="search-input">
-                    <button id="search-btn" class="search-btn">🔍</button>
-                </div>
-                <div class="header-actions">
-                    <button id="grid-view-btn" class="view-btn active" title="Grid View">⊞</button>
-                    <button id="list-view-btn" class="view-btn" title="List View">☰</button>
-                </div>
-            </div>
-        </header>
+      <header class="header">
+        <div class="header-content">
+          <h1 class="logo">📸 TurboPix</h1>
+          <div class="search-container">
+            <input
+              type="text"
+              id="search-input"
+              placeholder="Search photos..."
+              class="search-input"
+            />
+            <button id="search-btn" class="search-btn">🔍</button>
+          </div>
+          <div class="header-actions">
+            <button id="grid-view-btn" class="view-btn active" title="Grid View">⊞</button>
+            <button id="list-view-btn" class="view-btn" title="List View">☰</button>
+          </div>
+        </div>
+      </header>
 
-        <nav class="sidebar">
-            <div class="sidebar-content">
-                <button class="nav-item active" data-view="all">📷 All Photos</button>
-                <button class="nav-item" data-view="recent">🕒 Recent</button>
-                <button class="nav-item" data-view="favorites">❤️ Favorites</button>
-                <button class="nav-item" data-view="videos">🎥 Videos</button>
-            </div>
-        </nav>
+      <nav class="sidebar">
+        <div class="sidebar-content">
+          <button class="nav-item active" data-view="all">📷 All Photos</button>
+          <button class="nav-item" data-view="recent">🕒 Recent</button>
+          <button class="nav-item" data-view="favorites">❤️ Favorites</button>
+          <button class="nav-item" data-view="videos">🎥 Videos</button>
+        </div>
+      </nav>
 
-        <main class="main-content">
-            <div class="content-header">
-                <h2 id="current-view-title">All Photos</h2>
-                <div class="content-actions">
-                    <select id="sort-select" class="sort-select">
-                        <option value="date_desc">Newest First</option>
-                        <option value="date_asc">Oldest First</option>
-                        <option value="name_asc">Name A-Z</option>
-                        <option value="name_desc">Name Z-A</option>
-                        <option value="size_desc">Largest First</option>
-                        <option value="size_asc">Smallest First</option>
-                    </select>
-                </div>
-            </div>
+      <main class="main-content">
+        <div class="content-header">
+          <h2 id="current-view-title">All Photos</h2>
+          <div class="content-actions">
+            <select id="sort-select" class="sort-select">
+              <option value="date_desc">Newest First</option>
+              <option value="date_asc">Oldest First</option>
+              <option value="name_asc">Name A-Z</option>
+              <option value="name_desc">Name Z-A</option>
+              <option value="size_desc">Largest First</option>
+              <option value="size_asc">Smallest First</option>
+            </select>
+          </div>
+        </div>
 
-            <div id="photo-grid" class="photo-grid">
-                <div class="loading-skeleton">
-                    <div class="skeleton-item"></div>
-                    <div class="skeleton-item"></div>
-                    <div class="skeleton-item"></div>
-                    <div class="skeleton-item"></div>
-                    <div class="skeleton-item"></div>
-                    <div class="skeleton-item"></div>
-                </div>
-            </div>
+        <div id="photo-grid" class="photo-grid">
+          <div class="loading-skeleton">
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+          </div>
+        </div>
 
-            <div id="load-more-container" class="load-more-container">
-                <button id="load-more-btn" class="load-more-btn">Load More</button>
-            </div>
-        </main>
+        <div id="load-more-container" class="load-more-container">
+          <button id="load-more-btn" class="load-more-btn">Load More</button>
+        </div>
+      </main>
     </div>
 
     <!-- Photo Viewer Modal -->
     <div id="photo-viewer" class="photo-viewer">
-        <div class="viewer-overlay"></div>
-        <div class="viewer-content">
-            <button class="viewer-close" title="Close">✕</button>
-            <button class="viewer-prev" title="Previous">‹</button>
-            <button class="viewer-next" title="Next">›</button>
-            
-            <div class="viewer-main">
-                <img id="viewer-image" class="viewer-image" alt="Photo">
-                <video id="viewer-video" class="viewer-video" controls style="display: none;"></video>
-            </div>
-            
-            <div class="viewer-sidebar">
-                <div class="photo-info">
-                    <h3 id="photo-title">Photo Title</h3>
-                    <div class="photo-meta">
-                        <div class="meta-item">
-                            <label>Date:</label>
-                            <span id="photo-date">-</span>
-                        </div>
-                        <div class="meta-item">
-                            <label>Size:</label>
-                            <span id="photo-size">-</span>
-                        </div>
-                        <div class="meta-item">
-                            <label>Camera:</label>
-                            <span id="photo-camera">-</span>
-                        </div>
-                        <div class="meta-item">
-                            <label>Location:</label>
-                            <span id="photo-location">-</span>
-                        </div>
-                    </div>
-                    <div class="photo-actions">
-                        <button class="action-btn favorite-btn" title="Add to Favorites">❤️</button>
-                        <button class="action-btn download-btn" title="Download">⬇️</button>
-                        <button class="action-btn share-btn" title="Share">📤</button>
-                    </div>
-                </div>
-            </div>
+      <div class="viewer-overlay"></div>
+      <div class="viewer-content">
+        <button class="viewer-close" title="Close">✕</button>
+        <button class="viewer-prev" title="Previous">‹</button>
+        <button class="viewer-next" title="Next">›</button>
+
+        <div class="viewer-main">
+          <img id="viewer-image" class="viewer-image" alt="Photo" />
+          <video id="viewer-video" class="viewer-video" controls style="display: none"></video>
         </div>
+
+        <div class="viewer-sidebar">
+          <div class="photo-info">
+            <h3 id="photo-title">Photo Title</h3>
+            <div class="photo-meta">
+              <div class="meta-item">
+                <label>Date:</label>
+                <span id="photo-date">-</span>
+              </div>
+              <div class="meta-item">
+                <label>Size:</label>
+                <span id="photo-size">-</span>
+              </div>
+              <div class="meta-item">
+                <label>Camera:</label>
+                <span id="photo-camera">-</span>
+              </div>
+              <div class="meta-item">
+                <label>Location:</label>
+                <span id="photo-location">-</span>
+              </div>
+            </div>
+            <div class="photo-actions">
+              <button class="action-btn favorite-btn" title="Add to Favorites">❤️</button>
+              <button class="action-btn download-btn" title="Download">⬇️</button>
+              <button class="action-btn share-btn" title="Share">📤</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Loading Indicator -->
     <div id="loading-indicator" class="loading-indicator">
-        <div class="spinner"></div>
-        <span>Loading...</span>
+      <div class="spinner"></div>
+      <span>Loading...</span>
     </div>
 
     <!-- Toast Notifications -->
@@ -125,5 +130,5 @@
     <script src="/js/viewer.js"></script>
     <script src="/js/search.js"></script>
     <script src="/js/app.js"></script>
-</body>
+  </body>
 </html>

@@ -1,381 +1,381 @@
 .photo-card {
-    position: relative;
-    border-radius: var(--border-radius);
-    overflow: hidden;
-    box-shadow: var(--shadow-light);
-    transition: var(--transition-medium);
-    cursor: pointer;
-    background: var(--surface-color);
+  position: relative;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-light);
+  transition: var(--transition-medium);
+  cursor: pointer;
+  background: var(--surface-color);
 }
 
 .photo-card:hover {
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-medium);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-medium);
 }
 
 .photo-card-image-container {
-    width: 100%;
-    height: 200px;
-    overflow: hidden;
-    background: var(--background-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  width: 100%;
+  height: 200px;
+  overflow: hidden;
+  background: var(--background-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .photo-card-image {
-    width: 100%;
-    height: 200px;
-    object-fit: cover;
-    transition: var(--transition-medium);
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  transition: var(--transition-medium);
 }
 
 .photo-card-placeholder {
-    width: 100%;
-    height: 100%;
-    background: var(--background-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    font-size: 48px;
+  width: 100%;
+  height: 100%;
+  background: var(--background-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 48px;
 }
 
 .photo-card-placeholder::before {
-    content: "📷";
+  content: '📷';
 }
 
 .error-placeholder {
-    color: var(--color-danger);
-    font-size: 24px;
+  color: var(--color-danger);
+  font-size: 24px;
 }
 
 .photo-card:hover .photo-card-image {
-    transform: scale(1.05);
+  transform: scale(1.05);
 }
 
 .photo-card-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to bottom, transparent 0%, rgb(0 0 0 / 70%) 100%);
-    opacity: 0;
-    transition: var(--transition-medium);
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    padding: 16px;
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 0%, rgb(0 0 0 / 70%) 100%);
+  opacity: 0;
+  transition: var(--transition-medium);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 16px;
 }
 
 .photo-card:hover .photo-card-overlay {
-    opacity: 1;
+  opacity: 1;
 }
 
 .photo-card-title {
-    color: white;
-    font-size: 14px;
-    font-weight: 600;
-    margin-bottom: 4px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 
 .photo-card-meta {
-    color: rgb(255 255 255 / 80%);
-    font-size: 12px;
+  color: rgb(255 255 255 / 80%);
+  font-size: 12px;
 }
 
 .photo-card-actions {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    display: flex;
-    gap: 4px;
-    opacity: 0;
-    transition: var(--transition-medium);
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: var(--transition-medium);
 }
 
 .photo-card:hover .photo-card-actions {
-    opacity: 1;
+  opacity: 1;
 }
 
 .card-action-btn {
-    width: 32px;
-    height: 32px;
-    border: none;
-    border-radius: 50%;
-    background: rgb(0 0 0 / 50%);
-    color: white;
-    cursor: pointer;
-    transition: var(--transition-fast);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 50%);
+  color: white;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
 }
 
 .card-action-btn:hover {
-    background: rgb(0 0 0 / 80%);
+  background: rgb(0 0 0 / 80%);
 }
 
 .photo-viewer {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 2000;
-    opacity: 0;
-    visibility: hidden;
-    transition: var(--transition-medium);
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2000;
+  opacity: 0;
+  visibility: hidden;
+  transition: var(--transition-medium);
 }
 
 .photo-viewer.active {
-    opacity: 1;
-    visibility: visible;
+  opacity: 1;
+  visibility: visible;
 }
 
 .viewer-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgb(0 0 0 / 90%);
-    backdrop-filter: blur(10px);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgb(0 0 0 / 90%);
+  backdrop-filter: blur(10px);
 }
 
 .viewer-content {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    display: grid;
-    grid-template-areas: "main sidebar";
-    grid-template-columns: 1fr 350px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-areas: 'main sidebar';
+  grid-template-columns: 1fr 350px;
 }
 
 .viewer-close {
-    position: absolute;
-    top: 24px;
-    right: 24px;
-    width: 48px;
-    height: 48px;
-    border: none;
-    border-radius: 50%;
-    background: rgb(255 255 255 / 20%);
-    color: white;
-    font-size: 24px;
-    cursor: pointer;
-    transition: var(--transition-fast);
-    z-index: 10;
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 20%);
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  z-index: 10;
 }
 
 .viewer-close:hover {
-    background: rgb(255 255 255 / 30%);
+  background: rgb(255 255 255 / 30%);
 }
 
 .viewer-prev,
 .viewer-next {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 48px;
-    height: 48px;
-    border: none;
-    border-radius: 50%;
-    background: rgb(255 255 255 / 20%);
-    color: white;
-    font-size: 24px;
-    cursor: pointer;
-    transition: var(--transition-fast);
-    z-index: 10;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 20%);
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  z-index: 10;
 }
 
 .viewer-prev {
-    left: 24px;
+  left: 24px;
 }
 
 .viewer-next {
-    right: 374px;
+  right: 374px;
 }
 
 .viewer-prev:hover,
 .viewer-next:hover {
-    background: rgb(255 255 255 / 30%);
+  background: rgb(255 255 255 / 30%);
 }
 
 .viewer-main {
-    grid-area: main;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
+  grid-area: main;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
 }
 
 .viewer-image,
 .viewer-video {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: var(--border-radius);
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--border-radius);
 }
 
 .viewer-sidebar {
-    grid-area: sidebar;
-    background: var(--surface-color);
-    padding: 24px;
-    overflow-y: auto;
+  grid-area: sidebar;
+  background: var(--surface-color);
+  padding: 24px;
+  overflow-y: auto;
 }
 
 .photo-info h3 {
-    font-size: 20px;
-    font-weight: 600;
-    margin: 0 0 16px;
-    color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--text-primary);
 }
 
 .photo-meta {
-    margin-bottom: 24px;
+  margin-bottom: 24px;
 }
 
 .meta-item {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--divider-color);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--divider-color);
 }
 
 .meta-item:last-child {
-    border-bottom: none;
-    margin-bottom: 0;
-    padding-bottom: 0;
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
 }
 
 .meta-item label {
-    font-weight: 600;
-    color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .meta-item span {
-    color: var(--text-primary);
+  color: var(--text-primary);
 }
 
 .photo-actions {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .action-btn {
-    flex: 1;
-    min-width: 80px;
-    padding: 12px;
-    border: 2px solid var(--divider-color);
-    background: var(--surface-color);
-    border-radius: var(--border-radius);
-    cursor: pointer;
-    transition: var(--transition-fast);
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
+  flex: 1;
+  min-width: 80px;
+  padding: 12px;
+  border: 2px solid var(--divider-color);
+  background: var(--surface-color);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
 .action-btn:hover {
-    border-color: var(--primary-color);
-    background: var(--primary-light);
+  border-color: var(--primary-color);
+  background: var(--primary-light);
 }
 
 .action-btn.active {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
-    color: white;
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: white;
 }
 
 .toast {
-    background: var(--surface-color);
-    border-radius: var(--border-radius);
-    box-shadow: var(--shadow-medium);
-    padding: 16px;
-    margin-bottom: 12px;
-    transform: translateX(100%);
-    transition: var(--transition-medium);
-    border-left: 4px solid var(--primary-color);
+  background: var(--surface-color);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-medium);
+  padding: 16px;
+  margin-bottom: 12px;
+  transform: translateX(100%);
+  transition: var(--transition-medium);
+  border-left: 4px solid var(--primary-color);
 }
 
 .toast.show {
-    transform: translateX(0);
+  transform: translateX(0);
 }
 
 .toast.success {
-    border-left-color: #4CAF50;
+  border-left-color: #4caf50;
 }
 
 .toast.error {
-    border-left-color: #F44336;
+  border-left-color: #f44336;
 }
 
 .toast.warning {
-    border-left-color: #FF9800;
+  border-left-color: #ff9800;
 }
 
 .toast-title {
-    font-weight: 600;
-    margin-bottom: 4px;
-    color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-primary);
 }
 
 .toast-message {
-    color: var(--text-secondary);
-    font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .lazy-image {
-    opacity: 0;
-    transition: opacity var(--transition-medium);
+  opacity: 0;
+  transition: opacity var(--transition-medium);
 }
 
 .lazy-image.loaded {
-    opacity: 1;
+  opacity: 1;
 }
 
 .error-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 48px 24px;
-    text-align: center;
-    color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-secondary);
 }
 
 .error-state-icon {
-    font-size: 48px;
-    margin-bottom: 16px;
-    opacity: 0.5;
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
 }
 
 .error-state-title {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
 }
 
 .error-state-message {
-    font-size: 14px;
-    margin-bottom: 24px;
+  font-size: 14px;
+  margin-bottom: 24px;
 }
 
 .error-state-button {
-    padding: 12px 24px;
-    background: var(--primary-color);
-    color: white;
-    border: none;
-    border-radius: var(--border-radius);
-    cursor: pointer;
-    transition: var(--transition-fast);
+  padding: 12px 24px;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  transition: var(--transition-fast);
 }
 
 .error-state-button:hover {
-    background: var(--primary-dark);
+  background: var(--primary-dark);
 }

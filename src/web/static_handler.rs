@@ -67,6 +67,25 @@ impl StaticAsset {
     }
 }
 
+#[allow(dead_code)]
+pub fn get_mime_type(filename: &str) -> &'static str {
+    let extension = std::path::Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
+
+    match extension.to_lowercase().as_str() {
+        "html" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" => "application/javascript; charset=utf-8",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
 pub async fn serve_static_asset(req: HttpRequest) -> Result<HttpResponse> {
     let path = req.path();
     let asset = StaticAsset::from_path(path);

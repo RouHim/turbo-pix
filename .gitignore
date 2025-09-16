@@ -24,3 +24,6 @@ data/
 
 # CLI Rules files
 *.clinerules*
+
+# Log files
+*.log

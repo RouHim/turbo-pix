@@ -3,14 +3,6 @@ name = "turbo-pix"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "turbo-pix"
-path = "src/main.rs"
-
-[lib]
-name = "turbo_pix"
-path = "src/lib.rs"
-
 [dependencies]
 # Web framework
 actix-web = "4"
@@ -56,3 +48,10 @@ tracing-subscriber = { version = "0.3", features = ["json"] }
 tempfile = "3.0"
 tokio-test = "0.4"
 bytes = "1.0"
+
+
+[profile.release]
+panic = "abort" # Strip expensive panic clean-up logic
+codegen-units = 1 # Compile crates one after another so the compiler can optimize better
+lto = true # Enables link to optimizations
+strip = true # Strip debug symbols

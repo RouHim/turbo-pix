@@ -1,6 +1,5 @@
 use actix_web::{HttpRequest, HttpResponse, Result};
 
-
 #[derive(Debug, Clone)]
 pub enum StaticAsset {
     IndexHtml,
@@ -67,8 +66,6 @@ impl StaticAsset {
         }
     }
 }
-
-
 
 pub async fn serve_static_asset(req: HttpRequest) -> Result<HttpResponse> {
     let path = req.path();

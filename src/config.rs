@@ -33,7 +33,7 @@ impl Config {
 
         Ok(Config {
             port: env::var("TURBO_PIX_PORT")
-                .unwrap_or_else(|_| "8080".to_string())
+                .unwrap_or_else(|_| "18473".to_string())
                 .parse()?,
             host: env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             photo_paths: env::var("TURBO_PIX_PHOTO_PATHS")

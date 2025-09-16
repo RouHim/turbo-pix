@@ -1,4 +1,7 @@
-FROM alpine:3.18
+# # # # # # # # # # # # # # # # # # # #
+# Builder
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+FROM docker.io/alpine:3.18 as builder
 
 # Install Rust and build dependencies
 RUN apk add --no-cache \
@@ -13,28 +16,48 @@ RUN apk add --no-cache \
 # Create app directory
 WORKDIR /app
 
+# Copy dependency files first for better caching
+COPY Cargo.toml Cargo.lock ./
+
+# Create a dummy main.rs to build dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+RUN rm -rf src
+
 # Copy source code
-COPY . .
+COPY src ./src
+COPY static ./static
 
 # Build the application
 RUN cargo build --release
 
-# Create non-root user
-RUN addgroup -g 1001 -S turbopix && \
-    adduser -u 1001 -S turbopix -G turbopix
+# Create an empty directory that will be used in the final image
+RUN mkdir "/empty_dir"
 
-# Create data directory and set permissions
-RUN mkdir -p data && chown -R turbopix:turbopix /app
+# # # # # # # # # # # # # # # # # # # #
+# Run image
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+FROM scratch
 
-# Switch to non-root user
-USER turbopix
+ENV USER "1000"
+ENV DATA_FOLDER "/data"
+ENV STATIC_FOLDER "/static"
+ENV RUST_LOG "info"
 
-# Expose port
-EXPOSE 8080
+# For performance reasons write data to docker volume instead of containers writeable fs layer
+VOLUME $DATA_FOLDER
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+# Copy the empty directory as data and temp folder
+COPY --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
+COPY --chown=$USER:$USER --from=builder /empty_dir /tmp
 
-# Run the application
-CMD ["./target/release/turbo-pix"]
+# Copy the built application from the build image to the run-image
+COPY --chown=$USER:$USER --from=builder /app/target/release/turbo-pix /turbo-pix
+
+# Copy static files
+COPY --chown=$USER:$USER --from=builder /app/static $STATIC_FOLDER
+
+EXPOSE 18473
+USER $USER
+
+ENTRYPOINT ["/turbo-pix"]

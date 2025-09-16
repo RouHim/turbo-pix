@@ -1,16 +1,15 @@
 # TurboPix
 
-A fast, lightweight photo gallery built with Rust and Actix-web. Features automatic thumbnail generation, full-text search, and a responsive web interface.
+A fast photo gallery that automatically organizes and displays your photos with smart thumbnails and search.
 
 ## Features
 
-- 🚀 **Fast**: Built with Rust for optimal performance
-- 🖼️ **Smart Thumbnails**: Automatic generation with LRU caching
-- 🔍 **Full-Text Search**: Search photos by filename, metadata, and EXIF data
-- 📱 **Responsive**: Mobile-friendly web interface
-- 🏗️ **Container-Ready**: Docker and Kubernetes support
-- 📊 **Observability**: Health checks, metrics, and structured logging
-- 🔒 **Secure**: Non-root container execution, minimal attack surface
+- 🚀 **Fast Browsing**: Browse thousands of photos quickly
+- 🖼️ **Smart Thumbnails**: Automatically creates thumbnails in multiple sizes
+- 🔍 **Photo Search**: Find photos by name, date, or camera details
+- 📱 **Works Everywhere**: Runs on desktop, tablet, and mobile
+- 🏗️ **Easy Setup**: Run with Docker or install locally
+- 📊 **Reliable**: Built-in health monitoring and performance tracking
 
 ## Quick Start
 

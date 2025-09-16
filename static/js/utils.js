@@ -266,34 +266,50 @@ const touchHandler = {
 };
 
 // Performance helpers
-const performance = {
-    mark: (name) => {
-        if (window.performance && window.performance.mark) {
-            window.performance.mark(name);
-        }
-    },
-    
-    measure: (name, startMark, endMark) => {
-        if (window.performance && window.performance.measure) {
-            window.performance.measure(name, startMark, endMark);
-        }
-    },
-    
-    getEntries: () => {
-        if (window.performance && window.performance.getEntries) {
-            return window.performance.getEntries();
-        }
+const performanceUtils = {
+  mark: (name) => {
+    if (window.performance && window.performance.mark) {
+      window.performance.mark(name);
+    }
+  },
+
+  measure: (name, startMark, endMark) => {
+    if (window.performance && window.performance.measure) {
+      window.performance.measure(name, startMark, endMark);
+    }
+  },
+
+  getEntries: () => {
+    if (window.performance && window.performance.getEntries) {
+      return window.performance.getEntries();
+    }
         return [];
     }
 };
 
 // Export to global scope
 window.utils = {
-    $, $$, createElement, on, off, emit,
-    formatFileSize, formatDate, formatDuration,
-    debounce, throttle,
-    showLoading, hideLoading, showToast,
-    createLazyImage, handleError,
-    getPhotoUrl, getThumbnailUrl, getVideoUrl,
-    storage, SimpleState, touchHandler, performance
+  $,
+  $$,
+  createElement,
+  on,
+  off,
+  emit,
+  formatFileSize,
+  formatDate,
+  formatDuration,
+  debounce,
+  throttle,
+  showLoading,
+  hideLoading,
+  showToast,
+  createLazyImage,
+  handleError,
+  getPhotoUrl,
+  getThumbnailUrl,
+  getVideoUrl,
+  storage,
+  SimpleState,
+  touchHandler,
+  performance: performanceUtils,
 };

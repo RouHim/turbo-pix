@@ -1,4 +1,4 @@
-@media (max-width: 1200px) {
+@media (width <= 1200px) {
     :root {
         --sidebar-width: 240px;
     }
@@ -17,7 +17,7 @@
     }
 }
 
-@media (max-width: 1024px) {
+@media (width <= 1024px) {
     :root {
         --sidebar-width: 200px;
     }
@@ -49,13 +49,10 @@
     }
 }
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
     #app {
-        grid-template-areas: 
-            "header"
-            "main";
-        grid-template-columns: 1fr;
-        grid-template-rows: var(--header-height) 1fr;
+        grid-template: 
+            "header" var(--header-height) "main" 1fr / 1fr;
     }
     
     .sidebar {
@@ -79,7 +76,7 @@
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgb(0 0 0 / 50%);
         z-index: 150;
         opacity: 0;
         visibility: hidden;
@@ -183,7 +180,7 @@
         height: 48px;
         border: none;
         border-radius: 50%;
-        background: rgba(255, 255, 255, 0.2);
+        background: rgb(255 255 255 / 20%);
         color: white;
         font-size: 20px;
         cursor: pointer;
@@ -192,11 +189,11 @@
     }
     
     .info-toggle:hover {
-        background: rgba(255, 255, 255, 0.3);
+        background: rgb(255 255 255 / 30%);
     }
 }
 
-@media (max-width: 480px) {
+@media (width <= 480px) {
     .header-content {
         padding: 0 12px;
     }
@@ -245,7 +242,7 @@
     }
 }
 
-@media (max-height: 600px) {
+@media (height <= 600px) {
     .photo-card-image {
         height: 160px;
     }
@@ -255,7 +252,7 @@
     }
 }
 
-@media (min-width: 1400px) {
+@media (width >= 1400px) {
     .photo-grid {
         grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 32px;
@@ -278,7 +275,7 @@
     
     .photo-card-overlay {
         opacity: 1;
-        background: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.5) 100%);
+        background: linear-gradient(to bottom, transparent 0%, rgb(0 0 0 / 50%) 100%);
     }
     
     .photo-card-actions {
@@ -314,13 +311,13 @@
     :root {
         --background-color: #121212;
         --surface-color: #1E1E1E;
-        --text-primary: #FFFFFF;
-        --text-secondary: #AAAAAA;
-        --divider-color: #333333;
+        --text-primary: #FFF;
+        --text-secondary: #AAA;
+        --divider-color: #333;
         --primary-light: #1976D2;
-        --shadow-light: 0 2px 4px rgba(0,0,0,0.3);
-        --shadow-medium: 0 4px 8px rgba(0,0,0,0.4);
-        --shadow-heavy: 0 8px 24px rgba(0,0,0,0.6);
+        --shadow-light: 0 2px 4px rgb(0 0 0 / 30%);
+        --shadow-medium: 0 4px 8px rgb(0 0 0 / 40%);
+        --shadow-heavy: 0 8px 24px rgb(0 0 0 / 60%);
     }
     
     .search-input {
@@ -333,6 +330,6 @@
     }
     
     .viewer-overlay {
-        background: rgba(0, 0, 0, 0.95);
+        background: rgb(0 0 0 / 95%);
     }
 }

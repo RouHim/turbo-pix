@@ -1,0 +1,36 @@
+{
+  "name": "turbo-pix",
+  "version": "1.0.0",
+  "description": "A fast photo gallery that automatically organizes and displays your photos with smart thumbnails and search.",
+  "main": "index.js",
+  "type": "module",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "format": "prettier --write static/**/*.{js,css,html}",
+    "lint:js": "eslint static/js/**/*.js",
+    "lint:css": "stylelint static/css/**/*.css",
+    "lint": "npm run lint:js && npm run lint:css"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RouHim/turbo-pix.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/RouHim/turbo-pix/issues"
+  },
+  "homepage": "https://github.com/RouHim/turbo-pix#readme",
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "eslint": "^8.57.1",
+    "eslint-config-standard": "^17.1.0",
+    "prettier": "^3.6.2",
+    "stylelint": "^16.24.0",
+    "stylelint-config-standard": "^39.0.0"
+  }
+}

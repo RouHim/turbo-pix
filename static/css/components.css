@@ -41,7 +41,7 @@
     font-size: 48px;
 }
 
-.photo-card-placeholder:before {
+.photo-card-placeholder::before {
     content: "📷";
 }
 
@@ -56,11 +56,8 @@
 
 .photo-card-overlay {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.7) 100%);
+    inset: 0;
+    background: linear-gradient(to bottom, transparent 0%, rgb(0 0 0 / 70%) 100%);
     opacity: 0;
     transition: var(--transition-medium);
     display: flex;
@@ -81,7 +78,7 @@
 }
 
 .photo-card-meta {
-    color: rgba(255, 255, 255, 0.8);
+    color: rgb(255 255 255 / 80%);
     font-size: 12px;
 }
 
@@ -104,7 +101,7 @@
     height: 32px;
     border: none;
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgb(0 0 0 / 50%);
     color: white;
     cursor: pointer;
     transition: var(--transition-fast);
@@ -115,7 +112,7 @@
 }
 
 .card-action-btn:hover {
-    background: rgba(0, 0, 0, 0.8);
+    background: rgb(0 0 0 / 80%);
 }
 
 .photo-viewer {
@@ -141,7 +138,7 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.9);
+    background: rgb(0 0 0 / 90%);
     backdrop-filter: blur(10px);
 }
 
@@ -162,7 +159,7 @@
     height: 48px;
     border: none;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
+    background: rgb(255 255 255 / 20%);
     color: white;
     font-size: 24px;
     cursor: pointer;
@@ -171,7 +168,7 @@
 }
 
 .viewer-close:hover {
-    background: rgba(255, 255, 255, 0.3);
+    background: rgb(255 255 255 / 30%);
 }
 
 .viewer-prev,
@@ -183,7 +180,7 @@
     height: 48px;
     border: none;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
+    background: rgb(255 255 255 / 20%);
     color: white;
     font-size: 24px;
     cursor: pointer;
@@ -201,7 +198,7 @@
 
 .viewer-prev:hover,
 .viewer-next:hover {
-    background: rgba(255, 255, 255, 0.3);
+    background: rgb(255 255 255 / 30%);
 }
 
 .viewer-main {
@@ -230,7 +227,7 @@
 .photo-info h3 {
     font-size: 20px;
     font-weight: 600;
-    margin: 0 0 16px 0;
+    margin: 0 0 16px;
     color: var(--text-primary);
 }
 

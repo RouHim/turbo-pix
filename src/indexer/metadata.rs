@@ -163,6 +163,7 @@ pub struct PhotoMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, Timelike};
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;

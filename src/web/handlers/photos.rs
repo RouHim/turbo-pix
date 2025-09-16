@@ -374,9 +374,9 @@ pub async fn upload_photo(pool: web::Data<DbPool>, mut payload: Multipart) -> Re
     while let Some(mut field) = payload.try_next().await? {
         let content_disposition = field.content_disposition();
 
-        if let Some(name) = content_disposition.get_name() {
+        if let Some(name) = content_disposition.and_then(|cd| cd.get_name()) {
             if name == "file" {
-                if let Some(file_filename) = content_disposition.get_filename() {
+                if let Some(file_filename) = content_disposition.and_then(|cd| cd.get_filename()) {
                     filename = file_filename.to_string();
                 }
 

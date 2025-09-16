@@ -1,15 +1,13 @@
-version: '3.8'
-
 services:
   turbopix:
     build:
       context: .
-      dockerfile: Containerfile
+      dockerfile: container-data/Containerfile
     ports:
-      - "8080:8080"
+      - "18473:18473"
     volumes:
       - ./data:/app/data
-      - ./static:/app/static:ro
+      - ./photos:/photos:ro
     environment:
       - RUST_LOG=info
       - TURBO_PIX_PHOTO_PATHS=/photos

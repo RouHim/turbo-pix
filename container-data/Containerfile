@@ -1,0 +1,41 @@
+# # # # # # # # # # # # # # # # # # # #
+# Builder
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+FROM docker.io/messense/rust-musl-cross:x86_64-musl as builder
+
+# Set working directory and create empty directory in one layer
+WORKDIR /app
+RUN mkdir "/empty_dir"
+
+# Copy source code
+COPY ../Cargo.toml ../Cargo.lock ./
+COPY ../src ./src
+COPY ../static ./static
+
+# Set environment variables for static linking and build
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+# # # # # # # # # # # # # # # # # # # #
+# Run image
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+FROM scratch
+# Set environment variables in one layer
+ENV USER="1000" \
+    DATA_FOLDER="/data" \
+    STATIC_FOLDER="/static" \
+    RUST_LOG="info"
+
+# For performance reasons write data to docker volume instead of containers writeable fs layer
+VOLUME $DATA_FOLDER
+
+# Copy the empty directory as data and temp folder
+COPY --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
+COPY --chown=$USER:$USER --from=builder /empty_dir /tmp
+
+# Copy the built application directly from target directory
+COPY --chown=$USER:$USER --from=builder /app/target/x86_64-unknown-linux-musl/release/turbo-pix /turbo-pix
+
+EXPOSE 18473
+USER $USER
+
+ENTRYPOINT ["/turbo-pix"]

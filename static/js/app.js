@@ -208,13 +208,6 @@ class TurboPixApp {
           this.updateViewTitle('All Photos');
           break;
 
-        case 'recent':
-          filters.sort = 'date_indexed';
-          filters.order = 'desc';
-          await window.photoGrid.loadPhotos(null, filters, true);
-          this.updateViewTitle('Recent Photos');
-          break;
-
         case 'favorites':
           const favoritePhotos = await api.getFavoritePhotos();
           this.displayFavoritePhotos(favoritePhotos);

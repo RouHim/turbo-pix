@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use mime_guess::MimeGuess;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -8,7 +9,8 @@ use tracing::{error, info};
 
 use super::scanner::PhotoFile;
 use super::{FileScanner, MetadataExtractor};
-use crate::db::models::Photo;
+use crate::cache::CacheManager;
+use crate::db::{DbPool, Photo};
 
 pub struct PhotoProcessor {
     scanner: FileScanner,
@@ -21,6 +23,7 @@ impl PhotoProcessor {
         }
     }
 
+    #[cfg(test)]
     pub fn process_all(&self) -> Vec<ProcessedPhoto> {
         let photo_files = self.scanner.scan();
         let mut processed_photos = Vec::new();
@@ -38,6 +41,87 @@ impl PhotoProcessor {
 
         info!("Successfully processed {} photos", processed_photos.len());
         processed_photos
+    }
+
+    pub async fn full_rescan_and_cleanup(
+        &self,
+        db_pool: &DbPool,
+        cache_manager: &CacheManager,
+    ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
+        info!("Starting full filesystem rescan and cleanup");
+
+        // Get all existing photos from database using the connection functions we added
+        let db_photos = crate::db::get_all_photo_paths(db_pool)?;
+        let db_paths: HashSet<String> = db_photos.into_iter().collect();
+
+        // Scan filesystem for current photos
+        let photo_files = self.scanner.scan();
+        let mut fs_paths = HashSet::new();
+        let mut processed_photos = Vec::new();
+
+        info!("Found {} photos in filesystem", photo_files.len());
+
+        // Process each photo file
+        for photo_file in photo_files {
+            let path_str = photo_file.path.to_string_lossy().to_string();
+            fs_paths.insert(path_str.clone());
+
+            // Check if we need to process this file
+            let file_modified = chrono::DateTime::<chrono::Utc>::from(photo_file.date_modified);
+            if let Ok(needs_update) = crate::db::needs_update(db_pool, &path_str, &file_modified) {
+                if needs_update {
+                    match self.process_photo(&photo_file) {
+                        Ok(processed) => {
+                            info!("Processed updated file: {}", processed.filename);
+                            processed_photos.push(processed);
+                        }
+                        Err(e) => {
+                            error!("Failed to process {}: {}", photo_file.path.display(), e);
+                        }
+                    }
+                } else {
+                    info!("Skipping unchanged file: {}", photo_file.filename);
+                }
+            } else {
+                // File not in database, process it
+                match self.process_photo(&photo_file) {
+                    Ok(processed) => {
+                        info!("Processed new file: {}", processed.filename);
+                        processed_photos.push(processed);
+                    }
+                    Err(e) => {
+                        error!("Failed to process {}: {}", photo_file.path.display(), e);
+                    }
+                }
+            }
+        }
+
+        // Find orphaned database entries (files that no longer exist on filesystem)
+        let orphaned_paths: Vec<String> = db_paths.difference(&fs_paths).cloned().collect();
+
+        if !orphaned_paths.is_empty() {
+            info!("Found {} orphaned database entries", orphaned_paths.len());
+
+            // Clean up cache for orphaned files
+            for path in &orphaned_paths {
+                if let Err(e) = cache_manager.clear_for_path(path).await {
+                    error!("Failed to clear cache for {}: {}", path, e);
+                }
+            }
+
+            // Remove orphaned entries from database
+            if let Err(e) = crate::db::delete_orphaned_photos(db_pool, &orphaned_paths) {
+                error!("Failed to delete orphaned photos: {}", e);
+            } else {
+                info!("Removed {} orphaned database entries", orphaned_paths.len());
+            }
+        }
+
+        info!(
+            "Full rescan completed. Processed {} photos",
+            processed_photos.len()
+        );
+        Ok(processed_photos)
     }
 
     fn process_photo(
@@ -58,7 +142,7 @@ impl PhotoProcessor {
             filename: photo_file.filename.clone(),
             file_size: photo_file.file_size as i64,
             mime_type,
-            date_taken: metadata.date_taken,
+            taken_at: metadata.taken_at,
             date_modified: DateTime::from_timestamp(date_modified, 0).unwrap_or_else(Utc::now),
             width: metadata.width,
             height: metadata.height,
@@ -105,7 +189,7 @@ pub struct ProcessedPhoto {
     pub filename: String,
     pub file_size: i64,
     pub mime_type: String,
-    pub date_taken: Option<DateTime<Utc>>,
+    pub taken_at: Option<DateTime<Utc>>,
     pub date_modified: DateTime<Utc>,
     pub width: Option<i32>,
     pub height: Option<i32>,
@@ -124,30 +208,44 @@ pub struct ProcessedPhoto {
 impl From<ProcessedPhoto> for Photo {
     fn from(processed: ProcessedPhoto) -> Self {
         Photo {
-            id: None,
+            id: 0, // Will be set by database
             path: processed.path,
             filename: processed.filename,
             file_size: processed.file_size,
-            mime_type: processed.mime_type,
-            date_taken: processed.date_taken,
+            mime_type: Some(processed.mime_type),
+            taken_at: processed.taken_at,
             date_modified: processed.date_modified,
-            date_indexed: Utc::now(),
-            width: processed.width,
-            height: processed.height,
-            orientation: processed.orientation,
+            date_indexed: Some(Utc::now()),
             camera_make: processed.camera_make,
             camera_model: processed.camera_model,
+            lens_make: None,
+            lens_model: None,
             iso: processed.iso,
             aperture: processed.aperture,
             shutter_speed: processed.shutter_speed,
             focal_length: processed.focal_length,
+            width: processed.width,
+            height: processed.height,
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: Some(processed.orientation),
+            flash_used: None,
             gps_latitude: processed.gps_latitude,
             gps_longitude: processed.gps_longitude,
             location_name: None,
             hash_md5: None,
             hash_sha256: Some(processed.hash_sha256),
             thumbnail_path: None,
-            has_thumbnail: false,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }
@@ -155,6 +253,7 @@ impl From<ProcessedPhoto> for Photo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;

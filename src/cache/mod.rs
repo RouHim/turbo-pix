@@ -1,11 +1,96 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
+use tracing::{error, info};
 
 pub mod memory;
 pub mod thumbnails;
 
 pub use memory::MemoryCache;
 pub use thumbnails::ThumbnailGenerator;
+
+#[derive(Clone)]
+pub struct CacheManager {
+    memory_cache: MemoryCache,
+    thumbnail_cache_dir: PathBuf,
+}
+
+impl CacheManager {
+    pub fn new(memory_cache: MemoryCache, thumbnail_cache_dir: PathBuf) -> Self {
+        Self {
+            memory_cache,
+            thumbnail_cache_dir,
+        }
+    }
+
+    pub async fn clear_for_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Clearing cache for deleted photo: {}", path);
+
+        // Clear memory cache entries that might reference this path
+        // Note: This is a simplified implementation - in practice you'd need
+        // to track path-to-id mappings to clear specific entries
+
+        // Clear thumbnail files that might exist for this path
+        let filename = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        info!("Looking for thumbnails with filename: {}", filename);
+        info!(
+            "Thumbnail cache directory: {}",
+            self.thumbnail_cache_dir.display()
+        );
+
+        for size in ["small", "medium", "large"] {
+            let thumbnail_path = self
+                .thumbnail_cache_dir
+                .join(format!("{}_{}.jpg", filename, size));
+            info!("Checking thumbnail path: {}", thumbnail_path.display());
+            if thumbnail_path.exists() {
+                if let Err(e) = std::fs::remove_file(&thumbnail_path) {
+                    error!(
+                        "Failed to remove thumbnail {}: {}",
+                        thumbnail_path.display(),
+                        e
+                    );
+                } else {
+                    info!("Removed thumbnail: {}", thumbnail_path.display());
+                }
+            } else {
+                info!("Thumbnail does not exist: {}", thumbnail_path.display());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn clear_all(&self) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Clearing all cache data");
+
+        // Clear memory cache
+        self.memory_cache.clear();
+
+        // Clear thumbnail cache directory
+        if self.thumbnail_cache_dir.exists() {
+            let entries = std::fs::read_dir(&self.thumbnail_cache_dir)?;
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    if let Err(e) = std::fs::remove_file(entry.path()) {
+                        error!(
+                            "Failed to remove cache file {}: {}",
+                            entry.path().display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThumbnailSize {

@@ -8,8 +8,7 @@ use tracing::{debug, warn};
 
 use super::{CacheError, CacheKey, CacheResult, ThumbnailSize};
 use crate::config::Config;
-use crate::db::models::Photo;
-use crate::db::DbPool;
+use crate::db::{DbPool, Photo};
 
 pub struct ThumbnailGenerator {
     cache_dir: PathBuf,
@@ -35,7 +34,7 @@ impl ThumbnailGenerator {
         photo: &Photo,
         size: ThumbnailSize,
     ) -> CacheResult<Vec<u8>> {
-        let cache_key = CacheKey::new(photo.id.unwrap_or(0), size);
+        let cache_key = CacheKey::new(photo.id, size);
 
         if let Some(cached_data) = self.get_from_disk_cache(&cache_key).await {
             debug!("Cache hit for {}", cache_key);
@@ -70,7 +69,7 @@ impl ThumbnailGenerator {
 
         let thumbnail_data = self.encode_image(thumbnail)?;
 
-        let cache_key = CacheKey::new(photo.id.unwrap_or(0), size);
+        let cache_key = CacheKey::new(photo.id, size);
         let cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
@@ -244,7 +243,7 @@ mod tests {
             filename: "test.jpg".to_string(),
             file_size: 1024,
             mime_type: "image/jpeg".to_string(),
-            date_taken: Some(Utc::now()),
+            taken_at: Some(Utc::now()),
             date_modified: Utc::now(),
             date_indexed: Utc::now(),
             width: Some(100),

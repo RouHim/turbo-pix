@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tracing::{info, warn};
 
-use cache::MemoryCache;
+use cache::{CacheManager, MemoryCache};
 use scheduler::PhotoScheduler;
 use web::handlers::thumbnails::ThumbnailService;
 use web::static_handler::serve_static_asset;
@@ -41,18 +41,6 @@ async fn main() -> io::Result<()> {
 
     info!("Database initialized successfully");
 
-    // Start photo scheduler
-    let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
-    let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone());
-    photo_scheduler.start();
-    info!("Photo scheduler started");
-
-    // Run initial scan to show photo count
-    info!("Running initial photo scan...");
-    if let Err(e) = photo_scheduler.run_manual_scan() {
-        tracing::error!("Initial scan failed: {}", e);
-    }
-
     // Initialize thumbnail system
     let memory_cache = MemoryCache::new(
         config.cache.memory_cache_size,
@@ -60,10 +48,28 @@ async fn main() -> io::Result<()> {
     );
     let thumbnail_service = Arc::new(ThumbnailService::new(
         &config,
-        memory_cache,
+        memory_cache.clone(),
         db_pool.clone(),
     ));
     info!("Thumbnail system initialized");
+
+    // Initialize cache manager
+    let cache_manager = CacheManager::new(
+        memory_cache,
+        config.cache.thumbnail_cache_path.clone().into(),
+    );
+
+    // Start photo scheduler with cache manager
+    let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
+    let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager);
+    let _scheduler_handle = photo_scheduler.start();
+    info!("Photo scheduler started");
+
+    // Run startup rescan instead of manual scan
+    info!("Running startup photo rescan and cleanup...");
+    if let Err(e) = photo_scheduler.run_startup_rescan().await {
+        tracing::error!("Startup rescan failed: {}", e);
+    }
 
     let host = config.host.clone();
     let port = config.port;
@@ -98,10 +104,18 @@ async fn main() -> io::Result<()> {
 
     // Graceful shutdown handling
     let server_handle = server.handle();
+    let photo_scheduler_clone = photo_scheduler.clone();
     tokio::spawn(async move {
         match signal::ctrl_c().await {
             Ok(()) => {
                 warn!("Received shutdown signal, stopping server gracefully...");
+
+                // Perform cleanup tasks
+                info!("Running shutdown cleanup...");
+                if let Err(e) = photo_scheduler_clone.shutdown_cleanup().await {
+                    warn!("Shutdown cleanup failed: {}", e);
+                }
+
                 server_handle.stop(true).await;
             }
             Err(err) => {

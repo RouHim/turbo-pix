@@ -1,5 +1,4 @@
-use crate::db::crud::{SearchQuery, SearchSuggestion};
-use crate::db::{DbPool, Photo};
+use crate::db::{DbPool, Photo, SearchQuery, SearchSuggestion};
 use crate::web::handlers::photos::{ErrorResponse, PhotosResponse};
 use actix_web::{web, HttpResponse, Result};
 use serde::Serialize;
@@ -27,7 +26,7 @@ pub async fn search_photos(
 
             Ok(HttpResponse::Ok().json(PhotosResponse {
                 photos,
-                total,
+                total: total as usize,
                 page,
                 limit,
                 has_next,

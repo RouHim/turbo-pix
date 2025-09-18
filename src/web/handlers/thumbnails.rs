@@ -3,13 +3,11 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::cache::{CacheKey, MemoryCache, ThumbnailGenerator, ThumbnailSize};
-use crate::db::connection::DbPool;
-use crate::db::crud::PhotoCrud;
+use crate::db::{DbPool, Photo};
 
 pub struct ThumbnailService {
     generator: ThumbnailGenerator,
     memory_cache: MemoryCache,
-    db_pool: DbPool,
 }
 
 impl ThumbnailService {
@@ -18,12 +16,12 @@ impl ThumbnailService {
         Self {
             generator,
             memory_cache,
-            db_pool,
         }
     }
 }
 
 pub async fn get_thumbnail(
+    pool: web::Data<DbPool>,
     path: web::Path<(i64, String)>,
     service: web::Data<Arc<ThumbnailService>>,
 ) -> ActixResult<HttpResponse> {
@@ -48,17 +46,7 @@ pub async fn get_thumbnail(
     }
 
     // Get photo from database
-    let mut conn = match service.db_pool.get() {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Failed to get database connection: {}", e);
-            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": "Database connection failed"
-            })));
-        }
-    };
-
-    let photo = match PhotoCrud::find_by_id(&mut conn, photo_id as i32) {
+    let photo = match Photo::find_by_id(&pool, photo_id) {
         Ok(Some(photo)) => photo,
         Ok(None) => {
             return Ok(HttpResponse::NotFound().json(serde_json::json!({
@@ -202,7 +190,7 @@ mod tests {
             filename: "test.jpg".to_string(),
             file_size: 1024,
             mime_type: "image/jpeg".to_string(),
-            date_taken: Some(Utc::now()),
+            taken_at: Some(Utc::now()),
             date_modified: Utc::now(),
             date_indexed: Utc::now(),
             width: Some(100),

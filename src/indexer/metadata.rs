@@ -29,7 +29,7 @@ impl MetadataExtractor {
     fn extract_basic_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
         if let Some(field) = reader.get_field(Tag::DateTime, In::PRIMARY) {
             if let Some(date_time) = Self::parse_exif_datetime(&field.display_value().to_string()) {
-                metadata.date_taken = Some(date_time);
+                metadata.taken_at = Some(date_time);
             }
         }
 
@@ -146,7 +146,7 @@ impl MetadataExtractor {
 
 #[derive(Debug, Default, Clone)]
 pub struct PhotoMetadata {
-    pub date_taken: Option<DateTime<Utc>>,
+    pub taken_at: Option<DateTime<Utc>>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: Option<i32>,
@@ -172,7 +172,7 @@ mod tests {
     fn test_metadata_default() {
         let metadata = PhotoMetadata::default();
 
-        assert!(metadata.date_taken.is_none());
+        assert!(metadata.taken_at.is_none());
         assert!(metadata.width.is_none());
         assert!(metadata.height.is_none());
         assert!(metadata.orientation.is_none());
@@ -206,7 +206,7 @@ mod tests {
 
         let metadata = MetadataExtractor::extract(&nonexistent_path);
 
-        assert!(metadata.date_taken.is_none());
+        assert!(metadata.taken_at.is_none());
         assert!(metadata.width.is_none());
         assert!(metadata.camera_make.is_none());
     }
@@ -221,7 +221,7 @@ mod tests {
 
         let metadata = MetadataExtractor::extract(&text_file);
 
-        assert!(metadata.date_taken.is_none());
+        assert!(metadata.taken_at.is_none());
         assert!(metadata.width.is_none());
         assert!(metadata.camera_make.is_none());
     }
@@ -237,7 +237,7 @@ mod tests {
 
         let metadata = MetadataExtractor::extract(&fake_image);
 
-        assert!(metadata.date_taken.is_none());
+        assert!(metadata.taken_at.is_none());
         assert!(metadata.width.is_none());
         assert!(metadata.camera_make.is_none());
     }

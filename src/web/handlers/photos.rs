@@ -69,20 +69,6 @@ pub struct Collection {
     pub photo_count: usize,
 }
 
-#[derive(Debug, Serialize)]
-pub struct Camera {
-    pub make: String,
-    pub model: String,
-    pub photo_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StatsResponse {
-    pub total_photos: usize,
-    pub total_size: i64,
-    pub cameras: Vec<Camera>,
-}
-
 fn create_photo_from_temp_file(
     temp_path: &Path,
     filename: &str,
@@ -114,30 +100,44 @@ fn create_photo_from_temp_file(
 
     // Create the Photo struct
     Ok(Photo {
-        id: None,
+        id: 0, // Will be set by database
         path: temp_path.to_string_lossy().to_string(),
         filename: filename.to_string(),
         file_size,
-        mime_type,
-        date_taken: metadata.date_taken,
+        mime_type: Some(mime_type),
+        taken_at: metadata.taken_at,
         date_modified: Utc::now(),
-        date_indexed: Utc::now(),
-        width: metadata.width,
-        height: metadata.height,
-        orientation: metadata.orientation.unwrap_or(1),
+        date_indexed: Some(Utc::now()),
         camera_make: metadata.camera_make,
         camera_model: metadata.camera_model,
+        lens_make: None,
+        lens_model: None,
         iso: metadata.iso,
         aperture: metadata.aperture,
         shutter_speed: metadata.shutter_speed,
         focal_length: metadata.focal_length,
+        width: metadata.width,
+        height: metadata.height,
+        color_space: None,
+        white_balance: None,
+        exposure_mode: None,
+        metering_mode: None,
+        orientation: Some(metadata.orientation.unwrap_or(1)),
+        flash_used: None,
         gps_latitude: metadata.gps_latitude,
         gps_longitude: metadata.gps_longitude,
         location_name: None,
         hash_md5: None, // We could calculate this too, but SHA256 is sufficient
         hash_sha256: Some(hash_sha256),
         thumbnail_path: None,
-        has_thumbnail: false,
+        has_thumbnail: Some(false),
+        country: None,
+        keywords: None,
+        faces_detected: None,
+        objects_detected: None,
+        colors: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
     })
 }
 
@@ -225,7 +225,7 @@ pub async fn list_photos(
 
             Ok(HttpResponse::Ok().json(PhotosResponse {
                 photos,
-                total,
+                total: total as usize,
                 page,
                 limit,
                 has_next,
@@ -294,10 +294,17 @@ pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> Re
     match std::fs::read(&photo.path) {
         Ok(file_data) => {
             // Determine content type from photo metadata or file extension
-            let content_type = if photo.mime_type.starts_with("image/") {
-                photo.mime_type
+            let content_type = if let Some(ref mime_type) = photo.mime_type {
+                if mime_type.starts_with("image/") {
+                    mime_type.clone()
+                } else {
+                    // Fallback to mime_guess if metadata is not reliable
+                    mime_guess::from_path(&photo.path)
+                        .first_or_octet_stream()
+                        .to_string()
+                }
             } else {
-                // Fallback to mime_guess if metadata is not reliable
+                // No mime_type available, use mime_guess
                 mime_guess::from_path(&photo.path)
                     .first_or_octet_stream()
                     .to_string()
@@ -333,7 +340,7 @@ pub async fn get_photo_metadata(
                 "filename": photo.filename,
                 "file_size": photo.file_size,
                 "mime_type": photo.mime_type,
-                "date_taken": photo.date_taken,
+                "taken_at": photo.taken_at,
                 "date_modified": photo.date_modified,
                 "width": photo.width,
                 "height": photo.height,
@@ -441,12 +448,12 @@ pub async fn upload_photo(pool: web::Data<DbPool>, mut payload: Multipart) -> Re
 
     // Update file size and MIME type from uploaded data
     photo.file_size = file_data.len() as i64;
-    photo.mime_type = content_type;
+    photo.mime_type = Some(content_type);
 
     // Save to database
     match photo.create(&pool) {
         Ok(id) => {
-            photo.id = Some(id);
+            photo.id = id;
             Ok(HttpResponse::Created().json(photo))
         }
         Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -516,7 +523,7 @@ pub async fn update_photo(
     }
 
     // Save changes
-    match photo.update(&pool, photo_id) {
+    match photo.update(&pool) {
         Ok(_) => Ok(HttpResponse::Ok().json(photo)),
         Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
             error: format!("Database error: {}", e),

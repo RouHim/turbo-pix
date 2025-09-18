@@ -421,32 +421,15 @@ class PhotoViewer {
       url: window.location.href,
     };
 
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData);
-        utils.showToast('Shared', 'Photo shared successfully', 'success', 2000);
-      } catch (error) {
-        if (error.name !== 'AbortError') {
-          this.fallbackShare(shareData);
-        }
+    try {
+      await navigator.share(shareData);
+      utils.showToast('Shared', 'Photo shared successfully', 'success', 2000);
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        utils.showToast('Share', 'Sharing cancelled or not supported', 'warning', 2000);
       }
-    } else {
-      this.fallbackShare(shareData);
     }
   }
-
-  fallbackShare(shareData) {
-    // Copy to clipboard
-    navigator.clipboard
-      .writeText(shareData.url)
-      .then(() => {
-        utils.showToast('Copied', 'Photo URL copied to clipboard', 'info', 2000);
-      })
-      .catch(() => {
-        utils.showToast('Share', 'Sharing not supported on this device', 'warning', 2000);
-      });
-  }
-
   toggleSidebar() {
     if (this.elements.sidebar) {
       this.elements.sidebar.classList.toggle('show');

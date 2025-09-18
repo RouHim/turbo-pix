@@ -5,7 +5,7 @@ pub mod static_handler;
 
 #[cfg(test)]
 mod api_tests {
-    use crate::db::{connection::create_in_memory_pool, models::Photo, DbPool};
+    use crate::db::{create_in_memory_pool, DbPool, Photo};
     use crate::web::routes::configure_routes;
     use actix_web::{test, web, App};
     use bytes::Bytes;

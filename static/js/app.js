@@ -8,7 +8,6 @@ class TurboPixApp {
       isMobile: window.innerWidth <= 768,
       sidebarOpen: false,
       sortBy: 'date_desc',
-      viewMode: 'grid',
       totalPhotos: 0,
       selectedPhotos: [],
     });
@@ -44,15 +43,7 @@ class TurboPixApp {
     });
 
     // View mode toggles
-    const gridViewBtn = utils.$('#grid-view-btn');
-    const listViewBtn = utils.$('#list-view-btn');
-
-    if (gridViewBtn) {
-      utils.on(gridViewBtn, 'click', () => this.setViewMode('grid'));
-    }
-    if (listViewBtn) {
-      utils.on(listViewBtn, 'click', () => this.setViewMode('list'));
-    }
+    // Removed - view switching functionality removed
 
     // Sort controls
     const sortSelect = utils.$('#sort-select');
@@ -99,10 +90,6 @@ class TurboPixApp {
   }
 
   setupViewControls() {
-    // Set initial view mode
-    const viewMode = this.state.get('viewMode');
-    this.updateViewModeButtons(viewMode);
-
     // Set initial sort
     const sortBy = this.state.get('sortBy');
     const sortSelect = utils.$('#sort-select');
@@ -141,10 +128,8 @@ class TurboPixApp {
       searchBtn.innerHTML = '🔍';
       searchBtn.title = 'Search';
 
-      const headerActions = utils.$('.header-actions');
-      if (headerActions) {
-        headerActions.insertBefore(searchBtn, headerActions.firstChild);
-      }
+      // Insert after search container since header-actions was removed
+      searchContainer.parentNode.insertBefore(searchBtn, searchContainer.nextSibling);
 
       utils.on(searchBtn, 'click', () => {
         this.toggleMobileSearch();
@@ -260,26 +245,6 @@ class TurboPixApp {
     const titleEl = utils.$('#current-view-title');
     if (titleEl) {
       titleEl.textContent = title;
-    }
-  }
-
-  setViewMode(mode) {
-    this.state.set('viewMode', mode);
-    this.updateViewModeButtons(mode);
-
-    // Apply view mode styles
-    const photoGrid = utils.$('#photo-grid');
-    if (photoGrid) {
-      photoGrid.className = `photo-grid ${mode}-view`;
-    }
-  }
-
-  updateViewModeButtons(mode) {
-    utils.$$('.view-btn').forEach((btn) => btn.classList.remove('active'));
-
-    const activeBtn = utils.$(`#${mode}-view-btn`);
-    if (activeBtn) {
-      activeBtn.classList.add('active');
     }
   }
 
@@ -416,7 +381,6 @@ class TurboPixApp {
     const stateToSave = {
       currentView: this.state.get('currentView'),
       sortBy: this.state.get('sortBy'),
-      viewMode: this.state.get('viewMode'),
     };
 
     utils.storage.set('appState', stateToSave);

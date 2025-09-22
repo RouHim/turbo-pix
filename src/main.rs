@@ -19,8 +19,8 @@ use tracing::{info, warn};
 
 use cache::{CacheManager, MemoryCache};
 use scheduler::PhotoScheduler;
-use web_handlers::ThumbnailService;
 use web::static_handler::serve_static_asset;
+use web_handlers::ThumbnailService;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {

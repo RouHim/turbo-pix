@@ -322,7 +322,10 @@ pub async fn get_photo(pool: web::Data<DbPool>, path: web::Path<i64>) -> ActixRe
     }
 }
 
-pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> ActixResult<HttpResponse> {
+pub async fn get_photo_file(
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+) -> ActixResult<HttpResponse> {
     let photo_id = path.into_inner();
 
     // Get photo metadata from database
@@ -435,7 +438,10 @@ pub async fn get_photo_metadata(
     }
 }
 
-pub async fn upload_photo(pool: web::Data<DbPool>, mut payload: Multipart) -> ActixResult<HttpResponse> {
+pub async fn upload_photo(
+    pool: web::Data<DbPool>,
+    mut payload: Multipart,
+) -> ActixResult<HttpResponse> {
     const MAX_FILE_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
     let mut file_data = Vec::new();
@@ -597,7 +603,10 @@ pub async fn update_photo(
     }
 }
 
-pub async fn delete_photo(pool: web::Data<DbPool>, path: web::Path<i64>) -> ActixResult<HttpResponse> {
+pub async fn delete_photo(
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+) -> ActixResult<HttpResponse> {
     let photo_id = path.into_inner();
 
     // Check if photo exists

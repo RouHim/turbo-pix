@@ -12,7 +12,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 .route("/photos/{id}", web::get().to(web_handlers::get_photo))
                 .route("/photos/{id}", web::put().to(web_handlers::update_photo))
                 .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
-                .route("/photos/{id}/file", web::get().to(web_handlers::get_photo_file))
+                .route(
+                    "/photos/{id}/file",
+                    web::get().to(web_handlers::get_photo_file),
+                )
                 .route(
                     "/photos/{id}/thumbnail",
                     web::get().to(web_handlers::get_photo_thumbnail),

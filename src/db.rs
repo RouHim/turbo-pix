@@ -413,9 +413,11 @@ impl Photo {
             |row| row.get::<_, i64>(0),
         );
 
-        if existing.is_ok() {
-            // Update existing photo
-            self.update(pool)
+        if let Ok(existing_id) = existing {
+            // Create a copy of self with the correct ID for update
+            let mut photo_for_update = self.clone();
+            photo_for_update.id = existing_id;
+            photo_for_update.update(pool)
         } else {
             // Create new photo
             self.create(pool)?;

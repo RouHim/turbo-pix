@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use exif::{In, Reader, Tag, Value};
 use mime_guess::MimeGuess;
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -18,30 +19,45 @@ pub struct MetadataExtractor;
 
 impl MetadataExtractor {
     pub fn extract(path: &Path) -> PhotoMetadata {
+        Self::extract_with_metadata(path, None)
+    }
+
+    pub fn extract_with_metadata(
+        path: &Path,
+        file_metadata: Option<&std::fs::Metadata>,
+    ) -> PhotoMetadata {
         let mut metadata = PhotoMetadata::default();
 
         if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
 
             if let Ok(exif_reader) = Reader::new().read_from_container(&mut reader) {
-                Self::extract_basic_info(&exif_reader, &mut metadata);
+                Self::extract_basic_info(&exif_reader, &mut metadata, file_metadata);
                 Self::extract_camera_info(&exif_reader, &mut metadata);
                 Self::extract_gps_info(&exif_reader, &mut metadata);
             } else {
                 debug!("No EXIF data found for: {}", path.display());
+                // Even without EXIF, try file creation date fallback
+                Self::apply_file_creation_fallback(&mut metadata, file_metadata);
             }
         }
 
         metadata
     }
 
-    fn extract_basic_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
+    fn extract_basic_info(
+        reader: &exif::Exif,
+        metadata: &mut PhotoMetadata,
+        file_metadata: Option<&std::fs::Metadata>,
+    ) {
         // Try multiple EXIF date tags in order of preference
         let date_tags = vec![Tag::DateTimeOriginal, Tag::DateTimeDigitized, Tag::DateTime];
 
         for tag in date_tags {
             if let Some(field) = reader.get_field(tag, In::PRIMARY) {
-                if let Some(date_time) = Self::parse_exif_datetime(&field.display_value().to_string()) {
+                if let Some(date_time) =
+                    Self::parse_exif_datetime(&field.display_value().to_string())
+                {
                     metadata.taken_at = Some(date_time);
                     break; // Use the first valid date found
                 }
@@ -51,6 +67,11 @@ impl MetadataExtractor {
         // If no EXIF date found, try GPS date as fallback
         if metadata.taken_at.is_none() {
             metadata.taken_at = Self::get_gps_date(reader);
+        }
+
+        // If still no date found, try file creation date as final fallback
+        if metadata.taken_at.is_none() {
+            Self::apply_file_creation_fallback(metadata, file_metadata);
         }
 
         if let Some(field) = reader.get_field(Tag::PixelXDimension, In::PRIMARY) {
@@ -98,21 +119,57 @@ impl MetadataExtractor {
         }
     }
 
+    fn apply_file_creation_fallback(
+        metadata: &mut PhotoMetadata,
+        file_metadata: Option<&std::fs::Metadata>,
+    ) {
+        if let Some(fs_metadata) = file_metadata {
+            if let Ok(created_time) = fs_metadata.created() {
+                metadata.taken_at = Some(DateTime::from(created_time));
+            }
+            // Silently ignore if creation time is not supported on this filesystem
+        }
+    }
+
     fn extract_camera_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
         if let Some(field) = reader.get_field(Tag::Make, In::PRIMARY) {
-            metadata.camera_make = Some(field.display_value().to_string().trim_matches('"').to_string());
+            metadata.camera_make = Some(
+                field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string(),
+            );
         }
 
         if let Some(field) = reader.get_field(Tag::Model, In::PRIMARY) {
-            metadata.camera_model = Some(field.display_value().to_string().trim_matches('"').to_string());
+            metadata.camera_model = Some(
+                field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string(),
+            );
         }
 
         if let Some(field) = reader.get_field(Tag::LensMake, In::PRIMARY) {
-            metadata.lens_make = Some(field.display_value().to_string().trim_matches('"').to_string());
+            metadata.lens_make = Some(
+                field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string(),
+            );
         }
 
         if let Some(field) = reader.get_field(Tag::LensModel, In::PRIMARY) {
-            metadata.lens_model = Some(field.display_value().to_string().trim_matches('"').to_string());
+            metadata.lens_model = Some(
+                field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string(),
+            );
         }
 
         if let Some(field) = reader.get_field(Tag::ISOSpeed, In::PRIMARY) {
@@ -132,7 +189,13 @@ impl MetadataExtractor {
         }
 
         if let Some(field) = reader.get_field(Tag::ExposureTime, In::PRIMARY) {
-            metadata.shutter_speed = Some(field.display_value().to_string().trim_matches('"').to_string());
+            metadata.shutter_speed = Some(
+                field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string(),
+            );
         }
 
         if let Some(field) = reader.get_field(Tag::FocalLength, In::PRIMARY) {
@@ -151,9 +214,13 @@ impl MetadataExtractor {
 
         if let Some(lat_field) = reader.get_field(Tag::GPSLatitude, In::PRIMARY) {
             if let Some(lat_ref_field) = reader.get_field(Tag::GPSLatitudeRef, In::PRIMARY) {
-                if let (Value::Rational(lat_values), ref_value) = (&lat_field.value, lat_ref_field.display_value().to_string()) {
+                if let (Value::Rational(lat_values), ref_value) =
+                    (&lat_field.value, lat_ref_field.display_value().to_string())
+                {
                     if lat_values.len() == 3 {
-                        let lat = lat_values[0].to_f64() + lat_values[1].to_f64() / 60.0 + lat_values[2].to_f64() / 3600.0;
+                        let lat = lat_values[0].to_f64()
+                            + lat_values[1].to_f64() / 60.0
+                            + lat_values[2].to_f64() / 3600.0;
                         latitude = Some(if ref_value.contains('S') { -lat } else { lat });
                         has_gps = true;
                     }
@@ -163,9 +230,13 @@ impl MetadataExtractor {
 
         if let Some(lon_field) = reader.get_field(Tag::GPSLongitude, In::PRIMARY) {
             if let Some(lon_ref_field) = reader.get_field(Tag::GPSLongitudeRef, In::PRIMARY) {
-                if let (Value::Rational(lon_values), ref_value) = (&lon_field.value, lon_ref_field.display_value().to_string()) {
+                if let (Value::Rational(lon_values), ref_value) =
+                    (&lon_field.value, lon_ref_field.display_value().to_string())
+                {
                     if lon_values.len() == 3 {
-                        let lon = lon_values[0].to_f64() + lon_values[1].to_f64() / 60.0 + lon_values[2].to_f64() / 3600.0;
+                        let lon = lon_values[0].to_f64()
+                            + lon_values[1].to_f64() / 60.0
+                            + lon_values[2].to_f64() / 3600.0;
                         longitude = Some(if ref_value.contains('W') { -lon } else { lon });
                         has_gps = true;
                     }
@@ -192,9 +263,17 @@ impl MetadataExtractor {
     fn parse_exif_datetime(datetime_str: &str) -> Option<DateTime<Utc>> {
         let cleaned = datetime_str.replace("\"", "");
 
-        NaiveDateTime::parse_from_str(&cleaned, "%Y:%m:%d %H:%M:%S")
-            .ok()
-            .map(|naive_dt| DateTime::from_naive_utc_and_offset(naive_dt, Utc))
+        // Try EXIF format first (with colons): "2023:01:15 10:30:00"
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(&cleaned, "%Y:%m:%d %H:%M:%S") {
+            return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
+        }
+
+        // Try standard format (with dashes): "2008-05-30 15:56:01"
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(&cleaned, "%Y-%m-%d %H:%M:%S") {
+            return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
+        }
+
+        None
     }
 }
 
@@ -259,10 +338,11 @@ impl FileScanner {
                                 .modified()
                                 .ok()
                                 .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                                 .map(|duration| {
-                                     DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                                         .unwrap_or_else(Utc::now)
-                                 }),
+                                .map(|duration| {
+                                    DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                                        .unwrap_or_else(Utc::now)
+                                }),
+                            metadata: metadata.clone(),
                         });
                     }
                 }
@@ -274,7 +354,9 @@ impl FileScanner {
     }
 
     fn is_image_file(path: &Path) -> bool {
-        let supported_extensions = ["jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "heic", "raw"];
+        let supported_extensions = [
+            "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "heic", "raw",
+        ];
 
         path.extension()
             .and_then(|ext| ext.to_str())
@@ -288,6 +370,7 @@ pub struct PhotoFile {
     pub path: PathBuf,
     pub size: u64,
     pub modified: Option<DateTime<Utc>>,
+    pub metadata: std::fs::Metadata,
 }
 
 // === PhotoProcessor ===
@@ -342,9 +425,16 @@ impl PhotoProcessor {
 
         let mut processed_count = 0;
         for photo_file in new_photos {
-            match self.process_and_store(&photo_file, db_pool, cache_manager).await {
+            match self
+                .process_and_store(&photo_file, db_pool, cache_manager)
+                .await
+            {
                 Ok(_) => processed_count += 1,
-                Err(e) => error!("Failed to process photo {}: {}", photo_file.path.display(), e),
+                Err(e) => error!(
+                    "Failed to process photo {}: {}",
+                    photo_file.path.display(),
+                    e
+                ),
             }
         }
 
@@ -371,12 +461,12 @@ impl PhotoProcessor {
             eprintln!("Failed to delete orphaned photos: {}", e);
         }
 
-        // Step 4: Process all files found on disk
-        for photo_file in photo_files {
-            if let Some(processed_photo) = self.process_file(&photo_file) {
-                processed_photos.push(processed_photo);
-            }
-        }
+        // Step 4: Process all files found on disk (parallel processing)
+        let parallel_results: Vec<ProcessedPhoto> = photo_files
+            .par_iter()
+            .filter_map(|photo_file| self.process_file(photo_file))
+            .collect();
+        processed_photos.extend(parallel_results);
 
         Ok(processed_photos)
     }
@@ -404,7 +494,7 @@ impl PhotoProcessor {
 
         let mime_type = MimeGuess::from_path(path).first().map(|m| m.to_string());
 
-        let metadata = MetadataExtractor::extract(path);
+        let metadata = MetadataExtractor::extract_with_metadata(path, Some(&photo_file.metadata));
 
         let hash_sha256 = self.calculate_file_hash(path).ok();
 
@@ -566,29 +656,29 @@ mod tests {
     fn test_extract_date_from_exif_priority_order() {
         // This test verifies that our EXIF date extraction follows the correct priority order:
         // 1. DateTimeOriginal (highest priority)
-        // 2. DateTimeDigitized 
+        // 2. DateTimeDigitized
         // 3. DateTime
         // 4. GPSDateStamp (lowest priority)
-        
+
         // Create a mock exif reader that returns values for all date fields
         // We expect DateTimeOriginal to be chosen despite other fields being present
-        
+
         // Note: This is a unit test for the logic, not requiring actual EXIF files
         // The enhanced extract_date_from_exif function now checks multiple tags in priority order
-        
+
         // Test parse_exif_datetime with different formats that would come from these tags
         let datetime_original = MetadataExtractor::parse_exif_datetime("\"2023:01:15 10:30:00\"");
         assert!(datetime_original.is_some());
-        
+
         let datetime_digitized = MetadataExtractor::parse_exif_datetime("\"2023:01:16 11:30:00\"");
         assert!(datetime_digitized.is_some());
-        
+
         let datetime_regular = MetadataExtractor::parse_exif_datetime("\"2023:01:17 12:30:00\"");
         assert!(datetime_regular.is_some());
-        
+
         // Verify each format parses correctly
         assert_eq!(datetime_original.unwrap().day(), 15);
-        assert_eq!(datetime_digitized.unwrap().day(), 16);  
+        assert_eq!(datetime_digitized.unwrap().day(), 16);
         assert_eq!(datetime_regular.unwrap().day(), 17);
     }
 
@@ -596,10 +686,10 @@ mod tests {
     fn test_enhanced_exif_date_extraction_with_sample_file() {
         // Test with the sample EXIF file we downloaded
         let sample_path = std::path::Path::new("photos/sample_with_exif.jpg");
-        
+
         if sample_path.exists() {
             let metadata = MetadataExtractor::extract(sample_path);
-            
+
             // The sample file should have EXIF date information
             // This verifies our enhanced extraction is working
             if metadata.taken_at.is_some() {
@@ -610,5 +700,220 @@ mod tests {
                 assert_eq!(taken_at.day(), 30);
             }
         }
+    }
+
+    #[test]
+    fn test_parallel_processing_performance() {
+        use std::time::Instant;
+
+        // Create test photo files by duplicating existing ones
+        let test_photos = vec![
+            {
+                let path = std::path::PathBuf::from("photos/sample_with_exif.jpg");
+                let metadata = std::fs::metadata(&path)
+                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                PhotoFile {
+                    path,
+                    size: metadata.len(),
+                    modified: metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| {
+                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                                .unwrap_or_else(Utc::now)
+                        }),
+                    metadata,
+                }
+            },
+            {
+                let path = std::path::PathBuf::from("photos/test_image_1.jpg");
+                let metadata = std::fs::metadata(&path)
+                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                PhotoFile {
+                    path,
+                    size: metadata.len(),
+                    modified: metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| {
+                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                                .unwrap_or_else(Utc::now)
+                        }),
+                    metadata,
+                }
+            },
+            {
+                let path = std::path::PathBuf::from("photos/test_image_3.jpg");
+                let metadata = std::fs::metadata(&path)
+                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                PhotoFile {
+                    path,
+                    size: metadata.len(),
+                    modified: metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| {
+                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                                .unwrap_or_else(Utc::now)
+                        }),
+                    metadata,
+                }
+            },
+        ];
+
+        // Create multiple copies to simulate larger workload
+        let mut large_test_set = Vec::new();
+        for _ in 0..50 {
+            // 150 total photos
+            large_test_set.extend(test_photos.clone());
+        }
+
+        let indexer = PhotoProcessor::new(vec![std::path::PathBuf::from("photos")]);
+
+        // Benchmark parallel processing
+        let start = Instant::now();
+        let parallel_results: Vec<ProcessedPhoto> = large_test_set
+            .par_iter()
+            .filter_map(|photo_file| indexer.process_file(photo_file))
+            .collect();
+        let parallel_duration = start.elapsed();
+
+        // Benchmark sequential processing for comparison
+        let start = Instant::now();
+        let mut sequential_results = Vec::new();
+        for photo_file in &large_test_set {
+            if let Some(processed_photo) = indexer.process_file(photo_file) {
+                sequential_results.push(processed_photo);
+            }
+        }
+        let sequential_duration = start.elapsed();
+
+        // Results should be the same
+        assert_eq!(parallel_results.len(), sequential_results.len());
+
+        println!(
+            "Parallel processing: {:.2}ms for {} photos ({:.2} photos/sec)",
+            parallel_duration.as_millis(),
+            parallel_results.len(),
+            parallel_results.len() as f64 / parallel_duration.as_secs_f64()
+        );
+
+        println!(
+            "Sequential processing: {:.2}ms for {} photos ({:.2} photos/sec)",
+            sequential_duration.as_millis(),
+            sequential_results.len(),
+            sequential_results.len() as f64 / sequential_duration.as_secs_f64()
+        );
+
+        println!(
+            "Speedup: {:.2}x",
+            sequential_duration.as_secs_f64() / parallel_duration.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn test_file_creation_date_fallback_no_exif_no_gps() {
+        use std::fs;
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary file without EXIF data
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"fake image data").unwrap();
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Get the file's creation time
+        let file_metadata = fs::metadata(&temp_path).unwrap();
+        let expected_creation_time = file_metadata.created().unwrap();
+        let expected_datetime: DateTime<Utc> = DateTime::from(expected_creation_time);
+
+        // Extract metadata with file metadata provided
+        let metadata = MetadataExtractor::extract_with_metadata(&temp_path, Some(&file_metadata));
+
+        // Should fall back to file creation date since no EXIF/GPS data
+        assert!(metadata.taken_at.is_some());
+        let taken_at = metadata.taken_at.unwrap();
+
+        // Allow small time difference due to conversion precision
+        let time_diff = (taken_at - expected_datetime).num_seconds().abs();
+        assert!(
+            time_diff <= 1,
+            "Creation time fallback should match file creation time within 1 second, got diff: {}",
+            time_diff
+        );
+    }
+
+    #[test]
+    fn test_file_creation_date_fallback_exif_takes_priority() {
+        // Test with the sample EXIF file - should NOT use file creation time
+        let sample_path = std::path::Path::new("photos/sample_with_exif.jpg");
+
+        if sample_path.exists() {
+            let file_metadata = std::fs::metadata(sample_path).unwrap();
+            let metadata =
+                MetadataExtractor::extract_with_metadata(sample_path, Some(&file_metadata));
+
+            // Should use EXIF date (2008-05-30), not file creation time
+            assert!(metadata.taken_at.is_some());
+            let taken_at = metadata.taken_at.unwrap();
+            assert_eq!(taken_at.year(), 2008);
+            assert_eq!(taken_at.month(), 5);
+            assert_eq!(taken_at.day(), 30);
+        }
+    }
+
+    #[test]
+    fn test_file_creation_date_fallback_handles_unsupported_filesystem() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"fake image data").unwrap();
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Extract metadata without file metadata (simulating unsupported filesystem)
+        let metadata = MetadataExtractor::extract(&temp_path);
+
+        // Should not crash, taken_at should remain None since no EXIF data and creation time unsupported
+        assert!(metadata.taken_at.is_none());
+    }
+
+    #[test]
+    fn test_file_creation_date_fallback_with_metadata_parameter() {
+        use std::fs;
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary file without EXIF data
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"fake image data").unwrap();
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Get the file's creation time
+        let file_metadata = fs::metadata(&temp_path).unwrap();
+        let expected_creation_time = file_metadata.created().unwrap();
+        let expected_datetime: DateTime<Utc> = DateTime::from(expected_creation_time);
+
+        // Test that extract_with_metadata provides creation time fallback
+        let metadata_with_param =
+            MetadataExtractor::extract_with_metadata(&temp_path, Some(&file_metadata));
+        let metadata_without_param = MetadataExtractor::extract(&temp_path);
+
+        // Only the method with metadata should have taken_at set (creation time fallback)
+        assert!(metadata_with_param.taken_at.is_some());
+        assert!(metadata_without_param.taken_at.is_none()); // extract() doesn't have access to file metadata
+
+        // Verify the creation time is correctly extracted
+        let taken_at = metadata_with_param.taken_at.unwrap();
+        let time_diff = (taken_at - expected_datetime).num_seconds().abs();
+        assert!(
+            time_diff <= 1,
+            "Creation time fallback should match file creation time within 1 second, got diff: {}",
+            time_diff
+        );
     }
 }

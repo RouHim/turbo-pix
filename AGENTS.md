@@ -1,6 +1,6 @@
 # Agent Guidelines for TurboPix
 
-## Build/Test/Lint Commands
+## Build/Test/Lint Commands Backend
 
 - `cargo run` - Start the application
 - `cargo build` - Build the project
@@ -9,6 +9,11 @@
 - `cargo check` - Check for compilation errors without building
 - `cargo clippy` - Run linter (Clippy) for code quality
 - `cargo fmt` - Format code according to Rust standards
+
+## Test/Lint/Format Commands Frontend
+
+- `npm run lint` - Run linter (ESLint) for code quality
+- `npm run format` - Format code using Prettier
 
 ## Test-Driven Development (TDD)
 
@@ -85,7 +90,7 @@ cargo test                   # Run full test suite
 
 - **Zero warnings policy**: Maintain zero clippy warnings and compilation warnings
 - **Test coverage**: All tests must pass before commits
-- **Code review required**: Perform code review with `cargo clippy` before committing
+- **Code review required**: Perform code review before committing
 - **Utility preservation**: Use `#[allow(dead_code)]` for potentially useful functions rather than deletion
 
 ## Project Context & Development Guidelines

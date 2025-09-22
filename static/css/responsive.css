@@ -319,8 +319,8 @@
   --shadow-light: 0 1px 3px rgb(0 0 0 / 40%), 0 1px 2px rgb(0 0 0 / 30%);
   --shadow-medium: 0 4px 6px rgb(0 0 0 / 50%), 0 2px 4px rgb(0 0 0 / 40%);
   --shadow-heavy: 0 10px 15px rgb(0 0 0 / 60%), 0 4px 6px rgb(0 0 0 / 50%);
-  --glass-bg: rgba(30, 41, 59, 0.8);
-  --glass-border: rgba(51, 65, 85, 0.3);
+  --glass-bg: rgb(30 41 59 / 80%);
+  --glass-border: rgb(51 65 85 / 30%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -337,8 +337,8 @@
     --shadow-light: 0 1px 3px rgb(0 0 0 / 40%), 0 1px 2px rgb(0 0 0 / 30%);
     --shadow-medium: 0 4px 6px rgb(0 0 0 / 50%), 0 2px 4px rgb(0 0 0 / 40%);
     --shadow-heavy: 0 10px 15px rgb(0 0 0 / 60%), 0 4px 6px rgb(0 0 0 / 50%);
-    --glass-bg: rgba(30, 41, 59, 0.8);
-    --glass-border: rgba(51, 65, 85, 0.3);
+    --glass-bg: rgb(30 41 59 / 80%);
+    --glass-border: rgb(51 65 85 / 30%);
   }
 
   .search-input {

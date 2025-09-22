@@ -311,8 +311,8 @@ class PhotoViewer {
 
     // Date
     if (this.elements.date) {
-      this.elements.date.textContent = photo.date_taken
-        ? utils.formatDate(photo.date_taken)
+      this.elements.date.textContent = photo.taken_at
+        ? utils.formatDate(photo.taken_at)
         : 'Unknown';
     }
 

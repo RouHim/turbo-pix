@@ -25,7 +25,7 @@ mod api_tests {
         }
 
         fn create_test_photo(&self, path: &str, filename: &str) -> i64 {
-            let photo = Photo::new_test_photo(path, filename);
+            let photo = Photo::new_test_photo(path.to_string(), filename.to_string());
             photo.create(&self.pool).unwrap()
         }
 

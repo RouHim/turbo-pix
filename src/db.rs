@@ -748,4 +748,67 @@ impl Photo {
 
         Ok(suggestions)
     }
+
+    #[cfg(test)]
+    pub fn new_test_photo(file_path: String, filename: String) -> Self {
+        Photo {
+            id: 0,
+            file_path,
+            filename,
+            file_size: 1024,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(Utc::now()),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            camera_make: Some("Test Camera".to_string()),
+            camera_model: Some("Test Model".to_string()),
+            lens_make: None,
+            lens_model: None,
+            iso: Some(100),
+            aperture: Some(2.8),
+            shutter_speed: Some("1/60".to_string()),
+            focal_length: Some(50.0),
+            width: Some(1920),
+            height: Some(1080),
+            color_space: Some("sRGB".to_string()),
+            white_balance: Some("Auto".to_string()),
+            exposure_mode: Some("Auto".to_string()),
+            metering_mode: Some("Pattern".to_string()),
+            orientation: Some(1),
+            flash_used: Some(false),
+            latitude: None,
+            longitude: None,
+            location_name: None,
+            hash_md5: None,
+            hash_sha256: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
+    create_in_memory_pool()
+}
+
+#[cfg(test)]
+pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
+    let manager = SqliteConnectionManager::memory();
+    let pool = Pool::new(manager)?;
+
+    // Initialize schema on a connection from the pool
+    {
+        let conn = pool.get()?;
+        initialize_schema(&conn)?;
+    }
+
+    Ok(pool)
 }

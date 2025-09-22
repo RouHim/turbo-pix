@@ -257,8 +257,8 @@ class PhotoGrid {
   getPhotoMeta(photo) {
     const parts = [];
 
-    if (photo.date_taken) {
-      const date = new Date(photo.date_taken);
+    if (photo.taken_at) {
+      const date = new Date(photo.taken_at);
       parts.push(date.toLocaleDateString());
     }
 

@@ -88,6 +88,13 @@ cargo test                   # Run full test suite
 
 ## Project Context & Development Guidelines
 
+### Project Status
+
+- **Non-production application**: TurboPix is a development/personal project, not a production system
+- **No legacy compatibility requirements**: Since this isn't serving production users, we can make breaking changes freely
+- **Database can be recreated**: No need to preserve existing data or maintain migration compatibility
+- **Modern approach preferred**: Can use latest APIs and remove fallback mechanisms without concern
+
 ### Development Philosophy
 
 - **Clean, simple code over backwards compatibility**

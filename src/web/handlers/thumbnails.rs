@@ -26,10 +26,15 @@ pub async fn get_thumbnail(
     service: web::Data<Arc<ThumbnailService>>,
 ) -> ActixResult<HttpResponse> {
     let (photo_id, size_str) = path.into_inner();
+    info!("DEBUG: get_thumbnail called for photo_id={}, size_str={}", photo_id, size_str);
 
     let size = match size_str.parse::<ThumbnailSize>() {
-        Ok(size) => size,
+        Ok(size) => {
+            info!("DEBUG: parsed size successfully: {:?}", size);
+            size
+        },
         Err(_) => {
+            error!("DEBUG: failed to parse size: {}", size_str);
             return Ok(HttpResponse::BadRequest().json(serde_json::json!({
                 "error": "Invalid thumbnail size",
                 "valid_sizes": ["small", "medium", "large"]
@@ -38,22 +43,30 @@ pub async fn get_thumbnail(
     };
 
     let cache_key = CacheKey::new(photo_id, size);
+    info!("DEBUG: cache_key created: {}", cache_key);
 
     // Try memory cache first
     if let Some(data) = service.memory_cache.get(&cache_key) {
+        info!("DEBUG: found in memory cache, data length: {}", data.len());
         info!("Serving thumbnail from memory cache: {}", cache_key);
         return Ok(HttpResponse::Ok().content_type("image/jpeg").body(data));
     }
+    info!("DEBUG: not found in memory cache");
 
     // Get photo from database
     let photo = match Photo::find_by_id(&pool, photo_id) {
-        Ok(Some(photo)) => photo,
+        Ok(Some(photo)) => {
+            info!("DEBUG: found photo in db: path={}", photo.file_path);
+            photo
+        },
         Ok(None) => {
+            error!("DEBUG: photo not found in database: {}", photo_id);
             return Ok(HttpResponse::NotFound().json(serde_json::json!({
                 "error": "Photo not found"
             })));
         }
         Err(e) => {
+            error!("DEBUG: database error for photo {}: {}", photo_id, e);
             error!("Failed to fetch photo {}: {}", photo_id, e);
             return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to fetch photo"
@@ -61,18 +74,22 @@ pub async fn get_thumbnail(
         }
     };
 
+    info!("DEBUG: calling generator.get_or_generate for photo_id={}, size={:?}", photo_id, size);
     // Generate or get from disk cache
     match service.generator.get_or_generate(&photo, size).await {
         Ok(data) => {
+            info!("DEBUG: generator returned data, length: {}", data.len());
             // Store in memory cache for future requests
             if let Err(e) = service.memory_cache.put(&cache_key, data.clone()) {
                 error!("Failed to store thumbnail in memory cache: {}", e);
             }
 
+            info!("DEBUG: preparing HTTP response with {} bytes", data.len());
             info!("Serving generated thumbnail: {}", cache_key);
             Ok(HttpResponse::Ok().content_type("image/jpeg").body(data))
         }
         Err(e) => {
+            error!("DEBUG: generator failed: {}", e);
             error!("Failed to generate thumbnail for {}: {}", cache_key, e);
             Ok(HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to generate thumbnail"
@@ -202,8 +219,8 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             focal_length: None,
-            gps_latitude: None,
-            gps_longitude: None,
+            latitude: None,
+            longitude: None,
             location_name: None,
             hash_md5: None,
             hash_sha256: None,

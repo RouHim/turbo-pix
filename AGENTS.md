@@ -89,3 +89,26 @@
 ### Application Status
 
 ✅ **Application confirmed working** - TurboPix runs successfully with cleaned schema, processes 79 photos, server listening on 0.0.0.0:18473
+
+## Development Workflow & Common Pitfalls
+
+### Static File Development
+
+- **Always run `cargo clean && cargo build`** after modifying files in `/static/`
+- Rust embeds static files at compile-time using `include_str!()` macro - changes require recompilation
+- Use browser dev tools to verify latest changes are served
+- **Common pitfall**: Modified static files won't be served until recompilation forces re-embedding
+
+### JavaScript Debugging
+
+- Access app objects via browser console (e.g., `window.turboPixApp`)
+- Test both functional behavior and UI state synchronization
+- **Common bug pattern**: Functions update app state but forget to sync UI elements
+- **Example**: setSortBy() bug where photos reordered correctly but select dropdown value didn't update
+
+### UI State Management
+
+- Always sync DOM elements after app state changes
+- **Pattern**: `appState.value = newValue; domElement.value = newValue;`
+- **Fix pattern**: After state changes, explicitly update corresponding DOM elements
+- Verify both functional behavior AND visual UI state changes in testing

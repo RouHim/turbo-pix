@@ -16,10 +16,17 @@ pub async fn search_photos(
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = (page - 1) * limit;
 
-    let _sort_field = query.sort.as_deref().unwrap_or("date_indexed");
-    let _sort_order = query.order.as_deref().unwrap_or("desc");
+    let sort_field = query.sort.as_deref().unwrap_or("taken_at");
+    let sort_order = query.order.as_deref().unwrap_or("desc");
 
-    match Photo::search_photos(&pool, &query, limit as i64, offset as i64) {
+    match Photo::search_photos(
+        &pool,
+        &query,
+        limit as i64,
+        offset as i64,
+        Some(sort_field),
+        Some(sort_order),
+    ) {
         Ok((photos, total)) => {
             let has_next = offset + limit < total as u32;
             let has_prev = page > 1;

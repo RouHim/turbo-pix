@@ -190,7 +190,7 @@ pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
     pub id: i64,
-    pub path: String,
+    pub file_path: String,
     pub filename: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
@@ -213,8 +213,8 @@ pub struct Photo {
     pub metering_mode: Option<String>,
     pub orientation: Option<i32>,
     pub flash_used: Option<bool>,
-    pub gps_latitude: Option<f64>,
-    pub gps_longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub location_name: Option<String>,
     pub hash_md5: Option<String>,
     pub hash_sha256: Option<String>,
@@ -233,7 +233,7 @@ impl Photo {
     pub fn from_row(row: &Row) -> SqlResult<Self> {
         Ok(Photo {
             id: row.get(0)?,
-            path: row.get(1)?,
+            file_path: row.get(1)?,
             filename: row.get(2)?,
             file_size: row.get(3)?,
             mime_type: row.get(4)?,
@@ -266,8 +266,8 @@ impl Photo {
             metering_mode: row.get(21)?,
             orientation: row.get(22)?,
             flash_used: row.get(23)?,
-            gps_latitude: row.get(24)?,
-            gps_longitude: row.get(25)?,
+            latitude: row.get(24)?,
+            longitude: row.get(25)?,
             location_name: row.get(26)?,
             hash_md5: row.get(27)?,
             hash_sha256: row.get(28)?,
@@ -345,7 +345,7 @@ impl Photo {
                 updated_at = ?
              WHERE id = ?",
             rusqlite::params![
-                self.path,
+                self.file_path,
                 self.filename,
                 self.file_size,
                 self.mime_type,
@@ -368,8 +368,8 @@ impl Photo {
                 self.metering_mode,
                 self.orientation,
                 self.flash_used,
-                self.gps_latitude,
-                self.gps_longitude,
+                self.latitude,
+                self.longitude,
                 self.location_name,
                 self.hash_md5,
                 self.hash_sha256,
@@ -407,7 +407,7 @@ impl Photo {
         // Try to find existing photo by path
         let existing = conn.query_row(
             "SELECT id FROM photos WHERE file_path = ?",
-            [&self.path],
+            [&self.file_path],
             |row| row.get::<_, i64>(0),
         );
 
@@ -437,15 +437,36 @@ impl Photo {
         pool: &DbPool,
         limit: i64,
         offset: i64,
+        sort: Option<&str>,
+        order: Option<&str>,
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
         // Get total count
         let total: i64 = conn.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?;
 
+        // Build ORDER BY clause
+        let sort_field = match sort {
+            Some("filename") => "filename",
+            Some("camera_make") => "camera_make",
+            Some("camera_model") => "camera_model",
+            Some("file_size") => "file_size",
+            Some("created_at") => "created_at",
+            _ => "taken_at", // default
+        };
+
+        let sort_order = match order {
+            Some("asc") => "ASC",
+            _ => "DESC", // default
+        };
+
         // Get paginated results
-        let mut stmt =
-            conn.prepare("SELECT * FROM photos ORDER BY taken_at DESC LIMIT ? OFFSET ?")?;
+        let query = format!(
+            "SELECT * FROM photos ORDER BY {} {} LIMIT ? OFFSET ?",
+            sort_field, sort_order
+        );
+
+        let mut stmt = conn.prepare(&query)?;
         let photo_iter = stmt.query_map([limit, offset], Photo::from_row)?;
 
         let mut photos = Vec::new();
@@ -484,7 +505,7 @@ impl Photo {
         conn.execute(
             sql,
             params![
-                self.path,
+                self.file_path,
                 self.filename,
                 self.file_size,
                 self.taken_at.map(|dt| dt.to_rfc3339()),
@@ -498,8 +519,8 @@ impl Photo {
                 self.height,
                 self.orientation,
                 self.flash_used,
-                self.gps_latitude,
-                self.gps_longitude,
+                self.latitude,
+                self.longitude,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -578,6 +599,8 @@ impl Photo {
         query: &SearchQuery,
         limit: i64,
         offset: i64,
+        sort: Option<&str>,
+        order: Option<&str>,
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
@@ -639,9 +662,23 @@ impl Photo {
         let total: i64 = count_stmt.query_row(param_refs.as_slice(), |row| row.get(0))?;
 
         // Get the actual photos
+        let sort_field = match sort {
+            Some("filename") => "filename",
+            Some("camera_make") => "camera_make",
+            Some("camera_model") => "camera_model",
+            Some("file_size") => "file_size",
+            Some("created_at") => "created_at",
+            _ => "taken_at", // default
+        };
+
+        let sort_order = match order {
+            Some("asc") => "ASC",
+            _ => "DESC", // default
+        };
+
         let data_sql = format!(
-            "SELECT * FROM photos{} ORDER BY taken_at DESC LIMIT ? OFFSET ?",
-            where_clause
+            "SELECT * FROM photos{} ORDER BY {} {} LIMIT ? OFFSET ?",
+            where_clause, sort_field, sort_order
         );
         params.push(Box::new(limit));
         params.push(Box::new(offset));

@@ -88,15 +88,20 @@ pub fn get_mime_type(filename: &str) -> &'static str {
 
 pub async fn serve_static_asset(req: HttpRequest) -> Result<HttpResponse> {
     let path = req.path();
+    tracing::info!("Serving static asset for path: {}", path);
     let asset = StaticAsset::from_path(path);
+    tracing::info!("Asset type: {:?}", asset);
 
     match asset.content() {
         Some(content) => Ok(HttpResponse::Ok()
             .content_type(asset.mime_type())
             .body(content)),
-        None => Ok(HttpResponse::NotFound()
-            .content_type("text/plain")
-            .body("File not found")),
+        None => {
+            tracing::warn!("Asset not found for path: {}", path);
+            Ok(HttpResponse::NotFound()
+                .content_type("text/plain")
+                .body("File not found"))
+        }
     }
 }
 

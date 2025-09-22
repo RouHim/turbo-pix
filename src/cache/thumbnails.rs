@@ -58,7 +58,7 @@ impl ThumbnailGenerator {
     }
 
     async fn generate_thumbnail(&self, photo: &Photo, size: ThumbnailSize) -> CacheResult<Vec<u8>> {
-        let photo_path = PathBuf::from(&photo.path);
+        let photo_path = PathBuf::from(&photo.file_path);
 
         if !photo_path.exists() {
             return Err(CacheError::PhotoNotFound);
@@ -255,8 +255,8 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             focal_length: None,
-            gps_latitude: None,
-            gps_longitude: None,
+            latitude: None,
+            longitude: None,
             location_name: None,
             hash_md5: None,
             hash_sha256: None,

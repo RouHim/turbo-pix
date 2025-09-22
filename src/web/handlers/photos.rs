@@ -17,8 +17,9 @@ use tracing::error;
 pub struct PhotoQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
-    pub _sort: Option<String>,
-    pub _order: Option<String>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+    pub q: Option<String>,
     pub _date_from: Option<String>,
     pub _date_to: Option<String>,
     pub _camera_make: Option<String>,
@@ -101,7 +102,7 @@ fn create_photo_from_temp_file(
     // Create the Photo struct
     Ok(Photo {
         id: 0, // Will be set by database
-        path: temp_path.to_string_lossy().to_string(),
+        file_path: temp_path.to_string_lossy().to_string(),
         filename: filename.to_string(),
         file_size,
         mime_type: Some(mime_type),
@@ -124,8 +125,8 @@ fn create_photo_from_temp_file(
         metering_mode: None,
         orientation: Some(metadata.orientation.unwrap_or(1)),
         flash_used: None,
-        gps_latitude: metadata.gps_latitude,
-        gps_longitude: metadata.gps_longitude,
+        latitude: metadata.gps_latitude,
+        longitude: metadata.gps_longitude,
         location_name: None,
         hash_md5: None, // We could calculate this too, but SHA256 is sufficient
         hash_sha256: Some(hash_sha256),
@@ -218,7 +219,65 @@ pub async fn list_photos(
     let limit = query.limit.unwrap_or(50).min(100); // Max 100 per page
     let offset = (page - 1) * limit;
 
-    match Photo::list_with_pagination(&pool, limit as i64, offset as i64) {
+    // If there's a search query, use search functionality
+    if let Some(search_term) = &query.q {
+        if !search_term.trim().is_empty() {
+            // Create a SearchQuery from the PhotoQuery
+            let search_query = crate::db::SearchQuery {
+                q: Some(search_term.clone()),
+                camera_make: None,
+                camera_model: None,
+                year: None,
+                month: None,
+                keywords: None,
+                has_location: None,
+                country: None,
+                page: query.page,
+                limit: query.limit,
+                sort: query.sort.clone(),
+                order: query.order.clone(),
+            };
+
+            match Photo::search_photos(
+                &pool,
+                &search_query,
+                limit as i64,
+                offset as i64,
+                query.sort.as_deref(),
+                query.order.as_deref(),
+            ) {
+                Ok((photos, total)) => {
+                    let has_next = offset + limit < total as u32;
+                    let has_prev = page > 1;
+
+                    return Ok(HttpResponse::Ok().json(PhotosResponse {
+                        photos,
+                        total: total as usize,
+                        page,
+                        limit,
+                        has_next,
+                        has_prev,
+                    }));
+                }
+                Err(e) => {
+                    return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                        error: format!("Search error: {}", e),
+                        code: 500,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    }));
+                }
+            }
+        }
+    }
+
+    // Default behavior: list all photos
+    match Photo::list_with_pagination(
+        &pool,
+        limit as i64,
+        offset as i64,
+        query.sort.as_deref(),
+        query.order.as_deref(),
+    ) {
         Ok((photos, total)) => {
             let has_next = offset + limit < total as u32;
             let has_prev = page > 1;
@@ -281,7 +340,7 @@ pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> Re
     };
 
     // Security check: ensure the path is within allowed directories
-    let photo_path = std::path::Path::new(&photo.path);
+    let photo_path = std::path::Path::new(&photo.file_path);
     if !photo_path.exists() {
         return Ok(HttpResponse::NotFound().json(ErrorResponse {
             error: "Photo file not found on disk".to_string(),
@@ -291,7 +350,7 @@ pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> Re
     }
 
     // Read the file
-    match std::fs::read(&photo.path) {
+    match std::fs::read(&photo.file_path) {
         Ok(file_data) => {
             // Determine content type from photo metadata or file extension
             let content_type = if let Some(ref mime_type) = photo.mime_type {
@@ -299,13 +358,13 @@ pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> Re
                     mime_type.clone()
                 } else {
                     // Fallback to mime_guess if metadata is not reliable
-                    mime_guess::from_path(&photo.path)
+                    mime_guess::from_path(&photo.file_path)
                         .first_or_octet_stream()
                         .to_string()
                 }
             } else {
                 // No mime_type available, use mime_guess
-                mime_guess::from_path(&photo.path)
+                mime_guess::from_path(&photo.file_path)
                     .first_or_octet_stream()
                     .to_string()
             };
@@ -316,7 +375,7 @@ pub async fn get_photo_file(pool: web::Data<DbPool>, path: web::Path<i64>) -> Re
                 .body(file_data))
         }
         Err(e) => {
-            error!("Failed to read photo file {}: {}", photo.path, e);
+            error!("Failed to read photo file {}: {}", photo.file_path, e);
             Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 error: "Failed to read photo file".to_string(),
                 code: 500,
@@ -351,8 +410,8 @@ pub async fn get_photo_metadata(
                 "aperture": photo.aperture,
                 "shutter_speed": photo.shutter_speed,
                 "focal_length": photo.focal_length,
-                "gps_latitude": photo.gps_latitude,
-                "gps_longitude": photo.gps_longitude,
+                "gps_latitude": photo.latitude,
+                "gps_longitude": photo.longitude,
                 "location_name": photo.location_name,
                 "hash_md5": photo.hash_md5,
                 "hash_sha256": photo.hash_sha256
@@ -513,10 +572,10 @@ pub async fn update_photo(
         photo.focal_length = Some(focal_length);
     }
     if let Some(gps_latitude) = update_req.gps_latitude {
-        photo.gps_latitude = Some(gps_latitude);
+        photo.latitude = Some(gps_latitude);
     }
     if let Some(gps_longitude) = update_req.gps_longitude {
-        photo.gps_longitude = Some(gps_longitude);
+        photo.longitude = Some(gps_longitude);
     }
     if let Some(location_name) = &update_req.location_name {
         photo.location_name = Some(location_name.clone());

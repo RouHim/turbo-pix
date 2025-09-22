@@ -138,7 +138,7 @@ impl PhotoProcessor {
             .as_secs() as i64;
 
         Ok(ProcessedPhoto {
-            path: photo_file.path.to_string_lossy().to_string(),
+            file_path: photo_file.path.to_string_lossy().to_string(),
             filename: photo_file.filename.clone(),
             file_size: photo_file.file_size as i64,
             mime_type,
@@ -153,8 +153,8 @@ impl PhotoProcessor {
             aperture: metadata.aperture,
             shutter_speed: metadata.shutter_speed,
             focal_length: metadata.focal_length,
-            gps_latitude: metadata.gps_latitude,
-            gps_longitude: metadata.gps_longitude,
+            latitude: metadata.gps_latitude,
+            longitude: metadata.gps_longitude,
             hash_sha256: hash,
         })
     }
@@ -185,7 +185,7 @@ impl PhotoProcessor {
 
 #[derive(Debug, Clone)]
 pub struct ProcessedPhoto {
-    pub path: String,
+    pub file_path: String,
     pub filename: String,
     pub file_size: i64,
     pub mime_type: String,
@@ -200,8 +200,8 @@ pub struct ProcessedPhoto {
     pub aperture: Option<f64>,
     pub shutter_speed: Option<String>,
     pub focal_length: Option<f64>,
-    pub gps_latitude: Option<f64>,
-    pub gps_longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub hash_sha256: String,
 }
 
@@ -209,7 +209,7 @@ impl From<ProcessedPhoto> for Photo {
     fn from(processed: ProcessedPhoto) -> Self {
         Photo {
             id: 0, // Will be set by database
-            path: processed.path,
+            file_path: processed.file_path,
             filename: processed.filename,
             file_size: processed.file_size,
             mime_type: Some(processed.mime_type),
@@ -232,8 +232,8 @@ impl From<ProcessedPhoto> for Photo {
             metering_mode: None,
             orientation: Some(processed.orientation),
             flash_used: None,
-            gps_latitude: processed.gps_latitude,
-            gps_longitude: processed.gps_longitude,
+            latitude: processed.latitude,
+            longitude: processed.longitude,
             location_name: None,
             hash_md5: None,
             hash_sha256: Some(processed.hash_sha256),
@@ -408,7 +408,7 @@ mod tests {
         let photo = &processed[0];
 
         assert_eq!(photo.filename, "detailed_test.jpg");
-        assert!(photo.path.ends_with("detailed_test.jpg"));
+        assert!(photo.file_path.ends_with("detailed_test.jpg"));
         assert_eq!(photo.file_size, 21);
         assert_eq!(photo.mime_type, "image/jpeg");
         assert_eq!(photo.orientation, 1);

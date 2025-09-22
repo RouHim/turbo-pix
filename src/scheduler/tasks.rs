@@ -202,7 +202,7 @@ mod tests {
 
             let photo = Photo {
                 id: None,
-                path: path.to_string(),
+                file_path: path.to_string(),
                 filename: path.split('/').last().unwrap_or(path).to_string(),
                 file_size: 1024,
                 mime_type: "image/jpeg".to_string(),
@@ -218,8 +218,8 @@ mod tests {
                 aperture: None,
                 shutter_speed: None,
                 focal_length: None,
-                gps_latitude: None,
-                gps_longitude: None,
+                latitude: None,
+                longitude: None,
                 location_name: None,
                 hash_md5: None,
                 hash_sha256: Some(unique_hash),

@@ -251,6 +251,12 @@ class TurboPixApp {
   async setSortBy(sortBy) {
     this.state.set('sortBy', sortBy);
 
+    // Update UI select element to reflect new sort
+    const sortSelect = document.getElementById('sort-select');
+    if (sortSelect) {
+      sortSelect.value = sortBy;
+    }
+
     // Reload current view with new sorting
     const currentView = this.state.get('currentView');
     await this.loadViewData(currentView);

@@ -185,7 +185,7 @@ impl ThumbnailGenerator {
 mod tests {
     use super::*;
     use crate::config::{CacheConfig, Config};
-    use crate::db::connection::create_in_memory_pool;
+    use crate::db::create_in_memory_pool;
     use chrono::Utc;
     use std::fs::File;
     use std::io::Write;
@@ -237,31 +237,46 @@ mod tests {
     }
 
     fn create_test_photo(path: &str) -> Photo {
+        let now = Utc::now();
         Photo {
-            id: Some(1),
-            path: path.to_string(),
+            id: 1,
+            file_path: path.to_string(),
             filename: "test.jpg".to_string(),
             file_size: 1024,
-            mime_type: "image/jpeg".to_string(),
-            taken_at: Some(Utc::now()),
-            date_modified: Utc::now(),
-            date_indexed: Utc::now(),
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(now),
+            date_modified: now,
+            date_indexed: Some(now),
+            camera_make: Some("Test Camera".to_string()),
+            camera_model: Some("Test Model".to_string()),
+            lens_make: None,
+            lens_model: None,
+            iso: Some(100),
+            aperture: Some(2.8),
+            shutter_speed: Some("1/100".to_string()),
+            focal_length: Some(50.0),
             width: Some(100),
             height: Some(100),
-            orientation: 1,
-            camera_make: None,
-            camera_model: None,
-            iso: None,
-            aperture: None,
-            shutter_speed: None,
-            focal_length: None,
+            color_space: Some("sRGB".to_string()),
+            white_balance: Some("Auto".to_string()),
+            exposure_mode: Some("Auto".to_string()),
+            metering_mode: Some("Center-weighted".to_string()),
+            orientation: Some(1),
+            flash_used: Some(false),
             latitude: None,
             longitude: None,
             location_name: None,
-            hash_md5: None,
-            hash_sha256: None,
+            hash_md5: Some("test_hash_md5".to_string()),
+            hash_sha256: Some("test_hash_sha256".to_string()),
             thumbnail_path: None,
-            has_thumbnail: false,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            created_at: now,
+            updated_at: now,
         }
     }
 

@@ -153,8 +153,7 @@ mod tests {
     use tokio::time::{sleep, Duration as TokioDuration};
 
     use crate::cache::{CacheManager, MemoryCache};
-    use crate::db::Photo;
-    use crate::db::{create_test_db_pool, DbPool};
+    use crate::db::{create_test_db_pool, DbPool, Photo};
 
     struct TestEnvironment {
         temp_dir: TempDir,
@@ -200,31 +199,46 @@ mod tests {
             path.hash(&mut hasher);
             let unique_hash = format!("{:x}", hasher.finish());
 
+            let now = Utc::now();
             let photo = Photo {
-                id: None,
+                id: 1, // Will be set by database
                 file_path: path.to_string(),
                 filename: path.split('/').last().unwrap_or(path).to_string(),
                 file_size: 1024,
-                mime_type: "image/jpeg".to_string(),
+                mime_type: Some("image/jpeg".to_string()),
                 taken_at: None,
-                date_modified: Utc::now(),
-                date_indexed: Utc::now(),
-                width: Some(800),
-                height: Some(600),
-                orientation: 1,
+                date_modified: now,
+                date_indexed: Some(now),
                 camera_make: None,
                 camera_model: None,
+                lens_make: None,
+                lens_model: None,
                 iso: None,
                 aperture: None,
                 shutter_speed: None,
                 focal_length: None,
+                width: Some(800),
+                height: Some(600),
+                color_space: None,
+                white_balance: None,
+                exposure_mode: None,
+                metering_mode: None,
+                orientation: Some(1),
+                flash_used: None,
                 latitude: None,
                 longitude: None,
                 location_name: None,
                 hash_md5: None,
                 hash_sha256: Some(unique_hash),
                 thumbnail_path: None,
-                has_thumbnail: false,
+                has_thumbnail: Some(false),
+                country: None,
+                keywords: None,
+                faces_detected: None,
+                objects_detected: None,
+                colors: None,
+                created_at: now,
+                updated_at: now,
             };
 
             photo.create_or_update(&self.db_pool)?;

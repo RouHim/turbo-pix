@@ -60,6 +60,10 @@ impl PhotoProcessor {
         let mut processed_photos = Vec::new();
 
         info!("Found {} photos in filesystem", photo_files.len());
+        for photo_file in &photo_files {
+            let path_str = photo_file.path.to_string_lossy().to_string();
+            fs_paths.insert(path_str);
+        }
 
         // Process each photo file
         for photo_file in photo_files {
@@ -110,7 +114,8 @@ impl PhotoProcessor {
             }
 
             // Remove orphaned entries from database
-            if let Err(e) = crate::db::delete_orphaned_photos(db_pool, &orphaned_paths) {
+            let existing_paths: Vec<String> = fs_paths.iter().cloned().collect();
+            if let Err(e) = crate::db::delete_orphaned_photos(db_pool, &existing_paths) {
                 error!("Failed to delete orphaned photos: {}", e);
             } else {
                 info!("Removed {} orphaned database entries", orphaned_paths.len());
@@ -383,12 +388,12 @@ mod tests {
 
         assert_eq!(photo.filename, processed_photo.filename);
         assert_eq!(photo.file_size, processed_photo.file_size);
-        assert_eq!(photo.mime_type, processed_photo.mime_type);
+        assert_eq!(photo.mime_type, Some(processed_photo.mime_type.clone()));
         assert_eq!(photo.hash_sha256, Some(processed_photo.hash_sha256.clone()));
-        assert_eq!(photo.orientation, processed_photo.orientation);
-        assert!(photo.id.is_none());
+        assert_eq!(photo.orientation, Some(processed_photo.orientation));
+        assert_eq!(photo.id, 0); // Default id for new photos
         assert!(photo.hash_md5.is_none());
-        assert_eq!(photo.has_thumbnail, false);
+        assert_eq!(photo.has_thumbnail, Some(false));
     }
 
     #[test]

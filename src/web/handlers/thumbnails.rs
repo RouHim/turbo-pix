@@ -26,13 +26,16 @@ pub async fn get_thumbnail(
     service: web::Data<Arc<ThumbnailService>>,
 ) -> ActixResult<HttpResponse> {
     let (photo_id, size_str) = path.into_inner();
-    info!("DEBUG: get_thumbnail called for photo_id={}, size_str={}", photo_id, size_str);
+    info!(
+        "DEBUG: get_thumbnail called for photo_id={}, size_str={}",
+        photo_id, size_str
+    );
 
     let size = match size_str.parse::<ThumbnailSize>() {
         Ok(size) => {
             info!("DEBUG: parsed size successfully: {:?}", size);
             size
-        },
+        }
         Err(_) => {
             error!("DEBUG: failed to parse size: {}", size_str);
             return Ok(HttpResponse::BadRequest().json(serde_json::json!({
@@ -58,7 +61,7 @@ pub async fn get_thumbnail(
         Ok(Some(photo)) => {
             info!("DEBUG: found photo in db: path={}", photo.file_path);
             photo
-        },
+        }
         Ok(None) => {
             error!("DEBUG: photo not found in database: {}", photo_id);
             return Ok(HttpResponse::NotFound().json(serde_json::json!({
@@ -74,7 +77,10 @@ pub async fn get_thumbnail(
         }
     };
 
-    info!("DEBUG: calling generator.get_or_generate for photo_id={}, size={:?}", photo_id, size);
+    info!(
+        "DEBUG: calling generator.get_or_generate for photo_id={}, size={:?}",
+        photo_id, size
+    );
     // Generate or get from disk cache
     match service.generator.get_or_generate(&photo, size).await {
         Ok(data) => {
@@ -144,8 +150,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::config::{CacheConfig, Config};
-    use crate::db::connection::create_in_memory_pool;
-    use crate::db::models::Photo;
+    use crate::db::{create_in_memory_pool, Photo};
 
     fn create_test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
@@ -192,7 +197,7 @@ mod tests {
         Ok(())
     }
 
-    async fn setup_test_service() -> (Arc<ThumbnailService>, TempDir) {
+    async fn setup_test_service() -> (Arc<ThumbnailService>, DbPool, TempDir) {
         let (config, temp_dir) = create_test_config();
         let db_pool = create_in_memory_pool().unwrap();
 
@@ -201,49 +206,73 @@ mod tests {
         let image_path = temp_dir.path().join("test.jpg");
         create_test_image(&image_path).unwrap();
 
+        let now = Utc::now();
         let photo = Photo {
-            id: None,
-            path: image_path.to_string_lossy().to_string(),
+            id: 1,
+            file_path: image_path.to_string_lossy().to_string(),
             filename: "test.jpg".to_string(),
             file_size: 1024,
-            mime_type: "image/jpeg".to_string(),
-            taken_at: Some(Utc::now()),
-            date_modified: Utc::now(),
-            date_indexed: Utc::now(),
-            width: Some(100),
-            height: Some(100),
-            orientation: 1,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(now),
+            date_modified: now,
+            date_indexed: Some(now),
             camera_make: None,
             camera_model: None,
+            lens_make: None,
+            lens_model: None,
             iso: None,
             aperture: None,
             shutter_speed: None,
             focal_length: None,
+            width: Some(100),
+            height: Some(100),
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: Some(1),
+            flash_used: None,
             latitude: None,
             longitude: None,
             location_name: None,
             hash_md5: None,
             hash_sha256: None,
             thumbnail_path: None,
-            has_thumbnail: false,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            created_at: now,
+            updated_at: now,
         };
 
         photo.create(&db_pool).unwrap();
 
         let memory_cache = MemoryCache::new(100, 10);
-        let service = Arc::new(ThumbnailService::new(&config, memory_cache, db_pool));
+        let service = Arc::new(ThumbnailService::new(
+            &config,
+            memory_cache,
+            db_pool.clone(),
+        ));
 
-        (service, temp_dir)
+        (service, db_pool, temp_dir)
     }
 
     #[actix_web::test]
     async fn test_get_thumbnail_success() {
-        let (service, _temp_dir) = setup_test_service().await;
+        let (service, db_pool, _temp_dir) = setup_test_service().await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(service.clone())).route(
-            "/thumbnails/{photo_id}/{size}",
-            web::get().to(get_thumbnail),
-        ))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(db_pool))
+                .app_data(web::Data::new(service.clone()))
+                .route(
+                    "/thumbnails/{photo_id}/{size}",
+                    web::get().to(get_thumbnail),
+                ),
+        )
         .await;
 
         let req = test::TestRequest::get()
@@ -257,12 +286,17 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_thumbnail_invalid_size() {
-        let (service, _temp_dir) = setup_test_service().await;
+        let (service, db_pool, _temp_dir) = setup_test_service().await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(service.clone())).route(
-            "/thumbnails/{photo_id}/{size}",
-            web::get().to(get_thumbnail),
-        ))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(db_pool))
+                .app_data(web::Data::new(service.clone()))
+                .route(
+                    "/thumbnails/{photo_id}/{size}",
+                    web::get().to(get_thumbnail),
+                ),
+        )
         .await;
 
         let req = test::TestRequest::get()
@@ -275,12 +309,17 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_thumbnail_nonexistent_photo() {
-        let (service, _temp_dir) = setup_test_service().await;
+        let (service, db_pool, _temp_dir) = setup_test_service().await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(service.clone())).route(
-            "/thumbnails/{photo_id}/{size}",
-            web::get().to(get_thumbnail),
-        ))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(db_pool))
+                .app_data(web::Data::new(service.clone()))
+                .route(
+                    "/thumbnails/{photo_id}/{size}",
+                    web::get().to(get_thumbnail),
+                ),
+        )
         .await;
 
         let req = test::TestRequest::get()
@@ -293,7 +332,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_cache_stats() {
-        let (service, _temp_dir) = setup_test_service().await;
+        let (service, _db_pool, _temp_dir) = setup_test_service().await;
 
         let app = test::init_service(
             App::new()
@@ -318,7 +357,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_clear_cache() {
-        let (service, _temp_dir) = setup_test_service().await;
+        let (service, _db_pool, _temp_dir) = setup_test_service().await;
 
         let app = test::init_service(
             App::new()

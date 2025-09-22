@@ -704,11 +704,11 @@ impl Photo {
 
         // Camera makes
         let mut stmt = conn.prepare(
-            "SELECT camera_make, COUNT(*) as count 
-             FROM photos 
-             WHERE camera_make IS NOT NULL 
-             GROUP BY camera_make 
-             ORDER BY count DESC 
+            "SELECT camera_make, COUNT(*) as count
+             FROM photos
+             WHERE camera_make IS NOT NULL
+             GROUP BY camera_make
+             ORDER BY count DESC
              LIMIT 10",
         )?;
 
@@ -726,11 +726,11 @@ impl Photo {
 
         // Years
         let mut stmt = conn.prepare(
-            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count 
-             FROM photos 
-             WHERE taken_at IS NOT NULL 
-             GROUP BY year 
-             ORDER BY count DESC 
+            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count
+             FROM photos
+             WHERE taken_at IS NOT NULL
+             GROUP BY year
+             ORDER BY count DESC
              LIMIT 10",
         )?;
 

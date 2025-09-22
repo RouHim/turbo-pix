@@ -451,12 +451,12 @@ impl Photo {
 
         // Build ORDER BY clause
         let sort_field = match sort {
-            Some("filename") => "filename",
+            Some("filename") | Some("name") => "filename",
             Some("camera_make") => "camera_make",
             Some("camera_model") => "camera_model",
-            Some("file_size") => "file_size",
+            Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
-            _ => "taken_at", // default
+            Some("date") | _ => "taken_at", // default
         };
 
         let sort_order = match order {
@@ -667,12 +667,12 @@ impl Photo {
 
         // Get the actual photos
         let sort_field = match sort {
-            Some("filename") => "filename",
+            Some("filename") | Some("name") => "filename",
             Some("camera_make") => "camera_make",
             Some("camera_model") => "camera_model",
-            Some("file_size") => "file_size",
+            Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
-            _ => "taken_at", // default
+            Some("date") | _ => "taken_at", // default
         };
 
         let sort_order = match order {

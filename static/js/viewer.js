@@ -7,6 +7,12 @@ class PhotoViewer {
     this.currentIndex = 0;
     this.photos = [];
     this.preloadedImages = new Map();
+    this.zoomLevel = 1;
+    this.maxZoom = 3;
+    this.minZoom = 0.5;
+    this.isDragging = false;
+    this.dragStart = { x: 0, y: 0 };
+    this.imagePosition = { x: 0, y: 0 };
 
     this.elements = {
       viewer: utils.$('#photo-viewer'),
@@ -26,6 +32,9 @@ class PhotoViewer {
       favoriteBtn: utils.$('.favorite-btn'),
       downloadBtn: utils.$('.download-btn'),
       shareBtn: utils.$('.share-btn'),
+      zoomIn: utils.$('.zoom-in'),
+      zoomOut: utils.$('.zoom-out'),
+      zoomFit: utils.$('.zoom-fit'),
     };
 
     this.init();
@@ -68,6 +77,26 @@ class PhotoViewer {
 
     if (this.elements.shareBtn) {
       utils.on(this.elements.shareBtn, 'click', () => this.sharePhoto());
+    }
+
+    // Zoom controls
+    if (this.elements.zoomIn) {
+      utils.on(this.elements.zoomIn, 'click', () => this.zoomIn());
+    }
+
+    if (this.elements.zoomOut) {
+      utils.on(this.elements.zoomOut, 'click', () => this.zoomOut());
+    }
+
+    if (this.elements.zoomFit) {
+      utils.on(this.elements.zoomFit, 'click', () => this.fitToScreen());
+    }
+
+    // Image interaction for dragging when zoomed
+    if (this.elements.image) {
+      utils.on(this.elements.image, 'mousedown', (e) => this.startDrag(e));
+      utils.on(document, 'mousemove', (e) => this.drag(e));
+      utils.on(document, 'mouseup', () => this.endDrag());
     }
 
     // Prevent click propagation on content
@@ -143,7 +172,7 @@ class PhotoViewer {
 
     // Show viewer
     if (this.elements.viewer) {
-      this.elements.viewer.classList.add('active');
+      this.elements.viewer.classList.add('active', 'fade-in');
       document.body.style.overflow = 'hidden';
     }
 
@@ -163,7 +192,7 @@ class PhotoViewer {
     this.isOpen = false;
 
     if (this.elements.viewer) {
-      this.elements.viewer.classList.remove('active');
+      this.elements.viewer.classList.remove('active', 'fade-in');
       document.body.style.overflow = '';
     }
 
@@ -205,6 +234,9 @@ class PhotoViewer {
   }
 
   async displayPhoto(photo) {
+    // Reset zoom when displaying new photo
+    this.fitToScreen();
+
     utils.showLoading();
 
     try {
@@ -452,6 +484,68 @@ class PhotoViewer {
     const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
     return videoExtensions.includes(ext);
+  }
+
+  zoomIn() {
+    if (this.zoomLevel < this.maxZoom) {
+      this.zoomLevel = Math.min(this.zoomLevel * 1.5, this.maxZoom);
+      this.applyZoom();
+    }
+  }
+
+  zoomOut() {
+    if (this.zoomLevel > this.minZoom) {
+      this.zoomLevel = Math.max(this.zoomLevel / 1.5, this.minZoom);
+      this.applyZoom();
+    }
+  }
+
+  fitToScreen() {
+    this.zoomLevel = 1;
+    this.imagePosition = { x: 0, y: 0 };
+    this.applyZoom();
+  }
+
+  applyZoom() {
+    if (!this.elements.image) return;
+
+    const transform = `scale(${this.zoomLevel}) translate(${this.imagePosition.x}px, ${this.imagePosition.y}px)`;
+    this.elements.image.style.transform = transform;
+
+    // Update zoom class for cursor
+    this.elements.image.classList.toggle('zoomed', this.zoomLevel > 1);
+  }
+
+  startDrag(e) {
+    if (this.zoomLevel <= 1) return;
+
+    e.preventDefault();
+    this.isDragging = true;
+    this.dragStart = {
+      x: e.clientX - this.imagePosition.x,
+      y: e.clientY - this.imagePosition.y,
+    };
+    this.elements.image.style.cursor = 'grabbing';
+  }
+
+  drag(e) {
+    if (!this.isDragging || this.zoomLevel <= 1) return;
+
+    e.preventDefault();
+    this.imagePosition = {
+      x: e.clientX - this.dragStart.x,
+      y: e.clientY - this.dragStart.y,
+    };
+    this.applyZoom();
+  }
+
+  endDrag() {
+    if (!this.isDragging) return;
+
+    this.isDragging = false;
+    if (this.elements.image) {
+      this.elements.image.style.cursor = this.zoomLevel > 1 ? 'grab' : 'default';
+    }
   }
 
   // Public API

@@ -157,11 +157,6 @@ class PhotoGrid {
     const card = utils.createElement('div', 'photo-card');
     card.dataset.photoId = photo.id;
 
-    // Calculate aspect ratio for better layout
-    const aspectRatio = photo.width && photo.height ? photo.width / photo.height : 1;
-    const gridRowSpan = Math.ceil(200 / aspectRatio / 10);
-    card.style.gridRowEnd = `span ${Math.max(gridRowSpan, 15)}`;
-
     // Create card with thumbnail URL for lazy loading
     card.innerHTML = `
             <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo.id, 'medium')}">

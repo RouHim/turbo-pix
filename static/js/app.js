@@ -27,6 +27,7 @@ class TurboPixApp {
     this.setupNavigation();
     this.setupViewControls();
     this.setupResponsiveLayout();
+    this.initTheme();
     this.loadInitialData();
     this.startPerformanceMonitoring();
   }
@@ -50,6 +51,14 @@ class TurboPixApp {
     if (sortSelect) {
       utils.on(sortSelect, 'change', (e) => {
         this.setSortBy(e.target.value);
+      });
+    }
+
+    // Theme toggle
+    const themeToggle = utils.$('#theme-toggle');
+    if (themeToggle) {
+      utils.on(themeToggle, 'click', () => {
+        this.toggleTheme();
       });
     }
 
@@ -396,6 +405,35 @@ class TurboPixApp {
     const savedState = utils.storage.get('appState');
     if (savedState) {
       this.state.update(savedState);
+    }
+  }
+
+  initTheme() {
+    const savedTheme = utils.storage.get('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = savedTheme || (prefersDark ? 'dark' : 'light');
+    this.setTheme(theme);
+  }
+
+  setTheme(theme) {
+    document.documentElement.classList.toggle('dark-theme', theme === 'dark');
+    document.documentElement.classList.toggle('light-theme', theme === 'light');
+    utils.storage.set('theme', theme);
+    this.updateThemeToggle(theme);
+  }
+
+  toggleTheme() {
+    const currentTheme = document.documentElement.classList.contains('dark-theme')
+      ? 'dark'
+      : 'light';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    this.setTheme(newTheme);
+  }
+
+  updateThemeToggle(theme) {
+    const themeToggle = utils.$('#theme-toggle');
+    if (themeToggle) {
+      themeToggle.className = `theme-toggle ${theme}`;
     }
   }
 

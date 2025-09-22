@@ -12,24 +12,29 @@
     <div id="app">
       <header class="header">
         <div class="header-content">
-          <h1 class="logo">📸 TurboPix</h1>
-          <div class="search-container">
-            <input
-              type="text"
-              id="search-input"
-              placeholder="Search photos..."
-              class="search-input"
-            />
-            <button id="search-btn" class="search-btn">🔍</button>
+          <h1 class="logo">TurboPix</h1>
+          <div class="header-actions">
+            <div class="search-container">
+              <input
+                type="text"
+                id="search-input"
+                placeholder="Search photos..."
+                class="search-input"
+              />
+              <button id="search-btn" class="search-btn">Search</button>
+            </div>
+            <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+              <span class="theme-icon"></span>
+            </button>
           </div>
         </div>
       </header>
 
       <nav class="sidebar">
         <div class="sidebar-content">
-          <button class="nav-item active" data-view="all">📷 All Photos</button>
-          <button class="nav-item" data-view="favorites">❤️ Favorites</button>
-          <button class="nav-item" data-view="videos">🎥 Videos</button>
+          <button class="nav-item active" data-view="all">All Photos</button>
+          <button class="nav-item" data-view="favorites">Favorites</button>
+          <button class="nav-item" data-view="videos">Videos</button>
         </div>
       </nav>
 
@@ -73,6 +78,12 @@
         <button class="viewer-prev" title="Previous">‹</button>
         <button class="viewer-next" title="Next">›</button>
 
+        <div class="viewer-zoom-controls">
+          <button class="zoom-btn zoom-out" title="Zoom Out">−</button>
+          <button class="zoom-btn zoom-in" title="Zoom In">+</button>
+          <button class="zoom-btn zoom-fit" title="Fit to Screen">⤢</button>
+        </div>
+
         <div class="viewer-main">
           <img id="viewer-image" class="viewer-image" alt="Photo" />
           <video id="viewer-video" class="viewer-video" controls style="display: none"></video>
@@ -100,9 +111,9 @@
               </div>
             </div>
             <div class="photo-actions">
-              <button class="action-btn favorite-btn" title="Add to Favorites">❤️</button>
-              <button class="action-btn download-btn" title="Download">⬇️</button>
-              <button class="action-btn share-btn" title="Share">📤</button>
+              <button class="action-btn favorite-btn" title="Add to Favorites">Favorite</button>
+              <button class="action-btn download-btn" title="Download">Download</button>
+              <button class="action-btn share-btn" title="Share">Share</button>
             </div>
           </div>
         </div>

@@ -456,7 +456,8 @@ impl Photo {
             Some("camera_model") => "camera_model",
             Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
-            Some("date") | _ => "taken_at", // default
+            Some("date") => "taken_at",
+            _ => "taken_at", // default
         };
 
         let sort_order = match order {
@@ -672,7 +673,8 @@ impl Photo {
             Some("camera_model") => "camera_model",
             Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
-            Some("date") | _ => "taken_at", // default
+            Some("date") => "taken_at",
+            _ => "taken_at", // default
         };
 
         let sort_order = match order {

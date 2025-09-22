@@ -9,8 +9,8 @@
   --color-success: #10b981;
   --background-color: #fafafa;
   --background-secondary: #f8fafc;
-  --surface-color: #ffffff;
-  --surface-elevated: #ffffff;
+  --surface-color: #fff;
+  --surface-elevated: #fff;
   --text-primary: #1e293b;
   --text-secondary: #64748b;
   --text-muted: #94a3b8;
@@ -26,16 +26,16 @@
   --transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   --sidebar-width: 280px;
   --header-height: 64px;
-  --glass-bg: rgba(255, 255, 255, 0.8);
-  --glass-border: rgba(255, 255, 255, 0.2);
+  --glass-bg: rgb(255 255 255 / 80%);
+  --glass-border: rgb(255 255 255 / 20%);
 }
 
 /* Light theme variables (explicit) */
 html.light-theme {
   --background-color: #fafafa;
   --background-secondary: #f8fafc;
-  --surface-color: #ffffff;
-  --surface-elevated: #ffffff;
+  --surface-color: #fff;
+  --surface-elevated: #fff;
   --text-primary: #1e293b;
   --text-secondary: #64748b;
   --text-muted: #94a3b8;
@@ -44,8 +44,8 @@ html.light-theme {
   --shadow-medium: 0 4px 6px rgb(0 0 0 / 7%), 0 2px 4px rgb(0 0 0 / 6%);
   --shadow-heavy: 0 10px 15px rgb(0 0 0 / 10%), 0 4px 6px rgb(0 0 0 / 5%);
   --shadow-glow: 0 0 20px rgb(79 70 229 / 15%);
-  --glass-bg: rgba(255, 255, 255, 0.8);
-  --glass-border: rgba(255, 255, 255, 0.2);
+  --glass-bg: rgb(255 255 255 / 80%);
+  --glass-border: rgb(255 255 255 / 20%);
 }
 
 /* Dark theme variables */
@@ -62,8 +62,8 @@ html.dark-theme {
   --shadow-medium: 0 4px 6px rgb(0 0 0 / 25%), 0 2px 4px rgb(0 0 0 / 20%);
   --shadow-heavy: 0 10px 15px rgb(0 0 0 / 35%), 0 4px 6px rgb(0 0 0 / 25%);
   --shadow-glow: 0 0 20px rgb(79 70 229 / 25%);
-  --glass-bg: rgba(30, 41, 59, 0.8);
-  --glass-border: rgba(30, 41, 59, 0.2);
+  --glass-bg: rgb(30 41 59 / 80%);
+  --glass-border: rgb(30 41 59 / 20%);
 }
 
 * {
@@ -165,7 +165,6 @@ body {
 .theme-toggle {
   width: 44px;
   height: 44px;
-  border: none;
   border-radius: 50%;
   background: var(--surface-color);
   color: var(--text-primary);
@@ -392,10 +391,10 @@ body {
   }
 }
 
-@keyframes viewerFadeIn {
+@keyframes viewer-fade-in {
   0% {
     opacity: 0;
-    backdrop-filter: blur(0px);
+    backdrop-filter: blur(0);
   }
 
   100% {
@@ -404,7 +403,7 @@ body {
   }
 }
 
-@keyframes cardEntrance {
+@keyframes card-entrance {
   0% {
     opacity: 0;
     transform: translateY(20px) scale(0.95);

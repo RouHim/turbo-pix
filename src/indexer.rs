@@ -259,10 +259,10 @@ impl FileScanner {
                                 .modified()
                                 .ok()
                                 .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                                .map(|duration| {
-                                    DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                                        .unwrap_or_else(|| Utc::now())
-                                }),
+                                 .map(|duration| {
+                                     DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                                         .unwrap_or_else(Utc::now)
+                                 }),
                         });
                     }
                 }
@@ -304,6 +304,7 @@ impl PhotoProcessor {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn process_all(&self) -> Vec<ProcessedPhoto> {
         let photo_files = self.scanner.scan();
         let mut processed_photos = Vec::new();
@@ -317,6 +318,7 @@ impl PhotoProcessor {
         processed_photos
     }
 
+    #[allow(dead_code)]
     pub async fn process_new_photos(
         &self,
         db_pool: &DbPool,
@@ -379,6 +381,7 @@ impl PhotoProcessor {
         Ok(processed_photos)
     }
 
+    #[allow(dead_code)]
     async fn process_and_store(
         &self,
         photo_file: &PhotoFile,
@@ -481,6 +484,7 @@ pub struct ProcessedPhoto {
 }
 
 impl ProcessedPhoto {
+    #[allow(dead_code)]
     fn save_to_db(&self, db_pool: &DbPool) -> Result<i64, Box<dyn std::error::Error>> {
         let photo = Photo {
             id: 0,
@@ -530,7 +534,7 @@ impl ProcessedPhoto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, Timelike, Utc};
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_parse_exif_datetime() {

@@ -148,7 +148,6 @@ mod tests {
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::Write;
-    use std::path::Path;
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
@@ -392,7 +391,7 @@ mod tests {
         // Setup complex scenario:
         // 1. Create some files
         let image1 = env.create_test_image("existing1.jpg", b"existing content 1");
-        let image2 = env.create_test_image("existing2.jpg", b"existing content 2");
+        let _image2 = env.create_test_image("existing2.jpg", b"existing content 2");
 
         // 2. Add one to database, leave one new
         env.add_photo_to_db(&image1.to_string_lossy())

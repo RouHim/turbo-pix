@@ -23,6 +23,7 @@ impl CacheManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn clear_for_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         info!("Clearing cache for deleted photo: {}", path);
 

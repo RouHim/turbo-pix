@@ -50,7 +50,7 @@ mod api_tests {
         )
         .await;
 
-        let (temp_file, jpeg_data) = TestContext::create_test_jpeg();
+        let (_temp_file, jpeg_data) = TestContext::create_test_jpeg();
         let boundary = "----formdata-test-boundary";
 
         let multipart_body = format!(

@@ -111,6 +111,7 @@ pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {
 }
 
 // Utility functions
+#[allow(dead_code)]
 pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare("SELECT file_path FROM photos")?;
@@ -123,6 +124,7 @@ pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::er
     Ok(paths)
 }
 
+#[allow(dead_code)]
 pub fn needs_update(
     pool: &DbPool,
     file_path: &str,

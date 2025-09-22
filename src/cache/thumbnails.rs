@@ -187,8 +187,6 @@ mod tests {
     use crate::config::{CacheConfig, Config};
     use crate::db::create_in_memory_pool;
     use chrono::Utc;
-    use std::fs::File;
-    use std::io::Write;
     use tempfile::TempDir;
 
     fn create_test_config() -> (Config, TempDir) {
@@ -284,7 +282,7 @@ mod tests {
     async fn test_thumbnail_generator_creation() {
         let (config, _temp_dir) = create_test_config();
         let db_pool = create_in_memory_pool().unwrap();
-        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+        let _generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         // Cache directory should be created
         assert!(config

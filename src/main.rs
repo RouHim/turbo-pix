@@ -4,6 +4,7 @@ mod db;
 mod indexer;
 mod scheduler;
 mod web;
+mod web_handlers;
 
 use actix_web::{
     middleware::Logger,
@@ -18,7 +19,7 @@ use tracing::{info, warn};
 
 use cache::{CacheManager, MemoryCache};
 use scheduler::PhotoScheduler;
-use web::handlers::thumbnails::ThumbnailService;
+use web_handlers::ThumbnailService;
 use web::static_handler::serve_static_asset;
 
 #[actix_web::main]

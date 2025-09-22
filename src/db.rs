@@ -748,8 +748,55 @@ impl Photo {
 
         Ok(suggestions)
     }
+}
 
-    #[cfg(test)]
+impl From<crate::indexer::ProcessedPhoto> for Photo {
+    fn from(processed: crate::indexer::ProcessedPhoto) -> Self {
+        Photo {
+            id: 0, // This will be set by the database
+            file_path: processed.file_path,
+            filename: processed.filename,
+            file_size: processed.file_size,
+            mime_type: processed.mime_type,
+            taken_at: processed.taken_at,
+            date_modified: processed.date_modified,
+            date_indexed: Some(Utc::now()),
+            camera_make: processed.camera_make,
+            camera_model: processed.camera_model,
+            lens_make: processed.lens_make,
+            lens_model: processed.lens_model,
+            iso: processed.iso,
+            aperture: processed.aperture,
+            shutter_speed: processed.shutter_speed,
+            focal_length: processed.focal_length,
+            width: processed.width,
+            height: processed.height,
+            color_space: processed.color_space,
+            white_balance: processed.white_balance,
+            exposure_mode: processed.exposure_mode,
+            metering_mode: processed.metering_mode,
+            orientation: processed.orientation,
+            flash_used: processed.flash_used,
+            latitude: processed.latitude,
+            longitude: processed.longitude,
+            location_name: None,
+            hash_md5: None,
+            hash_sha256: processed.hash_sha256,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Photo {
     pub fn new_test_photo(file_path: String, filename: String) -> Self {
         Photo {
             id: 0,

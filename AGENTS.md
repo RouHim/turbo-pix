@@ -10,6 +10,25 @@
 - `cargo clippy` - Run linter (Clippy) for code quality
 - `cargo fmt` - Format code according to Rust standards
 
+## Test-Driven Development (TDD)
+
+### TDD Cycle
+
+1. **Write failing test** → 2. **Implement minimal code** → 3. **Refactor** → 4. **Run full suite**
+
+### TDD Commands
+
+```bash
+cargo test <test_name> --lib  # Run specific test
+cargo test                   # Full test suite (target: 77+ passing)
+```
+
+### Test Infrastructure
+
+- **Helpers**: `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
+- **Sample data**: `photos/sample_with_exif.jpg` for EXIF testing
+- **Pattern**: Unit tests in `#[cfg(test)]` modules, integration in `tests/` dir
+
 ## E2E Testing with Puppeteer
 
 ### Test Setup
@@ -29,12 +48,22 @@
 
 ### Post-Feature Testing Protocol
 
-1. Start application with `cargo run`
-2. Use Puppeteer to navigate to main page
-3. Take screenshots for visual regression testing
-4. Test new feature functionality end-to-end
-5. Verify existing functionality still works
-6. Check browser console for JavaScript errors
+**TDD-Enhanced Testing Workflow:**
+
+1. **Start with failing tests** - Write tests for new feature before implementation
+2. **Implement to pass tests** - Build minimal functionality to satisfy test requirements
+3. **Start application** with `cargo run` for manual verification
+4. **Run full test suite** - `cargo test` to ensure no regressions (target: 77+ tests passing)
+5. **E2E validation** - Use Puppeteer to test complete user workflows
+6. **Visual regression testing** - Take screenshots and verify UI changes
+7. **Performance verification** - Check application still processes photos efficiently
+8. **Browser console check** - Verify no JavaScript errors introduced
+
+**Test-First Feature Implementation:**
+
+- Define API contracts in tests before coding endpoints
+- Test error conditions before implementing error handling
+- Verify edge cases through unit tests before integration testing
 
 ## Code Style & Conventions
 
@@ -85,10 +114,6 @@
 - Fix unused field warning in ThumbnailService
 - Consider module flattening: Convert directories to single files (indexer/, scheduler/, web/handlers/)
 - Test application functionality after restructuring
-
-### Application Status
-
-✅ **Application confirmed working** - TurboPix runs successfully with cleaned schema, processes 79 photos, server listening on 0.0.0.0:18473
 
 ## Development Workflow & Common Pitfalls
 

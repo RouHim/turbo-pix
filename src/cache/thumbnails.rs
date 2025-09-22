@@ -64,10 +64,13 @@ impl ThumbnailGenerator {
             return Err(CacheError::PhotoNotFound);
         }
 
-        let img = image::open(&photo_path)?;
-        let thumbnail = self.resize_image(img, size);
-
-        let thumbnail_data = self.encode_image(thumbnail)?;
+        let thumbnail_data = if self.is_video_file(photo) {
+            self.generate_video_thumbnail(&photo_path, size).await?
+        } else {
+            let img = image::open(&photo_path)?;
+            let thumbnail = self.resize_image(img, size);
+            self.encode_image(thumbnail)?
+        };
 
         let cache_key = CacheKey::new(photo.id, size);
         let cache_path = self.get_cache_path(&cache_key);
@@ -95,6 +98,52 @@ impl ThumbnailGenerator {
         let mut buffer = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buffer, ImageFormat::Jpeg)?;
         Ok(buffer.into_inner())
+    }
+
+    fn is_video_file(&self, photo: &Photo) -> bool {
+        photo.mime_type
+            .as_ref()
+            .map(|mime| mime.starts_with("video/"))
+            .unwrap_or(false)
+    }
+
+    async fn generate_video_thumbnail(&self, _video_path: &Path, size: ThumbnailSize) -> CacheResult<Vec<u8>> {
+        // TODO: Implement video thumbnail generation using ffmpeg or similar
+        // For now, create a placeholder thumbnail with a video icon overlay
+
+        // Create a simple placeholder image for video thumbnails
+        use image::{ImageBuffer, Rgb};
+
+        let target_size = size.to_pixels();
+        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(target_size, target_size, |x, y| {
+            // Create a simple gradient background
+            let r = (x as f32 / target_size as f32 * 255.0) as u8;
+            let g = (y as f32 / target_size as f32 * 255.0) as u8;
+            let b = 128;
+            Rgb([r, g, b])
+        });
+
+        // Add a simple "VIDEO" text overlay (very basic implementation)
+        let _text_color = Rgb([255, 255, 255]);
+        let bg_color = Rgb([0, 0, 0]);
+
+        // Draw a simple rectangle for text background
+        for y in (target_size / 2 - 20)..(target_size / 2 + 20) {
+            for x in (target_size / 2 - 40)..(target_size / 2 + 40) {
+                if x < target_size && y < target_size {
+                    img.put_pixel(x, y, bg_color);
+                }
+            }
+        }
+
+        // Note: In a real implementation, you would:
+        // 1. Use ffmpeg to extract a frame from the video (e.g., at 1 second)
+        // 2. Load that frame as an image
+        // 3. Resize it to the target size
+        // 4. Return the JPEG data
+
+        let dynamic_img = DynamicImage::ImageRgb8(img);
+        self.encode_image(dynamic_img)
     }
 
     async fn save_to_disk_cache(&self, key: &CacheKey, data: &[u8]) -> CacheResult<()> {

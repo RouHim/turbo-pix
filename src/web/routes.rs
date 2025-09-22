@@ -9,12 +9,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::scope("/api")
                 .route("/photos", web::get().to(web_handlers::list_photos))
                 .route("/photos", web::post().to(web_handlers::upload_photo))
-                .route("/photos/{id}", web::get().to(web_handlers::get_photo))
-                .route("/photos/{id}", web::put().to(web_handlers::update_photo))
-                .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
                 .route(
                     "/photos/{id}/file",
                     web::get().to(web_handlers::get_photo_file),
+                )
+                .route(
+                    "/photos/{id}/video",
+                    web::get().to(web_handlers::get_video_file),
                 )
                 .route(
                     "/photos/{id}/thumbnail",
@@ -24,6 +25,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     "/photos/{id}/metadata",
                     web::get().to(web_handlers::get_photo_metadata),
                 )
+                .route("/photos/{id}", web::get().to(web_handlers::get_photo))
+                .route("/photos/{id}", web::put().to(web_handlers::update_photo))
+                .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
                 .route("/search", web::get().to(web_handlers::search_photos))
                 .route(
                     "/search/suggestions",

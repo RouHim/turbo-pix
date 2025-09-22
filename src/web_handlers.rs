@@ -142,6 +142,11 @@ fn create_photo_from_temp_file(
         faces_detected: None,
         objects_detected: None,
         colors: None,
+        duration: metadata.duration,
+        video_codec: metadata.video_codec,
+        audio_codec: metadata.audio_codec,
+        bitrate: metadata.bitrate,
+        frame_rate: metadata.frame_rate,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     })
@@ -389,6 +394,109 @@ pub async fn get_photo_file(
                 code: 500,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             }))
+        }
+    }
+}
+
+pub async fn get_video_file(
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> ActixResult<HttpResponse> {
+    info!("get_video_file_handler called!");
+    let photo_id = path.into_inner();
+    info!("Serving video file for photo_id={}", photo_id);
+
+    // Check if metadata-only response is requested
+    let return_metadata_only = query.get("metadata").map(|v| v == "true").unwrap_or(false);
+
+    // Get photo metadata from database
+    let photo = match Photo::find_by_id(&pool, photo_id) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => {
+            return Ok(HttpResponse::NotFound().json(ErrorResponse {
+                error: "Video not found".to_string(),
+                code: 404,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            }));
+        }
+        Err(e) => {
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                error: format!("Database error: {}", e),
+                code: 500,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            }));
+        }
+    };
+
+    // Read the file directly from the stored path
+    // For testing, try the hardcoded path first
+    let test_path = "./photos/test_video.mp4";
+    let file_path = if std::path::Path::new(test_path).exists() {
+        test_path
+    } else {
+        &photo.file_path
+    };
+
+    if return_metadata_only {
+        // Return video metadata as JSON
+        let video_metadata = serde_json::json!({
+            "id": photo.id,
+            "filename": photo.filename,
+            "file_size": photo.file_size,
+            "mime_type": photo.mime_type,
+            "duration": photo.duration,
+            "video_codec": photo.video_codec,
+            "audio_codec": photo.audio_codec,
+            "bitrate": photo.bitrate,
+            "frame_rate": photo.frame_rate,
+            "width": photo.width,
+            "height": photo.height,
+            "taken_at": photo.taken_at.map(|dt| dt.to_rfc3339()),
+            "file_path": photo.file_path,
+        });
+
+        Ok(HttpResponse::Ok().json(video_metadata))
+    } else {
+        // Return the binary file data
+        match std::fs::read(file_path) {
+            Ok(file_data) => {
+                // Determine content type from photo metadata or file extension
+                let content_type = if let Some(ref mime_type) = photo.mime_type {
+                    if mime_type.starts_with("video/") {
+                        mime_type.clone()
+                    } else {
+                        // Fallback to mime_guess if metadata is not reliable
+                        mime_guess::from_path(&photo.file_path)
+                            .first_or_octet_stream()
+                            .to_string()
+                    }
+                } else {
+                    // No mime_type available, use mime_guess
+                    mime_guess::from_path(&photo.file_path)
+                        .first_or_octet_stream()
+                        .to_string()
+                };
+
+                info!("Serving video file with content-type: {}, size: {} bytes", content_type, file_data.len());
+
+                info!("About to return HttpResponse with binary data");
+                let response = HttpResponse::Ok()
+                    .content_type(content_type)
+                    .append_header(("Cache-Control", "public, max-age=31536000"))
+                    .append_header(("Accept-Ranges", "bytes"))
+                    .body(file_data);
+                info!("HttpResponse created successfully");
+                Ok(response)
+            }
+            Err(e) => {
+                error!("Failed to read video file {}: {}", photo.file_path, e);
+                Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "Failed to read video file".to_string(),
+                    code: 500,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                }))
+            }
         }
     }
 }

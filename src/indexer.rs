@@ -1,6 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use exif::{In, Reader, Tag, Value};
-use mime_guess::MimeGuess;
+use mime_guess::{MimeGuess, mime};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -28,7 +28,16 @@ impl MetadataExtractor {
     ) -> PhotoMetadata {
         let mut metadata = PhotoMetadata::default();
 
-        if let Ok(file) = File::open(path) {
+        // Check if this is a video file first
+        let mime_type = MimeGuess::from_path(path).first();
+        let is_video = mime_type
+            .as_ref()
+            .map(|m| m.type_() == mime::VIDEO)
+            .unwrap_or(false);
+
+        if is_video {
+            Self::extract_video_metadata(path, &mut metadata);
+        } else if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
 
             if let Ok(exif_reader) = Reader::new().read_from_container(&mut reader) {
@@ -260,6 +269,55 @@ impl MetadataExtractor {
             .map(|naive_dt| DateTime::from_naive_utc_and_offset(naive_dt, Utc))
     }
 
+    fn extract_video_metadata(path: &Path, metadata: &mut PhotoMetadata) {
+        // Basic video metadata extraction
+        // TODO: Implement proper video metadata extraction using ffmpeg or similar
+        // For now, we set basic defaults and detect video format
+
+        let mime_type = MimeGuess::from_path(path).first();
+        if let Some(mime) = mime_type {
+            match mime.subtype().as_str() {
+                "mp4" => {
+                    metadata.video_codec = Some("h264".to_string()); // Common default
+                    metadata.audio_codec = Some("aac".to_string());  // Common default
+                }
+                "webm" => {
+                    metadata.video_codec = Some("vp8".to_string());  // Common for WebM
+                    metadata.audio_codec = Some("vorbis".to_string()); // Common for WebM
+                }
+                "avi" => {
+                    metadata.video_codec = Some("mpeg4".to_string()); // Common for AVI
+                    metadata.audio_codec = Some("mp3".to_string());   // Common for AVI
+                }
+                "mov" => {
+                    metadata.video_codec = Some("h264".to_string()); // Common for MOV
+                    metadata.audio_codec = Some("aac".to_string());  // Common for MOV
+                }
+                "mkv" => {
+                    metadata.video_codec = Some("h264".to_string()); // Common for MKV
+                    metadata.audio_codec = Some("aac".to_string());  // Common for MKV
+                }
+                _ => {
+                    metadata.video_codec = Some("unknown".to_string());
+                    metadata.audio_codec = Some("unknown".to_string());
+                }
+            }
+        }
+
+        // Set default values for video metadata
+        // These would be extracted from actual video files in a full implementation
+        metadata.duration = None; // TODO: Extract actual duration
+        metadata.bitrate = None;  // TODO: Extract actual bitrate
+        metadata.frame_rate = None; // TODO: Extract actual frame rate
+
+        // For videos, try to get creation date from file metadata
+        if let Ok(file_metadata) = std::fs::metadata(path) {
+            if let Ok(created_time) = file_metadata.created() {
+                metadata.taken_at = Some(DateTime::from(created_time));
+            }
+        }
+    }
+
     fn parse_exif_datetime(datetime_str: &str) -> Option<DateTime<Utc>> {
         let cleaned = datetime_str.replace("\"", "");
 
@@ -298,6 +356,11 @@ pub struct PhotoMetadata {
     pub flash_used: Option<bool>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    pub duration: Option<f64>, // Video duration in seconds
+    pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
+    pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
+    pub bitrate: Option<i32>, // Bitrate in kbps
+    pub frame_rate: Option<f64>, // Frame rate for videos
 }
 
 // === FileScanner ===
@@ -329,7 +392,7 @@ impl FileScanner {
             {
                 let path = entry.path();
 
-                if path.is_file() && Self::is_image_file(path) {
+                if path.is_file() && Self::is_supported_file(path) {
                     if let Ok(metadata) = fs::metadata(path) {
                         photos.push(PhotoFile {
                             path: path.to_path_buf(),
@@ -353,9 +416,12 @@ impl FileScanner {
         photos
     }
 
-    fn is_image_file(path: &Path) -> bool {
+    fn is_supported_file(path: &Path) -> bool {
         let supported_extensions = [
+            // Images
             "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "heic", "raw",
+            // Videos
+            "mp4", "mov", "avi", "mkv", "webm", "m4v",
         ];
 
         path.extension()
@@ -524,6 +590,11 @@ impl PhotoProcessor {
             latitude: metadata.latitude,
             longitude: metadata.longitude,
             hash_sha256,
+            duration: metadata.duration,
+            video_codec: metadata.video_codec,
+            audio_codec: metadata.audio_codec,
+            bitrate: metadata.bitrate,
+            frame_rate: metadata.frame_rate,
         })
     }
 
@@ -571,6 +642,11 @@ pub struct ProcessedPhoto {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub hash_sha256: Option<String>,
+    pub duration: Option<f64>, // Video duration in seconds
+    pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
+    pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
+    pub bitrate: Option<i32>, // Bitrate in kbps
+    pub frame_rate: Option<f64>, // Frame rate for videos
 }
 
 impl ProcessedPhoto {
@@ -613,6 +689,11 @@ impl ProcessedPhoto {
             faces_detected: None,
             objects_detected: None,
             colors: None,
+            duration: self.duration,
+            video_codec: self.video_codec.clone(),
+            audio_codec: self.audio_codec.clone(),
+            bitrate: self.bitrate,
+            frame_rate: self.frame_rate,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

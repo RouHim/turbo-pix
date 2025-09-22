@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS photos (
     faces_detected TEXT,
     objects_detected TEXT,
     colors TEXT,
+    duration REAL, -- Video duration in seconds
+    video_codec TEXT, -- Video codec (e.g., "h264", "h265")
+    audio_codec TEXT, -- Audio codec (e.g., "aac", "mp3")
+    bitrate INTEGER, -- Bitrate in kbps
+    frame_rate REAL, -- Frame rate for videos
     created_at DATETIME,
     updated_at DATETIME
 );
@@ -227,6 +232,11 @@ pub struct Photo {
     pub faces_detected: Option<String>,
     pub objects_detected: Option<String>,
     pub colors: Option<String>,
+    pub duration: Option<f64>, // Video duration in seconds
+    pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
+    pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
+    pub bitrate: Option<i32>, // Bitrate in kbps
+    pub frame_rate: Option<f64>, // Frame rate for videos
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -280,13 +290,18 @@ impl Photo {
             faces_detected: row.get(33)?,
             objects_detected: row.get(34)?,
             colors: row.get(35)?,
+            duration: row.get(36)?,
+            video_codec: row.get(37)?,
+            audio_codec: row.get(38)?,
+            bitrate: row.get(39)?,
+            frame_rate: row.get(40)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(36)?;
+                let datetime_str = row.get::<_, String>(41)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                36,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -296,7 +311,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                36,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -305,12 +320,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(37)?;
+                let datetime_str = row.get::<_, String>(42)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                37,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -320,7 +335,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                37,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -334,18 +349,19 @@ impl Photo {
     pub fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         conn.execute(
-            "UPDATE photos SET 
-                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
-                taken_at = ?, file_modified = ?, date_indexed = ?,
-                camera_make = ?, camera_model = ?, lens_make = ?, lens_model = ?,
-                iso = ?, aperture = ?, shutter_speed = ?, focal_length = ?,
-                width = ?, height = ?, color_space = ?, white_balance = ?,
-                exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
-                latitude = ?, longitude = ?, location_name = ?,
-                hash_md5 = ?, hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
-                country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
-                updated_at = ?
-             WHERE id = ?",
+            "UPDATE photos SET
+                 file_path = ?, filename = ?, file_size = ?, mime_type = ?,
+                 taken_at = ?, file_modified = ?, date_indexed = ?,
+                 camera_make = ?, camera_model = ?, lens_make = ?, lens_model = ?,
+                 iso = ?, aperture = ?, shutter_speed = ?, focal_length = ?,
+                 width = ?, height = ?, color_space = ?, white_balance = ?,
+                 exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
+                 latitude = ?, longitude = ?, location_name = ?,
+                 hash_md5 = ?, hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
+                 country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
+                 duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
+                 updated_at = ?
+              WHERE id = ?",
             rusqlite::params![
                 self.file_path,
                 self.filename,
@@ -382,6 +398,11 @@ impl Photo {
                 self.faces_detected,
                 self.objects_detected,
                 self.colors,
+                self.duration,
+                self.video_codec,
+                self.audio_codec,
+                self.bitrate,
+                self.frame_rate,
                 Utc::now().to_rfc3339(),
                 self.id
             ],
@@ -500,10 +521,11 @@ impl Photo {
                 file_path, filename, file_size, taken_at, camera_make, camera_model,
                 iso, aperture, shutter_speed, focal_length, width, height, orientation,
                 flash_used, latitude, longitude, country, keywords,
-                faces_detected, objects_detected, colors, file_modified, created_at, updated_at
+                faces_detected, objects_detected, colors, duration, video_codec, audio_codec,
+                bitrate, frame_rate, file_modified, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
             )
         "#;
 
@@ -531,6 +553,11 @@ impl Photo {
                 self.faces_detected,
                 self.objects_detected,
                 self.colors,
+                self.duration,
+                self.video_codec,
+                self.audio_codec,
+                self.bitrate,
+                self.frame_rate,
                 self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
                 Utc::now().to_rfc3339(),
@@ -795,6 +822,11 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             faces_detected: None,
             objects_detected: None,
             colors: None,
+            duration: processed.duration,
+            video_codec: processed.video_codec,
+            audio_codec: processed.audio_codec,
+            bitrate: processed.bitrate,
+            frame_rate: processed.frame_rate,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

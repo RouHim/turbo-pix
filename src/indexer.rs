@@ -1,6 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use exif::{In, Reader, Tag, Value};
-use mime_guess::{MimeGuess, mime};
+use mime_guess::{mime, MimeGuess};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -279,23 +279,23 @@ impl MetadataExtractor {
             match mime.subtype().as_str() {
                 "mp4" => {
                     metadata.video_codec = Some("h264".to_string()); // Common default
-                    metadata.audio_codec = Some("aac".to_string());  // Common default
+                    metadata.audio_codec = Some("aac".to_string()); // Common default
                 }
                 "webm" => {
-                    metadata.video_codec = Some("vp8".to_string());  // Common for WebM
+                    metadata.video_codec = Some("vp8".to_string()); // Common for WebM
                     metadata.audio_codec = Some("vorbis".to_string()); // Common for WebM
                 }
                 "avi" => {
                     metadata.video_codec = Some("mpeg4".to_string()); // Common for AVI
-                    metadata.audio_codec = Some("mp3".to_string());   // Common for AVI
+                    metadata.audio_codec = Some("mp3".to_string()); // Common for AVI
                 }
                 "mov" => {
                     metadata.video_codec = Some("h264".to_string()); // Common for MOV
-                    metadata.audio_codec = Some("aac".to_string());  // Common for MOV
+                    metadata.audio_codec = Some("aac".to_string()); // Common for MOV
                 }
                 "mkv" => {
                     metadata.video_codec = Some("h264".to_string()); // Common for MKV
-                    metadata.audio_codec = Some("aac".to_string());  // Common for MKV
+                    metadata.audio_codec = Some("aac".to_string()); // Common for MKV
                 }
                 _ => {
                     metadata.video_codec = Some("unknown".to_string());
@@ -307,7 +307,7 @@ impl MetadataExtractor {
         // Set default values for video metadata
         // These would be extracted from actual video files in a full implementation
         metadata.duration = None; // TODO: Extract actual duration
-        metadata.bitrate = None;  // TODO: Extract actual bitrate
+        metadata.bitrate = None; // TODO: Extract actual bitrate
         metadata.frame_rate = None; // TODO: Extract actual frame rate
 
         // For videos, try to get creation date from file metadata
@@ -356,11 +356,11 @@ pub struct PhotoMetadata {
     pub flash_used: Option<bool>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
-    pub duration: Option<f64>, // Video duration in seconds
+    pub duration: Option<f64>,       // Video duration in seconds
     pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>, // Bitrate in kbps
-    pub frame_rate: Option<f64>, // Frame rate for videos
+    pub bitrate: Option<i32>,        // Bitrate in kbps
+    pub frame_rate: Option<f64>,     // Frame rate for videos
 }
 
 // === FileScanner ===
@@ -419,8 +419,7 @@ impl FileScanner {
     fn is_supported_file(path: &Path) -> bool {
         let supported_extensions = [
             // Images
-            "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "heic", "raw",
-            // Videos
+            "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "heic", "raw", // Videos
             "mp4", "mov", "avi", "mkv", "webm", "m4v",
         ];
 
@@ -642,11 +641,11 @@ pub struct ProcessedPhoto {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub hash_sha256: Option<String>,
-    pub duration: Option<f64>, // Video duration in seconds
+    pub duration: Option<f64>,       // Video duration in seconds
     pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>, // Bitrate in kbps
-    pub frame_rate: Option<f64>, // Frame rate for videos
+    pub bitrate: Option<i32>,        // Bitrate in kbps
+    pub frame_rate: Option<f64>,     // Frame rate for videos
 }
 
 impl ProcessedPhoto {

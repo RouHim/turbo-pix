@@ -10,6 +10,14 @@ use super::{CacheError, CacheKey, CacheResult, ThumbnailSize};
 use crate::config::Config;
 use crate::db::{DbPool, Photo};
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct VideoMetadata {
+    pub duration: f64,
+    pub width: i32,
+    pub height: i32,
+}
+
 pub struct ThumbnailGenerator {
     cache_dir: PathBuf,
     disk_cache: Arc<Mutex<HashMap<String, PathBuf>>>,
@@ -101,49 +109,52 @@ impl ThumbnailGenerator {
     }
 
     fn is_video_file(&self, photo: &Photo) -> bool {
-        photo.mime_type
+        photo
+            .mime_type
             .as_ref()
             .map(|mime| mime.starts_with("video/"))
             .unwrap_or(false)
     }
 
-    async fn generate_video_thumbnail(&self, _video_path: &Path, size: ThumbnailSize) -> CacheResult<Vec<u8>> {
-        // TODO: Implement video thumbnail generation using ffmpeg or similar
-        // For now, create a placeholder thumbnail with a video icon overlay
+    async fn generate_video_thumbnail(
+        &self,
+        video_path: &Path,
+        size: ThumbnailSize,
+    ) -> CacheResult<Vec<u8>> {
+        // Extract video metadata to get duration
+        let metadata = Self::extract_video_metadata(video_path).await?;
 
-        // Create a simple placeholder image for video thumbnails
-        use image::{ImageBuffer, Rgb};
+        // Calculate optimal frame extraction time
+        let frame_time = Self::calculate_optimal_frame_time(&metadata);
 
-        let target_size = size.to_pixels();
-        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(target_size, target_size, |x, y| {
-            // Create a simple gradient background
-            let r = (x as f32 / target_size as f32 * 255.0) as u8;
-            let g = (y as f32 / target_size as f32 * 255.0) as u8;
-            let b = 128;
-            Rgb([r, g, b])
-        });
+        // Create temporary file for extracted frame
+        let temp_dir = std::env::temp_dir();
+        let temp_frame_path = temp_dir.join(format!(
+            "turbo_pix_frame_{}_{}.jpg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
 
-        // Add a simple "VIDEO" text overlay (very basic implementation)
-        let _text_color = Rgb([255, 255, 255]);
-        let bg_color = Rgb([0, 0, 0]);
+        // Extract frame at calculated time
+        Self::extract_frame_at_time(video_path, frame_time, &temp_frame_path).await?;
 
-        // Draw a simple rectangle for text background
-        for y in (target_size / 2 - 20)..(target_size / 2 + 20) {
-            for x in (target_size / 2 - 40)..(target_size / 2 + 40) {
-                if x < target_size && y < target_size {
-                    img.put_pixel(x, y, bg_color);
-                }
-            }
+        // Load the extracted frame and create thumbnail
+        let img = image::open(&temp_frame_path).map_err(|e| {
+            CacheError::VideoProcessingError(format!("Failed to load extracted frame: {}", e))
+        })?;
+
+        let thumbnail = self.resize_image(img, size);
+        let thumbnail_data = self.encode_image(thumbnail)?;
+
+        // Clean up temporary file
+        if temp_frame_path.exists() {
+            let _ = std::fs::remove_file(&temp_frame_path);
         }
 
-        // Note: In a real implementation, you would:
-        // 1. Use ffmpeg to extract a frame from the video (e.g., at 1 second)
-        // 2. Load that frame as an image
-        // 3. Resize it to the target size
-        // 4. Return the JPEG data
-
-        let dynamic_img = DynamicImage::ImageRgb8(img);
-        self.encode_image(dynamic_img)
+        Ok(thumbnail_data)
     }
 
     async fn save_to_disk_cache(&self, key: &CacheKey, data: &[u8]) -> CacheResult<()> {
@@ -227,6 +238,119 @@ impl ThumbnailGenerator {
         }
 
         (files, size)
+    }
+
+    // Video processing methods
+    pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
+        use std::process::Command;
+
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                video_path.to_str().unwrap(),
+            ])
+            .output()
+            .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(CacheError::VideoProcessingError(format!(
+                "ffprobe exited with status: {}",
+                output.status
+            )));
+        }
+
+        let json_str = String::from_utf8(output.stdout).map_err(|e| {
+            CacheError::VideoProcessingError(format!("Invalid UTF-8 output: {}", e))
+        })?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| CacheError::VideoProcessingError(format!("JSON parse error: {}", e)))?;
+
+        // Extract duration from format section
+        let duration = parsed["format"]["duration"]
+            .as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or_else(|| CacheError::VideoMetadataError("Duration not found".to_string()))?;
+
+        // Extract width/height from first video stream
+        let streams = parsed["streams"]
+            .as_array()
+            .ok_or_else(|| CacheError::VideoMetadataError("No streams found".to_string()))?;
+
+        let video_stream = streams
+            .iter()
+            .find(|stream| stream["codec_type"] == "video")
+            .ok_or_else(|| CacheError::VideoMetadataError("No video stream found".to_string()))?;
+
+        let width = video_stream["width"]
+            .as_i64()
+            .ok_or_else(|| CacheError::VideoMetadataError("Width not found".to_string()))?
+            as i32;
+
+        let height = video_stream["height"]
+            .as_i64()
+            .ok_or_else(|| CacheError::VideoMetadataError("Height not found".to_string()))?
+            as i32;
+
+        Ok(VideoMetadata {
+            duration,
+            width,
+            height,
+        })
+    }
+
+    pub fn calculate_optimal_frame_time(metadata: &VideoMetadata) -> f64 {
+        let duration = metadata.duration;
+
+        // Extract frame at 10% of duration, with constraints
+        let optimal_time = duration * 0.1;
+
+        // Apply constraints: minimum 0.5s, maximum 30s
+        if optimal_time < 0.5 {
+            (0.5f64).min(duration * 0.5) // For very short videos, take middle frame
+        } else if optimal_time > 30.0 {
+            30.0
+        } else {
+            optimal_time
+        }
+    }
+
+    pub async fn extract_frame_at_time(
+        video_path: &Path,
+        time_seconds: f64,
+        output_path: &Path,
+    ) -> CacheResult<()> {
+        use std::process::Command;
+
+        let output = Command::new("ffmpeg")
+            .args([
+                "-y", // Overwrite output file
+                "-i",
+                video_path.to_str().unwrap(),
+                "-ss",
+                &time_seconds.to_string(),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2", // High quality
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(CacheError::VideoProcessingError(format!(
+                "ffmpeg exited with status: {}",
+                output.status
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -322,6 +446,11 @@ mod tests {
             faces_detected: None,
             objects_detected: None,
             colors: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
             created_at: now,
             updated_at: now,
         }
@@ -510,5 +639,176 @@ mod tests {
         let (files, size) = generator.get_cache_stats().await;
         assert_eq!(files, 2);
         assert!(size > 0);
+    }
+
+    fn create_test_video_photo(path: &str) -> Photo {
+        let now = Utc::now();
+        Photo {
+            id: 2,
+            file_path: path.to_string(),
+            filename: "test_video.mp4".to_string(),
+            file_size: 11156,
+            mime_type: Some("video/mp4".to_string()),
+            taken_at: Some(now),
+            date_modified: now,
+            date_indexed: Some(now),
+            camera_make: None,
+            camera_model: None,
+            lens_make: None,
+            lens_model: None,
+            iso: None,
+            aperture: None,
+            shutter_speed: None,
+            focal_length: None,
+            width: Some(320),
+            height: Some(240),
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: Some(1),
+            flash_used: Some(false),
+            latitude: None,
+            longitude: None,
+            location_name: None,
+            hash_md5: Some("test_video_hash_md5".to_string()),
+            hash_sha256: Some("test_video_hash_sha256".to_string()),
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            duration: Some(5.0), // 5 second test video
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+            bitrate: Some(1000),
+            frame_rate: Some(30.0),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_thumbnail_generation() {
+        let (config, _temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        // Use actual test video file from photos directory
+        let video_path = "/home/rouven/projects/turbo-pix/photos/test_video.mp4";
+        let photo = create_test_video_photo(video_path);
+
+        // Generate video thumbnail
+        let result = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .await;
+
+        assert!(result.is_ok(), "Video thumbnail generation should succeed");
+
+        let thumbnail_data = result.unwrap();
+        assert!(
+            !thumbnail_data.is_empty(),
+            "Thumbnail data should not be empty"
+        );
+        assert!(
+            thumbnail_data.len() > 1000,
+            "Thumbnail should be a reasonable size (>1KB)"
+        );
+
+        // Should be cached on disk
+        let cache_key = CacheKey::new(2, ThumbnailSize::Medium);
+        let cache_path = generator.get_cache_path(&cache_key);
+        assert!(cache_path.exists(), "Thumbnail should be cached on disk");
+    }
+
+    #[tokio::test]
+    async fn test_video_metadata_extraction() {
+        let video_path = "/home/rouven/projects/turbo-pix/photos/test_video.mp4";
+
+        // This test will fail until we implement extract_video_metadata
+        let metadata =
+            ThumbnailGenerator::extract_video_metadata(std::path::Path::new(video_path)).await;
+
+        assert!(
+            metadata.is_ok(),
+            "Should extract video metadata successfully"
+        );
+        let metadata = metadata.unwrap();
+
+        assert!(metadata.duration > 0.0, "Duration should be positive");
+        assert_eq!(metadata.width, 320, "Width should match expected");
+        assert_eq!(metadata.height, 240, "Height should match expected");
+    }
+
+    #[tokio::test]
+    async fn test_video_frame_timing_calculation() {
+        // Test frame timing algorithm with different video durations
+        let short_video = VideoMetadata {
+            duration: 2.0,
+            width: 320,
+            height: 240,
+        };
+        let medium_video = VideoMetadata {
+            duration: 30.0,
+            width: 320,
+            height: 240,
+        };
+        let long_video = VideoMetadata {
+            duration: 3600.0,
+            width: 320,
+            height: 240,
+        };
+
+        // These will fail until we implement calculate_optimal_frame_time
+        let short_time = ThumbnailGenerator::calculate_optimal_frame_time(&short_video);
+        let medium_time = ThumbnailGenerator::calculate_optimal_frame_time(&medium_video);
+        let long_time = ThumbnailGenerator::calculate_optimal_frame_time(&long_video);
+
+        assert!(short_time >= 0.5, "Should not extract before 0.5 seconds");
+        assert!(short_time <= 2.0, "Should not exceed video duration");
+
+        assert!(medium_time >= 0.5, "Should not extract before 0.5 seconds");
+        assert!(medium_time <= 30.0, "Should not exceed video duration");
+
+        assert!(long_time >= 0.5, "Should not extract before 0.5 seconds");
+        assert!(
+            long_time <= 30.0,
+            "Should cap at 30 seconds for long videos"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_video_thumbnail_different_sizes() {
+        let (config, _temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let video_path = "/home/rouven/projects/turbo-pix/photos/test_video.mp4";
+        let photo = create_test_video_photo(video_path);
+
+        // Generate different sizes
+        let small = generator
+            .get_or_generate(&photo, ThumbnailSize::Small)
+            .await
+            .unwrap();
+        let medium = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .await
+            .unwrap();
+        let large = generator
+            .get_or_generate(&photo, ThumbnailSize::Large)
+            .await
+            .unwrap();
+
+        // All should succeed and be different sizes
+        assert!(!small.is_empty());
+        assert!(!medium.is_empty());
+        assert!(!large.is_empty());
+
+        // Larger thumbnails should generally have more data
+        assert!(medium.len() >= small.len(), "Medium should be >= small");
+        assert!(large.len() >= medium.len(), "Large should be >= medium");
     }
 }

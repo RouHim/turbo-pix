@@ -472,7 +472,11 @@ pub async fn get_video_file(
                         .to_string()
                 };
 
-                info!("Serving video file with content-type: {}, size: {} bytes", content_type, file_data.len());
+                info!(
+                    "Serving video file with content-type: {}, size: {} bytes",
+                    content_type,
+                    file_data.len()
+                );
 
                 info!("About to return HttpResponse with binary data");
                 let response = HttpResponse::Ok()
@@ -1088,6 +1092,11 @@ mod tests {
             faces_detected: None,
             objects_detected: None,
             colors: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
             created_at: now,
             updated_at: now,
         };

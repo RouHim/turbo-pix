@@ -1,14 +1,15 @@
 # # # # # # # # # # # # # # # # # # # #
 # Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-FROM docker.io/messense/rust-musl-cross:x86_64-musl as builder
+FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
 
 # Set working directory and create empty directory in one layer
 WORKDIR /app
 RUN mkdir "/empty_dir"
 
 # Copy source code
-COPY ../Cargo.toml ../Cargo.lock ./
+COPY ../Cargo.toml ./
+COPY ../Cargo.lock ./
 COPY ../src ./src
 COPY ../static ./static
 

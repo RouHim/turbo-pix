@@ -568,6 +568,14 @@ class PhotoViewer {
 }
 
 // Initialize global photo viewer when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-  window.photoViewer = new PhotoViewer();
-});
+function initGlobalPhotoViewer() {
+  if (!window.photoViewer) {
+    window.photoViewer = new PhotoViewer();
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initGlobalPhotoViewer);
+} else {
+  initGlobalPhotoViewer();
+}

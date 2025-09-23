@@ -232,11 +232,11 @@ pub struct Photo {
     pub faces_detected: Option<String>,
     pub objects_detected: Option<String>,
     pub colors: Option<String>,
-    pub duration: Option<f64>, // Video duration in seconds
+    pub duration: Option<f64>,       // Video duration in seconds
     pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>, // Bitrate in kbps
-    pub frame_rate: Option<f64>, // Frame rate for videos
+    pub bitrate: Option<i32>,        // Bitrate in kbps
+    pub frame_rate: Option<f64>,     // Frame rate for videos
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -873,6 +873,11 @@ impl Photo {
             faces_detected: None,
             objects_detected: None,
             colors: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

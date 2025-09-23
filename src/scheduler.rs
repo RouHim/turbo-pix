@@ -236,6 +236,11 @@ mod tests {
                 faces_detected: None,
                 objects_detected: None,
                 colors: None,
+                duration: None,
+                video_codec: None,
+                audio_codec: None,
+                bitrate: None,
+                frame_rate: None,
                 created_at: now,
                 updated_at: now,
             };

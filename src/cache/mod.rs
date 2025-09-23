@@ -166,6 +166,10 @@ pub enum CacheError {
     #[allow(dead_code)]
     #[error("Invalid thumbnail size")]
     InvalidSize,
+    #[error("Video processing error: {0}")]
+    VideoProcessingError(String),
+    #[error("Video metadata extraction failed: {0}")]
+    VideoMetadataError(String),
 }
 
 pub type CacheResult<T> = Result<T, CacheError>;

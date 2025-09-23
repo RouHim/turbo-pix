@@ -451,6 +451,7 @@ mod tests {
             audio_codec: None,
             bitrate: None,
             frame_rate: None,
+            is_favorite: Some(false),
             created_at: now,
             updated_at: now,
         }
@@ -685,6 +686,7 @@ mod tests {
             audio_codec: Some("aac".to_string()),
             bitrate: Some(1000),
             frame_rate: Some(30.0),
+            is_favorite: Some(false),
             created_at: now,
             updated_at: now,
         }

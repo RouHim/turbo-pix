@@ -238,6 +238,7 @@ mod tests {
                 colors: None,
                 duration: None,
                 video_codec: None,
+                is_favorite: Some(false),
                 audio_codec: None,
                 bitrate: None,
                 frame_rate: None,

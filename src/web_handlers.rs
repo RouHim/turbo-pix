@@ -1129,6 +1129,7 @@ mod tests {
             audio_codec: None,
             bitrate: None,
             frame_rate: None,
+            is_favorite: Some(false),
             created_at: now,
             updated_at: now,
         };

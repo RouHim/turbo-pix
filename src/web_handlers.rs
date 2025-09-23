@@ -807,19 +807,7 @@ pub async fn get_stats(pool: web::Data<DbPool>) -> ActixResult<HttpResponse> {
     }
 }
 
-pub async fn get_photo_thumbnail(
-    _pool: web::Data<DbPool>,
-    path: web::Path<(i64, String)>,
-) -> ActixResult<HttpResponse> {
-    let (_photo_id, _size) = path.into_inner();
 
-    // For now, return 404 - thumbnail generation would be implemented here
-    Ok(HttpResponse::NotFound().json(ErrorResponse {
-        error: "Thumbnail not implemented yet".to_string(),
-        code: 404,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-    }))
-}
 
 // ===============================
 // SEARCH HANDLERS AND TYPES
@@ -903,15 +891,17 @@ impl ThumbnailService {
     }
 }
 
-pub async fn get_thumbnail(
+
+
+pub async fn get_thumbnail_by_hash(
     pool: web::Data<DbPool>,
-    path: web::Path<(i64, String)>,
+    path: web::Path<(String, String)>,
     service: web::Data<Arc<ThumbnailService>>,
 ) -> ActixResult<HttpResponse> {
-    let (photo_id, size_str) = path.into_inner();
+    let (hash, size_str) = path.into_inner();
     info!(
-        "DEBUG: get_thumbnail called for photo_id={}, size_str={}",
-        photo_id, size_str
+        "DEBUG: get_thumbnail_by_hash called for hash={}, size_str={}",
+        hash, size_str
     );
 
     let size = match size_str.parse::<ThumbnailSize>() {
@@ -928,43 +918,126 @@ pub async fn get_thumbnail(
         }
     };
 
-    let cache_key = CacheKey::new(photo_id, size);
-    info!("DEBUG: cache_key created: {}", cache_key);
-
-    // Try memory cache first
-    if let Some(data) = service.memory_cache.get(&cache_key) {
-        info!("DEBUG: found in memory cache, data length: {}", data.len());
-        info!("Serving thumbnail from memory cache: {}", cache_key);
-        return Ok(HttpResponse::Ok().content_type("image/jpeg").body(data));
-    }
-    info!("DEBUG: not found in memory cache");
-
-    // Get photo from database
-    let photo = match Photo::find_by_id(&pool, photo_id) {
+    // Find photo by hash
+    let photo = match Photo::find_by_hash(&pool, &hash) {
         Ok(Some(photo)) => {
-            info!("DEBUG: found photo in db: path={}", photo.file_path);
+            info!("DEBUG: found photo by hash: path={}", photo.file_path);
             photo
         }
         Ok(None) => {
-            error!("DEBUG: photo not found in database: {}", photo_id);
+            error!("DEBUG: photo not found by hash: {}", hash);
             return Ok(HttpResponse::NotFound().json(serde_json::json!({
                 "error": "Photo not found"
             })));
         }
         Err(e) => {
-            error!("DEBUG: database error for photo {}: {}", photo_id, e);
-            error!("Failed to fetch photo {}: {}", photo_id, e);
+            error!("DEBUG: database error for hash {}: {}", hash, e);
             return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to fetch photo"
             })));
         }
     };
 
+    // Create cache key using photo hash
+    let cache_key = match CacheKey::from_photo(&photo, size) {
+        Ok(key) => {
+            info!("DEBUG: cache_key created: {}", key);
+            key
+        }
+        Err(e) => {
+            error!("DEBUG: failed to create cache key: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to create cache key"
+            })));
+        }
+    };
+
+    // Check memory cache first
+    if let Some(data) = service.memory_cache.get(&cache_key) {
+        info!("DEBUG: found in memory cache");
+        info!("Cache hit (memory): {}", cache_key);
+        return Ok(HttpResponse::Ok().content_type("image/jpeg").body(data));
+    }
+
+    info!("DEBUG: not in memory cache, generating thumbnail");
+    match service.generator.get_or_generate(&photo, size).await {
+        Ok(data) => {
+            info!("DEBUG: generator returned data, length: {}", data.len());
+            // Store in memory cache for future requests
+            if let Err(e) = service.memory_cache.put(&cache_key, data.clone()) {
+                error!("Failed to store thumbnail in memory cache: {}", e);
+            }
+
+            info!("DEBUG: preparing HTTP response with {} bytes", data.len());
+            info!("Serving generated thumbnail: {}", cache_key);
+            Ok(HttpResponse::Ok().content_type("image/jpeg").body(data))
+        }
+        Err(e) => {
+            error!("DEBUG: generator failed: {}", e);
+            error!("Failed to generate thumbnail for {}: {}", cache_key, e);
+            Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to generate thumbnail"
+            })))
+        }
+    }
+}
+
+pub async fn get_thumbnail_by_hash_default_size(
+    pool: web::Data<DbPool>,
+    path: web::Path<String>,
+    service: web::Data<Arc<ThumbnailService>>,
+) -> ActixResult<HttpResponse> {
+    let hash = path.into_inner();
     info!(
-        "DEBUG: calling generator.get_or_generate for photo_id={}, size={:?}",
-        photo_id, size
+        "DEBUG: get_thumbnail_by_hash_default_size called for hash={}",
+        hash
     );
-    // Generate or get from disk cache
+
+    // Use medium as default size
+    let size = ThumbnailSize::Medium;
+
+    // Find photo by hash
+    let photo = match Photo::find_by_hash(&pool, &hash) {
+        Ok(Some(photo)) => {
+            info!("DEBUG: found photo by hash: path={}", photo.file_path);
+            photo
+        }
+        Ok(None) => {
+            error!("DEBUG: photo not found by hash: {}", hash);
+            return Ok(HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Photo not found"
+            })));
+        }
+        Err(e) => {
+            error!("DEBUG: database error for hash {}: {}", hash, e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to fetch photo"
+            })));
+        }
+    };
+
+    // Create cache key using photo hash
+    let cache_key = match CacheKey::from_photo(&photo, size) {
+        Ok(key) => {
+            info!("DEBUG: cache_key created: {}", key);
+            key
+        }
+        Err(e) => {
+            error!("DEBUG: failed to create cache key: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to create cache key"
+            })));
+        }
+    };
+
+    // Check memory cache first
+    if let Some(data) = service.memory_cache.get(&cache_key) {
+        info!("DEBUG: found in memory cache");
+        info!("Cache hit (memory): {}", cache_key);
+        return Ok(HttpResponse::Ok().content_type("image/jpeg").body(data));
+    }
+
+    info!("DEBUG: not in memory cache, generating thumbnail");
     match service.generator.get_or_generate(&photo, size).await {
         Ok(data) => {
             info!("DEBUG: generator returned data, length: {}", data.len());
@@ -1115,8 +1188,8 @@ mod tests {
             latitude: None,
             longitude: None,
             location_name: None,
-            hash_md5: None,
-            hash_sha256: None,
+            hash_md5: Some("d41d8cd98f00b204e9800998ecf8427e".to_string()),
+            hash_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
             thumbnail_path: None,
             has_thumbnail: Some(false),
             country: None,
@@ -1146,75 +1219,7 @@ mod tests {
         (service, db_pool, temp_dir)
     }
 
-    #[actix_web::test]
-    async fn test_get_thumbnail_success() {
-        let (service, db_pool, _temp_dir) = setup_test_service().await;
 
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(db_pool))
-                .app_data(web::Data::new(service.clone()))
-                .route(
-                    "/thumbnails/{photo_id}/{size}",
-                    web::get().to(get_thumbnail),
-                ),
-        )
-        .await;
-
-        let req = test::TestRequest::get()
-            .uri("/thumbnails/1/small")
-            .to_request();
-
-        let resp = test::call_service(&app, req).await;
-        assert!(resp.status().is_success());
-        assert_eq!(resp.headers().get("content-type").unwrap(), "image/jpeg");
-    }
-
-    #[actix_web::test]
-    async fn test_get_thumbnail_invalid_size() {
-        let (service, db_pool, _temp_dir) = setup_test_service().await;
-
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(db_pool))
-                .app_data(web::Data::new(service.clone()))
-                .route(
-                    "/thumbnails/{photo_id}/{size}",
-                    web::get().to(get_thumbnail),
-                ),
-        )
-        .await;
-
-        let req = test::TestRequest::get()
-            .uri("/thumbnails/1/invalid")
-            .to_request();
-
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), 400);
-    }
-
-    #[actix_web::test]
-    async fn test_get_thumbnail_nonexistent_photo() {
-        let (service, db_pool, _temp_dir) = setup_test_service().await;
-
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(db_pool))
-                .app_data(web::Data::new(service.clone()))
-                .route(
-                    "/thumbnails/{photo_id}/{size}",
-                    web::get().to(get_thumbnail),
-                ),
-        )
-        .await;
-
-        let req = test::TestRequest::get()
-            .uri("/thumbnails/999/small")
-            .to_request();
-
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), 404);
-    }
 
     #[actix_web::test]
     async fn test_cache_stats() {

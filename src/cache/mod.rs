@@ -139,19 +139,27 @@ impl fmt::Display for ThumbnailSize {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey {
-    pub photo_id: i64,
+    pub content_hash: String,
     pub size: ThumbnailSize,
 }
 
 impl CacheKey {
-    pub fn new(photo_id: i64, size: ThumbnailSize) -> Self {
-        Self { photo_id, size }
+    pub fn new(content_hash: String, size: ThumbnailSize) -> Self {
+        Self { content_hash, size }
+    }
+    
+    pub fn from_photo(photo: &crate::db::Photo, size: ThumbnailSize) -> Result<Self, CacheError> {
+        let hash = photo.hash_sha256.as_ref()
+            .or(photo.hash_md5.as_ref())
+            .ok_or(CacheError::MissingHash)?;
+        
+        Ok(Self::new(hash.clone(), size))
     }
 }
 
 impl fmt::Display for CacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}", self.photo_id, self.size)
+        write!(f, "{}_{}", self.content_hash, self.size)
     }
 }
 
@@ -163,6 +171,8 @@ pub enum CacheError {
     IoError(#[from] std::io::Error),
     #[error("Photo not found")]
     PhotoNotFound,
+    #[error("Photo missing content hash - cannot cache without hash")]
+    MissingHash,
     #[allow(dead_code)]
     #[error("Invalid thumbnail size")]
     InvalidSize,
@@ -203,18 +213,18 @@ mod tests {
 
     #[test]
     fn test_cache_key() {
-        let key = CacheKey::new(123, ThumbnailSize::Medium);
-        assert_eq!(key.photo_id, 123);
+        let key = CacheKey::new("abcd1234".to_string(), ThumbnailSize::Medium);
+        assert_eq!(key.content_hash, "abcd1234");
         assert_eq!(key.size, ThumbnailSize::Medium);
-        assert_eq!(format!("{}", key), "123_medium");
+        assert_eq!(format!("{}", key), "abcd1234_medium");
     }
 
     #[test]
     fn test_cache_key_equality() {
-        let key1 = CacheKey::new(1, ThumbnailSize::Small);
-        let key2 = CacheKey::new(1, ThumbnailSize::Small);
-        let key3 = CacheKey::new(1, ThumbnailSize::Medium);
-        let key4 = CacheKey::new(2, ThumbnailSize::Small);
+        let key1 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
+        let key2 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
+        let key3 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Medium);
+        let key4 = CacheKey::new("test_hash_2".to_string(), ThumbnailSize::Small);
 
         assert_eq!(key1, key2);
         assert_ne!(key1, key3);
@@ -244,7 +254,7 @@ mod tests {
     #[test]
     fn test_memory_cache_basic_operations() {
         let cache = MemoryCache::new(10, 1); // 10 items, 1MB
-        let key = CacheKey::new(1, ThumbnailSize::Small);
+        let key = CacheKey::new("test_hash_basic".to_string(), ThumbnailSize::Small);
         let data = vec![1, 2, 3, 4, 5];
 
         // Initially empty
@@ -264,9 +274,9 @@ mod tests {
     #[test]
     fn test_memory_cache_eviction() {
         let cache = MemoryCache::new(2, 1); // 2 items max
-        let key1 = CacheKey::new(1, ThumbnailSize::Small);
-        let key2 = CacheKey::new(2, ThumbnailSize::Small);
-        let key3 = CacheKey::new(3, ThumbnailSize::Small);
+        let key1 = CacheKey::new("test_hash_evict1".to_string(), ThumbnailSize::Small);
+        let key2 = CacheKey::new("test_hash_evict2".to_string(), ThumbnailSize::Small);
+        let key3 = CacheKey::new("test_hash_evict3".to_string(), ThumbnailSize::Small);
         let data = vec![0; 100]; // 100 bytes each
 
         // Fill cache

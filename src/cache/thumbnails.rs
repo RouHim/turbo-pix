@@ -42,7 +42,7 @@ impl ThumbnailGenerator {
         photo: &Photo,
         size: ThumbnailSize,
     ) -> CacheResult<Vec<u8>> {
-        let cache_key = CacheKey::new(photo.id, size);
+        let cache_key = CacheKey::from_photo(photo, size)?;
 
         if let Some(cached_data) = self.get_from_disk_cache(&cache_key).await {
             debug!("Cache hit for {}", cache_key);
@@ -80,7 +80,7 @@ impl ThumbnailGenerator {
             self.encode_image(thumbnail)?
         };
 
-        let cache_key = CacheKey::new(photo.id, size);
+        let cache_key = CacheKey::from_photo(photo, size)?;
         let cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
@@ -172,9 +172,15 @@ impl ThumbnailGenerator {
     }
 
     fn get_cache_path(&self, key: &CacheKey) -> PathBuf {
-        let filename = format!("{}_{}.jpg", key.photo_id, key.size.as_str());
+        let filename = format!("{}_{}.jpg", key.content_hash, key.size.as_str());
 
-        let subdir = format!("{:03}", key.photo_id % 1000);
+        // Use first 3 characters of hash for subdirectory distribution
+        let subdir = if key.content_hash.len() >= 3 {
+            key.content_hash[..3].to_string()
+        } else {
+            key.content_hash.clone()
+        };
+        
         self.cache_dir.join(subdir).join(filename)
     }
 
@@ -494,7 +500,7 @@ mod tests {
         assert!(!thumbnail_data.is_empty());
 
         // Should be cached on disk now
-        let cache_key = CacheKey::new(1, ThumbnailSize::Small);
+        let cache_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists());
     }
@@ -558,12 +564,13 @@ mod tests {
         assert!(!large.is_empty());
 
         // Verify cache files exist for each size
-        let cache_dir = PathBuf::from(&config.cache.thumbnail_cache_path);
-        let subdir = cache_dir.join("001"); // photo_id 1 % 1000 = 1, formatted as 001
+        let small_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
+        let medium_key = CacheKey::from_photo(&photo, ThumbnailSize::Medium).unwrap();
+        let large_key = CacheKey::from_photo(&photo, ThumbnailSize::Large).unwrap();
 
-        assert!(subdir.join("1_small.jpg").exists());
-        assert!(subdir.join("1_medium.jpg").exists());
-        assert!(subdir.join("1_large.jpg").exists());
+        assert!(generator.get_cache_path(&small_key).exists());
+        assert!(generator.get_cache_path(&medium_key).exists());
+        assert!(generator.get_cache_path(&large_key).exists());
     }
 
     #[tokio::test]
@@ -597,7 +604,7 @@ mod tests {
             .unwrap();
 
         // Verify cache file exists
-        let cache_key = CacheKey::new(1, ThumbnailSize::Small);
+        let cache_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists());
 
@@ -720,7 +727,7 @@ mod tests {
         );
 
         // Should be cached on disk
-        let cache_key = CacheKey::new(2, ThumbnailSize::Medium);
+        let cache_key = CacheKey::from_photo(&photo, ThumbnailSize::Medium).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists(), "Thumbnail should be cached on disk");
     }

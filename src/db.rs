@@ -531,6 +531,17 @@ impl Photo {
         }
     }
 
+    pub fn find_by_hash(pool: &DbPool, hash: &str) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+        let mut stmt = conn.prepare("SELECT * FROM photos WHERE hash_sha256 = ?")?;
+
+        match stmt.query_row([hash], Photo::from_row) {
+            Ok(photo) => Ok(Some(photo)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+
     pub fn create(&self, pool: &DbPool) -> Result<i64, Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
@@ -538,12 +549,12 @@ impl Photo {
             INSERT INTO photos (
                 file_path, filename, file_size, mime_type, taken_at, camera_make, camera_model,
                 iso, aperture, shutter_speed, focal_length, width, height, orientation,
-                flash_used, latitude, longitude, country, keywords,
+                flash_used, latitude, longitude, hash_md5, hash_sha256, country, keywords,
                 faces_detected, objects_detected, colors, duration, video_codec, audio_codec,
                 bitrate, frame_rate, is_favorite, file_modified, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33
             )
         "#;
 
@@ -567,6 +578,8 @@ impl Photo {
                 self.flash_used,
                 self.latitude,
                 self.longitude,
+                self.hash_md5,
+                self.hash_sha256,
                 self.country,
                 self.keywords,
                 self.faces_detected,

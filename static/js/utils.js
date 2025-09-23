@@ -161,7 +161,7 @@ const handleError = (error, context = '') => {
 
 // URL helpers
 const getPhotoUrl = (photoId) => `/api/photos/${photoId}/file`;
-const getThumbnailUrl = (photoId, size = 'medium') => `/api/thumbnails/${photoId}/${size}`;
+const getThumbnailUrl = (photo, size = 'medium') => `/api/thumbnails/hash/${photo.hash_sha256}/${size}`;
 const getVideoUrl = (photoId) => `/api/photos/${photoId}/video`;
 
 // Local storage helpers

@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_memory_cache_basic_operations() {
         let cache = MemoryCache::new(10, 1); // 10 items, 1MB
-        let key = CacheKey::new(1, ThumbnailSize::Small);
+        let key = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
         let data = vec![1, 2, 3, 4, 5];
 
         // Initially empty
@@ -167,9 +167,9 @@ mod tests {
     #[test]
     fn test_memory_cache_eviction() {
         let cache = MemoryCache::new(2, 1); // 2 items max
-        let key1 = CacheKey::new(1, ThumbnailSize::Small);
-        let key2 = CacheKey::new(2, ThumbnailSize::Small);
-        let key3 = CacheKey::new(3, ThumbnailSize::Small);
+        let key1 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
+        let key2 = CacheKey::new("test_hash_2".to_string(), ThumbnailSize::Small);
+        let key3 = CacheKey::new("test_hash_3".to_string(), ThumbnailSize::Small);
         let data = vec![0; 100]; // 100 bytes each
 
         // Fill cache
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn test_memory_cache_size_limit() {
         let cache = MemoryCache::new(10, 1); // 1MB = 1,048,576 bytes
-        let key = CacheKey::new(1, ThumbnailSize::Large);
+        let key = CacheKey::new("test_hash_large".to_string(), ThumbnailSize::Large);
         let large_data = vec![0; 2 * 1024 * 1024]; // 2MB data (too large)
         let small_data = vec![0; 1000]; // 1KB data
 
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn test_memory_cache_remove() {
         let cache = MemoryCache::new(10, 1);
-        let key = CacheKey::new(1, ThumbnailSize::Medium);
+        let key = CacheKey::new("test_hash_remove".to_string(), ThumbnailSize::Medium);
         let data = vec![1, 2, 3];
 
         cache.put(&key, data.clone()).unwrap();
@@ -226,8 +226,8 @@ mod tests {
     #[test]
     fn test_memory_cache_clear() {
         let cache = MemoryCache::new(10, 1);
-        let key1 = CacheKey::new(1, ThumbnailSize::Small);
-        let key2 = CacheKey::new(2, ThumbnailSize::Medium);
+        let key1 = CacheKey::new("test_hash_clear1".to_string(), ThumbnailSize::Small);
+        let key2 = CacheKey::new("test_hash_clear2".to_string(), ThumbnailSize::Medium);
         let data = vec![1, 2, 3];
 
         cache.put(&key1, data.clone()).unwrap();
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_memory_cache_replace_existing() {
         let cache = MemoryCache::new(10, 1);
-        let key = CacheKey::new(1, ThumbnailSize::Small);
+        let key = CacheKey::new("test_hash_replace".to_string(), ThumbnailSize::Small);
         let data1 = vec![1, 2, 3];
         let data2 = vec![4, 5, 6, 7];
 

@@ -162,7 +162,7 @@ class PhotoGrid {
 
     // Create card with thumbnail URL for lazy loading
     card.innerHTML = `
-            <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo.id, 'medium')}">
+            <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo, 'medium')}">
                 <div class="photo-card-placeholder"></div>
                 ${isVideo ? '<div class="video-play-icon"></div>' : ''}
             </div>

@@ -17,10 +17,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     "/photos/{id}/video",
                     web::get().to(web_handlers::get_video_file),
                 )
-                .route(
-                    "/photos/{id}/thumbnail",
-                    web::get().to(web_handlers::get_photo_thumbnail),
-                )
+
                 .route(
                     "/photos/{id}/metadata",
                     web::get().to(web_handlers::get_photo_metadata),
@@ -41,9 +38,14 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 .route("/cameras", web::get().to(web_handlers::get_cameras))
                 .route("/stats", web::get().to(web_handlers::get_stats))
                 .route(
-                    "/thumbnails/{photo_id}/{size}",
-                    web::get().to(web_handlers::get_thumbnail),
+                    "/thumbnails/hash/{hash}",
+                    web::get().to(web_handlers::get_thumbnail_by_hash_default_size),
                 )
+                .route(
+                    "/thumbnails/hash/{hash}/{size}",
+                    web::get().to(web_handlers::get_thumbnail_by_hash),
+                )
+
                 .route("/cache/stats", web::get().to(web_handlers::cache_stats))
                 .route("/cache/clear", web::delete().to(web_handlers::clear_cache)),
         );

@@ -157,10 +157,14 @@ class PhotoGrid {
     const card = utils.createElement('div', 'photo-card');
     card.dataset.photoId = photo.id;
 
+    // Check if this is a video
+    const isVideo = photo.video_codec != null;
+
     // Create card with thumbnail URL for lazy loading
     card.innerHTML = `
             <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo.id, 'medium')}">
                 <div class="photo-card-placeholder"></div>
+                ${isVideo ? '<div class="video-play-icon"></div>' : ''}
             </div>
             <div class="photo-card-overlay">
                 <div class="photo-card-title">${this.getPhotoTitle(photo)}</div>

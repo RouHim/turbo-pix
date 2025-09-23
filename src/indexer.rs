@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
@@ -598,18 +598,8 @@ impl PhotoProcessor {
     }
 
     fn calculate_file_hash(&self, path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-        let mut file = File::open(path)?;
         let mut hasher = Sha256::new();
-        let mut buffer = [0; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
+        hasher.update(path.to_string_lossy().as_bytes());
         Ok(format!("{:x}", hasher.finalize()))
     }
 }

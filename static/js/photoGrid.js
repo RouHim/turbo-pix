@@ -171,10 +171,10 @@ class PhotoGrid {
                 <div class="photo-card-meta">${this.getPhotoMeta(photo)}</div>
             </div>
             <div class="photo-card-actions">
-                <button class="card-action-btn favorite-btn" title="Add to Favorites" data-action="favorite">
-                    ${api.isFavorite(photo.id) ? '❤️' : '🤍'}
+                <button class="card-action-btn favorite-btn" title="${window.i18nManager ? window.i18nManager.t('ui.add_to_favorites') : 'Add to Favorites'}" data-action="favorite">
+                    ${photo.is_favorite ? '❤️' : '🤍'}
                 </button>
-                <button class="card-action-btn download-btn" title="Download" data-action="download">⬇️</button>
+                <button class="card-action-btn download-btn" title="${window.i18nManager ? window.i18nManager.t('ui.download') : 'Download'}" data-action="download">⬇️</button>
             </div>
         `;
 
@@ -202,7 +202,7 @@ class PhotoGrid {
 
     utils.on(favoriteBtn, 'click', (e) => {
       e.stopPropagation();
-      this.toggleFavorite(photo.id, favoriteBtn);
+      this.toggleFavorite(photo, favoriteBtn);
     });
 
     utils.on(downloadBtn, 'click', (e) => {
@@ -272,23 +272,74 @@ class PhotoGrid {
     return parts.join(' • ');
   }
 
-  toggleFavorite(photoId, button) {
-    const isFavorite = api.isFavorite(photoId);
+  async toggleFavorite(photo, button) {
+    const wasAlreadyFavorite = photo.is_favorite;
+    const newFavoriteState = !wasAlreadyFavorite;
 
-    if (isFavorite) {
-      api.removeFromFavorites(photoId);
-      button.textContent = '🤍';
-      button.title = 'Add to Favorites';
-      utils.showToast('Removed', 'Photo removed from favorites', 'info', 2000);
-    } else {
-      api.addToFavorites(photoId);
-      button.textContent = '❤️';
-      button.title = 'Remove from Favorites';
-      utils.showToast('Added', 'Photo added to favorites', 'success', 2000);
+    // Optimistically update UI
+    button.textContent = newFavoriteState ? '❤️' : '🤍';
+    button.title = newFavoriteState
+      ? window.i18nManager
+        ? window.i18nManager.t('ui.remove_from_favorites')
+        : 'Remove from Favorites'
+      : window.i18nManager
+        ? window.i18nManager.t('ui.add_to_favorites')
+        : 'Add to Favorites';
+
+    try {
+      // Call backend API
+      if (newFavoriteState) {
+        await api.addToFavorites(photo.id);
+      } else {
+        await api.removeFromFavorites(photo.id);
+      }
+
+      // Update photo object
+      photo.is_favorite = newFavoriteState;
+
+      // Show success message
+      utils.showToast(
+        newFavoriteState
+          ? window.i18nManager
+            ? window.i18nManager.t('ui.added')
+            : 'Added'
+          : window.i18nManager
+            ? window.i18nManager.t('ui.removed')
+            : 'Removed',
+        newFavoriteState
+          ? window.i18nManager
+            ? window.i18nManager.t('messages.photo_added_to_favorites')
+            : 'Photo added to favorites'
+          : window.i18nManager
+            ? window.i18nManager.t('messages.photo_removed_from_favorites')
+            : 'Photo removed from favorites',
+        'success',
+        2000
+      );
+
+      // Emit event for other components
+      utils.emit(window, 'favoriteToggled', { photoId: photo.id, isFavorite: newFavoriteState });
+    } catch (error) {
+      // Revert UI on error
+      button.textContent = wasAlreadyFavorite ? '❤️' : '🤍';
+      button.title = wasAlreadyFavorite
+        ? window.i18nManager
+          ? window.i18nManager.t('ui.remove_from_favorites')
+          : 'Remove from Favorites'
+        : window.i18nManager
+          ? window.i18nManager.t('ui.add_to_favorites')
+          : 'Add to Favorites';
+
+      console.error('Error toggling favorite:', error);
+      utils.showToast(
+        window.i18nManager ? window.i18nManager.t('ui.error') : 'Error',
+        window.i18nManager
+          ? window.i18nManager.t('messages.error_updating_favorite')
+          : 'Error updating favorite status',
+        'error',
+        3000
+      );
     }
-
-    // Emit event for other components
-    utils.emit(window, 'favoriteToggled', { photoId, isFavorite: !isFavorite });
   }
 
   downloadPhoto(photo) {
@@ -297,7 +348,14 @@ class PhotoGrid {
     link.download = photo.filename || `photo-${photo.id}`;
     link.click();
 
-    utils.showToast('Download', 'Photo download started', 'info', 2000);
+    utils.showToast(
+      window.i18nManager ? window.i18nManager.t('ui.download') : 'Download',
+      window.i18nManager
+        ? window.i18nManager.t('messages.photo_download_started')
+        : 'Photo download started',
+      'info',
+      2000
+    );
   }
 
   openPhotoViewer(photo, allPhotos) {
@@ -314,19 +372,25 @@ class PhotoGrid {
     this.container.innerHTML = `
             <div class="error-state">
                 <div class="error-state-icon">📷</div>
-                <div class="error-state-title">No Photos Found</div>
+                <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('ui.no_photos_found') : 'No Photos Found'}</div>
                 <div class="error-state-message">
                     ${
                       this.currentQuery
-                        ? `No photos match your search for "${this.currentQuery}"`
-                        : 'No photos have been indexed yet'
+                        ? window.i18nManager
+                          ? window.i18nManager.t('messages.no_photos_match_search', {
+                              query: this.currentQuery,
+                            })
+                          : `No photos match your search for "${this.currentQuery}"`
+                        : window.i18nManager
+                          ? window.i18nManager.t('messages.no_photos_indexed')
+                          : 'No photos have been indexed yet'
                     }
                 </div>
                 ${
                   !this.currentQuery
                     ? `
                     <button class="error-state-button" onclick="window.location.reload()">
-                        Refresh
+                        ${window.i18nManager ? window.i18nManager.t('ui.refresh') : 'Refresh'}
                     </button>
                 `
                     : ''
@@ -339,10 +403,10 @@ class PhotoGrid {
     this.container.innerHTML = `
             <div class="error-state">
                 <div class="error-state-icon">⚠️</div>
-                <div class="error-state-title">Error Loading Photos</div>
+                <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('errors.error_loading_photos') : 'Error Loading Photos'}</div>
                 <div class="error-state-message">${message}</div>
                 <button class="error-state-button" onclick="photoGrid.loadPhotos()">
-                    Try Again
+                    ${window.i18nManager ? window.i18nManager.t('ui.try_again') : 'Try Again'}
                 </button>
             </div>
         `;
@@ -372,7 +436,13 @@ class PhotoGrid {
       if (this.hasMore && this.photos.length > 0) {
         loadMoreContainer.style.display = 'flex';
         loadMoreBtn.disabled = this.loading;
-        loadMoreBtn.textContent = this.loading ? 'Loading...' : 'Load More';
+        loadMoreBtn.textContent = this.loading
+          ? window.i18nManager
+            ? window.i18nManager.t('ui.loading')
+            : 'Loading...'
+          : window.i18nManager
+            ? window.i18nManager.t('ui.load_more')
+            : 'Load More';
       } else {
         loadMoreContainer.style.display = 'none';
       }

@@ -693,6 +693,7 @@ impl ProcessedPhoto {
             audio_codec: self.audio_codec.clone(),
             bitrate: self.bitrate,
             frame_rate: self.frame_rate,
+            is_favorite: Some(false),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS photos (
     audio_codec TEXT, -- Audio codec (e.g., "aac", "mp3")
     bitrate INTEGER, -- Bitrate in kbps
     frame_rate REAL, -- Frame rate for videos
+    is_favorite BOOLEAN DEFAULT FALSE,
     created_at DATETIME,
     updated_at DATETIME
 );
@@ -92,6 +93,7 @@ pub const SCHEMA_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_photos_faces_detected ON photos(faces_detected);",
     "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
     "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
+    "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
 ];
 
 // Connection pool functions
@@ -237,6 +239,7 @@ pub struct Photo {
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
     pub bitrate: Option<i32>,        // Bitrate in kbps
     pub frame_rate: Option<f64>,     // Frame rate for videos
+    pub is_favorite: Option<bool>,   // Whether photo is marked as favorite
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -295,13 +298,14 @@ impl Photo {
             audio_codec: row.get(38)?,
             bitrate: row.get(39)?,
             frame_rate: row.get(40)?,
+            is_favorite: row.get(41)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(41)?;
+                let datetime_str = row.get::<_, String>(42)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -311,7 +315,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -320,12 +324,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(42)?;
+                let datetime_str = row.get::<_, String>(43)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                43,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -335,7 +339,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                43,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -360,7 +364,7 @@ impl Photo {
                  hash_md5 = ?, hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
                  country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
                  duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
-                 updated_at = ?
+                 is_favorite = ?, updated_at = ?
               WHERE id = ?",
             rusqlite::params![
                 self.file_path,
@@ -403,6 +407,7 @@ impl Photo {
                 self.audio_codec,
                 self.bitrate,
                 self.frame_rate,
+                self.is_favorite.unwrap_or(false),
                 Utc::now().to_rfc3339(),
                 self.id
             ],
@@ -422,6 +427,19 @@ impl Photo {
             rusqlite::params![has_thumbnail, thumbnail_path, self.id],
         )?;
         Ok(())
+    }
+
+    pub fn update_favorite_status(
+        pool: &DbPool,
+        id: i64,
+        is_favorite: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+        let rows_affected = conn.execute(
+            "UPDATE photos SET is_favorite = ?, updated_at = ? WHERE id = ?",
+            rusqlite::params![is_favorite, Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(rows_affected > 0)
     }
 
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
@@ -518,14 +536,14 @@ impl Photo {
 
         let sql = r#"
             INSERT INTO photos (
-                file_path, filename, file_size, taken_at, camera_make, camera_model,
+                file_path, filename, file_size, mime_type, taken_at, camera_make, camera_model,
                 iso, aperture, shutter_speed, focal_length, width, height, orientation,
                 flash_used, latitude, longitude, country, keywords,
                 faces_detected, objects_detected, colors, duration, video_codec, audio_codec,
-                bitrate, frame_rate, file_modified, created_at, updated_at
+                bitrate, frame_rate, is_favorite, file_modified, created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
             )
         "#;
 
@@ -535,6 +553,7 @@ impl Photo {
                 self.file_path,
                 self.filename,
                 self.file_size,
+                self.mime_type,
                 self.taken_at.map(|dt| dt.to_rfc3339()),
                 self.camera_make,
                 self.camera_model,
@@ -558,6 +577,7 @@ impl Photo {
                 self.audio_codec,
                 self.bitrate,
                 self.frame_rate,
+                self.is_favorite.unwrap_or(false),
                 self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
                 Utc::now().to_rfc3339(),
@@ -641,12 +661,54 @@ impl Photo {
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(ref q) = query.q {
-            where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
-            let pattern = format!("%{}%", q);
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern));
+            // Handle special type: queries
+            if q.starts_with("type:") {
+                let media_type = q.strip_prefix("type:").unwrap_or("");
+                match media_type {
+                    "video" => {
+                        where_clause.push_str(" AND mime_type LIKE 'video/%'");
+                    }
+                    "image" => {
+                        where_clause.push_str(" AND mime_type LIKE 'image/%'");
+                    }
+                    _ => {
+                        // Unknown type, fall back to general search
+                        where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                        let pattern = format!("%{}%", q);
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern));
+                    }
+                }
+            } else if q.starts_with("is_favorite:") {
+                let favorite_value = q.strip_prefix("is_favorite:").unwrap_or("");
+                match favorite_value {
+                    "true" => {
+                        where_clause.push_str(" AND is_favorite = 1");
+                    }
+                    "false" => {
+                        where_clause.push_str(" AND (is_favorite = 0 OR is_favorite IS NULL)");
+                    }
+                    _ => {
+                        // Unknown value, fall back to general search
+                        where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                        let pattern = format!("%{}%", q);
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern));
+                    }
+                }
+            } else {
+                // General search across multiple fields
+                where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                let pattern = format!("%{}%", q);
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            }
         }
 
         if let Some(ref camera_make) = query.camera_make {
@@ -827,6 +889,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             audio_codec: processed.audio_codec,
             bitrate: processed.bitrate,
             frame_rate: processed.frame_rate,
+            is_favorite: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -878,6 +941,7 @@ impl Photo {
             audio_codec: None,
             bitrate: None,
             frame_rate: None,
+            is_favorite: Some(false),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

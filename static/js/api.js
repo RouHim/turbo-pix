@@ -148,76 +148,49 @@ class TurboPixAPI {
     });
   }
 
-  // Favorites (using localStorage for client-side favorites)
-  getFavorites() {
-    return utils.storage.get('favorites', []);
+  // Favorites (using backend API)
+  async toggleFavorite(photoId, isFavorite) {
+    return this.request(`/api/photos/${photoId}/favorite`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_favorite: isFavorite }),
+    });
   }
 
-  addToFavorites(photoId) {
-    const favorites = this.getFavorites();
-    if (!favorites.includes(photoId)) {
-      favorites.push(photoId);
-      utils.storage.set('favorites', favorites);
-      return true;
-    }
-    return false;
-  }
-
-  removeFromFavorites(photoId) {
-    const favorites = this.getFavorites();
-    const index = favorites.indexOf(photoId);
-    if (index > -1) {
-      favorites.splice(index, 1);
-      utils.storage.set('favorites', favorites);
-      return true;
-    }
-    return false;
-  }
-
-  isFavorite(photoId) {
-    return this.getFavorites().includes(photoId);
-  }
-
-  async getFavoritePhotos() {
-    const favoriteIds = this.getFavorites();
-    if (favoriteIds.length === 0) {
-      return { photos: [], total: 0, page: 1, limit: 50 };
-    }
-
-    // Get photos in batches to avoid URL length limits
-    const batchSize = 20;
-    const batches = [];
-
-    for (let i = 0; i < favoriteIds.length; i += batchSize) {
-      const batch = favoriteIds.slice(i, i + batchSize);
-      batches.push(batch);
-    }
-
+  async addToFavorites(photoId) {
     try {
-      const batchPromises = batches.map(async (batch) => {
-        const requests = batch.map((id) => ({
-          endpoint: `/api/photos/${id}`,
-          options: {},
-        }));
-        return this.batchRequest(requests);
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      const photos = batchResults
-        .flat()
-        .filter((result) => !result.error)
-        .sort((a, b) => new Date(b.date_indexed) - new Date(a.date_indexed));
-
-      return {
-        photos,
-        total: photos.length,
-        page: 1,
-        limit: photos.length,
-      };
+      const result = await this.toggleFavorite(photoId, true);
+      return result;
     } catch (error) {
-      console.error('Error fetching favorite photos:', error);
-      return { photos: [], total: 0, page: 1, limit: 50 };
+      console.error('Error adding to favorites:', error);
+      throw error;
     }
+  }
+
+  async removeFromFavorites(photoId) {
+    try {
+      const result = await this.toggleFavorite(photoId, false);
+      return result;
+    } catch (error) {
+      console.error('Error removing from favorites:', error);
+      throw error;
+    }
+  }
+
+  isFavorite(photo) {
+    // Check if photo has is_favorite field from backend
+    if (typeof photo === 'object' && photo.is_favorite !== undefined) {
+      return photo.is_favorite;
+    }
+    // Fallback for photo ID - this should not be used anymore
+    console.warn('isFavorite called with photo ID instead of photo object');
+    return false;
+  }
+
+  async getFavoritePhotos(params = {}) {
+    return this.getPhotos({
+      ...params,
+      query: 'is_favorite:true',
+    });
   }
 
   // View settings (stored locally)

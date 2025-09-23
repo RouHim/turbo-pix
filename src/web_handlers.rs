@@ -46,6 +46,11 @@ pub struct PhotoUpdateRequest {
     pub location_name: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FavoriteToggleRequest {
+    pub is_favorite: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PhotosResponse {
     pub photos: Vec<Photo>,
@@ -149,6 +154,7 @@ fn create_photo_from_temp_file(
         frame_rate: metadata.frame_rate,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        is_favorite: Some(false),
     })
 }
 
@@ -734,6 +740,32 @@ pub async fn delete_photo(
             }
         }
         Ok(None) => Ok(HttpResponse::NotFound().json(ErrorResponse {
+            error: "Photo not found".to_string(),
+            code: 404,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        })),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+            error: format!("Database error: {}", e),
+            code: 500,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        })),
+    }
+}
+
+pub async fn toggle_photo_favorite(
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    req: web::Json<FavoriteToggleRequest>,
+) -> ActixResult<HttpResponse> {
+    let photo_id = path.into_inner();
+
+    match Photo::update_favorite_status(&pool, photo_id, req.is_favorite) {
+        Ok(true) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "id": photo_id,
+            "is_favorite": req.is_favorite,
+            "message": if req.is_favorite { "Added to favorites" } else { "Removed from favorites" }
+        }))),
+        Ok(false) => Ok(HttpResponse::NotFound().json(ErrorResponse {
             error: "Photo not found".to_string(),
             code: 404,
             timestamp: chrono::Utc::now().to_rfc3339(),

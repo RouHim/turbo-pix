@@ -19,11 +19,17 @@
                 type="text"
                 id="search-input"
                 placeholder="Search photos..."
+                data-i18n-placeholder="ui.search_photos_placeholder"
                 class="search-input"
               />
-              <button id="search-btn" class="search-btn">Search</button>
+              <button id="search-btn" class="search-btn" data-i18n="ui.search">Search</button>
             </div>
-            <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+            <button
+              id="theme-toggle"
+              class="theme-toggle"
+              title="Toggle theme"
+              data-i18n-title="ui.toggle_theme"
+            >
               <span class="theme-icon"></span>
             </button>
           </div>
@@ -32,23 +38,25 @@
 
       <nav class="sidebar">
         <div class="sidebar-content">
-          <button class="nav-item active" data-view="all">All Photos</button>
-          <button class="nav-item" data-view="favorites">Favorites</button>
-          <button class="nav-item" data-view="videos">Videos</button>
+          <button class="nav-item active" data-view="all" data-i18n="ui.all_photos">
+            All Photos
+          </button>
+          <button class="nav-item" data-view="favorites" data-i18n="ui.favorites">Favorites</button>
+          <button class="nav-item" data-view="videos" data-i18n="ui.videos">Videos</button>
         </div>
       </nav>
 
       <main class="main-content">
         <div class="content-header">
-          <h2 id="current-view-title">All Photos</h2>
+          <h2 id="current-view-title" data-i18n="ui.all_photos">All Photos</h2>
           <div class="content-actions">
             <select id="sort-select" class="sort-select">
-              <option value="date_desc">Newest First</option>
-              <option value="date_asc">Oldest First</option>
-              <option value="name_asc">Name A-Z</option>
-              <option value="name_desc">Name Z-A</option>
-              <option value="size_desc">Largest First</option>
-              <option value="size_asc">Smallest First</option>
+              <option value="date_desc" data-i18n="ui.newest_first">Newest First</option>
+              <option value="date_asc" data-i18n="ui.oldest_first">Oldest First</option>
+              <option value="name_asc" data-i18n="ui.name_a_z">Name A-Z</option>
+              <option value="name_desc" data-i18n="ui.name_z_a">Name Z-A</option>
+              <option value="size_desc" data-i18n="ui.largest_first">Largest First</option>
+              <option value="size_asc" data-i18n="ui.smallest_first">Smallest First</option>
             </select>
           </div>
         </div>
@@ -65,7 +73,9 @@
         </div>
 
         <div id="load-more-container" class="load-more-container">
-          <button id="load-more-btn" class="load-more-btn">Load More</button>
+          <button id="load-more-btn" class="load-more-btn" data-i18n="ui.load_more">
+            Load More
+          </button>
         </div>
       </main>
     </div>
@@ -74,46 +84,75 @@
     <div id="photo-viewer" class="photo-viewer">
       <div class="viewer-overlay"></div>
       <div class="viewer-content">
-        <button class="viewer-close" title="Close">✕</button>
-        <button class="viewer-prev" title="Previous">‹</button>
-        <button class="viewer-next" title="Next">›</button>
+        <button class="viewer-close" title="Close" data-i18n-title="ui.close">✕</button>
+        <button class="viewer-prev" title="Previous" data-i18n-title="ui.previous">‹</button>
+        <button class="viewer-next" title="Next" data-i18n-title="ui.next">›</button>
 
         <div class="viewer-zoom-controls">
-          <button class="zoom-btn zoom-out" title="Zoom Out">−</button>
-          <button class="zoom-btn zoom-in" title="Zoom In">+</button>
-          <button class="zoom-btn zoom-fit" title="Fit to Screen">⤢</button>
+          <button class="zoom-btn zoom-out" title="Zoom Out" data-i18n-title="ui.zoom_out">
+            −
+          </button>
+          <button class="zoom-btn zoom-in" title="Zoom In" data-i18n-title="ui.zoom_in">+</button>
+          <button
+            class="zoom-btn zoom-fit"
+            title="Fit to Screen"
+            data-i18n-title="ui.fit_to_screen"
+          >
+            ⤢
+          </button>
         </div>
 
         <div class="viewer-main">
-          <img id="viewer-image" class="viewer-image" alt="Photo" />
+          <img id="viewer-image" class="viewer-image" alt="Photo" data-i18n-alt="ui.photo" />
           <video id="viewer-video" class="viewer-video" controls style="display: none"></video>
         </div>
 
         <div class="viewer-sidebar">
           <div class="photo-info">
-            <h3 id="photo-title">Photo Title</h3>
+            <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
             <div class="photo-meta">
               <div class="meta-item">
-                <label>Date:</label>
+                <label data-i18n="ui.date">Date:</label>
                 <span id="photo-date">-</span>
               </div>
               <div class="meta-item">
-                <label>Size:</label>
+                <label data-i18n="ui.size">Size:</label>
                 <span id="photo-size">-</span>
               </div>
               <div class="meta-item">
-                <label>Camera:</label>
+                <label data-i18n="ui.camera">Camera:</label>
                 <span id="photo-camera">-</span>
               </div>
               <div class="meta-item">
-                <label>Location:</label>
+                <label data-i18n="ui.location">Location:</label>
                 <span id="photo-location">-</span>
               </div>
             </div>
             <div class="photo-actions">
-              <button class="action-btn favorite-btn" title="Add to Favorites">Favorite</button>
-              <button class="action-btn download-btn" title="Download">Download</button>
-              <button class="action-btn share-btn" title="Share">Share</button>
+              <button
+                class="action-btn favorite-btn"
+                title="Add to Favorites"
+                data-i18n="ui.favorite"
+                data-i18n-title="ui.add_to_favorites"
+              >
+                Favorite
+              </button>
+              <button
+                class="action-btn download-btn"
+                title="Download"
+                data-i18n="ui.download"
+                data-i18n-title="ui.download"
+              >
+                Download
+              </button>
+              <button
+                class="action-btn share-btn"
+                title="Share"
+                data-i18n="ui.share"
+                data-i18n-title="ui.share"
+              >
+                Share
+              </button>
             </div>
           </div>
         </div>
@@ -123,7 +162,7 @@
     <!-- Loading Indicator -->
     <div id="loading-indicator" class="loading-indicator">
       <div class="spinner"></div>
-      <span>Loading...</span>
+      <span data-i18n="ui.loading">Loading...</span>
     </div>
 
     <!-- Toast Notifications -->
@@ -131,6 +170,9 @@
 
     <script src="/js/utils.js"></script>
     <script src="/js/logger.js"></script>
+    <script src="/i18n/i18nManager.js"></script>
+    <script src="/i18n/en/index.js"></script>
+    <script src="/i18n/de/index.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/photoGrid.js"></script>
     <script src="/js/viewer.js"></script>

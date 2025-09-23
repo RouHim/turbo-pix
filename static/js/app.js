@@ -15,13 +15,16 @@ class TurboPixApp {
     this.init();
   }
 
-  init() {
+  async init() {
     if (window.logger) {
       window.logger.info('TurboPix App initializing', {
         userAgent: navigator.userAgent,
         url: window.location.href,
       });
     }
+
+    // Initialize i18n system first
+    await this.initializeI18n();
 
     this.bindEvents();
     this.setupNavigation();
@@ -30,6 +33,22 @@ class TurboPixApp {
     this.initTheme();
     this.loadInitialData();
     this.startPerformanceMonitoring();
+  }
+
+  async initializeI18n() {
+    try {
+      // Create i18nManager instance
+      if (!window.i18nManager) {
+        window.i18nManager = new window.I18nManager();
+      }
+
+      // Initialize the i18n system
+      await window.i18nManager.initializeI18n();
+
+      console.log('✅ i18n system initialized');
+    } catch (error) {
+      console.error('Failed to initialize i18n:', error);
+    }
   }
 
   bindEvents() {
@@ -122,7 +141,7 @@ class TurboPixApp {
     if (header && !utils.$('.menu-btn')) {
       const menuBtn = utils.createElement('button', 'menu-btn');
       menuBtn.innerHTML = '☰';
-      menuBtn.title = 'Menu';
+      menuBtn.title = window.i18nManager ? window.i18nManager.t('ui.menu') : 'Menu';
       header.insertBefore(menuBtn, header.firstChild);
 
       utils.on(menuBtn, 'click', () => {
@@ -135,7 +154,7 @@ class TurboPixApp {
     if (searchContainer && !utils.$('.mobile-search-btn')) {
       const searchBtn = utils.createElement('button', 'mobile-search-btn view-btn');
       searchBtn.innerHTML = '🔍';
-      searchBtn.title = 'Search';
+      searchBtn.title = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
 
       // Insert after search container since header-actions was removed
       searchContainer.parentNode.insertBefore(searchBtn, searchContainer.nextSibling);
@@ -183,6 +202,7 @@ class TurboPixApp {
 
     this.state.set('currentView', view);
     this.updateActiveNavItem(view);
+    this.updateViewTitle(view);
 
     await this.loadViewData(view);
   }
@@ -199,19 +219,16 @@ class TurboPixApp {
       switch (view) {
         case 'all':
           await window.photoGrid.loadPhotos(null, filters, true);
-          this.updateViewTitle('All Photos');
           break;
 
         case 'favorites':
           const favoritePhotos = await api.getFavoritePhotos();
           this.displayFavoritePhotos(favoritePhotos);
-          this.updateViewTitle('Favorite Photos');
           break;
 
         case 'videos':
           // This would need backend support for file type filtering
           await window.photoGrid.loadPhotos('type:video', filters, true);
-          this.updateViewTitle('Videos');
           break;
       }
     } catch (error) {
@@ -250,10 +267,19 @@ class TurboPixApp {
     }
   }
 
-  updateViewTitle(title) {
+  updateViewTitle(view) {
     const titleEl = utils.$('#current-view-title');
-    if (titleEl) {
-      titleEl.textContent = title;
+    if (titleEl && window.i18nManager) {
+      // Map view names to i18n keys
+      const titleKeys = {
+        all: 'all_photos',
+        favorites: 'favorites',
+        videos: 'videos',
+      };
+
+      const i18nKey = titleKeys[view] || 'all_photos';
+      const localizedTitle = window.i18nManager.t(`ui.${i18nKey}`);
+      titleEl.textContent = localizedTitle;
     }
   }
 
@@ -363,7 +389,14 @@ class TurboPixApp {
         } else {
           console.warn('Health check failed:', error);
         }
-        utils.showToast('Connection', 'Server connection lost', 'warning', 3000);
+        utils.showToast(
+          window.i18nManager ? window.i18nManager.t('ui.connection') : 'Connection',
+          window.i18nManager
+            ? window.i18nManager.t('errors.server_connection_lost')
+            : 'Server connection lost',
+          'warning',
+          3000
+        );
       }
     }, 30000);
   }
@@ -456,10 +489,11 @@ class TurboPixApp {
 }
 
 // Initialize app when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   utils.performance.mark('app-init-start');
 
   window.turboPixApp = new TurboPixApp();
+  await window.turboPixApp.init();
 
   utils.performance.mark('app-init-end');
   utils.performance.measure('app-init', 'app-init-start', 'app-init-end');

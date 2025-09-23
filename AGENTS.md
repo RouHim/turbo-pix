@@ -17,17 +17,6 @@
 
 ## Test-Driven Development (TDD)
 
-### TDD Cycle
-
-1. **Write failing test** → 2. **Implement minimal code** → 3. **Refactor** → 4. **Run full suite**
-
-### TDD Commands
-
-```bash
-cargo test <test_name> --lib  # Run specific test
-cargo test                   # Run full test suite
-```
-
 ### Test Infrastructure
 
 - **Helpers**: `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
@@ -53,7 +42,7 @@ cargo test                   # Run full test suite
 - **Responsive Design**: Test on different viewport sizes
 - **API Endpoints**: Verify `/api/photos`, `/api/search`, `/thumbnails/*` responses
 
-### Post-Feature Testing Protocol
+## Post-Feature Testing Protocol
 
 **TDD-Enhanced Testing Workflow:**
 
@@ -85,6 +74,8 @@ cargo test                   # Run full test suite
 - **Logging**: Use `tracing` crate for structured logging
 - **JSON**: Use `serde_json::json!` macro for responses, consistent error format
 - **Web handlers**: Return `Result<HttpResponse>`, use proper HTTP status codes
+- **Clean Code**: KISS principle, avoid unnecessary complexity, comment non-obvious logic, remove dead code
+- **SOLID principles**: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion
 
 ## Code Quality Standards
 
@@ -101,14 +92,6 @@ cargo test                   # Run full test suite
 - **No legacy compatibility requirements**: Since this isn't serving production users, we can make breaking changes freely
 - **Database can be recreated**: No need to preserve existing data or maintain migration compatibility
 - **Modern approach preferred**: Can use latest APIs and remove fallback mechanisms without concern
-
-### Development Philosophy
-
-- **Clean, simple code over backwards compatibility**
-- **Remove unused/legacy code aggressively**
-- **Use modern APIs without fallbacks** (e.g., navigator.share() only)
-- **Direct schema initialization over complex migration systems**
-- **Focus on code clarity and maintainability**
 
 ## Development Workflow & Common Pitfalls
 

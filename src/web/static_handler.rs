@@ -13,6 +13,9 @@ pub enum StaticAsset {
     ViewerJs,
     SearchJs,
     UtilsJs,
+    I18nManagerJs,
+    I18nEnIndexJs,
+    I18nDeIndexJs,
     NotFound,
 }
 
@@ -30,6 +33,9 @@ impl StaticAsset {
             "/js/viewer.js" => Self::ViewerJs,
             "/js/search.js" => Self::SearchJs,
             "/js/utils.js" => Self::UtilsJs,
+            "/i18n/i18nManager.js" => Self::I18nManagerJs,
+            "/i18n/en/index.js" => Self::I18nEnIndexJs,
+            "/i18n/de/index.js" => Self::I18nDeIndexJs,
             _ => Self::NotFound,
         }
     }
@@ -47,6 +53,9 @@ impl StaticAsset {
             Self::ViewerJs => Some(include_str!("../../static/js/viewer.js")),
             Self::SearchJs => Some(include_str!("../../static/js/search.js")),
             Self::UtilsJs => Some(include_str!("../../static/js/utils.js")),
+            Self::I18nManagerJs => Some(include_str!("../../static/i18n/i18nManager.js")),
+            Self::I18nEnIndexJs => Some(include_str!("../../static/i18n/en/index.js")),
+            Self::I18nDeIndexJs => Some(include_str!("../../static/i18n/de/index.js")),
             Self::NotFound => None,
         }
     }
@@ -61,7 +70,10 @@ impl StaticAsset {
             | Self::PhotoGridJs
             | Self::ViewerJs
             | Self::SearchJs
-            | Self::UtilsJs => "application/javascript; charset=utf-8",
+            | Self::UtilsJs
+            | Self::I18nManagerJs
+            | Self::I18nEnIndexJs
+            | Self::I18nDeIndexJs => "application/javascript; charset=utf-8",
             Self::NotFound => "text/plain",
         }
     }

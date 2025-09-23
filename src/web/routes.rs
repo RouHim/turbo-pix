@@ -28,6 +28,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 .route("/photos/{id}", web::get().to(web_handlers::get_photo))
                 .route("/photos/{id}", web::put().to(web_handlers::update_photo))
                 .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
+                .route(
+                    "/photos/{id}/favorite",
+                    web::put().to(web_handlers::toggle_photo_favorite),
+                )
                 .route("/search", web::get().to(web_handlers::search_photos))
                 .route(
                     "/search/suggestions",

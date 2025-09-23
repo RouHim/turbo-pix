@@ -96,7 +96,9 @@ async fn main() -> io::Result<()> {
                     .route("/", get().to(serve_static_asset))
                     .route("/index.html", get().to(serve_static_asset))
                     .route("/css/{filename}", get().to(serve_static_asset))
-                    .route("/js/{filename}", get().to(serve_static_asset)),
+                    .route("/js/{filename}", get().to(serve_static_asset))
+                    .route("/i18n/{filename}", get().to(serve_static_asset))
+                    .route("/i18n/{lang}/{filename}", get().to(serve_static_asset)),
             )
     })
     .workers(workers)

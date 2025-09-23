@@ -144,7 +144,19 @@ const handleError = (error, context = '') => {
   } else {
     console.error(`Error in ${context}:`, error);
   }
-  showToast('Error', error.message || 'An unexpected error occurred', 'error');
+
+  const errorMessage = error.message || 'An unexpected error occurred';
+
+  // Use i18n manager if available
+  let translatedMessage = errorMessage;
+  let translatedTitle = 'Error';
+
+  if (window.i18nManager && window.i18nManager.LL) {
+    translatedMessage = window.i18nManager.translateError(errorMessage);
+    translatedTitle = window.i18nManager.LL.notifications.error();
+  }
+
+  showToast(translatedTitle, translatedMessage, 'error');
 };
 
 // URL helpers

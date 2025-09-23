@@ -306,6 +306,11 @@ class PhotoViewer {
     const videoUrl = utils.getVideoUrl(photo.id);
 
     if (this.elements.video && this.elements.image) {
+      // Force video reload by clearing src first to prevent browser caching issues
+      this.elements.video.src = '';
+      this.elements.video.load(); // Trigger reload
+
+      // Now set the new source
       this.elements.video.src = videoUrl;
       this.elements.video.style.display = 'block';
       this.elements.image.style.display = 'none';

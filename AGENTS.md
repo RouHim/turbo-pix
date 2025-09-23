@@ -132,3 +132,33 @@ cargo test                   # Run full test suite
 - **Pattern**: `appState.value = newValue; domElement.value = newValue;`
 - **Fix pattern**: After state changes, explicitly update corresponding DOM elements
 - Verify both functional behavior AND visual UI state changes in testing
+
+## Debugging Guidelines & Common Issues
+
+### Anti-Pattern: Development Code in Production Logic
+
+- **Avoid**: Hardcoded test paths, fallback logic, or development shortcuts in production code paths
+- **Key insight**: Remove all development convenience code before deployment - it often masks real bugs
+
+### Video Playback Debugging
+
+- **DOM structure**: Videos appear as photo cards in grid but play in `#viewer-video` element
+- **Grid selector**: Use `[data-photo-id]` for targeting specific photos in grid, not `.photo-grid-item`
+- **API testing**: Test both GET and HEAD requests - different error patterns may emerge
+- **Browser state**: Refresh page between E2E tests to avoid caching/state interference
+- **Database verification**: Check `mime_type` field consistency for media type detection
+
+### E2E Testing Best Practices
+
+- **Selector strategy**: Use data attributes (`[data-photo-id="176"]`) for reliable element targeting
+- **API verification**: Test endpoints directly before browser automation testing
+- **Response validation**: Check both status codes and content length for file serving
+- **Screenshot documentation**: Capture working states for regression comparison
+- **Process cleanup**: Always kill background processes after testing to avoid port conflicts
+
+### Backend Bug Investigation Workflow
+
+1. **API endpoint testing**: Verify raw API responses with curl/browser dev tools
+2. **Database state verification**: Check data consistency and field values
+3. **Hardcoded path detection**: Search for fallback logic that might override dynamic behavior
+5. **Documentation**: Update AGENTS.md with lessons learned and debugging insights, keep it short and to the point

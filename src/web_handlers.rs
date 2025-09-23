@@ -430,13 +430,7 @@ pub async fn get_video_file(
     };
 
     // Read the file directly from the stored path
-    // For testing, try the hardcoded path first
-    let test_path = "./photos/test_video.mp4";
-    let file_path = if std::path::Path::new(test_path).exists() {
-        test_path
-    } else {
-        &photo.file_path
-    };
+    let file_path = &photo.file_path;
 
     if return_metadata_only {
         // Return video metadata as JSON

@@ -158,10 +158,7 @@ impl CacheKey {
     }
 
     pub fn from_photo(photo: &crate::db::Photo, size: ThumbnailSize) -> Result<Self, CacheError> {
-        let hash = photo
-            .hash_sha256
-            .as_ref()
-            .ok_or(CacheError::MissingHash)?;
+        let hash = photo.hash_sha256.as_ref().ok_or(CacheError::MissingHash)?;
 
         Ok(Self::new(hash.clone(), size))
     }

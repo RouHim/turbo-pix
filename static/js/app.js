@@ -75,10 +75,15 @@ class TurboPixApp {
 
     // Theme toggle
     const themeToggle = utils.$('#theme-toggle');
+    console.log('🎨 Theme toggle button found:', !!themeToggle, themeToggle);
     if (themeToggle) {
-      utils.on(themeToggle, 'click', () => {
+      utils.on(themeToggle, 'click', (e) => {
+        console.log('🎨 Theme toggle button clicked!', e);
         this.toggleTheme();
       });
+      console.log('🎨 Theme toggle event bound');
+    } else {
+      console.error('🎨 Theme toggle button NOT found!');
     }
 
     // Mobile menu
@@ -445,21 +450,26 @@ class TurboPixApp {
     const savedTheme = utils.storage.get('theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const theme = savedTheme || (prefersDark ? 'dark' : 'light');
+    console.log('🎨 Initializing theme:', { savedTheme, prefersDark, theme });
     this.setTheme(theme);
   }
 
   setTheme(theme) {
+    console.log('🎨 Setting theme to:', theme);
     document.documentElement.classList.toggle('dark-theme', theme === 'dark');
     document.documentElement.classList.toggle('light-theme', theme === 'light');
     utils.storage.set('theme', theme);
     this.updateThemeToggle(theme);
+    console.log('🎨 Theme set, HTML classes:', document.documentElement.className);
   }
 
   toggleTheme() {
+    console.log('🎨 Theme toggle clicked');
     const currentTheme = document.documentElement.classList.contains('dark-theme')
       ? 'dark'
       : 'light';
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    console.log('🎨 Toggling theme:', { currentTheme, newTheme });
     this.setTheme(newTheme);
   }
 

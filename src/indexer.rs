@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn test_enhanced_exif_date_extraction_with_sample_file() {
         // Test with the sample EXIF file we downloaded
-        let sample_path = std::path::Path::new("photos/sample_with_exif.jpg");
+        let sample_path = std::path::Path::new("test-data/sample_with_exif.jpg");
 
         if sample_path.exists() {
             let metadata = MetadataExtractor::extract(sample_path);
@@ -779,7 +779,7 @@ mod tests {
         // Create test photo files by duplicating existing ones
         let test_photos = vec![
             {
-                let path = std::path::PathBuf::from("photos/sample_with_exif.jpg");
+                let path = std::path::PathBuf::from("test-data/sample_with_exif.jpg");
                 let metadata = std::fs::metadata(&path)
                     .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
                 PhotoFile {
@@ -797,7 +797,7 @@ mod tests {
                 }
             },
             {
-                let path = std::path::PathBuf::from("photos/test_image_1.jpg");
+                let path = std::path::PathBuf::from("test-data/test_image_1.jpg");
                 let metadata = std::fs::metadata(&path)
                     .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
                 PhotoFile {
@@ -815,7 +815,7 @@ mod tests {
                 }
             },
             {
-                let path = std::path::PathBuf::from("photos/test_image_3.jpg");
+                let path = std::path::PathBuf::from("test-data/test_image_3.jpg");
                 let metadata = std::fs::metadata(&path)
                     .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
                 PhotoFile {
@@ -841,7 +841,7 @@ mod tests {
             large_test_set.extend(test_photos.clone());
         }
 
-        let indexer = PhotoProcessor::new(vec![std::path::PathBuf::from("photos")]);
+        let indexer = PhotoProcessor::new(vec![std::path::PathBuf::from("test-data")]);
 
         // Benchmark parallel processing
         let start = Instant::now();
@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn test_file_creation_date_fallback_exif_takes_priority() {
         // Test with the sample EXIF file - should NOT use file creation time
-        let sample_path = std::path::Path::new("photos/sample_with_exif.jpg");
+        let sample_path = std::path::Path::new("test-data/sample_with_exif.jpg");
 
         if sample_path.exists() {
             let file_metadata = std::fs::metadata(sample_path).unwrap();

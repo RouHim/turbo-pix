@@ -893,10 +893,10 @@ mod tests {
         use chrono::Utc;
         use tempfile::TempDir;
 
-        // Helper: project-local path to photos/<filename>
+        // Helper: project-local path to test-data/<filename>
         fn project_photo_path(filename: &str) -> std::path::PathBuf {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("photos")
+                .join("test-data")
                 .join(filename)
         }
 

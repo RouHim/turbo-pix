@@ -20,7 +20,8 @@
 ### Test Infrastructure
 
 - **Helpers**: `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
-- **Sample data**: `photos/sample_with_exif.jpg` for EXIF testing
+- **Sample data**: `photos/sample_with_exif.jpg` for EXIF testing, `photos/test_video.mp4` for video processing tests
+- **Video tests**: Require `RUN_VIDEO_TESTS=1` env var, `ffmpeg` and `ffprobe` installed, and sample video file present
 - **Pattern**: Unit tests in `#[cfg(test)]` modules, integration in `tests/` dir
 
 ## E2E Testing with Puppeteer
@@ -144,4 +145,4 @@
 1. **API endpoint testing**: Verify raw API responses with curl/browser dev tools
 2. **Database state verification**: Check data consistency and field values
 3. **Hardcoded path detection**: Search for fallback logic that might override dynamic behavior
-5. **Documentation**: Update AGENTS.md with lessons learned and debugging insights, keep it short and to the point
+4. **Documentation**: Update AGENTS.md with lessons learned and debugging insights, keep it short and to the point

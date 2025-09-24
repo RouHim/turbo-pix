@@ -42,7 +42,7 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .collect(),
             db_path: env::var("TURBO_PIX_DB_PATH")
-                .unwrap_or_else(|_| "./data/turbo-pix.db".to_string()),
+                .unwrap_or_else(|_| "./data/database/turbo-pix.db".to_string()),
             cache_path: cache_path.clone(),
             cache: CacheConfig {
                 thumbnail_cache_path: format!("{}/thumbnails", cache_path),

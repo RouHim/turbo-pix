@@ -22,16 +22,16 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 FROM scratch
 # Set environment variables in one layer
 ENV USER="1000" \
+    TURBO_PIX_PHOTO_PATHS="/photos" \
     DATA_FOLDER="/data" \
-    STATIC_FOLDER="/static" \
     RUST_LOG="info"
 
 # For performance reasons write data to docker volume instead of containers writeable fs layer
 VOLUME $DATA_FOLDER
 
 # Copy the empty directory as data and temp folder
-COPY --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
-COPY --chown=$USER:$USER --from=builder /empty_dir /tmp
+COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
+COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory
 COPY --chown=$USER:$USER --from=builder /app/target/x86_64-unknown-linux-musl/release/turbo-pix /turbo-pix

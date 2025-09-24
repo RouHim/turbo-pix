@@ -6,9 +6,8 @@ services:
     ports:
       - "18473:18473"
     volumes:
-      - ./data:/app/data
+      - ./data:/data
       - ./photos:/photos:ro
     environment:
       - RUST_LOG=info
-      - TURBO_PIX_PHOTO_PATHS=/photos
     restart: unless-stopped

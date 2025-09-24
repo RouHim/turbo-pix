@@ -25,11 +25,11 @@ pub struct PhotoQuery {
     pub sort: Option<String>,
     pub order: Option<String>,
     pub q: Option<String>,
-    pub _date_from: Option<String>,
-    pub _date_to: Option<String>,
-    pub _camera_make: Option<String>,
-    pub _camera_model: Option<String>,
-    pub _has_gps: Option<bool>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub has_gps: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

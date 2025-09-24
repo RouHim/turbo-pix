@@ -184,12 +184,12 @@ body {
   box-shadow: var(--shadow-medium);
 }
 
-.theme-toggle.dark .theme-icon::before {
-  content: '☀️';
+.theme-toggle .theme-icon::before {
+  content: '🌙';
 }
 
-.theme-toggle.light .theme-icon::before {
-  content: '🌙';
+.theme-toggle.dark .theme-icon::before {
+  content: '☀️';
 }
 
 .sidebar {

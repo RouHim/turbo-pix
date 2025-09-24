@@ -1,0 +1,20 @@
+{
+  "name": "turbo-pix",
+  "version": "0.1.0",
+  "description": "Fast photo indexer and viewer",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write static/**/*.{js,css}",
+    "format:check": "prettier --check static/**/*.{js,css}",
+    "lint": "npm run lint:js && npm run lint:css",
+    "lint:js": "eslint static/**/*.js",
+    "lint:css": "stylelint static/**/*.css"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "stylelint": "^16.0.0",
+    "stylelint-config-standard": "^36.0.0"
+  }
+}

@@ -37,7 +37,7 @@ const formatDate = (dateString) => {
       hour: '2-digit',
       minute: '2-digit',
     });
-  } catch (e) {
+  } catch {
     return 'Unknown';
   }
 };
@@ -161,7 +161,8 @@ const handleError = (error, context = '') => {
 
 // URL helpers
 const getPhotoUrl = (photoId) => `/api/photos/${photoId}/file`;
-const getThumbnailUrl = (photo, size = 'medium') => `/api/thumbnails/hash/${photo.hash_sha256}/${size}`;
+const getThumbnailUrl = (photo, size = 'medium') =>
+  `/api/thumbnails/hash/${photo.hash_sha256}/${size}`;
 const getVideoUrl = (photoId) => `/api/photos/${photoId}/video`;
 
 // Local storage helpers
@@ -170,7 +171,7 @@ const storage = {
     try {
       const item = localStorage.getItem(key);
       return item ? JSON.parse(item) : defaultValue;
-    } catch (e) {
+    } catch {
       return defaultValue;
     }
   },
@@ -189,7 +190,7 @@ const storage = {
     try {
       localStorage.removeItem(key);
       return true;
-    } catch (e) {
+    } catch {
       return false;
     }
   },

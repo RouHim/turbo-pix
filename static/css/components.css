@@ -201,9 +201,7 @@
   height: 100vh;
   max-height: 100vh;
   display: grid;
-  grid-template-areas: 'main sidebar';
-  grid-template-columns: 1fr 350px;
-  grid-template-rows: 1fr;
+  grid-template: 'main sidebar' 1fr / 1fr 350px;
 }
 
 .viewer-close {

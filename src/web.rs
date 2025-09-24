@@ -31,57 +31,54 @@ pub mod middleware {
 // ============================================================================
 
 pub mod routes {
-    use actix_web::web;
     use crate::web_handlers;
+    use actix_web::web;
 
     pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.route("/health", web::get().to(web_handlers::health_check))
-        .route("/ready", web::get().to(web_handlers::ready_check))
-        .route("/metrics", web::get().to(web_handlers::metrics))
-        .service(
-            web::scope("/api")
-                .route("/photos", web::get().to(web_handlers::list_photos))
-                .route("/photos", web::post().to(web_handlers::upload_photo))
-                .route(
-                    "/photos/{id}/file",
-                    web::get().to(web_handlers::get_photo_file),
-                )
-                .route(
-                    "/photos/{id}/video",
-                    web::get().to(web_handlers::get_video_file),
-                )
-
-                .route(
-                    "/photos/{id}/metadata",
-                    web::get().to(web_handlers::get_photo_metadata),
-                )
-                .route("/photos/{id}", web::get().to(web_handlers::get_photo))
-                .route("/photos/{id}", web::put().to(web_handlers::update_photo))
-                .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
-                .route(
-                    "/photos/{id}/favorite",
-                    web::put().to(web_handlers::toggle_photo_favorite),
-                )
-                .route("/search", web::get().to(web_handlers::search_photos))
-                .route(
-                    "/search/suggestions",
-                    web::get().to(web_handlers::search_suggestions),
-                )
-                .route("/collections", web::get().to(web_handlers::get_collections))
-                .route("/cameras", web::get().to(web_handlers::get_cameras))
-                .route("/stats", web::get().to(web_handlers::get_stats))
-                .route(
-                    "/thumbnails/hash/{hash}",
-                    web::get().to(web_handlers::get_thumbnail_by_hash_default_size),
-                )
-                .route(
-                    "/thumbnails/hash/{hash}/{size}",
-                    web::get().to(web_handlers::get_thumbnail_by_hash),
-                )
-
-                .route("/cache/stats", web::get().to(web_handlers::cache_stats))
-                .route("/cache/clear", web::delete().to(web_handlers::clear_cache)),
-        );
+        cfg.route("/health", web::get().to(web_handlers::health_check))
+            .route("/ready", web::get().to(web_handlers::ready_check))
+            .service(
+                web::scope("/api")
+                    .route("/photos", web::get().to(web_handlers::list_photos))
+                    .route("/photos", web::post().to(web_handlers::upload_photo))
+                    .route(
+                        "/photos/{id}/file",
+                        web::get().to(web_handlers::get_photo_file),
+                    )
+                    .route(
+                        "/photos/{id}/video",
+                        web::get().to(web_handlers::get_video_file),
+                    )
+                    .route(
+                        "/photos/{id}/metadata",
+                        web::get().to(web_handlers::get_photo_metadata),
+                    )
+                    .route("/photos/{id}", web::get().to(web_handlers::get_photo))
+                    .route("/photos/{id}", web::put().to(web_handlers::update_photo))
+                    .route("/photos/{id}", web::delete().to(web_handlers::delete_photo))
+                    .route(
+                        "/photos/{id}/favorite",
+                        web::put().to(web_handlers::toggle_photo_favorite),
+                    )
+                    .route("/search", web::get().to(web_handlers::search_photos))
+                    .route(
+                        "/search/suggestions",
+                        web::get().to(web_handlers::search_suggestions),
+                    )
+                    .route("/collections", web::get().to(web_handlers::get_collections))
+                    .route("/cameras", web::get().to(web_handlers::get_cameras))
+                    .route("/stats", web::get().to(web_handlers::get_stats))
+                    .route(
+                        "/thumbnails/hash/{hash}",
+                        web::get().to(web_handlers::get_thumbnail_by_hash_default_size),
+                    )
+                    .route(
+                        "/thumbnails/hash/{hash}/{size}",
+                        web::get().to(web_handlers::get_thumbnail_by_hash),
+                    )
+                    .route("/cache/stats", web::get().to(web_handlers::cache_stats))
+                    .route("/cache/clear", web::delete().to(web_handlers::clear_cache)),
+            );
     }
 }
 
@@ -94,82 +91,84 @@ pub mod static_handler {
 
     #[derive(Debug, Clone)]
     pub enum StaticAsset {
-    IndexHtml,
-    MainCss,
-    ComponentsCss,
-    ResponsiveCss,
-    AppJs,
-    ApiJs,
-    LoggerJs,
-    PhotoGridJs,
-    ViewerJs,
-    SearchJs,
-    UtilsJs,
-    I18nManagerJs,
-    I18nEnIndexJs,
-    I18nDeIndexJs,
-    NotFound,
-}
-
-impl StaticAsset {
-    pub fn from_path(path: &str) -> Self {
-        match path {
-            "/" | "/index.html" => Self::IndexHtml,
-            "/css/main.css" => Self::MainCss,
-            "/css/components.css" => Self::ComponentsCss,
-            "/css/responsive.css" => Self::ResponsiveCss,
-            "/js/app.js" => Self::AppJs,
-            "/js/api.js" => Self::ApiJs,
-            "/js/logger.js" => Self::LoggerJs,
-            "/js/photoGrid.js" => Self::PhotoGridJs,
-            "/js/viewer.js" => Self::ViewerJs,
-            "/js/search.js" => Self::SearchJs,
-            "/js/utils.js" => Self::UtilsJs,
-            "/i18n/i18nManager.js" => Self::I18nManagerJs,
-            "/i18n/en/index.js" => Self::I18nEnIndexJs,
-            "/i18n/de/index.js" => Self::I18nDeIndexJs,
-            _ => Self::NotFound,
-        }
+        IndexHtml,
+        MainCss,
+        ComponentsCss,
+        ResponsiveCss,
+        AppJs,
+        ApiJs,
+        LoggerJs,
+        PhotoGridJs,
+        ViewerJs,
+        SearchJs,
+        UtilsJs,
+        I18nManagerJs,
+        I18nEnIndexJs,
+        I18nDeIndexJs,
+        NotFound,
     }
 
-    pub fn content(&self) -> Option<&'static str> {
-        match self {
-            Self::IndexHtml => Some(include_str!("../static/index.html")),
-            Self::MainCss => Some(include_str!("../static/css/main.css")),
-            Self::ComponentsCss => Some(include_str!("../static/css/components.css")),
-            Self::ResponsiveCss => Some(include_str!("../static/css/responsive.css")),
-            Self::AppJs => Some(include_str!("../static/js/app.js")),
-            Self::ApiJs => Some(include_str!("../static/js/api.js")),
-            Self::LoggerJs => Some(include_str!("../static/js/logger.js")),
-            Self::PhotoGridJs => Some(include_str!("../static/js/photoGrid.js")),
-            Self::ViewerJs => Some(include_str!("../static/js/viewer.js")),
-            Self::SearchJs => Some(include_str!("../static/js/search.js")),
-            Self::UtilsJs => Some(include_str!("../static/js/utils.js")),
-            Self::I18nManagerJs => Some(include_str!("../static/i18n/i18nManager.js")),
-            Self::I18nEnIndexJs => Some(include_str!("../static/i18n/en/index.js")),
-            Self::I18nDeIndexJs => Some(include_str!("../static/i18n/de/index.js")),
-            Self::NotFound => None,
+    impl StaticAsset {
+        pub fn from_path(path: &str) -> Self {
+            match path {
+                "/" | "/index.html" => Self::IndexHtml,
+                "/css/main.css" => Self::MainCss,
+                "/css/components.css" => Self::ComponentsCss,
+                "/css/responsive.css" => Self::ResponsiveCss,
+                "/js/app.js" => Self::AppJs,
+                "/js/api.js" => Self::ApiJs,
+                "/js/logger.js" => Self::LoggerJs,
+                "/js/photoGrid.js" => Self::PhotoGridJs,
+                "/js/viewer.js" => Self::ViewerJs,
+                "/js/search.js" => Self::SearchJs,
+                "/js/utils.js" => Self::UtilsJs,
+                "/i18n/i18nManager.js" => Self::I18nManagerJs,
+                "/i18n/en/index.js" => Self::I18nEnIndexJs,
+                "/i18n/de/index.js" => Self::I18nDeIndexJs,
+                _ => Self::NotFound,
+            }
         }
-    }
 
-    pub fn mime_type(&self) -> &'static str {
-        match self {
-            Self::IndexHtml => "text/html; charset=utf-8",
-            Self::MainCss | Self::ComponentsCss | Self::ResponsiveCss => "text/css; charset=utf-8",
-            Self::AppJs
-            | Self::ApiJs
-            | Self::LoggerJs
-            | Self::PhotoGridJs
-            | Self::ViewerJs
-            | Self::SearchJs
-            | Self::UtilsJs
-            | Self::I18nManagerJs
-            | Self::I18nEnIndexJs
-            | Self::I18nDeIndexJs => "application/javascript; charset=utf-8",
-            Self::NotFound => "text/plain",
+        pub fn content(&self) -> Option<&'static str> {
+            match self {
+                Self::IndexHtml => Some(include_str!("../static/index.html")),
+                Self::MainCss => Some(include_str!("../static/css/main.css")),
+                Self::ComponentsCss => Some(include_str!("../static/css/components.css")),
+                Self::ResponsiveCss => Some(include_str!("../static/css/responsive.css")),
+                Self::AppJs => Some(include_str!("../static/js/app.js")),
+                Self::ApiJs => Some(include_str!("../static/js/api.js")),
+                Self::LoggerJs => Some(include_str!("../static/js/logger.js")),
+                Self::PhotoGridJs => Some(include_str!("../static/js/photoGrid.js")),
+                Self::ViewerJs => Some(include_str!("../static/js/viewer.js")),
+                Self::SearchJs => Some(include_str!("../static/js/search.js")),
+                Self::UtilsJs => Some(include_str!("../static/js/utils.js")),
+                Self::I18nManagerJs => Some(include_str!("../static/i18n/i18nManager.js")),
+                Self::I18nEnIndexJs => Some(include_str!("../static/i18n/en/index.js")),
+                Self::I18nDeIndexJs => Some(include_str!("../static/i18n/de/index.js")),
+                Self::NotFound => None,
+            }
+        }
+
+        pub fn mime_type(&self) -> &'static str {
+            match self {
+                Self::IndexHtml => "text/html; charset=utf-8",
+                Self::MainCss | Self::ComponentsCss | Self::ResponsiveCss => {
+                    "text/css; charset=utf-8"
+                }
+                Self::AppJs
+                | Self::ApiJs
+                | Self::LoggerJs
+                | Self::PhotoGridJs
+                | Self::ViewerJs
+                | Self::SearchJs
+                | Self::UtilsJs
+                | Self::I18nManagerJs
+                | Self::I18nEnIndexJs
+                | Self::I18nDeIndexJs => "application/javascript; charset=utf-8",
+                Self::NotFound => "text/plain",
+            }
         }
     }
-}
 
     #[allow(dead_code)]
     pub fn get_mime_type(filename: &str) -> &'static str {
@@ -191,21 +190,21 @@ impl StaticAsset {
     }
 
     pub async fn serve_static_asset(req: HttpRequest) -> Result<HttpResponse> {
-    let path = req.path();
-    tracing::info!("Serving static asset for path: {}", path);
-    let asset = StaticAsset::from_path(path);
-    tracing::info!("Asset type: {:?}", asset);
+        let path = req.path();
+        tracing::info!("Serving static asset for path: {}", path);
+        let asset = StaticAsset::from_path(path);
+        tracing::info!("Asset type: {:?}", asset);
 
-    match asset.content() {
-        Some(content) => Ok(HttpResponse::Ok()
-            .content_type(asset.mime_type())
-            .body(content)),
-        None => {
-            tracing::warn!("Asset not found for path: {}", path);
-            Ok(HttpResponse::NotFound()
-                .content_type("text/plain")
-                .body("File not found"))
-        }
+        match asset.content() {
+            Some(content) => Ok(HttpResponse::Ok()
+                .content_type(asset.mime_type())
+                .body(content)),
+            None => {
+                tracing::warn!("Asset not found for path: {}", path);
+                Ok(HttpResponse::NotFound()
+                    .content_type("text/plain")
+                    .body("File not found"))
+            }
         }
     }
 }
@@ -281,9 +280,10 @@ mod static_handler_tests {
 
         #[actix_web::test]
         async fn test_serve_nonexistent_file() {
-            let app =
-                test::init_service(App::new().route("/{path:.*}", web::get().to(serve_static_asset)))
-                    .await;
+            let app = test::init_service(
+                App::new().route("/{path:.*}", web::get().to(serve_static_asset)),
+            )
+            .await;
 
             let req = test::TestRequest::get()
                 .uri("/nonexistent.css")
@@ -335,10 +335,16 @@ mod static_handler_tests {
             assert!(content.is_some());
             let html_content = content.unwrap();
             assert!(html_content.contains("<!doctype html>"));
-            
+
             // Test for the info-toggle button
-            assert!(html_content.contains("info-toggle"), "HTML should contain info-toggle button");
-            println!("HTML content (first 500 chars): {}", &html_content[..500.min(html_content.len())]);
+            assert!(
+                html_content.contains("info-toggle"),
+                "HTML should contain info-toggle button"
+            );
+            println!(
+                "HTML content (first 500 chars): {}",
+                &html_content[..500.min(html_content.len())]
+            );
 
             let asset = StaticAsset::MainCss;
             let content = asset.content();

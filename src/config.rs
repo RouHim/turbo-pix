@@ -22,7 +22,7 @@ pub struct Config {
     pub cache_size_mb: usize,
     pub scan_interval: u64,
     pub batch_size: usize,
-    pub metrics_enabled: bool,
+
     pub health_check_path: String,
 }
 
@@ -73,9 +73,7 @@ impl Config {
             batch_size: env::var("TURBO_PIX_BATCH_SIZE")
                 .unwrap_or_else(|_| "1000".to_string())
                 .parse()?,
-            metrics_enabled: env::var("TURBO_PIX_METRICS_ENABLED")
-                .unwrap_or_else(|_| "true".to_string())
-                .parse()?,
+
             health_check_path: env::var("TURBO_PIX_HEALTH_CHECK_PATH")
                 .unwrap_or_else(|_| "/health".to_string()),
         })

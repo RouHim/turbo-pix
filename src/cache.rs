@@ -156,12 +156,14 @@ impl CacheKey {
     pub fn new(content_hash: String, size: ThumbnailSize) -> Self {
         Self { content_hash, size }
     }
-    
+
     pub fn from_photo(photo: &crate::db::Photo, size: ThumbnailSize) -> Result<Self, CacheError> {
-        let hash = photo.hash_sha256.as_ref()
+        let hash = photo
+            .hash_sha256
+            .as_ref()
             .or(photo.hash_md5.as_ref())
             .ok_or(CacheError::MissingHash)?;
-        
+
         Ok(Self::new(hash.clone(), size))
     }
 }
@@ -497,7 +499,7 @@ impl ThumbnailGenerator {
         } else {
             key.content_hash.clone()
         };
-        
+
         self.cache_dir.join(subdir).join(filename)
     }
 
@@ -906,7 +908,10 @@ mod tests {
                 db_path: "test.db".to_string(),
                 cache_path: cache_path.to_string_lossy().to_string(),
                 cache: CacheConfig {
-                    thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                    thumbnail_cache_path: cache_path
+                        .join("thumbnails")
+                        .to_string_lossy()
+                        .to_string(),
                     memory_cache_size: 100,
                     memory_cache_max_size_mb: 10,
                 },
@@ -916,7 +921,6 @@ mod tests {
                 cache_size_mb: 100,
                 scan_interval: 3600,
                 batch_size: 1000,
-                metrics_enabled: false,
                 health_check_path: "/health".to_string(),
             };
 

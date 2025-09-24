@@ -19,6 +19,7 @@ use tracing::{error, info};
 // ===============================
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct PhotoQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
@@ -178,53 +179,6 @@ pub async fn ready_check(pool: web::Data<DbPool>) -> ActixResult<HttpResponse> {
             "timestamp": chrono::Utc::now().to_rfc3339()
         }))),
     }
-}
-
-pub async fn metrics(pool: web::Data<DbPool>) -> ActixResult<HttpResponse> {
-    let _conn = match pool.get() {
-        Ok(conn) => conn,
-        Err(_) => {
-            return Ok(HttpResponse::ServiceUnavailable().body("# Database connection failed\n"));
-        }
-    };
-
-    // Get basic metrics
-    let total_photos = Photo::list_all(&pool, i64::MAX).unwrap_or_default().len();
-    let db_size_bytes = std::fs::metadata("./data/turbo-pix.db")
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    // Format as Prometheus metrics
-    let metrics = format!(
-        r#"# HELP turbopix_photos_total Total number of indexed photos
-# TYPE turbopix_photos_total gauge
-turbopix_photos_total {}
-
-# HELP turbopix_db_size_bytes Database file size in bytes
-# TYPE turbopix_db_size_bytes gauge
-turbopix_db_size_bytes {}
-
-# HELP turbopix_uptime_seconds Application uptime in seconds
-# TYPE turbopix_uptime_seconds counter
-turbopix_uptime_seconds {}
-
-# HELP turbopix_memory_usage_bytes Current memory usage in bytes
-# TYPE turbopix_memory_usage_bytes gauge
-turbopix_memory_usage_bytes {}
-"#,
-        total_photos,
-        db_size_bytes,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        // Simple memory estimate - in a real app you'd use a proper metrics library
-        1024 * 1024 * 50 // 50MB estimate
-    );
-
-    Ok(HttpResponse::Ok()
-        .content_type("text/plain; version=0.0.4; charset=utf-8")
-        .body(metrics))
 }
 
 pub async fn list_photos(
@@ -807,8 +761,6 @@ pub async fn get_stats(pool: web::Data<DbPool>) -> ActixResult<HttpResponse> {
     }
 }
 
-
-
 // ===============================
 // SEARCH HANDLERS AND TYPES
 // ===============================
@@ -890,8 +842,6 @@ impl ThumbnailService {
         }
     }
 }
-
-
 
 pub async fn get_thumbnail_by_hash(
     pool: web::Data<DbPool>,
@@ -1127,7 +1077,6 @@ mod tests {
             cache_size_mb: 100,
             scan_interval: 3600,
             batch_size: 1000,
-            metrics_enabled: false,
             health_check_path: "/health".to_string(),
         };
 
@@ -1189,7 +1138,9 @@ mod tests {
             longitude: None,
             location_name: None,
             hash_md5: Some("d41d8cd98f00b204e9800998ecf8427e".to_string()),
-            hash_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            hash_sha256: Some(
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+            ),
             thumbnail_path: None,
             has_thumbnail: Some(false),
             country: None,
@@ -1218,8 +1169,6 @@ mod tests {
 
         (service, db_pool, temp_dir)
     }
-
-
 
     #[actix_web::test]
     async fn test_cache_stats() {

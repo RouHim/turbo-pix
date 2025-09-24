@@ -464,18 +464,6 @@ impl Photo {
         }
     }
 
-    pub fn list_all(pool: &DbPool, limit: i64) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM photos ORDER BY taken_at DESC LIMIT ?")?;
-        let photo_iter = stmt.query_map([limit], Photo::from_row)?;
-
-        let mut photos = Vec::new();
-        for photo in photo_iter {
-            photos.push(photo?);
-        }
-        Ok(photos)
-    }
-
     pub fn list_with_pagination(
         pool: &DbPool,
         limit: i64,
@@ -531,7 +519,10 @@ impl Photo {
         }
     }
 
-    pub fn find_by_hash(pool: &DbPool, hash: &str) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
+    pub fn find_by_hash(
+        pool: &DbPool,
+        hash: &str,
+    ) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         let mut stmt = conn.prepare("SELECT * FROM photos WHERE hash_sha256 = ?")?;
 

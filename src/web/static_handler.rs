@@ -235,7 +235,12 @@ mod tests {
         let asset = StaticAsset::IndexHtml;
         let content = asset.content();
         assert!(content.is_some());
-        assert!(content.unwrap().contains("<!doctype html>"));
+        let html_content = content.unwrap();
+        assert!(html_content.contains("<!doctype html>"));
+        
+        // Test for the info-toggle button
+        assert!(html_content.contains("info-toggle"), "HTML should contain info-toggle button");
+        println!("HTML content (first 500 chars): {}", &html_content[..500.min(html_content.len())]);
 
         let asset = StaticAsset::MainCss;
         let content = asset.content();

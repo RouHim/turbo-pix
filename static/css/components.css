@@ -198,10 +198,12 @@
 .viewer-content {
   position: relative;
   width: 100%;
-  height: 100%;
+  height: 100vh;
+  max-height: 100vh;
   display: grid;
   grid-template-areas: 'main sidebar';
   grid-template-columns: 1fr 350px;
+  grid-template-rows: 1fr;
 }
 
 .viewer-close {
@@ -295,6 +297,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .viewer-image,
@@ -318,8 +322,11 @@
 .viewer-sidebar {
   grid-area: sidebar;
   background: var(--surface-color);
-  padding: 24px;
+  padding: 16px;
   overflow-y: auto;
+  height: 100vh;
+  min-height: 100vh;
+  box-sizing: border-box;
 }
 
 .photo-info h3 {

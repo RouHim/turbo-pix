@@ -35,6 +35,7 @@ class PhotoViewer {
       zoomIn: utils.$('.zoom-in'),
       zoomOut: utils.$('.zoom-out'),
       zoomFit: utils.$('.zoom-fit'),
+      infoToggle: utils.$('.info-toggle'),
     };
 
     this.init();
@@ -90,6 +91,11 @@ class PhotoViewer {
 
     if (this.elements.zoomFit) {
       utils.on(this.elements.zoomFit, 'click', () => this.fitToScreen());
+    }
+
+    // Info toggle button (mobile sidebar toggle)
+    if (this.elements.infoToggle) {
+      utils.on(this.elements.infoToggle, 'click', () => this.toggleSidebar());
     }
 
     // Image interaction for dragging when zoomed

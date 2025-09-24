@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS photos (
     latitude REAL,
     longitude REAL,
     location_name TEXT,
-    hash_md5 TEXT,
     hash_sha256 TEXT,
     thumbnail_path TEXT,
     has_thumbnail BOOLEAN,
@@ -101,9 +100,18 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     let manager = SqliteConnectionManager::file(database_path);
     let pool = Pool::new(manager)?;
 
-    // Initialize schema on a connection from the pool
+    // Initialize schema and configure pragmas on a connection from the pool
+    // These pragmas improve concurrency and set a sensible busy timeout.
     {
         let conn = pool.get()?;
+        // Set WAL mode (database-level), reasonable sync, keep temp tables in memory,
+        // and set a busy timeout so that transient locks are waited on instead of failing immediately.
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA busy_timeout = 5000;",
+        )?;
         initialize_schema(&conn)?;
     }
 
@@ -225,7 +233,6 @@ pub struct Photo {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub location_name: Option<String>,
-    pub hash_md5: Option<String>,
     pub hash_sha256: Option<String>,
     pub thumbnail_path: Option<String>,
     pub has_thumbnail: Option<bool>,
@@ -284,28 +291,27 @@ impl Photo {
             latitude: row.get(24)?,
             longitude: row.get(25)?,
             location_name: row.get(26)?,
-            hash_md5: row.get(27)?,
-            hash_sha256: row.get(28)?,
-            thumbnail_path: row.get(29)?,
-            has_thumbnail: row.get(30)?,
-            country: row.get(31)?,
-            keywords: row.get(32)?,
-            faces_detected: row.get(33)?,
-            objects_detected: row.get(34)?,
-            colors: row.get(35)?,
-            duration: row.get(36)?,
-            video_codec: row.get(37)?,
-            audio_codec: row.get(38)?,
-            bitrate: row.get(39)?,
-            frame_rate: row.get(40)?,
-            is_favorite: row.get(41)?,
+            hash_sha256: row.get(27)?,
+            thumbnail_path: row.get(28)?,
+            has_thumbnail: row.get(29)?,
+            country: row.get(30)?,
+            keywords: row.get(31)?,
+            faces_detected: row.get(32)?,
+            objects_detected: row.get(33)?,
+            colors: row.get(34)?,
+            duration: row.get(35)?,
+            video_codec: row.get(36)?,
+            audio_codec: row.get(37)?,
+            bitrate: row.get(38)?,
+            frame_rate: row.get(39)?,
+            is_favorite: row.get(40)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(42)?;
+                let datetime_str = row.get::<_, String>(41)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -315,7 +321,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -324,12 +330,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(43)?;
+                let datetime_str = row.get::<_, String>(42)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                43,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -339,7 +345,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                43,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -361,7 +367,7 @@ impl Photo {
                  width = ?, height = ?, color_space = ?, white_balance = ?,
                  exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
                  latitude = ?, longitude = ?, location_name = ?,
-                 hash_md5 = ?, hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
+                 hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
                  country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
                  duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
                  is_favorite = ?, updated_at = ?
@@ -393,7 +399,6 @@ impl Photo {
                 self.latitude,
                 self.longitude,
                 self.location_name,
-                self.hash_md5,
                 self.hash_sha256,
                 self.thumbnail_path,
                 self.has_thumbnail,
@@ -540,12 +545,12 @@ impl Photo {
             INSERT INTO photos (
                 file_path, filename, file_size, mime_type, taken_at, camera_make, camera_model,
                 iso, aperture, shutter_speed, focal_length, width, height, orientation,
-                flash_used, latitude, longitude, hash_md5, hash_sha256, country, keywords,
+                flash_used, latitude, longitude, hash_sha256, country, keywords,
                 faces_detected, objects_detected, colors, duration, video_codec, audio_codec,
                 bitrate, frame_rate, is_favorite, file_modified, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32
             )
         "#;
 
@@ -569,7 +574,6 @@ impl Photo {
                 self.flash_used,
                 self.latitude,
                 self.longitude,
-                self.hash_md5,
                 self.hash_sha256,
                 self.country,
                 self.keywords,
@@ -879,7 +883,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             latitude: processed.latitude,
             longitude: processed.longitude,
             location_name: None,
-            hash_md5: None,
             hash_sha256: processed.hash_sha256,
             thumbnail_path: None,
             has_thumbnail: Some(false),
@@ -931,7 +934,6 @@ impl Photo {
             latitude: None,
             longitude: None,
             location_name: None,
-            hash_md5: None,
             hash_sha256: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),

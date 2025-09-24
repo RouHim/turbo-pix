@@ -669,7 +669,6 @@ impl ProcessedPhoto {
             latitude: self.latitude,
             longitude: self.longitude,
             location_name: None,
-            hash_md5: None,
             hash_sha256: self.hash_sha256.clone(),
             thumbnail_path: None,
             has_thumbnail: Some(false),

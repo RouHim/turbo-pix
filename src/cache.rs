@@ -161,7 +161,6 @@ impl CacheKey {
         let hash = photo
             .hash_sha256
             .as_ref()
-            .or(photo.hash_md5.as_ref())
             .ok_or(CacheError::MissingHash)?;
 
         Ok(Self::new(hash.clone(), size))
@@ -974,7 +973,6 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_md5: Some("test_hash_md5".to_string()),
                 hash_sha256: Some("test_hash_sha256".to_string()),
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
@@ -1210,7 +1208,6 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_md5: Some("test_video_hash_md5".to_string()),
                 hash_sha256: Some("test_video_hash_sha256".to_string()),
                 thumbnail_path: None,
                 has_thumbnail: Some(false),

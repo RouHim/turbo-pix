@@ -139,7 +139,6 @@ fn create_photo_from_temp_file(
         latitude: metadata.latitude,
         longitude: metadata.longitude,
         location_name: None,
-        hash_md5: None, // We could calculate this too, but SHA256 is sufficient
         hash_sha256: Some(hash_sha256),
         thumbnail_path: None,
         has_thumbnail: Some(false),
@@ -487,7 +486,6 @@ pub async fn get_photo_metadata(
                 "gps_latitude": photo.latitude,
                 "gps_longitude": photo.longitude,
                 "location_name": photo.location_name,
-                "hash_md5": photo.hash_md5,
                 "hash_sha256": photo.hash_sha256
             })))
         }
@@ -1137,7 +1135,6 @@ mod tests {
             latitude: None,
             longitude: None,
             location_name: None,
-            hash_md5: Some("d41d8cd98f00b204e9800998ecf8427e".to_string()),
             hash_sha256: Some(
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
             ),

@@ -227,7 +227,6 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_md5: None,
                 hash_sha256: Some(unique_hash),
                 thumbnail_path: None,
                 has_thumbnail: Some(false),

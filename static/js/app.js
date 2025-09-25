@@ -75,8 +75,18 @@ class TurboPixApp {
 
     // Theme toggle
     const themeToggle = utils.$('#theme-toggle');
+    console.log('🎨 Binding theme toggle event, button found:', !!themeToggle);
     if (themeToggle) {
-      utils.on(themeToggle, 'click', this.toggleTheme.bind(this));
+      const boundToggle = this.toggleTheme.bind(this);
+      utils.on(themeToggle, 'click', boundToggle);
+      console.log('🎨 Theme toggle event bound successfully');
+
+      // Also add a direct event listener for debugging
+      themeToggle.addEventListener('click', () => {
+        console.log('🎨 Direct click event fired on theme toggle');
+      });
+    } else {
+      console.error('🎨 Theme toggle button not found for event binding!');
     }
 
     // Mobile menu
@@ -447,24 +457,48 @@ class TurboPixApp {
   }
 
   setTheme(theme) {
+    console.log('🎨 setTheme called with:', theme);
+    const hadDark = document.documentElement.classList.contains('dark-theme');
+    const hadLight = document.documentElement.classList.contains('light-theme');
+
     document.documentElement.classList.toggle('dark-theme', theme === 'dark');
     document.documentElement.classList.toggle('light-theme', theme === 'light');
+
+    const nowHasDark = document.documentElement.classList.contains('dark-theme');
+    const nowHasLight = document.documentElement.classList.contains('light-theme');
+
+    console.log('🎨 HTML classes changed:', { hadDark, hadLight, nowHasDark, nowHasLight });
+
     utils.storage.set('theme', theme);
     this.updateThemeToggle(theme);
   }
 
   toggleTheme() {
+    console.log('🎨 toggleTheme called');
     const currentTheme = document.documentElement.classList.contains('dark-theme')
       ? 'dark'
       : 'light';
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    console.log('🎨 Toggling from', currentTheme, 'to', newTheme);
     this.setTheme(newTheme);
+
+    // Visual feedback
+    const button = document.getElementById('theme-toggle');
+    if (button) {
+      button.style.transform = 'scale(1.1)';
+      setTimeout(() => (button.style.transform = ''), 200);
+    }
   }
 
   updateThemeToggle(theme) {
+    console.log('🎨 updateThemeToggle called with:', theme);
     const themeToggle = utils.$('#theme-toggle');
     if (themeToggle) {
+      const oldClass = themeToggle.className;
       themeToggle.className = `theme-toggle ${theme}`;
+      console.log('🎨 Button class changed from', oldClass, 'to', themeToggle.className);
+    } else {
+      console.error('🎨 Theme toggle button not found!');
     }
   }
 

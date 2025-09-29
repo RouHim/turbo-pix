@@ -827,8 +827,8 @@ pub async fn search_suggestions(
 // ===============================
 
 pub struct ThumbnailService {
-    generator: ThumbnailGenerator,
-    memory_cache: MemoryCache,
+    pub generator: ThumbnailGenerator,
+    pub memory_cache: MemoryCache,
 }
 
 impl ThumbnailService {

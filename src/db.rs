@@ -416,32 +416,9 @@ impl Photo {
         Ok(())
     }
 
-    pub fn update_thumbnail_status(
-        &self,
-        pool: &DbPool,
-        has_thumbnail: bool,
-        thumbnail_path: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        conn.execute(
-            "UPDATE photos SET has_thumbnail = ?, thumbnail_path = ? WHERE hash_sha256 = ?",
-            rusqlite::params![has_thumbnail, thumbnail_path, self.hash_sha256],
-        )?;
-        Ok(())
-    }
 
-    pub fn update_favorite_status(
-        pool: &DbPool,
-        hash: &str,
-        is_favorite: bool,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let rows_affected = conn.execute(
-            "UPDATE photos SET is_favorite = ?, updated_at = ? WHERE hash_sha256 = ?",
-            rusqlite::params![is_favorite, Utc::now().to_rfc3339(), hash],
-        )?;
-        Ok(rows_affected > 0)
-    }
+
+
 
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
@@ -507,18 +484,7 @@ impl Photo {
         Ok((photos, total))
     }
 
-    #[allow(dead_code)]
-    pub fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
-        // Legacy method - kept for compatibility but not used in hash-based system
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM photos WHERE rowid = ?")?;
 
-        match stmt.query_row([id], Photo::from_row) {
-            Ok(photo) => Ok(Some(photo)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
 
     pub fn find_by_hash(
         pool: &DbPool,
@@ -913,52 +879,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
 
 #[cfg(test)]
 impl Photo {
-    pub fn new_test_photo(file_path: String, filename: String) -> Self {
-        Photo {
-            hash_sha256: "a".repeat(64), // Use dummy 64-char hash for testing
-            file_path,
-            filename,
-            file_size: 1024,
-            mime_type: Some("image/jpeg".to_string()),
-            taken_at: Some(Utc::now()),
-            date_modified: Utc::now(),
-            date_indexed: Some(Utc::now()),
-            camera_make: Some("Test Camera".to_string()),
-            camera_model: Some("Test Model".to_string()),
-            lens_make: None,
-            lens_model: None,
-            iso: Some(100),
-            aperture: Some(2.8),
-            shutter_speed: Some("1/60".to_string()),
-            focal_length: Some(50.0),
-            width: Some(1920),
-            height: Some(1080),
-            color_space: Some("sRGB".to_string()),
-            white_balance: Some("Auto".to_string()),
-            exposure_mode: Some("Auto".to_string()),
-            metering_mode: Some("Pattern".to_string()),
-            orientation: Some(1),
-            flash_used: Some(false),
-            latitude: None,
-            longitude: None,
-            location_name: None,
-            thumbnail_path: None,
-            has_thumbnail: Some(false),
-            country: None,
-            keywords: None,
-            faces_detected: None,
-            objects_detected: None,
-            colors: None,
-            duration: None,
-            video_codec: None,
-            audio_codec: None,
-            bitrate: None,
-            frame_rate: None,
-            is_favorite: Some(false),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
-    }
+
 }
 
 #[cfg(test)]

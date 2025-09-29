@@ -18,9 +18,7 @@ use crate::db::{DbPool, Photo};
 pub struct MetadataExtractor;
 
 impl MetadataExtractor {
-    pub fn extract(path: &Path) -> PhotoMetadata {
-        Self::extract_with_metadata(path, None)
-    }
+
 
     pub fn extract_with_metadata(
         path: &Path,
@@ -271,7 +269,7 @@ impl MetadataExtractor {
 
     fn extract_video_metadata(path: &Path, metadata: &mut PhotoMetadata) {
         // Basic video metadata extraction
-        // TODO: Implement proper video metadata extraction using ffmpeg or similar
+        // Note: Video metadata extraction requires ffmpeg integration
         // For now, we set basic defaults and detect video format
 
         let mime_type = MimeGuess::from_path(path).first();
@@ -306,8 +304,8 @@ impl MetadataExtractor {
 
         // Set default values for video metadata
         // These would be extracted from actual video files in a full implementation
-        metadata.duration = None; // TODO: Extract actual duration
-        metadata.bitrate = None; // TODO: Extract actual bitrate
+        metadata.duration = None; // Requires ffmpeg integration
+        metadata.bitrate = None; // Requires ffmpeg integration
         metadata.frame_rate = None; // TODO: Extract actual frame rate
 
         // For videos, try to get creation date from file metadata
@@ -758,7 +756,7 @@ mod tests {
         let sample_path = std::path::Path::new("test-data/sample_with_exif.jpg");
 
         if sample_path.exists() {
-            let metadata = MetadataExtractor::extract(sample_path);
+            let metadata = MetadataExtractor::extract_with_metadata(sample_path, None);
 
             // The sample file should have EXIF date information
             // This verifies our enhanced extraction is working
@@ -946,7 +944,7 @@ mod tests {
         let temp_path = temp_file.path().to_path_buf();
 
         // Extract metadata without file metadata (simulating unsupported filesystem)
-        let metadata = MetadataExtractor::extract(&temp_path);
+        let metadata = MetadataExtractor::extract_with_metadata(&temp_path, None);
 
         // Should not crash, taken_at should remain None since no EXIF data and creation time unsupported
         assert!(metadata.taken_at.is_none());
@@ -971,7 +969,7 @@ mod tests {
         // Test that extract_with_metadata provides creation time fallback
         let metadata_with_param =
             MetadataExtractor::extract_with_metadata(&temp_path, Some(&file_metadata));
-        let metadata_without_param = MetadataExtractor::extract(&temp_path);
+        let metadata_without_param = MetadataExtractor::extract_with_metadata(&temp_path, None);
 
         // Only the method with metadata should have taken_at set (creation time fallback)
         assert!(metadata_with_param.taken_at.is_some());

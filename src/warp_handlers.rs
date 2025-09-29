@@ -10,14 +10,8 @@ use warp::{reject, Rejection, Reply};
 pub struct PhotoQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
-    pub q: Option<String>,
     pub sort: Option<String>,
     pub order: Option<String>,
-    pub date_from: Option<String>,
-    pub date_to: Option<String>,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub has_gps: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,13 +47,6 @@ pub struct PhotosResponse {
     pub limit: u32,
     pub has_next: bool,
     pub has_prev: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-    pub code: u16,
-    pub timestamp: String,
 }
 
 #[derive(Debug, Serialize)]

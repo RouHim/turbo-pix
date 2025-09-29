@@ -122,24 +122,7 @@ impl PhotoScheduler {
         Ok(())
     }
 
-    pub async fn shutdown_cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Starting shutdown cleanup");
 
-        // Clean up cache data
-        match self.cache_manager.clear_all().await {
-            Ok(_) => info!("Cache cleanup completed successfully"),
-            Err(e) => error!("Cache cleanup failed: {}", e),
-        }
-
-        // Vacuum database on shutdown
-        match crate::db::vacuum_database(&self.db_pool) {
-            Ok(_) => info!("Shutdown database vacuum completed successfully"),
-            Err(e) => error!("Shutdown database vacuum failed: {}", e),
-        }
-
-        info!("Shutdown cleanup completed");
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -358,13 +341,7 @@ mod tests {
         assert_eq!(final_paths.len(), 1);
     }
 
-    #[tokio::test]
-    async fn test_shutdown_cleanup() {
-        let env = TestEnvironment::new().await;
 
-        let result = env.scheduler.shutdown_cleanup().await;
-        assert!(result.is_ok());
-    }
 
     #[tokio::test]
     async fn test_database_vacuum_operations() {

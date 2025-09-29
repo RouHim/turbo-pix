@@ -6,8 +6,7 @@ mod scheduler;
 
 mod warp_handlers;
 mod warp_helpers;
-// mod web; // Removed: legacy Actix Web module
-// mod web_handlers; // Removed: legacy Actix Web handlers
+
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -18,7 +17,7 @@ use warp::Filter;
 use cache::{CacheManager, MemoryCache};
 use scheduler::PhotoScheduler;
 use warp_helpers::{cors, handle_rejection, with_db};
-// use web_handlers::ThumbnailService; // Cancelled: thumbnail service migration
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     &config,
     //     memory_cache.clone(),
     //     db_pool.clone(),
-    // )); // Cancelled: thumbnail service migration
+
     info!("Thumbnail system initialized");
 
     // Initialize cache manager

@@ -394,17 +394,11 @@ impl ThumbnailGenerator {
         };
 
         let cache_key = CacheKey::from_photo(photo, size)?;
-        let cache_path = self.get_cache_path(&cache_key);
+        let _cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
         // Update database to mark thumbnail as available
-        if let Err(e) = photo.update_thumbnail_status(
-            &self.db_pool,
-            true,
-            Some(cache_path.to_string_lossy().to_string()),
-        ) {
-            warn!("Failed to update thumbnail status in database: {}", e);
-        }
+        // Note: Thumbnail status tracking removed as part of cleanup
 
         Ok(thumbnail_data)
     }

@@ -1,7 +1,7 @@
 use crate::db::DbPool;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::convert::Infallible;
-use std::sync::Arc;
+
 use warp::{reject, Filter, Rejection, Reply};
 
 #[derive(Debug, Serialize)]
@@ -35,11 +35,7 @@ pub fn with_db(
     warp::any().map(move || db_pool.clone())
 }
 
-pub fn with_thumbnail_service<T: Clone + Send + Sync>(
-    service: Arc<T>,
-) -> impl Filter<Extract = (Arc<T>,), Error = Infallible> + Clone {
-    warp::any().map(move || service.clone())
-}
+
 
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
@@ -52,19 +48,19 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if let Some(database_error) = err.find::<DatabaseError>() {
         code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
         message = database_error.message.clone();
-    } else if let Some(_) = err.find::<NotFoundError>() {
+    } else if err.find::<NotFoundError>().is_some() {
         code = warp::http::StatusCode::NOT_FOUND;
         message = "Photo not found".to_string();
     } else if let Some(validation_error) = err.find::<ValidationError>() {
         code = warp::http::StatusCode::BAD_REQUEST;
         message = validation_error.message.clone();
-    } else if let Some(_) = err.find::<warp::reject::PayloadTooLarge>() {
+    } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
         code = warp::http::StatusCode::PAYLOAD_TOO_LARGE;
         message = "Payload too large".to_string();
-    } else if let Some(_) = err.find::<warp::reject::UnsupportedMediaType>() {
+    } else if err.find::<warp::reject::UnsupportedMediaType>().is_some() {
         code = warp::http::StatusCode::UNSUPPORTED_MEDIA_TYPE;
         message = "Unsupported media type".to_string();
-    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
+    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
         code = warp::http::StatusCode::METHOD_NOT_ALLOWED;
         message = "Method not allowed".to_string();
     } else {
@@ -85,10 +81,7 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     ))
 }
 
-pub fn json_body<T: for<'de> Deserialize<'de> + Send>(
-) -> impl Filter<Extract = (T,), Error = Rejection> + Clone {
-    warp::body::content_length_limit(1024 * 16).and(warp::body::json())
-}
+
 
 pub fn cors() -> warp::cors::Builder {
     warp::cors()

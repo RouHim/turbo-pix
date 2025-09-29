@@ -35,7 +35,7 @@ pub struct SearchSuggestion {
 // Schema definitions
 pub const PHOTOS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS photos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hash_sha256 TEXT PRIMARY KEY NOT NULL CHECK(length(hash_sha256) = 64),
     file_path TEXT NOT NULL UNIQUE,
     filename TEXT NOT NULL,
     file_size INTEGER NOT NULL,
@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS photos (
     latitude REAL,
     longitude REAL,
     location_name TEXT,
-    hash_sha256 TEXT,
     thumbnail_path TEXT,
     has_thumbnail BOOLEAN,
     country TEXT,
@@ -76,9 +75,9 @@ CREATE TABLE IF NOT EXISTS photos (
     bitrate INTEGER, -- Bitrate in kbps
     frame_rate REAL, -- Frame rate for videos
     is_favorite BOOLEAN DEFAULT FALSE,
-    created_at DATETIME,
-    updated_at DATETIME
-);
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) WITHOUT ROWID;
 "#;
 
 pub const SCHEMA_SQL: &[&str] = &[
@@ -206,7 +205,7 @@ pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> 
 // Main Photo struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
-    pub id: i64,
+    pub hash_sha256: String,         // Now the primary key - always present
     pub file_path: String,
     pub filename: String,
     pub file_size: i64,
@@ -233,7 +232,6 @@ pub struct Photo {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub location_name: Option<String>,
-    pub hash_sha256: Option<String>,
     pub thumbnail_path: Option<String>,
     pub has_thumbnail: Option<bool>,
     pub country: Option<String>,
@@ -254,7 +252,7 @@ pub struct Photo {
 impl Photo {
     pub fn from_row(row: &Row) -> SqlResult<Self> {
         Ok(Photo {
-            id: row.get(0)?,
+            hash_sha256: row.get(0)?,        // Now first column (PRIMARY KEY)
             file_path: row.get(1)?,
             filename: row.get(2)?,
             file_size: row.get(3)?,
@@ -291,27 +289,26 @@ impl Photo {
             latitude: row.get(24)?,
             longitude: row.get(25)?,
             location_name: row.get(26)?,
-            hash_sha256: row.get(27)?,
-            thumbnail_path: row.get(28)?,
-            has_thumbnail: row.get(29)?,
-            country: row.get(30)?,
-            keywords: row.get(31)?,
-            faces_detected: row.get(32)?,
-            objects_detected: row.get(33)?,
-            colors: row.get(34)?,
-            duration: row.get(35)?,
-            video_codec: row.get(36)?,
-            audio_codec: row.get(37)?,
-            bitrate: row.get(38)?,
-            frame_rate: row.get(39)?,
-            is_favorite: row.get(40)?,
+            thumbnail_path: row.get(27)?,    // hash_sha256 removed from index 27
+            has_thumbnail: row.get(28)?,
+            country: row.get(29)?,
+            keywords: row.get(30)?,
+            faces_detected: row.get(31)?,
+            objects_detected: row.get(32)?,
+            colors: row.get(33)?,
+            duration: row.get(34)?,
+            video_codec: row.get(35)?,
+            audio_codec: row.get(36)?,
+            bitrate: row.get(37)?,
+            frame_rate: row.get(38)?,
+            is_favorite: row.get(39)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(41)?;
+                let datetime_str = row.get::<_, String>(40)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                40,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -321,7 +318,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                40,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -330,12 +327,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(42)?;
+                let datetime_str = row.get::<_, String>(41)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                41,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -345,7 +342,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                41,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -367,11 +364,11 @@ impl Photo {
                  width = ?, height = ?, color_space = ?, white_balance = ?,
                  exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
                  latitude = ?, longitude = ?, location_name = ?,
-                 hash_sha256 = ?, thumbnail_path = ?, has_thumbnail = ?,
+                 thumbnail_path = ?, has_thumbnail = ?,
                  country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
                  duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
                  is_favorite = ?, updated_at = ?
-              WHERE id = ?",
+              WHERE hash_sha256 = ?",
             rusqlite::params![
                 self.file_path,
                 self.filename,
@@ -399,7 +396,6 @@ impl Photo {
                 self.latitude,
                 self.longitude,
                 self.location_name,
-                self.hash_sha256,
                 self.thumbnail_path,
                 self.has_thumbnail,
                 self.country,
@@ -414,7 +410,7 @@ impl Photo {
                 self.frame_rate,
                 self.is_favorite.unwrap_or(false),
                 Utc::now().to_rfc3339(),
-                self.id
+                self.hash_sha256
             ],
         )?;
         Ok(())
@@ -428,21 +424,21 @@ impl Photo {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         conn.execute(
-            "UPDATE photos SET has_thumbnail = ?, thumbnail_path = ? WHERE id = ?",
-            rusqlite::params![has_thumbnail, thumbnail_path, self.id],
+            "UPDATE photos SET has_thumbnail = ?, thumbnail_path = ? WHERE hash_sha256 = ?",
+            rusqlite::params![has_thumbnail, thumbnail_path, self.hash_sha256],
         )?;
         Ok(())
     }
 
     pub fn update_favorite_status(
         pool: &DbPool,
-        id: i64,
+        hash: &str,
         is_favorite: bool,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         let rows_affected = conn.execute(
-            "UPDATE photos SET is_favorite = ?, updated_at = ? WHERE id = ?",
-            rusqlite::params![is_favorite, Utc::now().to_rfc3339(), id],
+            "UPDATE photos SET is_favorite = ?, updated_at = ? WHERE hash_sha256 = ?",
+            rusqlite::params![is_favorite, Utc::now().to_rfc3339(), hash],
         )?;
         Ok(rows_affected > 0)
     }
@@ -450,18 +446,16 @@ impl Photo {
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
-        // Try to find existing photo by path
+        // Try to find existing photo by hash
         let existing = conn.query_row(
-            "SELECT id FROM photos WHERE file_path = ?",
-            [&self.file_path],
-            |row| row.get::<_, i64>(0),
+            "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
+            [&self.hash_sha256],
+            |row| row.get::<_, String>(0),
         );
 
-        if let Ok(existing_id) = existing {
-            // Create a copy of self with the correct ID for update
-            let mut photo_for_update = self.clone();
-            photo_for_update.id = existing_id;
-            photo_for_update.update(pool)
+        if existing.is_ok() {
+            // Photo exists, update it
+            self.update(pool)
         } else {
             // Create new photo
             self.create(pool)?;
@@ -513,9 +507,11 @@ impl Photo {
         Ok((photos, total))
     }
 
+    #[allow(dead_code)]
     pub fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
+        // Legacy method - kept for compatibility but not used in hash-based system
         let conn = pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM photos WHERE id = ?")?;
+        let mut stmt = conn.prepare("SELECT * FROM photos WHERE rowid = ?")?;
 
         match stmt.query_row([id], Photo::from_row) {
             Ok(photo) => Ok(Some(photo)),
@@ -538,43 +534,57 @@ impl Photo {
         }
     }
 
-    pub fn create(&self, pool: &DbPool) -> Result<i64, Box<dyn std::error::Error>> {
+    pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
         let sql = r#"
             INSERT INTO photos (
-                file_path, filename, file_size, mime_type, taken_at, camera_make, camera_model,
-                iso, aperture, shutter_speed, focal_length, width, height, orientation,
-                flash_used, latitude, longitude, hash_sha256, country, keywords,
-                faces_detected, objects_detected, colors, duration, video_codec, audio_codec,
-                bitrate, frame_rate, is_favorite, file_modified, created_at, updated_at
+                hash_sha256, file_path, filename, file_size, mime_type, taken_at, file_modified,
+                date_indexed, camera_make, camera_model, lens_make, lens_model,
+                iso, aperture, shutter_speed, focal_length, width, height, color_space,
+                white_balance, exposure_mode, metering_mode, orientation, flash_used,
+                latitude, longitude, location_name, thumbnail_path, has_thumbnail,
+                country, keywords, faces_detected, objects_detected, colors,
+                duration, video_codec, audio_codec, bitrate, frame_rate,
+                is_favorite, created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
             )
         "#;
 
         conn.execute(
             sql,
             params![
+                self.hash_sha256,
                 self.file_path,
                 self.filename,
                 self.file_size,
                 self.mime_type,
                 self.taken_at.map(|dt| dt.to_rfc3339()),
+                self.date_modified.to_rfc3339(),
+                self.date_indexed.map(|dt| dt.to_rfc3339()),
                 self.camera_make,
                 self.camera_model,
+                self.lens_make,
+                self.lens_model,
                 self.iso,
                 self.aperture,
                 self.shutter_speed,
                 self.focal_length,
                 self.width,
                 self.height,
+                self.color_space,
+                self.white_balance,
+                self.exposure_mode,
+                self.metering_mode,
                 self.orientation,
                 self.flash_used,
                 self.latitude,
                 self.longitude,
-                self.hash_sha256,
+                self.location_name,
+                self.thumbnail_path,
+                self.has_thumbnail,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -586,18 +596,17 @@ impl Photo {
                 self.bitrate,
                 self.frame_rate,
                 self.is_favorite.unwrap_or(false),
-                self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
                 Utc::now().to_rfc3339(),
             ],
         )?;
 
-        Ok(conn.last_insert_rowid())
+        Ok(())
     }
 
-    pub fn delete(pool: &DbPool, id: i64) -> Result<bool, Box<dyn std::error::Error>> {
+    pub fn delete(pool: &DbPool, hash: &str) -> Result<bool, Box<dyn std::error::Error>> {
         let conn = pool.get()?;
-        let deleted_rows = conn.execute("DELETE FROM photos WHERE id = ?", [id])?;
+        let deleted_rows = conn.execute("DELETE FROM photos WHERE hash_sha256 = ?", [hash])?;
         Ok(deleted_rows > 0)
     }
 
@@ -856,7 +865,7 @@ impl Photo {
 impl From<crate::indexer::ProcessedPhoto> for Photo {
     fn from(processed: crate::indexer::ProcessedPhoto) -> Self {
         Photo {
-            id: 0, // This will be set by the database
+            hash_sha256: processed.hash_sha256.expect("ProcessedPhoto must have hash_sha256"),
             file_path: processed.file_path,
             filename: processed.filename,
             file_size: processed.file_size,
@@ -883,7 +892,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             latitude: processed.latitude,
             longitude: processed.longitude,
             location_name: None,
-            hash_sha256: processed.hash_sha256,
             thumbnail_path: None,
             has_thumbnail: Some(false),
             country: None,
@@ -907,7 +915,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
 impl Photo {
     pub fn new_test_photo(file_path: String, filename: String) -> Self {
         Photo {
-            id: 0,
+            hash_sha256: "a".repeat(64), // Use dummy 64-char hash for testing
             file_path,
             filename,
             file_size: 1024,
@@ -934,7 +942,6 @@ impl Photo {
             latitude: None,
             longitude: None,
             location_name: None,
-            hash_sha256: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
             country: None,

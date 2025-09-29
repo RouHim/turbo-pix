@@ -122,8 +122,8 @@ pub async fn list_photos(
     }
 }
 
-pub async fn get_photo(photo_id: i64, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_id(&db_pool, photo_id) {
+pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => Ok(warp::reply::json(&photo)),
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -135,8 +135,8 @@ pub async fn get_photo(photo_id: i64, db_pool: DbPool) -> Result<impl Reply, Rej
     }
 }
 
-pub async fn get_photo_file(photo_id: i64, db_pool: DbPool) -> Result<Box<dyn Reply>, Rejection> {
-    let photo = match Photo::find_by_id(&db_pool, photo_id) {
+pub async fn get_photo_file(photo_hash: String, db_pool: DbPool) -> Result<Box<dyn Reply>, Rejection> {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -173,11 +173,11 @@ pub async fn get_photo_file(photo_id: i64, db_pool: DbPool) -> Result<Box<dyn Re
 }
 
 pub async fn get_video_file(
-    photo_id: i64,
+    photo_hash: String,
     query: VideoQuery,
     db_pool: DbPool,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let photo = match Photo::find_by_id(&db_pool, photo_id) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -192,7 +192,7 @@ pub async fn get_video_file(
 
     if return_metadata_only {
         let video_metadata = json!({
-            "id": photo.id,
+            "hash_sha256": photo.hash_sha256,
             "filename": photo.filename,
             "file_size": photo.file_size,
             "mime_type": photo.mime_type,
@@ -240,11 +240,11 @@ pub async fn get_video_file(
     }
 }
 
-pub async fn get_photo_metadata(photo_id: i64, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_id(&db_pool, photo_id) {
+pub async fn get_photo_metadata(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => {
             let metadata = json!({
-                "id": photo.id,
+                "hash_sha256": photo.hash_sha256,
                 "filename": photo.filename,
                 "file_size": photo.file_size,
                 "mime_type": photo.mime_type,
@@ -262,7 +262,6 @@ pub async fn get_photo_metadata(photo_id: i64, db_pool: DbPool) -> Result<impl R
                 "gps_latitude": photo.latitude,
                 "gps_longitude": photo.longitude,
                 "location_name": photo.location_name,
-                "hash_sha256": photo.hash_sha256,
             });
             Ok(warp::reply::json(&metadata))
         }
@@ -277,11 +276,11 @@ pub async fn get_photo_metadata(photo_id: i64, db_pool: DbPool) -> Result<impl R
 }
 
 pub async fn update_photo(
-    photo_id: i64,
+    photo_hash: String,
     update_req: PhotoUpdateRequest,
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
-    let mut photo = match Photo::find_by_id(&db_pool, photo_id) {
+    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -338,10 +337,10 @@ pub async fn update_photo(
     }
 }
 
-pub async fn delete_photo(photo_id: i64, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_id(&db_pool, photo_id) {
+pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(_)) => {
-            match Photo::delete(&db_pool, photo_id) {
+            match Photo::delete(&db_pool, &photo_hash) {
                 Ok(true) => Ok(warp::reply::with_status(
                     "",
                     warp::http::StatusCode::NO_CONTENT,
@@ -447,15 +446,15 @@ pub async fn get_stats(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 
 // Thumbnail endpoints (simplified - fallback to original photo for now)
 pub async fn get_photo_thumbnail(
-    photo_id: i64, 
+    photo_hash: String, 
     query: ThumbnailQuery,
     db_pool: DbPool
 ) -> Result<Box<dyn Reply>, Rejection> {
-    tracing::debug!("Thumbnail requested for photo {}, size: {:?}", photo_id, query.size);
+    tracing::debug!("Thumbnail requested for photo {}, size: {:?}", photo_hash, query.size);
     
     // For now, just serve the original photo file as a fallback
     // TODO: Implement proper thumbnail generation
-    let photo = match Photo::find_by_id(&db_pool, photo_id) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {

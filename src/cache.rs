@@ -158,9 +158,7 @@ impl CacheKey {
     }
 
     pub fn from_photo(photo: &crate::db::Photo, size: ThumbnailSize) -> Result<Self, CacheError> {
-        let hash = photo.hash_sha256.as_ref().ok_or(CacheError::MissingHash)?;
-
-        Ok(Self::new(hash.clone(), size))
+        Ok(Self::new(photo.hash_sha256.clone(), size))
     }
 }
 
@@ -986,7 +984,7 @@ mod tests {
         fn create_test_photo(path: &str) -> Photo {
             let now = Utc::now();
             Photo {
-                id: 1,
+                hash_sha256: "a".repeat(64),
                 file_path: path.to_string(),
                 filename: "test.jpg".to_string(),
                 file_size: 1024,
@@ -1013,7 +1011,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_sha256: Some("test_hash_sha256".to_string()),
+
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
                 country: None,
@@ -1221,7 +1219,7 @@ mod tests {
         fn create_test_video_photo(path: &str) -> Photo {
             let now = Utc::now();
             Photo {
-                id: 2,
+                hash_sha256: "b".repeat(64),
                 file_path: path.to_string(),
                 filename: "test_video.mp4".to_string(),
                 file_size: 11156,
@@ -1248,7 +1246,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_sha256: Some("test_video_hash_sha256".to_string()),
+
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
                 country: None,

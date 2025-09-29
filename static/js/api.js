@@ -87,12 +87,12 @@ class TurboPixAPI {
     return this.request(endpoint);
   }
 
-  async getPhoto(id) {
-    return this.request(`/api/photos/${id}`);
+  async getPhoto(hash) {
+    return this.request(`/api/photos/${hash}`);
   }
 
-  async getPhotoThumbnail(id, size = 'medium') {
-    const response = await fetch(`/api/photos/${id}/thumbnail?size=${size}`);
+  async getPhotoThumbnail(hash, size = 'medium') {
+    const response = await fetch(`/api/photos/${hash}/thumbnail?size=${size}`);
     if (!response.ok) {
       throw new Error(`Failed to load thumbnail: ${response.statusText}`);
     }
@@ -149,16 +149,16 @@ class TurboPixAPI {
   }
 
   // Favorites (using backend API)
-  async toggleFavorite(photoId, isFavorite) {
-    return this.request(`/api/photos/${photoId}/favorite`, {
+  async toggleFavorite(photoHash, isFavorite) {
+    return this.request(`/api/photos/${photoHash}/favorite`, {
       method: 'PUT',
       body: JSON.stringify({ is_favorite: isFavorite }),
     });
   }
 
-  async addToFavorites(photoId) {
+  async addToFavorites(photoHash) {
     try {
-      const result = await this.toggleFavorite(photoId, true);
+      const result = await this.toggleFavorite(photoHash, true);
       return result;
     } catch (error) {
       console.error('Error adding to favorites:', error);
@@ -166,9 +166,9 @@ class TurboPixAPI {
     }
   }
 
-  async removeFromFavorites(photoId) {
+  async removeFromFavorites(photoHash) {
     try {
-      const result = await this.toggleFavorite(photoId, false);
+      const result = await this.toggleFavorite(photoHash, false);
       return result;
     } catch (error) {
       console.error('Error removing from favorites:', error);
@@ -181,8 +181,11 @@ class TurboPixAPI {
     if (typeof photo === 'object' && photo.is_favorite !== undefined) {
       return photo.is_favorite;
     }
-    // Fallback for photo ID - this should not be used anymore
-    console.warn('isFavorite called with photo ID instead of photo object');
+    // If passed a hash string, we can't determine favorite status locally
+    if (typeof photo === 'string') {
+      console.warn('isFavorite called with photo hash instead of photo object');
+      return false;
+    }
     return false;
   }
 

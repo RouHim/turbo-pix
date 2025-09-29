@@ -542,10 +542,11 @@ impl PhotoProcessor {
         photo_file: &PhotoFile,
         db_pool: &DbPool,
         _cache_manager: &CacheManager,
-    ) -> Result<i64, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error>> {
         if let Some(processed_photo) = self.process_file(photo_file) {
-            let photo_id = processed_photo.save_to_db(db_pool)?;
-            Ok(photo_id)
+            let hash = processed_photo.hash_sha256.clone().ok_or("Missing hash for processed photo")?;
+            processed_photo.save_to_db(db_pool)?;
+            Ok(hash)
         } else {
             Err("Failed to process photo file".into())
         }
@@ -640,9 +641,9 @@ pub struct ProcessedPhoto {
 
 impl ProcessedPhoto {
     #[allow(dead_code)]
-    fn save_to_db(&self, db_pool: &DbPool) -> Result<i64, Box<dyn std::error::Error>> {
+    fn save_to_db(&self, db_pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let photo = Photo {
-            id: 0,
+            hash_sha256: self.hash_sha256.clone().expect("ProcessedPhoto must have hash_sha256"),
             file_path: self.file_path.clone(),
             filename: self.filename.clone(),
             file_size: self.file_size,
@@ -669,7 +670,6 @@ impl ProcessedPhoto {
             latitude: self.latitude,
             longitude: self.longitude,
             location_name: None,
-            hash_sha256: self.hash_sha256.clone(),
             thumbnail_path: None,
             has_thumbnail: Some(false),
             country: None,

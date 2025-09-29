@@ -167,7 +167,7 @@ class PhotoViewer {
 
   async open(photo, allPhotos = []) {
     this.photos = allPhotos;
-    this.currentIndex = this.photos.findIndex((p) => p.id === photo.id);
+    this.currentIndex = this.photos.findIndex((p) => p.hash_sha256 === photo.hash_sha256);
     if (this.currentIndex === -1) {
       this.photos = [photo];
       this.currentIndex = 0;
@@ -251,7 +251,7 @@ class PhotoViewer {
       if (window.logger) {
         window.logger.info('Displaying photo', {
           component: 'PhotoViewer',
-          photoId: photo.id,
+          photoHash: photo.hash_sha256,
           filename: photo.filename,
           isVideo,
         });
@@ -266,7 +266,7 @@ class PhotoViewer {
       if (window.logger) {
         window.logger.error('Error displaying photo', error, {
           component: 'PhotoViewer',
-          photoId: photo.id,
+          photoHash: photo.hash_sha256,
           filename: photo.filename,
         });
       } else {
@@ -279,11 +279,11 @@ class PhotoViewer {
   }
 
   async displayImage(photo) {
-    const imageUrl = utils.getPhotoUrl(photo.id);
+    const imageUrl = utils.getPhotoUrl(photo.hash_sha256);
 
     // Check if already preloaded
-    if (this.preloadedImages.has(photo.id)) {
-      const img = this.preloadedImages.get(photo.id);
+    if (this.preloadedImages.has(photo.hash_sha256)) {
+      const img = this.preloadedImages.get(photo.hash_sha256);
       this.showImage(img.src);
       return;
     }
@@ -291,7 +291,7 @@ class PhotoViewer {
     // Load image
     const img = new Image();
     img.onload = () => {
-      this.preloadedImages.set(photo.id, img);
+      this.preloadedImages.set(photo.hash_sha256, img);
       this.showImage(img.src);
     };
     img.onerror = () => {
@@ -309,7 +309,7 @@ class PhotoViewer {
   }
 
   async displayVideo(photo) {
-    const videoUrl = utils.getVideoUrl(photo.id);
+    const videoUrl = utils.getVideoUrl(photo.hash_sha256);
 
     if (this.elements.video && this.elements.image) {
       // Force video reload by clearing src first to prevent browser caching issues
@@ -349,7 +349,8 @@ class PhotoViewer {
 
     // Title
     if (this.elements.title) {
-      this.elements.title.textContent = photo.filename || `Photo ${photo.id}`;
+      this.elements.title.textContent =
+        photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
     }
 
     // Date
@@ -386,7 +387,7 @@ class PhotoViewer {
 
     // Update favorite button
     if (this.elements.favoriteBtn) {
-      const isFavorite = api.isFavorite(photo.id);
+      const isFavorite = api.isFavorite(photo.hash_sha256);
       this.elements.favoriteBtn.classList.toggle('active', isFavorite);
       this.elements.favoriteBtn.title = isFavorite ? 'Remove from Favorites' : 'Add to Favorites';
     }
@@ -398,12 +399,12 @@ class PhotoViewer {
     indices.forEach((index) => {
       if (index >= 0 && index < this.photos.length) {
         const photo = this.photos[index];
-        if (!this.preloadedImages.has(photo.id) && !this.isVideoFile(photo.filename)) {
+        if (!this.preloadedImages.has(photo.hash_sha256) && !this.isVideoFile(photo.filename)) {
           const img = new Image();
           img.onload = () => {
-            this.preloadedImages.set(photo.id, img);
+            this.preloadedImages.set(photo.hash_sha256, img);
           };
-          img.src = utils.getPhotoUrl(photo.id);
+          img.src = utils.getPhotoUrl(photo.hash_sha256);
         }
       }
     });
@@ -412,26 +413,26 @@ class PhotoViewer {
   toggleFavorite() {
     if (!this.currentPhoto) return;
 
-    const photoId = this.currentPhoto.id;
-    const isFavorite = api.isFavorite(photoId);
+    const photoHash = this.currentPhoto.hash_sha256;
+    const isFavorite = api.isFavorite(photoHash);
 
     if (isFavorite) {
-      api.removeFromFavorites(photoId);
+      api.removeFromFavorites(photoHash);
       utils.showToast('Removed', 'Photo removed from favorites', 'info', 2000);
       if (window.logger) {
         window.logger.info('Photo removed from favorites', {
           component: 'PhotoViewer',
-          photoId,
+          photoHash,
           action: 'remove_favorite',
         });
       }
     } else {
-      api.addToFavorites(photoId);
+      api.addToFavorites(photoHash);
       utils.showToast('Added', 'Photo added to favorites', 'success', 2000);
       if (window.logger) {
         window.logger.info('Photo added to favorites', {
           component: 'PhotoViewer',
-          photoId,
+          photoHash,
           action: 'add_favorite',
         });
       }
@@ -447,8 +448,9 @@ class PhotoViewer {
     if (!this.currentPhoto) return;
 
     const link = utils.createElement('a');
-    link.href = utils.getPhotoUrl(this.currentPhoto.id);
-    link.download = this.currentPhoto.filename || `photo-${this.currentPhoto.id}`;
+    link.href = utils.getPhotoUrl(this.currentPhoto.hash_sha256);
+    link.download =
+      this.currentPhoto.filename || `photo-${this.currentPhoto.hash_sha256.substring(0, 8)}`;
     link.click();
 
     utils.showToast('Download', 'Photo download started', 'info', 2000);

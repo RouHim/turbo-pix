@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_get = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::get())
         .and(with_db(db_pool.clone()))
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_file = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path("file"))
         .and(warp::path::end())
         .and(warp::get())
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_video = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path("video"))
         .and(warp::path::end())
         .and(warp::get())
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_metadata = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path("metadata"))
         .and(warp::path::end())
         .and(warp::get())
@@ -133,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_update = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::put())
         .and(warp::body::json::<warp_handlers::PhotoUpdateRequest>())
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_photo_delete = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::delete())
         .and(with_db(db_pool.clone()))
@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Thumbnail endpoints
     let api_photo_thumbnail = warp::path("api")
         .and(warp::path("photos"))
-        .and(warp::path::param::<i64>())
+        .and(warp::path::param::<String>())
         .and(warp::path("thumbnail"))
         .and(warp::path::end())
         .and(warp::get())

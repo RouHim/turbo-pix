@@ -193,14 +193,14 @@ mod tests {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
 
-            // Generate unique hash based on path
+            // Generate unique hash based on path (64 chars for SHA256 constraint)
             let mut hasher = DefaultHasher::new();
             path.hash(&mut hasher);
-            let unique_hash = format!("{:x}", hasher.finish());
+            let unique_hash = format!("{:016x}{}", hasher.finish(), "0".repeat(48));
 
             let now = Utc::now();
             let photo = Photo {
-                id: 1, // Will be set by database
+                hash_sha256: unique_hash,
                 file_path: path.to_string(),
                 filename: path.split('/').last().unwrap_or(path).to_string(),
                 file_size: 1024,
@@ -227,7 +227,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 location_name: None,
-                hash_sha256: Some(unique_hash),
+
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
                 country: None,

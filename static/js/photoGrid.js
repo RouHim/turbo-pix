@@ -155,7 +155,7 @@ class PhotoGrid {
 
   createPhotoCard(photo) {
     const card = utils.createElement('div', 'photo-card');
-    card.dataset.photoId = photo.id;
+    card.dataset.photoId = photo.hash_sha256;
 
     // Check if this is a video
     const isVideo = photo.video_codec != null;
@@ -250,7 +250,7 @@ class PhotoGrid {
   }
 
   getPhotoTitle(photo) {
-    return photo.filename || `Photo ${photo.id}`;
+    return photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
   }
 
   getPhotoMeta(photo) {
@@ -289,9 +289,9 @@ class PhotoGrid {
     try {
       // Call backend API
       if (newFavoriteState) {
-        await api.addToFavorites(photo.id);
+        await api.addToFavorites(photo.hash_sha256);
       } else {
-        await api.removeFromFavorites(photo.id);
+        await api.removeFromFavorites(photo.hash_sha256);
       }
 
       // Update photo object
@@ -318,7 +318,10 @@ class PhotoGrid {
       );
 
       // Emit event for other components
-      utils.emit(window, 'favoriteToggled', { photoId: photo.id, isFavorite: newFavoriteState });
+      utils.emit(window, 'favoriteToggled', {
+        photoHash: photo.hash_sha256,
+        isFavorite: newFavoriteState,
+      });
     } catch (error) {
       // Revert UI on error
       button.textContent = wasAlreadyFavorite ? '❤️' : '🤍';
@@ -344,8 +347,8 @@ class PhotoGrid {
 
   downloadPhoto(photo) {
     const link = utils.createElement('a');
-    link.href = utils.getPhotoUrl(photo.id);
-    link.download = photo.filename || `photo-${photo.id}`;
+    link.href = utils.getPhotoUrl(photo.hash_sha256);
+    link.download = photo.filename || `photo-${photo.hash_sha256.substring(0, 8)}`;
     link.click();
 
     utils.showToast(
@@ -474,7 +477,7 @@ class PhotoGrid {
 
   getSelectedPhotos() {
     return this.photos.filter((photo) => {
-      const card = this.container.querySelector(`[data-photo-id="${photo.id}"]`);
+      const card = this.container.querySelector(`[data-photo-id="${photo.hash_sha256}"]`);
       return card && card.classList.contains('selected');
     });
   }

@@ -128,6 +128,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::update_photo);
 
+    let api_photo_favorite = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("favorite"))
+        .and(warp::path::end())
+        .and(warp::put())
+        .and(warp::body::json::<warp_handlers::FavoriteRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(warp_handlers::toggle_favorite);
+
     let api_photo_delete = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -377,6 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(api_photo_video)
         .or(api_photo_metadata)
         .or(api_photo_update)
+        .or(api_photo_favorite)
         .or(api_photo_delete)
         .or(api_photo_thumbnail)
         .or(api_thumbnail_by_hash)

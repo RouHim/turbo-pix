@@ -31,7 +31,6 @@ class PhotoViewer {
       location: utils.$('#photo-location'),
       favoriteBtn: utils.$('.favorite-btn'),
       downloadBtn: utils.$('.download-btn'),
-      shareBtn: utils.$('.share-btn'),
       zoomIn: utils.$('.zoom-in'),
       zoomOut: utils.$('.zoom-out'),
       zoomFit: utils.$('.zoom-fit'),
@@ -74,10 +73,6 @@ class PhotoViewer {
 
     if (this.elements.downloadBtn) {
       utils.on(this.elements.downloadBtn, 'click', () => this.downloadPhoto());
-    }
-
-    if (this.elements.shareBtn) {
-      utils.on(this.elements.shareBtn, 'click', () => this.sharePhoto());
     }
 
     // Zoom controls
@@ -387,7 +382,7 @@ class PhotoViewer {
 
     // Update favorite button
     if (this.elements.favoriteBtn) {
-      const isFavorite = api.isFavorite(photo.hash_sha256);
+      const isFavorite = api.isFavorite(photo);
       this.elements.favoriteBtn.classList.toggle('active', isFavorite);
       this.elements.favoriteBtn.title = isFavorite ? 'Remove from Favorites' : 'Add to Favorites';
     }
@@ -410,38 +405,50 @@ class PhotoViewer {
     });
   }
 
-  toggleFavorite() {
+  async toggleFavorite() {
     if (!this.currentPhoto) return;
 
     const photoHash = this.currentPhoto.hash_sha256;
-    const isFavorite = api.isFavorite(photoHash);
+    const isFavorite = api.isFavorite(this.currentPhoto);
 
-    if (isFavorite) {
-      api.removeFromFavorites(photoHash);
-      utils.showToast('Removed', 'Photo removed from favorites', 'info', 2000);
-      if (window.logger) {
-        window.logger.info('Photo removed from favorites', {
-          component: 'PhotoViewer',
-          photoHash,
-          action: 'remove_favorite',
-        });
+    try {
+      if (isFavorite) {
+        await api.removeFromFavorites(photoHash);
+        this.currentPhoto.is_favorite = false;
+        utils.showToast('Removed', 'Photo removed from favorites', 'info', 2000);
+        if (window.logger) {
+          window.logger.info('Photo removed from favorites', {
+            component: 'PhotoViewer',
+            photoHash,
+            action: 'remove_favorite',
+          });
+        }
+      } else {
+        await api.addToFavorites(photoHash);
+        this.currentPhoto.is_favorite = true;
+        utils.showToast('Added', 'Photo added to favorites', 'success', 2000);
+        if (window.logger) {
+          window.logger.info('Photo added to favorites', {
+            component: 'PhotoViewer',
+            photoHash,
+            action: 'add_favorite',
+          });
+        }
       }
-    } else {
-      api.addToFavorites(photoHash);
-      utils.showToast('Added', 'Photo added to favorites', 'success', 2000);
+
+      this.updatePhotoInfo();
+
+      // Emit event for other components
+      utils.emit(window, 'favoriteToggled', { photoHash, isFavorite: !isFavorite });
+    } catch (error) {
+      utils.showToast('Error', 'Failed to update favorite status', 'error', 2000);
       if (window.logger) {
-        window.logger.info('Photo added to favorites', {
+        window.logger.error('Error toggling favorite', error, {
           component: 'PhotoViewer',
           photoHash,
-          action: 'add_favorite',
         });
       }
     }
-
-    this.updatePhotoInfo();
-
-    // Emit event for other components
-    utils.emit(window, 'favoriteToggled', { photoId, isFavorite: !isFavorite });
   }
 
   downloadPhoto() {
@@ -456,25 +463,6 @@ class PhotoViewer {
     utils.showToast('Download', 'Photo download started', 'info', 2000);
   }
 
-  async sharePhoto() {
-    if (!this.currentPhoto) return;
-
-    const photo = this.currentPhoto;
-    const shareData = {
-      title: `TurboPix - ${photo.filename || 'Photo'}`,
-      text: `Check out this photo from TurboPix`,
-      url: window.location.href,
-    };
-
-    try {
-      await navigator.share(shareData);
-      utils.showToast('Shared', 'Photo shared successfully', 'success', 2000);
-    } catch (error) {
-      if (error.name !== 'AbortError') {
-        utils.showToast('Share', 'Sharing cancelled or not supported', 'warning', 2000);
-      }
-    }
-  }
   toggleSidebar() {
     if (this.elements.sidebar) {
       this.elements.sidebar.classList.toggle('show');

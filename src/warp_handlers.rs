@@ -346,6 +346,40 @@ pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Re
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct FavoriteRequest {
+    pub is_favorite: bool,
+}
+
+pub async fn toggle_favorite(
+    photo_hash: String,
+    favorite_req: FavoriteRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            tracing::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    photo.is_favorite = Some(favorite_req.is_favorite);
+
+    match photo.update(&db_pool) {
+        Ok(_) => Ok(warp::reply::json(&photo)),
+        Err(e) => {
+            tracing::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
 pub async fn search_photos(query: SearchQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(50).min(100);

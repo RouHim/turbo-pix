@@ -205,7 +205,7 @@ pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> 
 // Main Photo struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
-    pub hash_sha256: String,         // Now the primary key - always present
+    pub hash_sha256: String, // Now the primary key - always present
     pub file_path: String,
     pub filename: String,
     pub file_size: i64,
@@ -252,7 +252,7 @@ pub struct Photo {
 impl Photo {
     pub fn from_row(row: &Row) -> SqlResult<Self> {
         Ok(Photo {
-            hash_sha256: row.get(0)?,        // Now first column (PRIMARY KEY)
+            hash_sha256: row.get(0)?, // Now first column (PRIMARY KEY)
             file_path: row.get(1)?,
             filename: row.get(2)?,
             file_size: row.get(3)?,
@@ -289,7 +289,7 @@ impl Photo {
             latitude: row.get(24)?,
             longitude: row.get(25)?,
             location_name: row.get(26)?,
-            thumbnail_path: row.get(27)?,    // hash_sha256 removed from index 27
+            thumbnail_path: row.get(27)?, // hash_sha256 removed from index 27
             has_thumbnail: row.get(28)?,
             country: row.get(29)?,
             keywords: row.get(30)?,
@@ -416,10 +416,6 @@ impl Photo {
         Ok(())
     }
 
-
-
-
-
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
@@ -483,8 +479,6 @@ impl Photo {
         }
         Ok((photos, total))
     }
-
-
 
     pub fn find_by_hash(
         pool: &DbPool,
@@ -831,7 +825,9 @@ impl Photo {
 impl From<crate::indexer::ProcessedPhoto> for Photo {
     fn from(processed: crate::indexer::ProcessedPhoto) -> Self {
         Photo {
-            hash_sha256: processed.hash_sha256.expect("ProcessedPhoto must have hash_sha256"),
+            hash_sha256: processed
+                .hash_sha256
+                .expect("ProcessedPhoto must have hash_sha256"),
             file_path: processed.file_path,
             filename: processed.filename,
             file_size: processed.file_size,
@@ -878,9 +874,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
 }
 
 #[cfg(test)]
-impl Photo {
-
-}
+impl Photo {}
 
 #[cfg(test)]
 pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {

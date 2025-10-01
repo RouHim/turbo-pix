@@ -3,8 +3,6 @@ use std::env;
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
     pub thumbnail_cache_path: String,
-    pub memory_cache_size: usize,
-    pub memory_cache_max_size_mb: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -46,12 +44,6 @@ impl Config {
             cache_path: cache_path.clone(),
             cache: CacheConfig {
                 thumbnail_cache_path: format!("{}/thumbnails", cache_path),
-                memory_cache_size: env::var("TURBO_PIX_MEMORY_CACHE_SIZE")
-                    .unwrap_or_else(|_| "1000".to_string())
-                    .parse()?,
-                memory_cache_max_size_mb: env::var("TURBO_PIX_MEMORY_CACHE_MAX_SIZE_MB")
-                    .unwrap_or_else(|_| "100".to_string())
-                    .parse()?,
             },
             thumbnail_sizes: env::var("TURBO_PIX_THUMBNAIL_SIZES")
                 .unwrap_or_else(|_| "200,400,800".to_string())

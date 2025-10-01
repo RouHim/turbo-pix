@@ -121,8 +121,6 @@ impl PhotoScheduler {
 
         Ok(())
     }
-
-
 }
 
 #[cfg(test)]
@@ -134,7 +132,7 @@ mod tests {
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
-    use crate::cache::{CacheManager, MemoryCache};
+    use crate::cache::CacheManager;
     use crate::db::{create_test_db_pool, DbPool, Photo};
 
     struct TestEnvironment {
@@ -148,9 +146,7 @@ mod tests {
         async fn new() -> Self {
             let temp_dir = TempDir::new().unwrap();
             let db_pool = create_test_db_pool().unwrap();
-            let memory_cache = MemoryCache::new(100, 50);
-            let cache_manager =
-                CacheManager::new(memory_cache, temp_dir.path().join("cache").to_path_buf());
+            let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let scheduler =
@@ -341,8 +337,6 @@ mod tests {
         assert_eq!(final_paths.len(), 1);
     }
 
-
-
     #[tokio::test]
     async fn test_database_vacuum_operations() {
         let env = TestEnvironment::new().await;
@@ -412,9 +406,7 @@ mod tests {
     async fn test_scheduler_error_handling() {
         let temp_dir = TempDir::new().unwrap();
         let db_pool = create_test_db_pool().unwrap();
-        let memory_cache = MemoryCache::new(100, 50);
-        let cache_manager =
-            CacheManager::new(memory_cache, temp_dir.path().join("cache").to_path_buf());
+        let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
 
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];

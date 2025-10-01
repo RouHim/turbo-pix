@@ -1,9 +1,11 @@
+use crate::cache::{ThumbnailGenerator, ThumbnailSize};
 use crate::db::{DbPool, Photo, SearchQuery, SearchSuggestion};
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use std::convert::Infallible;
+use std::str::FromStr;
 use warp::{reject, Rejection, Reply};
 
 #[derive(Debug, Deserialize)]
@@ -78,15 +80,18 @@ pub async fn ready_check(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     }
 }
 
-pub async fn list_photos(
-    query: PhotoQuery,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
+pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = (page - 1) * limit;
 
-    match Photo::list_with_pagination(&db_pool, limit as i64, offset as i64, query.sort.as_deref(), query.order.as_deref()) {
+    match Photo::list_with_pagination(
+        &db_pool,
+        limit as i64,
+        offset as i64,
+        query.sort.as_deref(),
+        query.order.as_deref(),
+    ) {
         Ok((photos, total)) => {
             let has_next = offset + limit < total as u32;
             let has_prev = page > 1;
@@ -122,7 +127,10 @@ pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply
     }
 }
 
-pub async fn get_photo_file(photo_hash: String, db_pool: DbPool) -> Result<Box<dyn Reply>, Rejection> {
+pub async fn get_photo_file(
+    photo_hash: String,
+    db_pool: DbPool,
+) -> Result<Box<dyn Reply>, Rejection> {
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
@@ -142,17 +150,10 @@ pub async fn get_photo_file(photo_hash: String, db_pool: DbPool) -> Result<Box<d
                     .to_string()
             });
 
-            let reply = warp::reply::with_header(
-                file_data,
-                "content-type",
-                content_type,
-            );
-            let reply = warp::reply::with_header(
-                reply,
-                "cache-control",
-                "public, max-age=31536000",
-            );
-            
+            let reply = warp::reply::with_header(file_data, "content-type", content_type);
+            let reply =
+                warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
+
             Ok(Box::new(reply))
         }
         Err(_) => Err(reject::custom(NotFoundError)),
@@ -175,7 +176,11 @@ pub async fn get_video_file(
         }
     };
 
-    let return_metadata_only = query.metadata.as_ref().map(|v| v == "true").unwrap_or(false);
+    let return_metadata_only = query
+        .metadata
+        .as_ref()
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     if return_metadata_only {
         let video_metadata = json!({
@@ -205,29 +210,21 @@ pub async fn get_video_file(
                     .to_string()
             });
 
-            let reply = warp::reply::with_header(
-                file_data,
-                "content-type",
-                content_type,
-            );
-            let reply = warp::reply::with_header(
-                reply,
-                "cache-control",
-                "public, max-age=31536000",
-            );
-            let reply = warp::reply::with_header(
-                reply,
-                "accept-ranges",
-                "bytes",
-            );
-            
+            let reply = warp::reply::with_header(file_data, "content-type", content_type);
+            let reply =
+                warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
+            let reply = warp::reply::with_header(reply, "accept-ranges", "bytes");
+
             Ok(Box::new(reply))
         }
         Err(_) => Err(reject::custom(NotFoundError)),
     }
 }
 
-pub async fn get_photo_metadata(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+pub async fn get_photo_metadata(
+    photo_hash: String,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => {
             let metadata = json!({
@@ -326,21 +323,19 @@ pub async fn update_photo(
 
 pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash) {
-        Ok(Some(_)) => {
-            match Photo::delete(&db_pool, &photo_hash) {
-                Ok(true) => Ok(warp::reply::with_status(
-                    "",
-                    warp::http::StatusCode::NO_CONTENT,
-                )),
-                Ok(false) => Err(reject::custom(NotFoundError)),
-                Err(e) => {
-                    tracing::error!("Database error: {}", e);
-                    Err(reject::custom(DatabaseError {
-                        message: format!("Database error: {}", e),
-                    }))
-                }
+        Ok(Some(_)) => match Photo::delete(&db_pool, &photo_hash) {
+            Ok(true) => Ok(warp::reply::with_status(
+                "",
+                warp::http::StatusCode::NO_CONTENT,
+            )),
+            Ok(false) => Err(reject::custom(NotFoundError)),
+            Err(e) => {
+                tracing::error!("Database error: {}", e);
+                Err(reject::custom(DatabaseError {
+                    message: format!("Database error: {}", e),
+                }))
             }
-        }
+        },
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
             tracing::error!("Database error: {}", e);
@@ -351,10 +346,7 @@ pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Re
     }
 }
 
-pub async fn search_photos(
-    query: SearchQuery,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
+pub async fn search_photos(query: SearchQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = (page - 1) * limit;
@@ -397,7 +389,9 @@ pub async fn search_suggestions(
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
     match Photo::get_search_suggestions(&db_pool, query.q.as_deref()) {
-        Ok(suggestions) => Ok(warp::reply::json(&SearchSuggestionsResponse { suggestions })),
+        Ok(suggestions) => Ok(warp::reply::json(&SearchSuggestionsResponse {
+            suggestions,
+        })),
         Err(e) => {
             tracing::error!("Suggestions error: {}", e);
             Err(reject::custom(DatabaseError {
@@ -433,14 +427,17 @@ pub async fn get_stats(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 
 // Thumbnail endpoints (simplified - fallback to original photo for now)
 pub async fn get_photo_thumbnail(
-    photo_hash: String, 
+    photo_hash: String,
     query: ThumbnailQuery,
-    db_pool: DbPool
+    db_pool: DbPool,
+    thumbnail_generator: ThumbnailGenerator,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    tracing::debug!("Thumbnail requested for photo {}, size: {:?}", photo_hash, query.size);
-    
-    // For now, just serve the original photo file as a fallback
-    // TODO: Implement proper thumbnail generation
+    tracing::debug!(
+        "Thumbnail requested for photo {}, size: {:?}",
+        photo_hash,
+        query.size
+    );
+
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
@@ -452,39 +449,35 @@ pub async fn get_photo_thumbnail(
         }
     };
 
-    match std::fs::read(&photo.file_path) {
-        Ok(file_data) => {
-            let content_type = photo.mime_type.unwrap_or_else(|| {
-                mime_guess::from_path(&photo.file_path)
-                    .first_or_octet_stream()
-                    .to_string()
-            });
+    let size = ThumbnailSize::from_str(&query.size.unwrap_or_else(|| "medium".to_string()))
+        .unwrap_or(ThumbnailSize::Medium);
 
-            let reply = warp::reply::with_header(
-                file_data,
-                "content-type",
-                content_type,
-            );
+    match thumbnail_generator.get_or_generate(&photo, size).await {
+        Ok(thumbnail_data) => {
+            let reply = warp::reply::with_header(thumbnail_data, "content-type", "image/jpeg");
             let reply = warp::reply::with_header(
                 reply,
                 "cache-control",
                 "public, max-age=86400", // 24 hours cache for thumbnails
             );
-            
+
             Ok(Box::new(reply))
         }
-        Err(_) => Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            tracing::error!("Failed to generate thumbnail: {}", e);
+            Err(reject::custom(NotFoundError))
+        }
     }
 }
 
 pub async fn get_thumbnail_by_hash(
     hash: String,
     size: String,
-    db_pool: DbPool
+    db_pool: DbPool,
+    thumbnail_generator: ThumbnailGenerator,
 ) -> Result<Box<dyn Reply>, Rejection> {
     tracing::debug!("Thumbnail by hash requested: {}, size: {}", hash, size);
-    
-    // Find photo by hash
+
     let photo = match Photo::find_by_hash(&db_pool, &hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => {
@@ -499,31 +492,24 @@ pub async fn get_thumbnail_by_hash(
         }
     };
 
-    // For now, serve the original photo file as thumbnail fallback
-    // TODO: Implement proper thumbnail generation and caching
-    match std::fs::read(&photo.file_path) {
-        Ok(file_data) => {
-            let content_type = photo.mime_type.unwrap_or_else(|| {
-                mime_guess::from_path(&photo.file_path)
-                    .first_or_octet_stream()
-                    .to_string()
-            });
+    let thumbnail_size = ThumbnailSize::from_str(&size).unwrap_or(ThumbnailSize::Medium);
 
-            let reply = warp::reply::with_header(
-                file_data,
-                "content-type",
-                content_type,
-            );
+    match thumbnail_generator
+        .get_or_generate(&photo, thumbnail_size)
+        .await
+    {
+        Ok(thumbnail_data) => {
+            let reply = warp::reply::with_header(thumbnail_data, "content-type", "image/jpeg");
             let reply = warp::reply::with_header(
                 reply,
                 "cache-control",
                 "public, max-age=86400", // 24 hours cache for thumbnails
             );
-            
+
             Ok(Box::new(reply))
         }
         Err(e) => {
-            tracing::error!("Failed to read photo file {}: {}", photo.file_path, e);
+            tracing::error!("Failed to generate thumbnail for {}: {}", hash, e);
             Err(reject::custom(NotFoundError))
         }
     }

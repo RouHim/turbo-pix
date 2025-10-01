@@ -7,17 +7,15 @@ mod scheduler;
 mod warp_handlers;
 mod warp_helpers;
 
-
 use std::convert::Infallible;
 use std::path::PathBuf;
 // use std::sync::Arc; // Unused after thumbnail service removal
 use tracing::info;
 use warp::Filter;
 
-use cache::{CacheManager, MemoryCache};
+use cache::{CacheManager, ThumbnailGenerator};
 use scheduler::PhotoScheduler;
-use warp_helpers::{cors, handle_rejection, with_db};
-
+use warp_helpers::{cors, handle_rejection, with_db, with_thumbnail_generator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,23 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Database initialized successfully");
 
-    // Initialize thumbnail system
-    let memory_cache = MemoryCache::new(
-        config.cache.memory_cache_size,
-        config.cache.memory_cache_max_size_mb,
-    );
-    // let _thumbnail_service = Arc::new(ThumbnailService::new(
-    //     &config,
-    //     memory_cache.clone(),
-    //     db_pool.clone(),
-
-    info!("Thumbnail system initialized");
-
     // Initialize cache manager
-    let cache_manager = CacheManager::new(
-        memory_cache,
-        config.cache.thumbnail_cache_path.clone().into(),
-    );
+    let cache_manager = CacheManager::new(config.cache.thumbnail_cache_path.clone().into());
+
+    // Initialize thumbnail generator
+    let thumbnail_generator = ThumbnailGenerator::new(&config, db_pool.clone())
+        .expect("Failed to initialize thumbnail generator");
+
+    info!("Cache and thumbnail system initialized");
 
     // Start photo scheduler with cache manager
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
@@ -156,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::get())
         .and(warp::query::<warp_handlers::ThumbnailQuery>())
         .and(with_db(db_pool.clone()))
+        .and(with_thumbnail_generator(thumbnail_generator.clone()))
         .and_then(warp_handlers::get_photo_thumbnail);
 
     let api_thumbnail_by_hash = warp::path("api")
@@ -166,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::path::end())
         .and(warp::get())
         .and(with_db(db_pool.clone()))
+        .and(with_thumbnail_generator(thumbnail_generator.clone()))
         .and_then(warp_handlers::get_thumbnail_by_hash);
 
     // Search endpoints
@@ -201,14 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::get_stats);
 
-
-
     // Static file serving
-    let static_index = warp::path::end()
-        .and(warp::get())
-        .and_then(|| async {
-            Ok::<_, Infallible>(warp::reply::html(include_str!("../static/index.html")))
-        });
+    let static_index = warp::path::end().and(warp::get()).and_then(|| async {
+        Ok::<_, Infallible>(warp::reply::html(include_str!("../static/index.html")))
+    });
 
     // CSS files
     let static_css_main = warp::path("css")
@@ -219,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/css/main.css"),
                 "content-type",
-                "text/css"
+                "text/css",
             ))
         });
 
@@ -231,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/css/components.css"),
                 "content-type",
-                "text/css"
+                "text/css",
             ))
         });
 
@@ -243,7 +230,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/css/responsive.css"),
                 "content-type",
-                "text/css"
+                "text/css",
             ))
         });
 
@@ -256,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/utils.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -268,7 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/logger.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -280,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/api.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -292,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/photoGrid.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -304,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/viewer.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -316,7 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/search.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -328,7 +315,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/i18n.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -340,7 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/js/app.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -353,7 +340,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/i18n/i18nManager.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -366,7 +353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/i18n/en/index.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 
@@ -379,7 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<_, Infallible>(warp::reply::with_header(
                 include_str!("../static/i18n/de/index.js"),
                 "content-type",
-                "application/javascript"
+                "application/javascript",
             ))
         });
 

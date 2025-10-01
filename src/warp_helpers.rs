@@ -1,3 +1,4 @@
+use crate::cache::ThumbnailGenerator;
 use crate::db::DbPool;
 use serde::Serialize;
 use std::convert::Infallible;
@@ -29,13 +30,15 @@ pub struct ValidationError {
 
 impl reject::Reject for ValidationError {}
 
-pub fn with_db(
-    db_pool: DbPool,
-) -> impl Filter<Extract = (DbPool,), Error = Infallible> + Clone {
+pub fn with_db(db_pool: DbPool) -> impl Filter<Extract = (DbPool,), Error = Infallible> + Clone {
     warp::any().map(move || db_pool.clone())
 }
 
-
+pub fn with_thumbnail_generator(
+    thumbnail_generator: ThumbnailGenerator,
+) -> impl Filter<Extract = (ThumbnailGenerator,), Error = Infallible> + Clone {
+    warp::any().map(move || thumbnail_generator.clone())
+}
 
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
@@ -80,8 +83,6 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
         code,
     ))
 }
-
-
 
 pub fn cors() -> warp::cors::Builder {
     warp::cors()

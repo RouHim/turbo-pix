@@ -18,8 +18,6 @@ use crate::db::{DbPool, Photo};
 pub struct MetadataExtractor;
 
 impl MetadataExtractor {
-
-
     pub fn extract_with_metadata(
         path: &Path,
         file_metadata: Option<&std::fs::Metadata>,
@@ -542,7 +540,10 @@ impl PhotoProcessor {
         _cache_manager: &CacheManager,
     ) -> Result<String, Box<dyn std::error::Error>> {
         if let Some(processed_photo) = self.process_file(photo_file) {
-            let hash = processed_photo.hash_sha256.clone().ok_or("Missing hash for processed photo")?;
+            let hash = processed_photo
+                .hash_sha256
+                .clone()
+                .ok_or("Missing hash for processed photo")?;
             processed_photo.save_to_db(db_pool)?;
             Ok(hash)
         } else {
@@ -641,7 +642,10 @@ impl ProcessedPhoto {
     #[allow(dead_code)]
     fn save_to_db(&self, db_pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let photo = Photo {
-            hash_sha256: self.hash_sha256.clone().expect("ProcessedPhoto must have hash_sha256"),
+            hash_sha256: self
+                .hash_sha256
+                .clone()
+                .expect("ProcessedPhoto must have hash_sha256"),
             file_path: self.file_path.clone(),
             filename: self.filename.clone(),
             file_size: self.file_size,

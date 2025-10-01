@@ -494,9 +494,14 @@ class TurboPixApp {
     console.log('🎨 updateThemeToggle called with:', theme);
     const themeToggle = utils.$('#theme-toggle');
     if (themeToggle) {
-      const oldClass = themeToggle.className;
-      themeToggle.className = `theme-toggle ${theme}`;
-      console.log('🎨 Button class changed from', oldClass, 'to', themeToggle.className);
+      // When in dark mode, button should have 'dark' class to show sun icon
+      // When in light mode, button should NOT have 'dark' class to show moon icon
+      if (theme === 'dark') {
+        themeToggle.classList.add('dark');
+      } else {
+        themeToggle.classList.remove('dark');
+      }
+      console.log('🎨 Button classes:', themeToggle.className);
     } else {
       console.error('🎨 Theme toggle button not found!');
     }

@@ -34,11 +34,9 @@ use warp_helpers::{cors, handle_rejection, with_db, with_thumbnail_generator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
     env_logger::init();
 
-    // Load configuration
-    let config = config::Config::from_env().expect("Failed to load configuration");
+    let config = config::Config::from_env()?;
 
     info!(
         "Starting TurboPix server on {}:{}",
@@ -47,18 +45,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Photo paths: {:?}", config.photo_paths);
     info!("Database: {}", config.db_path);
 
-    // Create database pool
-    let db_pool = db::create_db_pool(&config.db_path).expect("Failed to create database pool");
+    let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
+    start_background_tasks(photo_scheduler);
 
+    let host = config.host.clone();
+    let port = config.port;
+
+    // Build routes
+    let health_routes = build_health_routes(db_pool.clone());
+    let photo_routes = build_photo_routes(db_pool.clone());
+    let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
+    let stats_routes = build_stats_routes(db_pool);
+    let static_routes = build_static_routes();
+
+    let routes = health_routes
+        .or(photo_routes)
+        .or(thumbnail_routes)
+        .or(stats_routes)
+        .or(static_routes)
+        .with(cors())
+        .with(warp::log("turbo_pix"))
+        .recover(handle_rejection);
+
+    info!(
+        "Server started successfully, listening on {}:{}",
+        host, port
+    );
+
+    let server = warp::serve(routes).run(([127, 0, 0, 1], port));
+
+    // Start server directly without tokio::select! for now
+    server.await;
+
+    Ok(())
+}
+
+fn initialize_services(
+    config: &config::Config,
+) -> Result<
+    (
+        db_pool::DbPool,
+        ThumbnailGenerator,
+        PhotoScheduler,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    // Create database pool
+    let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
     // Initialize cache manager
     let cache_manager = CacheManager::new(config.cache.thumbnail_cache_path.clone().into());
 
     // Initialize thumbnail generator
-    let thumbnail_generator = ThumbnailGenerator::new(&config, db_pool.clone())
-        .expect("Failed to initialize thumbnail generator");
-
+    let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;
     info!("Cache and thumbnail system initialized");
 
     // Start photo scheduler with cache manager
@@ -67,29 +107,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");
 
-    // Run startup rescan instead of manual scan
+    Ok((db_pool, thumbnail_generator, photo_scheduler))
+}
+
+fn start_background_tasks(photo_scheduler: PhotoScheduler) {
     info!("Running startup photo rescan and cleanup...");
-    let scheduler_for_rescan = photo_scheduler.clone();
     tokio::spawn(async move {
-        if let Err(e) = scheduler_for_rescan.run_startup_rescan().await {
+        if let Err(e) = photo_scheduler.run_startup_rescan().await {
             log::error!("Startup rescan failed: {}", e);
         }
     });
+}
 
-    let host = config.host.clone();
-    let port = config.port;
-
-    // Health endpoints
+fn build_health_routes(
+    db_pool: db_pool::DbPool,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let health = warp::path("health")
         .and(warp::get())
         .and_then(warp_handlers::health_check);
 
     let ready = warp::path("ready")
         .and(warp::get())
-        .and(with_db(db_pool.clone()))
+        .and(with_db(db_pool))
         .and_then(warp_handlers::ready_check);
 
-    // Photo API endpoints
+    health.or(ready)
+}
+
+fn build_photo_routes(
+    db_pool: db_pool::DbPool,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let api_photos_list = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::end())
@@ -132,10 +179,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::path::end())
         .and(warp::put())
         .and(warp::body::json::<warp_handlers::FavoriteRequest>())
-        .and(with_db(db_pool.clone()))
+        .and(with_db(db_pool))
         .and_then(warp_handlers::toggle_favorite);
 
-    // Thumbnail endpoints
+    api_photos_list
+        .or(api_photo_get)
+        .or(api_photo_file)
+        .or(api_photo_video)
+        .or(api_photo_favorite)
+}
+
+fn build_thumbnail_routes(
+    db_pool: db_pool::DbPool,
+    thumbnail_generator: ThumbnailGenerator,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let api_photo_thumbnail = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -154,24 +211,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::get())
-        .and(with_db(db_pool.clone()))
-        .and(with_thumbnail_generator(thumbnail_generator.clone()))
+        .and(with_db(db_pool))
+        .and(with_thumbnail_generator(thumbnail_generator))
         .and_then(warp_handlers::get_thumbnail_by_hash);
 
-    // Stats endpoints
-    let api_stats = warp::path("api")
+    api_photo_thumbnail.or(api_thumbnail_by_hash)
+}
+
+fn build_stats_routes(
+    db_pool: db_pool::DbPool,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("api")
         .and(warp::path("stats"))
         .and(warp::path::end())
         .and(warp::get())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::get_stats);
+        .and(with_db(db_pool))
+        .and_then(warp_handlers::get_stats)
+}
 
-    // Static file serving
+fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let static_index = warp::path::end().and(warp::get()).and_then(|| async {
         Ok::<_, Infallible>(warp::reply::html(include_str!("../static/index.html")))
     });
 
-    // CSS files
     let static_css_main = warp::path("css")
         .and(warp::path("main.css"))
         .and(warp::path::end())
@@ -208,7 +270,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         });
 
-    // JavaScript files
     let static_js_utils = warp::path("js")
         .and(warp::path("utils.js"))
         .and(warp::path::end())
@@ -329,7 +390,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         });
 
-    // i18n files
     let static_i18n_manager = warp::path("i18n")
         .and(warp::path("i18nManager.js"))
         .and(warp::path::end())
@@ -368,18 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         });
 
-    // Combine all routes (API routes first, static files last)
-    let api_routes = api_photos_list
-        .or(api_photo_get)
-        .or(api_photo_file)
-        .or(api_photo_video)
-        .or(api_photo_favorite)
-        .or(api_photo_thumbnail)
-        .or(api_thumbnail_by_hash)
-        .or(api_stats);
-
-    // Combine static file routes
-    let static_routes = static_css_main
+    static_css_main
         .or(static_css_components)
         .or(static_css_responsive)
         .or(static_js_utils)
@@ -395,25 +444,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(static_i18n_manager)
         .or(static_i18n_en)
         .or(static_i18n_de)
-        .or(static_index);
-
-    let routes = health
-        .or(ready)
-        .or(api_routes)
-        .or(static_routes)
-        .with(cors())
-        .with(warp::log("turbo_pix"))
-        .recover(handle_rejection);
-
-    info!(
-        "Server started successfully, listening on {}:{}",
-        host, port
-    );
-
-    let server = warp::serve(routes).run(([127, 0, 0, 1], port));
-
-    // Start server directly without tokio::select! for now
-    server.await;
-
-    Ok(())
+        .or(static_index)
 }

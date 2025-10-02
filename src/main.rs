@@ -1,10 +1,24 @@
 mod cache;
+mod cache_manager;
 mod config;
 mod db;
+mod db_pool;
+mod db_schema;
+mod db_types;
+mod file_scanner;
+mod handlers_health;
+mod handlers_photo;
+mod handlers_search;
+mod handlers_thumbnail;
+mod handlers_video;
 mod indexer;
+mod metadata_extractor;
 mod mimetype_detector;
+mod photo_processor;
 mod scheduler;
-
+mod thumbnail_generator;
+mod thumbnail_types;
+mod video_processor;
 mod warp_handlers;
 mod warp_helpers;
 

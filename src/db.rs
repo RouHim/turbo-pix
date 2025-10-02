@@ -1,211 +1,12 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, Result as SqlResult, Row};
+use rusqlite::{params, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
-use log::info;
 
-// Type aliases
-pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
-
-// Search related structs
-#[derive(Debug, Deserialize)]
-pub struct SearchQuery {
-    pub q: Option<String>,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub year: Option<i32>,
-    pub month: Option<i32>,
-    pub keywords: Option<String>,
-    pub has_location: Option<bool>,
-    pub country: Option<String>,
-    pub limit: Option<u32>,
-    pub page: Option<u32>,
-    pub sort: Option<String>,
-    pub order: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SearchSuggestion {
-    pub term: String,
-    pub count: i64,
-    pub category: String,
-}
-
-// Schema definitions
-pub const PHOTOS_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS photos (
-    hash_sha256 TEXT PRIMARY KEY NOT NULL CHECK(length(hash_sha256) = 64),
-    file_path TEXT NOT NULL UNIQUE,
-    filename TEXT NOT NULL,
-    file_size INTEGER NOT NULL,
-    mime_type TEXT,
-    taken_at DATETIME,
-    file_modified DATETIME NOT NULL,
-    date_indexed DATETIME,
-    camera_make TEXT,
-    camera_model TEXT,
-    lens_make TEXT,
-    lens_model TEXT,
-    iso INTEGER,
-    aperture REAL,
-    shutter_speed TEXT,
-    focal_length REAL,
-    width INTEGER,
-    height INTEGER,
-    color_space TEXT,
-    white_balance TEXT,
-    exposure_mode TEXT,
-    metering_mode TEXT,
-    orientation INTEGER,
-    flash_used BOOLEAN,
-    latitude REAL,
-    longitude REAL,
-    location_name TEXT,
-    thumbnail_path TEXT,
-    has_thumbnail BOOLEAN,
-    country TEXT,
-    keywords TEXT,
-    faces_detected TEXT,
-    objects_detected TEXT,
-    colors TEXT,
-    duration REAL, -- Video duration in seconds
-    video_codec TEXT, -- Video codec (e.g., "h264", "h265")
-    audio_codec TEXT, -- Audio codec (e.g., "aac", "mp3")
-    bitrate INTEGER, -- Bitrate in kbps
-    frame_rate REAL, -- Frame rate for videos
-    is_favorite BOOLEAN DEFAULT FALSE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-) WITHOUT ROWID;
-"#;
-
-pub const SCHEMA_SQL: &[&str] = &[
-    PHOTOS_TABLE,
-    "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_make ON photos(camera_make);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_model ON photos(camera_model);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_file_modified ON photos(file_modified);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_keywords ON photos(keywords);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_faces_detected ON photos(faces_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
-];
-
-// Connection pool functions
-pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    // Create parent directory if it doesn't exist
-    if let Some(parent) = std::path::Path::new(database_path).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let manager = SqliteConnectionManager::file(database_path);
-    let pool = Pool::new(manager)?;
-
-    // Initialize schema and configure pragmas on a connection from the pool
-    // These pragmas improve concurrency and set a sensible busy timeout.
-    {
-        let conn = pool.get()?;
-        // Set WAL mode (database-level), reasonable sync, keep temp tables in memory,
-        // and set a busy timeout so that transient locks are waited on instead of failing immediately.
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA temp_store = MEMORY;
-             PRAGMA busy_timeout = 5000;",
-        )?;
-        initialize_schema(&conn)?;
-    }
-
-    Ok(pool)
-}
-
-pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {
-    for sql in SCHEMA_SQL {
-        conn.execute(sql, [])?;
-    }
-    Ok(())
-}
-
-// Utility functions
-#[allow(dead_code)]
-pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare("SELECT file_path FROM photos")?;
-    let photo_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
-
-    let mut paths = Vec::new();
-    for path in photo_iter {
-        paths.push(path?);
-    }
-    Ok(paths)
-}
-
-#[allow(dead_code)]
-pub fn needs_update(
-    pool: &DbPool,
-    file_path: &str,
-    file_modified: &DateTime<Utc>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare("SELECT file_modified FROM photos WHERE file_path = ?")?;
-
-    match stmt.query_row([file_path], |row| {
-        let db_modified_str: String = row.get(0)?;
-        let db_modified = DateTime::parse_from_rfc3339(&db_modified_str)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-            .with_timezone(&Utc);
-        Ok(db_modified)
-    }) {
-        Ok(db_modified) => Ok(file_modified > &db_modified),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true), // File not in DB, needs insert
-        Err(e) => Err(Box::new(e)),
-    }
-}
-
-pub fn delete_orphaned_photos(
-    pool: &DbPool,
-    existing_paths: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-
-    if existing_paths.is_empty() {
-        // If no existing paths, delete all photos
-        conn.execute("DELETE FROM photos", [])?;
-        info!("Deleted all photos from database (no files found)");
-        return Ok(());
-    }
-
-    // Create placeholders for the IN clause
-    let placeholders = existing_paths
-        .iter()
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "DELETE FROM photos WHERE file_path NOT IN ({})",
-        placeholders
-    );
-
-    let params: Vec<&dyn rusqlite::ToSql> = existing_paths
-        .iter()
-        .map(|p| p as &dyn rusqlite::ToSql)
-        .collect();
-
-    let deleted_count = conn.execute(&sql, params.as_slice())?;
-    info!("Deleted {} orphaned photos from database", deleted_count);
-
-    Ok(())
-}
-
-pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    conn.execute("VACUUM", [])?;
-    info!("Database vacuum completed");
-    Ok(())
-}
+// Re-exports from split modules
+pub use crate::db_pool::{
+    create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
+};
+pub use crate::db_types::{SearchQuery, SearchSuggestion};
 
 // Main Photo struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -883,19 +684,10 @@ impl Photo {}
 
 #[cfg(test)]
 pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
-    create_in_memory_pool()
+    crate::db_pool::create_in_memory_pool()
 }
 
 #[cfg(test)]
 pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
-    let manager = SqliteConnectionManager::memory();
-    let pool = Pool::new(manager)?;
-
-    // Initialize schema on a connection from the pool
-    {
-        let conn = pool.get()?;
-        initialize_schema(&conn)?;
-    }
-
-    Ok(pool)
+    crate::db_pool::create_in_memory_pool()
 }

@@ -14,6 +14,8 @@ pub struct PhotoQuery {
     pub sort: Option<String>,
     pub order: Option<String>,
     pub q: Option<String>,
+    pub year: Option<i32>,
+    pub month: Option<i32>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -31,14 +33,14 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = (page - 1) * limit;
 
-    // If a query string is provided, use search instead of list
-    let result = if let Some(q) = &query.q {
+    // If a query string or year/month filter is provided, use search instead of list
+    let result = if query.q.is_some() || query.year.is_some() || query.month.is_some() {
         let search_query = SearchQuery {
-            q: Some(q.clone()),
+            q: query.q.clone(),
             camera_make: None,
             camera_model: None,
-            year: None,
-            month: None,
+            year: query.year,
+            month: query.month,
             keywords: None,
             has_location: None,
             country: None,
@@ -314,6 +316,18 @@ pub async fn get_photo_metadata(
 pub async fn get_stats(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_stats(&db_pool) {
         Ok(stats) => Ok(warp::reply::json(&stats)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
+pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    match Photo::get_timeline_data(&db_pool) {
+        Ok(timeline) => Ok(warp::reply::json(&timeline)),
         Err(e) => {
             log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {

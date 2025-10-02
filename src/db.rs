@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::db_pool::{
     create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
 };
-pub use crate::db_types::{SearchQuery, SearchSuggestion};
+pub use crate::db_types::{SearchQuery, SearchSuggestion, TimelineData, TimelineDensity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
@@ -621,6 +621,48 @@ impl Photo {
 
         Ok(suggestions)
     }
+
+    pub fn get_timeline_data(pool: &DbPool) -> Result<TimelineData, Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+
+        // Get min and max dates
+        let (min_date, max_date): (Option<String>, Option<String>) = conn.query_row(
+            "SELECT MIN(taken_at), MAX(taken_at) FROM photos WHERE taken_at IS NOT NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        // Get photo density by year and month
+        let mut stmt = conn.prepare(
+            "SELECT
+                CAST(strftime('%Y', taken_at) AS INTEGER) as year,
+                CAST(strftime('%m', taken_at) AS INTEGER) as month,
+                COUNT(*) as count
+             FROM photos
+             WHERE taken_at IS NOT NULL
+             GROUP BY year, month
+             ORDER BY year, month",
+        )?;
+
+        let density_iter = stmt.query_map([], |row| {
+            Ok(TimelineDensity {
+                year: row.get(0)?,
+                month: row.get(1)?,
+                count: row.get(2)?,
+            })
+        })?;
+
+        let mut density = Vec::new();
+        for item in density_iter {
+            density.push(item?);
+        }
+
+        Ok(TimelineData {
+            min_date,
+            max_date,
+            density,
+        })
+    }
 }
 
 impl From<crate::indexer::ProcessedPhoto> for Photo {
@@ -685,4 +727,150 @@ pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
 #[cfg(test)]
 pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     crate::db_pool::create_in_memory_pool()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_photo_with_date(hash: &str, filename: &str, taken_at: DateTime<Utc>) -> Photo {
+        Photo {
+            hash_sha256: hash.to_string(),
+            file_path: format!("./test/{}", filename),
+            filename: filename.to_string(),
+            file_size: 1024,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(taken_at),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            camera_make: None,
+            camera_model: None,
+            lens_make: None,
+            lens_model: None,
+            iso: None,
+            aperture: None,
+            shutter_speed: None,
+            focal_length: None,
+            width: Some(1920),
+            height: Some(1080),
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: None,
+            flash_used: None,
+            latitude: None,
+            longitude: None,
+            location_name: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
+            is_favorite: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_get_timeline_data() {
+        let pool = create_test_db_pool().unwrap();
+
+        // Create test photos with different dates
+        let photo1 = create_test_photo_with_date(
+            &"a".repeat(64),
+            "photo1.jpg",
+            DateTime::parse_from_rfc3339("2010-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let photo2 = create_test_photo_with_date(
+            &"b".repeat(64),
+            "photo2.jpg",
+            DateTime::parse_from_rfc3339("2010-05-26T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let photo3 = create_test_photo_with_date(
+            &"c".repeat(64),
+            "photo3.jpg",
+            DateTime::parse_from_rfc3339("2011-12-01T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let photo4 = create_test_photo_with_date(
+            &"d".repeat(64),
+            "photo4.jpg",
+            DateTime::parse_from_rfc3339("2024-01-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+
+        // Insert photos
+        photo1.create(&pool).unwrap();
+        photo2.create(&pool).unwrap();
+        photo3.create(&pool).unwrap();
+        photo4.create(&pool).unwrap();
+
+        // Get timeline data
+        let timeline = Photo::get_timeline_data(&pool).unwrap();
+
+        // Verify min/max dates
+        assert_eq!(
+            timeline.min_date,
+            Some("2010-05-25T10:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            timeline.max_date,
+            Some("2024-01-15T10:00:00+00:00".to_string())
+        );
+
+        // Verify density data
+        assert_eq!(timeline.density.len(), 3); // 3 unique year-month combinations
+
+        // Check May 2010 (2 photos)
+        let may_2010 = timeline
+            .density
+            .iter()
+            .find(|d| d.year == 2010 && d.month == 5)
+            .unwrap();
+        assert_eq!(may_2010.count, 2);
+
+        // Check December 2011 (1 photo)
+        let dec_2011 = timeline
+            .density
+            .iter()
+            .find(|d| d.year == 2011 && d.month == 12)
+            .unwrap();
+        assert_eq!(dec_2011.count, 1);
+
+        // Check January 2024 (1 photo)
+        let jan_2024 = timeline
+            .density
+            .iter()
+            .find(|d| d.year == 2024 && d.month == 1)
+            .unwrap();
+        assert_eq!(jan_2024.count, 1);
+    }
+
+    #[test]
+    fn test_get_timeline_data_empty() {
+        let pool = create_test_db_pool().unwrap();
+
+        // Get timeline data from empty database
+        let timeline = Photo::get_timeline_data(&pool).unwrap();
+
+        // Should return None for dates and empty density
+        assert_eq!(timeline.min_date, None);
+        assert_eq!(timeline.max_date, None);
+        assert_eq!(timeline.density.len(), 0);
+    }
 }

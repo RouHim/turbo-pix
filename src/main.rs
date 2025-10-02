@@ -179,14 +179,23 @@ fn build_photo_routes(
         .and(warp::path::end())
         .and(warp::put())
         .and(warp::body::json::<warp_handlers::FavoriteRequest>())
-        .and(with_db(db_pool))
+        .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::toggle_favorite);
+
+    let api_photo_timeline = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("timeline"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool))
+        .and_then(warp_handlers::get_timeline);
 
     api_photos_list
         .or(api_photo_get)
         .or(api_photo_file)
         .or(api_photo_video)
         .or(api_photo_favorite)
+        .or(api_photo_timeline)
 }
 
 fn build_thumbnail_routes(
@@ -343,6 +352,18 @@ fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp
             ))
         });
 
+    let static_js_timeline = warp::path("js")
+        .and(warp::path("timeline.js"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and_then(|| async {
+            Ok::<_, Infallible>(warp::reply::with_header(
+                include_str!("../static/js/timeline.js"),
+                "content-type",
+                "application/javascript",
+            ))
+        });
+
     let static_js_i18n = warp::path("js")
         .and(warp::path("i18n.js"))
         .and(warp::path::end())
@@ -438,6 +459,7 @@ fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp
         .or(static_js_photogrid)
         .or(static_js_viewer)
         .or(static_js_search)
+        .or(static_js_timeline)
         .or(static_js_i18n)
         .or(static_js_app)
         .or(static_js_feather)

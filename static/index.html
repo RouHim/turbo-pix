@@ -61,6 +61,30 @@
           </div>
         </div>
 
+        <!-- Timeline Slider -->
+        <div class="timeline-container">
+          <!-- Desktop: Slider -->
+          <div class="timeline-slider desktop-only">
+            <button class="timeline-reset" title="Clear timeline filter">✕</button>
+            <div class="timeline-track">
+              <canvas class="timeline-heatmap" width="800" height="40"></canvas>
+              <input type="range" class="timeline-input" min="0" max="100" value="100" />
+            </div>
+            <div class="timeline-label">All Dates</div>
+          </div>
+
+          <!-- Mobile: Dropdowns -->
+          <div class="timeline-dropdowns mobile-only">
+            <select class="timeline-year-select">
+              <option value="">All Years</option>
+            </select>
+            <select class="timeline-month-select">
+              <option value="">All Months</option>
+            </select>
+            <button class="timeline-reset" title="Clear timeline filter">✕</button>
+          </div>
+        </div>
+
         <div id="photo-grid" class="photo-grid">
           <div class="loading-skeleton">
             <div class="skeleton-item"></div>
@@ -172,6 +196,7 @@
     <script src="/js/photoGrid.js"></script>
     <script src="/js/viewer.js"></script>
     <script src="/js/search.js"></script>
+    <script src="/js/timeline.js"></script>
     <script src="/js/app.js"></script>
   </body>
 </html>

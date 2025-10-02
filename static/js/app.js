@@ -10,6 +10,7 @@ class TurboPixApp {
       sortBy: 'date_desc',
       totalPhotos: 0,
       selectedPhotos: [],
+      timelineFilter: null, // { year: 2011, month: 5 } or null
     });
   }
 
@@ -210,6 +211,13 @@ class TurboPixApp {
     const [sort, order] = sortBy.split('_');
 
     const filters = { sort, order: order || 'desc' };
+
+    // Add timeline filter if active
+    const timelineFilter = this.state.get('timelineFilter');
+    if (timelineFilter) {
+      if (timelineFilter.year) filters.year = timelineFilter.year;
+      if (timelineFilter.month) filters.month = timelineFilter.month;
+    }
 
     try {
       switch (view) {
@@ -503,6 +511,11 @@ class TurboPixApp {
   refreshCurrentView() {
     const currentView = this.state.get('currentView');
     this.loadViewData(currentView);
+  }
+
+  applyTimelineFilter(filter) {
+    this.state.set('timelineFilter', filter);
+    this.refreshCurrentView();
   }
 
   getSelectedPhotos() {

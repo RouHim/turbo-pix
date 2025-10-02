@@ -30,7 +30,7 @@
 
 - Start application in the background using `nohup` and continue
 - Wait until the app gets up by checking the health endpoint `curl --retry 5 --retry-delay 2 http://localhost:8080/health`
-- Use Puppeteer MCP server for browser automation
+- Use Puppeteer or Playwright MCP server for browser automation
 - Navigate to `http://localhost:18473` for testing
 - Finally don't forget to kill the app process
 

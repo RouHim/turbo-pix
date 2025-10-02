@@ -113,8 +113,18 @@ class I18nManager {
     return typeof current === 'string' ? current : null;
   }
 
-  t(key) {
-    return this.getTranslationByKey(key) || key;
+  t(key, params = {}) {
+    let translation = this.getTranslationByKey(key) || key;
+
+    // Replace placeholders like {{query}} with actual values
+    if (params && typeof translation === 'string') {
+      Object.keys(params).forEach(paramKey => {
+        const placeholder = `{{${paramKey}}}`;
+        translation = translation.replace(placeholder, params[paramKey]);
+      });
+    }
+
+    return translation;
   }
 
   translateError(errorMessage) {

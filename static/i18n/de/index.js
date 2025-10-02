@@ -82,4 +82,13 @@ window.DE_TRANSLATIONS = {
     error: 'Fehler',
     connection: 'Verbindung',
   },
+
+  messages: {
+    no_photos_indexed: 'Es wurden noch keine Fotos indiziert',
+    no_photos_match_search: 'Keine Fotos entsprechen Ihrer Suche nach "{{query}}"',
+    photo_added_to_favorites: 'Foto zu Favoriten hinzugefügt',
+    photo_removed_from_favorites: 'Foto von Favoriten entfernt',
+    error_updating_favorite: 'Fehler beim Aktualisieren des Favoritenstatus',
+    photo_download_started: 'Download gestartet',
+  },
 };

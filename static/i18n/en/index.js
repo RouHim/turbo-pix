@@ -82,4 +82,13 @@ window.EN_TRANSLATIONS = {
     error: 'Error',
     connection: 'Connection',
   },
+
+  messages: {
+    no_photos_indexed: 'No photos have been indexed yet',
+    no_photos_match_search: 'No photos match your search for "{{query}}"',
+    photo_added_to_favorites: 'Photo added to favorites',
+    photo_removed_from_favorites: 'Photo removed from favorites',
+    error_updating_favorite: 'Error updating favorite status',
+    photo_download_started: 'Download started',
+  },
 };

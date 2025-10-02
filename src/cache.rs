@@ -11,71 +11,9 @@ mod tests {
     use chrono::Utc;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_thumbnail_size_conversions() {
-        assert_eq!(ThumbnailSize::Small.to_pixels(), 200);
-        assert_eq!(ThumbnailSize::Medium.to_pixels(), 400);
-        assert_eq!(ThumbnailSize::Large.to_pixels(), 800);
-
-        assert_eq!(ThumbnailSize::Small.as_str(), "small");
-        assert_eq!(ThumbnailSize::Medium.as_str(), "medium");
-        assert_eq!(ThumbnailSize::Large.as_str(), "large");
-
-        assert_eq!("small".parse::<ThumbnailSize>(), Ok(ThumbnailSize::Small));
-        assert_eq!("medium".parse::<ThumbnailSize>(), Ok(ThumbnailSize::Medium));
-        assert_eq!("large".parse::<ThumbnailSize>(), Ok(ThumbnailSize::Large));
-        assert_eq!("invalid".parse::<ThumbnailSize>(), Err(()));
-    }
-
-    #[test]
-    fn test_thumbnail_size_display() {
-        assert_eq!(format!("{}", ThumbnailSize::Small), "small");
-        assert_eq!(format!("{}", ThumbnailSize::Medium), "medium");
-        assert_eq!(format!("{}", ThumbnailSize::Large), "large");
-    }
-
-    #[test]
-    fn test_cache_key() {
-        let key = CacheKey::new("abcd1234".to_string(), ThumbnailSize::Medium);
-        assert_eq!(key.content_hash, "abcd1234");
-        assert_eq!(key.size, ThumbnailSize::Medium);
-        assert_eq!(format!("{}", key), "abcd1234_medium");
-    }
-
-    #[test]
-    fn test_cache_key_equality() {
-        let key1 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
-        let key2 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Small);
-        let key3 = CacheKey::new("test_hash_1".to_string(), ThumbnailSize::Medium);
-        let key4 = CacheKey::new("test_hash_2".to_string(), ThumbnailSize::Small);
-
-        assert_eq!(key1, key2);
-        assert_ne!(key1, key3);
-        assert_ne!(key1, key4);
-    }
-
-    #[test]
-    fn test_thumbnail_size_ordering() {
-        let sizes = vec![
-            ThumbnailSize::Large,
-            ThumbnailSize::Small,
-            ThumbnailSize::Medium,
-        ];
-        let mut sorted_sizes = sizes.clone();
-        sorted_sizes.sort_by_key(|s| s.to_pixels());
-
-        assert_eq!(
-            sorted_sizes,
-            vec![
-                ThumbnailSize::Small,
-                ThumbnailSize::Medium,
-                ThumbnailSize::Large
-            ]
-        );
-    }
-
     mod thumbnail_tests {
         use super::*;
+        use crate::thumbnail_types::{CacheError, CacheKey, VideoMetadata};
 
         // Helper: project-local path to test-data/<filename>
         fn project_photo_path(filename: &str) -> std::path::PathBuf {

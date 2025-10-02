@@ -4,6 +4,8 @@ pub use crate::photo_processor::{PhotoProcessor, ProcessedPhoto};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_scanner::PhotoFile;
+    use crate::metadata_extractor::MetadataExtractor;
     use chrono::{DateTime, Datelike, Timelike, Utc};
 
     #[test]

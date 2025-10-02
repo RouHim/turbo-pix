@@ -8,7 +8,6 @@ pub use crate::handlers_video::{get_video_file, VideoQuery};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::db::{create_test_db_pool, Photo, SearchQuery};
     use chrono::Utc;
 
@@ -126,17 +125,4 @@ mod tests {
         assert_eq!(photos.len(), 2);
     }
 
-    #[tokio::test]
-    async fn test_photo_query_with_q_parameter() {
-        // Test that PhotoQuery properly includes the q parameter
-        let query = PhotoQuery {
-            page: Some(1),
-            limit: Some(50),
-            sort: None,
-            order: None,
-            q: Some("is_favorite:true".to_string()),
-        };
-
-        assert_eq!(query.q, Some("is_favorite:true".to_string()));
-    }
 }

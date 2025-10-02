@@ -385,8 +385,12 @@ class PhotoViewer {
       const isFavorite = api.isFavorite(photo);
       this.elements.favoriteBtn.classList.toggle('active', isFavorite);
       this.elements.favoriteBtn.title = isFavorite
-        ? window.i18nManager ? window.i18nManager.t('ui.remove_from_favorites') : 'Remove from Favorites'
-        : window.i18nManager ? window.i18nManager.t('ui.add_to_favorites') : 'Add to Favorites';
+        ? window.i18nManager
+          ? window.i18nManager.t('ui.remove_from_favorites')
+          : 'Remove from Favorites'
+        : window.i18nManager
+          ? window.i18nManager.t('ui.add_to_favorites')
+          : 'Add to Favorites';
     }
   }
 

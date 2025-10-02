@@ -637,16 +637,8 @@ mod tests {
         let db_pool = create_test_db_pool().expect("Failed to create test DB");
 
         // Insert test photos (hash must be 64 chars for SHA256)
-        let photo1 = create_test_photo(
-            "a".repeat(64).as_str(),
-            "test1.jpg",
-            true,
-        );
-        let photo2 = create_test_photo(
-            "b".repeat(64).as_str(),
-            "test2.jpg",
-            false,
-        );
+        let photo1 = create_test_photo("a".repeat(64).as_str(), "test1.jpg", true);
+        let photo2 = create_test_photo("b".repeat(64).as_str(), "test2.jpg", false);
 
         photo1
             .create_or_update(&db_pool)
@@ -687,16 +679,8 @@ mod tests {
         let db_pool = create_test_db_pool().expect("Failed to create test DB");
 
         // Insert test photos (hash must be 64 chars for SHA256)
-        let photo1 = create_test_photo(
-            "c".repeat(64).as_str(),
-            "test3.jpg",
-            true,
-        );
-        let photo2 = create_test_photo(
-            "d".repeat(64).as_str(),
-            "test4.jpg",
-            false,
-        );
+        let photo1 = create_test_photo("c".repeat(64).as_str(), "test3.jpg", true);
+        let photo2 = create_test_photo("d".repeat(64).as_str(), "test4.jpg", false);
 
         photo1
             .create_or_update(&db_pool)

@@ -3,7 +3,7 @@
 class IconHelper {
   constructor() {
     // Wait for feather to be loaded
-    if (typeof feather === 'undefined') {
+    if (typeof window.feather === 'undefined') {
       console.warn('Feather icons library not loaded');
     }
   }
@@ -15,7 +15,7 @@ class IconHelper {
    * @returns {string} SVG markup
    */
   getIcon(name, options = {}) {
-    if (typeof feather === 'undefined') {
+    if (typeof window.feather === 'undefined') {
       console.warn('Feather icons library not loaded');
       return '';
     }
@@ -25,7 +25,7 @@ class IconHelper {
     const strokeWidth = options.strokeWidth || 2;
 
     // Get SVG from feather
-    const svg = feather.icons[name];
+    const svg = window.feather.icons[name];
     if (!svg) {
       console.warn(`Icon "${name}" not found in feather icons`);
       return '';
@@ -152,12 +152,12 @@ window.iconHelper = new IconHelper();
 // Auto-initialize icons when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    if (window.iconHelper && typeof feather !== 'undefined') {
+    if (window.iconHelper && typeof window.feather !== 'undefined') {
       window.iconHelper.initializeIcons();
     }
   });
 } else {
-  if (window.iconHelper && typeof feather !== 'undefined') {
+  if (window.iconHelper && typeof window.feather !== 'undefined') {
     window.iconHelper.initializeIcons();
   }
 }

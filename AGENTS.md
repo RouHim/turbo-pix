@@ -24,13 +24,16 @@
 - **Video tests**: Require `RUN_VIDEO_TESTS=1` env var, `ffmpeg` and `ffprobe` installed, and sample video file present
 - **Pattern**: Unit tests in `#[cfg(test)]` modules, integration in `tests/` dir
 
-## E2E Testing with Puppeteer
+## E2E Testing with Browser Automation
 
 ### Test Setup
 
 - Start application in the background using `nohup` and continue
 - Wait until the app gets up by checking the health endpoint `curl --retry 5 --retry-delay 2 http://localhost:8080/health`
-- Use Puppeteer or Playwright MCP server for browser automation
+- **IMPORTANT**: Use available MCP servers for browser automation (check for `mcp__` prefixed tools)
+  - Prefer Playwright MCP server if available (no additional dependencies)
+  - Only use Puppeteer MCP as fallback (avoids adding puppeteer to package.json)
+  - Do NOT install browser automation tools as project dependencies
 - Navigate to `http://localhost:18473` for testing
 - Finally don't forget to kill the app process
 

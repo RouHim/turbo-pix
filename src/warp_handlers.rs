@@ -1,10 +1,12 @@
 use crate::cache::{ThumbnailGenerator, ThumbnailSize};
 use crate::db::{DbPool, Photo, SearchQuery, SearchSuggestion};
+use crate::mimetype_detector;
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use std::convert::Infallible;
+use std::path::Path;
 use std::str::FromStr;
 use warp::{reject, Rejection, Reply};
 
@@ -174,9 +176,9 @@ pub async fn get_photo_file(
     match std::fs::read(&photo.file_path) {
         Ok(file_data) => {
             let content_type = photo.mime_type.unwrap_or_else(|| {
-                mime_guess::from_path(&photo.file_path)
-                    .first_or_octet_stream()
-                    .to_string()
+                mimetype_detector::from_path(Path::new(&photo.file_path))
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string())
             });
 
             let reply = warp::reply::with_header(file_data, "content-type", content_type);
@@ -234,9 +236,9 @@ pub async fn get_video_file(
     match std::fs::read(&photo.file_path) {
         Ok(file_data) => {
             let content_type = photo.mime_type.unwrap_or_else(|| {
-                mime_guess::from_path(&photo.file_path)
-                    .first_or_octet_stream()
-                    .to_string()
+                mimetype_detector::from_path(Path::new(&photo.file_path))
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string())
             });
 
             let reply = warp::reply::with_header(file_data, "content-type", content_type);

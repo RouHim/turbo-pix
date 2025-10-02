@@ -2,6 +2,7 @@ mod cache;
 mod config;
 mod db;
 mod indexer;
+mod mimetype_detector;
 mod scheduler;
 
 mod warp_handlers;

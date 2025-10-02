@@ -1,6 +1,5 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use exif::{In, Reader, Tag, Value};
-use mime_guess::{mime, MimeGuess};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -8,10 +7,10 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use log::{debug, error, info, warn};
-use walkdir::WalkDir;
 
 use crate::cache::CacheManager;
 use crate::db::{DbPool, Photo};
+use crate::mimetype_detector;
 
 // === MetadataExtractor ===
 
@@ -25,10 +24,10 @@ impl MetadataExtractor {
         let mut metadata = PhotoMetadata::default();
 
         // Check if this is a video file first
-        let mime_type = MimeGuess::from_path(path).first();
+        let mime_type = mimetype_detector::from_path(path);
         let is_video = mime_type
             .as_ref()
-            .map(|m| m.type_() == mime::VIDEO)
+            .map(|m| m.type_() == "video")
             .unwrap_or(false);
 
         if is_video {
@@ -270,9 +269,9 @@ impl MetadataExtractor {
         // Note: Video metadata extraction requires ffmpeg integration
         // For now, we set basic defaults and detect video format
 
-        let mime_type = MimeGuess::from_path(path).first();
+        let mime_type = mimetype_detector::from_path(path);
         if let Some(mime) = mime_type {
-            match mime.subtype().as_str() {
+            match mime.subtype() {
                 "mp4" => {
                     metadata.video_codec = Some("h264".to_string()); // Common default
                     metadata.audio_codec = Some("aac".to_string()); // Common default
@@ -381,17 +380,25 @@ impl FileScanner {
 
             info!("Scanning directory: {}", root_path.display());
 
-            for entry in WalkDir::new(root_path)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
+            Self::walk_directory(root_path, &mut photos);
+        }
+
+        info!("Found {} photos", photos.len());
+        photos
+    }
+
+    /// Recursively walk a directory and collect photo files
+    fn walk_directory(dir: &Path, photos: &mut Vec<PhotoFile>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
 
-                if path.is_file() && Self::is_supported_file(path) {
-                    if let Ok(metadata) = fs::metadata(path) {
+                if path.is_dir() {
+                    Self::walk_directory(&path, photos);
+                } else if path.is_file() && Self::is_supported_file(&path) {
+                    if let Ok(metadata) = fs::metadata(&path) {
                         photos.push(PhotoFile {
-                            path: path.to_path_buf(),
+                            path: path.clone(),
                             size: metadata.len(),
                             modified: metadata
                                 .modified()
@@ -407,9 +414,6 @@ impl FileScanner {
                 }
             }
         }
-
-        info!("Found {} photos", photos.len());
-        photos
     }
 
     fn is_supported_file(path: &Path) -> bool {
@@ -557,7 +561,7 @@ impl PhotoProcessor {
         let filename = path.file_name()?.to_string_lossy().to_string();
         let file_path = path.to_string_lossy().to_string();
 
-        let mime_type = MimeGuess::from_path(path).first().map(|m| m.to_string());
+        let mime_type = mimetype_detector::from_path(path).map(|m| m.to_string());
 
         let metadata = MetadataExtractor::extract_with_metadata(path, Some(&photo_file.metadata));
 

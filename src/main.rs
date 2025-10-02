@@ -22,9 +22,9 @@ mod video_processor;
 mod warp_handlers;
 mod warp_helpers;
 
+use log::info;
 use std::convert::Infallible;
 use std::path::PathBuf;
-use log::info;
 use warp::Filter;
 
 use cache::{CacheManager, ThumbnailGenerator};

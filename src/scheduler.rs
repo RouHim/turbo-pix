@@ -2,7 +2,7 @@ use clokwerk::{Job, Scheduler, TimeUnits};
 use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tracing::{error, info};
+use log::{error, info};
 
 use crate::cache::CacheManager;
 use crate::db::DbPool;

@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
-use tracing::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +10,6 @@ use std::path::Path;
 
 use image::{DynamicImage, ImageFormat};
 use tokio::fs;
-use tracing::warn;
 
 use crate::config::Config;
 use crate::db::{DbPool, Photo};

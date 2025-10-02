@@ -67,7 +67,7 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
         code = warp::http::StatusCode::METHOD_NOT_ALLOWED;
         message = "Method not allowed".to_string();
     } else {
-        tracing::error!("Unhandled rejection: {:?}", err);
+        log::error!("Unhandled rejection: {:?}", err);
         code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
         message = "Internal server error".to_string();
     }

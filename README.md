@@ -85,7 +85,7 @@ TurboPix is built with modern Rust technologies for maximum performance:
 - **Database**: SQLite with R2D2 connection pooling
 - **Image Processing**: Rust `image` crate with EXIF metadata extraction
 - **Async Runtime**: Tokio for high-performance async I/O
-- **Logging**: Structured logging with `tracing`
+- **Logging**: Standard logging with `log` and `env_logger`
 
 ### API Endpoints
 

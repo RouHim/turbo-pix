@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use tracing::{debug, error, info, warn};
+use log::{debug, error, info, warn};
 use walkdir::WalkDir;
 
 use crate::cache::CacheManager;

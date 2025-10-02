@@ -75,7 +75,7 @@
 - **Dependencies**: Use specific versions in Cargo.toml, prefer stable crates
 - **Config**: Load from environment variables with sensible defaults
 - **Database**: Use connection pooling (r2d2), implement CRUD in separate modules
-- **Logging**: Use `tracing` crate for structured logging
+- **Logging**: Use `log` crate with `env_logger` for standard logging
 - **JSON**: Use `serde_json::json!` macro for responses, consistent error format
 - **Web handlers**: Return `Result<HttpResponse>`, use proper HTTP status codes
 - **Clean Code**: KISS principle, avoid unnecessary complexity, comment non-obvious logic, remove dead code

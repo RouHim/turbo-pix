@@ -10,7 +10,7 @@ mod warp_helpers;
 use std::convert::Infallible;
 use std::path::PathBuf;
 // use std::sync::Arc; // Unused after thumbnail service removal
-use tracing::info;
+use log::info;
 use warp::Filter;
 
 use cache::{CacheManager, ThumbnailGenerator};
@@ -20,7 +20,7 @@ use warp_helpers::{cors, handle_rejection, with_db, with_thumbnail_generator};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    tracing_subscriber::fmt::init();
+    env_logger::init();
 
     // Load configuration
     let config = config::Config::from_env().expect("Failed to load configuration");
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scheduler_for_rescan = photo_scheduler.clone();
     tokio::spawn(async move {
         if let Err(e) = scheduler_for_rescan.run_startup_rescan().await {
-            tracing::error!("Startup rescan failed: {}", e);
+            log::error!("Startup rescan failed: {}", e);
         }
     });
 

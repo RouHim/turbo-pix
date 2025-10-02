@@ -73,7 +73,7 @@ pub async fn ready_check(db_pool: DbPool) -> Result<impl Reply, Rejection> {
             "timestamp": chrono::Utc::now().to_rfc3339()
         }))),
         Err(e) => {
-            tracing::error!("Database connection failed: {}", e);
+            log::error!("Database connection failed: {}", e);
             Err(reject::custom(DatabaseError {
                 message: "Database connection failed".to_string(),
             }))
@@ -135,7 +135,7 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
             }))
         }
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -148,7 +148,7 @@ pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply
         Ok(Some(photo)) => Ok(warp::reply::json(&photo)),
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -164,7 +164,7 @@ pub async fn get_photo_file(
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -198,7 +198,7 @@ pub async fn get_video_file(
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -281,7 +281,7 @@ pub async fn get_photo_metadata(
         }
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -299,7 +299,7 @@ pub async fn update_photo(
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -344,7 +344,7 @@ pub async fn update_photo(
     match photo.update(&db_pool) {
         Ok(_) => Ok(warp::reply::json(&photo)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -362,7 +362,7 @@ pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Re
             )),
             Ok(false) => Err(reject::custom(NotFoundError)),
             Err(e) => {
-                tracing::error!("Database error: {}", e);
+                log::error!("Database error: {}", e);
                 Err(reject::custom(DatabaseError {
                     message: format!("Database error: {}", e),
                 }))
@@ -370,7 +370,7 @@ pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Re
         },
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -392,7 +392,7 @@ pub async fn toggle_favorite(
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -404,7 +404,7 @@ pub async fn toggle_favorite(
     match photo.update(&db_pool) {
         Ok(_) => Ok(warp::reply::json(&photo)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -443,7 +443,7 @@ pub async fn search_photos(query: SearchQuery, db_pool: DbPool) -> Result<impl R
             }))
         }
         Err(e) => {
-            tracing::error!("Search error: {}", e);
+            log::error!("Search error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Search error: {}", e),
             }))
@@ -461,7 +461,7 @@ pub async fn search_suggestions(
             suggestions,
         })),
         Err(e) => {
-            tracing::error!("Suggestions error: {}", e);
+            log::error!("Suggestions error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Suggestions error: {}", e),
             }))
@@ -474,7 +474,7 @@ pub async fn get_cameras(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_cameras(&db_pool) {
         Ok(cameras) => Ok(warp::reply::json(&cameras)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -486,7 +486,7 @@ pub async fn get_stats(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_stats(&db_pool) {
         Ok(stats) => Ok(warp::reply::json(&stats)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -501,7 +501,7 @@ pub async fn get_photo_thumbnail(
     db_pool: DbPool,
     thumbnail_generator: ThumbnailGenerator,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    tracing::debug!(
+    log::debug!(
         "Thumbnail requested for photo {}, size: {:?}",
         photo_hash,
         query.size
@@ -511,7 +511,7 @@ pub async fn get_photo_thumbnail(
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
-            tracing::error!("Database error: {}", e);
+            log::error!("Database error: {}", e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -533,7 +533,7 @@ pub async fn get_photo_thumbnail(
             Ok(Box::new(reply))
         }
         Err(e) => {
-            tracing::error!("Failed to generate thumbnail: {}", e);
+            log::error!("Failed to generate thumbnail: {}", e);
             Err(reject::custom(NotFoundError))
         }
     }
@@ -545,16 +545,16 @@ pub async fn get_thumbnail_by_hash(
     db_pool: DbPool,
     thumbnail_generator: ThumbnailGenerator,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    tracing::debug!("Thumbnail by hash requested: {}, size: {}", hash, size);
+    log::debug!("Thumbnail by hash requested: {}, size: {}", hash, size);
 
     let photo = match Photo::find_by_hash(&db_pool, &hash) {
         Ok(Some(photo)) => photo,
         Ok(None) => {
-            tracing::warn!("Photo not found by hash: {}", hash);
+            log::warn!("Photo not found by hash: {}", hash);
             return Err(reject::custom(NotFoundError));
         }
         Err(e) => {
-            tracing::error!("Database error looking up photo by hash {}: {}", hash, e);
+            log::error!("Database error looking up photo by hash {}: {}", hash, e);
             return Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }));
@@ -578,7 +578,7 @@ pub async fn get_thumbnail_by_hash(
             Ok(Box::new(reply))
         }
         Err(e) => {
-            tracing::error!("Failed to generate thumbnail for {}: {}", hash, e);
+            log::error!("Failed to generate thumbnail for {}: {}", hash, e);
             Err(reject::custom(NotFoundError))
         }
     }

@@ -3,7 +3,7 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use log::info;
 
 // Type aliases
 pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;

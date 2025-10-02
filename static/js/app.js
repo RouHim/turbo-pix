@@ -11,8 +11,6 @@ class TurboPixApp {
       totalPhotos: 0,
       selectedPhotos: [],
     });
-
-    this.init();
   }
 
   async init() {
@@ -75,18 +73,8 @@ class TurboPixApp {
 
     // Theme toggle
     const themeToggle = utils.$('#theme-toggle');
-    console.log('🎨 Binding theme toggle event, button found:', !!themeToggle);
     if (themeToggle) {
-      const boundToggle = this.toggleTheme.bind(this);
-      utils.on(themeToggle, 'click', boundToggle);
-      console.log('🎨 Theme toggle event bound successfully');
-
-      // Also add a direct event listener for debugging
-      themeToggle.addEventListener('click', () => {
-        console.log('🎨 Direct click event fired on theme toggle');
-      });
-    } else {
-      console.error('🎨 Theme toggle button not found for event binding!');
+      utils.on(themeToggle, 'click', this.toggleTheme.bind(this));
     }
 
     // Mobile menu

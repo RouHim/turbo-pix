@@ -56,14 +56,17 @@ impl MetadataExtractor {
         } else if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
 
-            if let Ok(exif_reader) = Reader::new().read_from_container(&mut reader) {
-                Self::extract_basic_info(&exif_reader, &mut metadata, file_metadata);
-                Self::extract_camera_info(&exif_reader, &mut metadata);
-                Self::extract_gps_info(&exif_reader, &mut metadata);
-            } else {
-                debug!("No EXIF data found for: {}", path.display());
-                // Even without EXIF, try file creation date fallback
-                Self::apply_file_creation_fallback(&mut metadata, file_metadata);
+            match Reader::new().read_from_container(&mut reader) {
+                Ok(exif_reader) => {
+                    Self::extract_basic_info(&exif_reader, &mut metadata, file_metadata);
+                    Self::extract_camera_info(&exif_reader, &mut metadata);
+                    Self::extract_gps_info(&exif_reader, &mut metadata);
+                }
+                Err(e) => {
+                    debug!("Failed to read EXIF data for {}: {}", path.display(), e);
+                    // Even without EXIF, try file creation date fallback
+                    Self::apply_file_creation_fallback(&mut metadata, file_metadata);
+                }
             }
         }
 
@@ -76,25 +79,19 @@ impl MetadataExtractor {
         file_metadata: Option<&std::fs::Metadata>,
     ) {
         // Try multiple EXIF date tags in order of preference
-        let date_tags = vec![Tag::DateTimeOriginal, Tag::DateTimeDigitized, Tag::DateTime];
-
-        for tag in date_tags {
-            if let Some(field) = reader.get_field(tag, In::PRIMARY) {
-                if let Some(date_time) =
-                    Self::parse_exif_datetime(&field.display_value().to_string())
-                {
-                    metadata.taken_at = Some(date_time);
-                    break; // Use the first valid date found
-                }
-            }
-        }
+        // Using functional style to find the first valid date
+        metadata.taken_at = [Tag::DateTimeOriginal, Tag::DateTimeDigitized, Tag::DateTime]
+            .iter()
+            .filter_map(|tag| reader.get_field(*tag, In::PRIMARY))
+            .filter_map(|field| Self::parse_exif_datetime(&field.display_value().to_string()))
+            .next(); // Take the first valid date found
 
         // If no EXIF date found, try GPS date as fallback
         if metadata.taken_at.is_none() {
             metadata.taken_at = Self::get_gps_date(reader);
         }
 
-        // If still no date found, try file creation date as final fallback
+        // If still no date found, try file modification/creation date as final fallback
         if metadata.taken_at.is_none() {
             Self::apply_file_creation_fallback(metadata, file_metadata);
         }
@@ -149,10 +146,14 @@ impl MetadataExtractor {
         file_metadata: Option<&std::fs::Metadata>,
     ) {
         if let Some(fs_metadata) = file_metadata {
-            if let Ok(created_time) = fs_metadata.created() {
+            // Prefer modification time over creation time as it's more reliable
+            // Creation time on Linux shows when the file was copied to this filesystem,
+            // not when the photo was actually taken
+            if let Ok(modified_time) = fs_metadata.modified() {
+                metadata.taken_at = Some(DateTime::from(modified_time));
+            } else if let Ok(created_time) = fs_metadata.created() {
                 metadata.taken_at = Some(DateTime::from(created_time));
             }
-            // Silently ignore if creation time is not supported on this filesystem
         }
     }
 
@@ -279,7 +280,7 @@ impl MetadataExtractor {
         reader
             .get_field(Tag::GPSDateStamp, In::PRIMARY)
             .and_then(|gps_date| {
-                NaiveDate::parse_from_str(&gps_date.display_value().to_string(), "%Y-%m-%d").ok()
+                NaiveDate::parse_from_str(&gps_date.display_value().to_string(), "%F").ok()
             })
             .and_then(|gps_date| gps_date.and_hms_opt(0, 0, 0))
             .map(|naive_dt| DateTime::from_naive_utc_and_offset(naive_dt, Utc))
@@ -326,9 +327,12 @@ impl MetadataExtractor {
         metadata.bitrate = None; // Requires ffmpeg integration
         metadata.frame_rate = None; // TODO: Extract actual frame rate
 
-        // For videos, try to get creation date from file metadata
+        // For videos, try to get date from file metadata
+        // Prefer modification time over creation time as it's more reliable
         if let Ok(file_metadata) = std::fs::metadata(path) {
-            if let Ok(created_time) = file_metadata.created() {
+            if let Ok(modified_time) = file_metadata.modified() {
+                metadata.taken_at = Some(DateTime::from(modified_time));
+            } else if let Ok(created_time) = file_metadata.created() {
                 metadata.taken_at = Some(DateTime::from(created_time));
             }
         }
@@ -338,12 +342,15 @@ impl MetadataExtractor {
         let cleaned = datetime_str.replace("\"", "");
 
         // Try EXIF format first (with colons): "2023:01:15 10:30:00"
+        // Most cameras use this format per EXIF specification
         if let Ok(naive_dt) = NaiveDateTime::parse_from_str(&cleaned, "%Y:%m:%d %H:%M:%S") {
             return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
         }
 
-        // Try standard format (with dashes): "2008-05-30 15:56:01"
-        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(&cleaned, "%Y-%m-%d %H:%M:%S") {
+        // Try standard ISO 8601 format (with dashes): "2023-01-15 10:30:00"
+        // Some software normalizes dates to this format
+        // %F is equivalent to %Y-%m-%d, %T is equivalent to %H:%M:%S
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(&cleaned, "%F %T") {
             return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
         }
 

@@ -152,3 +152,8 @@
 2. **Database state verification**: Check data consistency and field values
 3. **Hardcoded path detection**: Search for fallback logic that might override dynamic behavior
 4. **Documentation**: Update AGENTS.md with lessons learned and debugging insights, keep it short and to the point
+
+## Rust Code Style Preferences
+
+- **Prefer iterator chains over for loops**: Use `.iter().filter_map().next()` instead of nested loops and conditionals
+- **Use arrays over vecs for known sizes**: `[A, B, C]` instead of `vec![A, B, C]` (avoids heap allocation)

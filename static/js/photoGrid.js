@@ -171,10 +171,12 @@ class PhotoGrid {
                 <div class="photo-card-meta">${this.getPhotoMeta(photo)}</div>
             </div>
             <div class="photo-card-actions">
-                <button class="card-action-btn favorite-btn" title="${window.i18nManager ? window.i18nManager.t('ui.add_to_favorites') : 'Add to Favorites'}" data-action="favorite">
-                    ${photo.is_favorite ? '❤️' : '🤍'}
+                <button class="card-action-btn favorite-btn ${photo.is_favorite ? 'active' : ''}" title="${window.i18nManager ? window.i18nManager.t('ui.add_to_favorites') : 'Add to Favorites'}" data-action="favorite">
+                    ${window.iconHelper.getSemanticIcon('favorite', { size: 18 })}
                 </button>
-                <button class="card-action-btn download-btn" title="${window.i18nManager ? window.i18nManager.t('ui.download') : 'Download'}" data-action="download">⬇️</button>
+                <button class="card-action-btn download-btn" title="${window.i18nManager ? window.i18nManager.t('ui.download') : 'Download'}" data-action="download">
+                    ${window.iconHelper.getSemanticIcon('download', { size: 18 })}
+                </button>
             </div>
         `;
 
@@ -233,7 +235,7 @@ class PhotoGrid {
       img.onerror = () => {
         const placeholder = container.querySelector('.photo-card-placeholder');
         if (placeholder) {
-          placeholder.innerHTML = '<div class="error-placeholder">❌</div>';
+          placeholder.innerHTML = `<div class="error-placeholder">${window.iconHelper.getSemanticIcon('error', { size: 24 })}</div>`;
         }
 
         if (window.logger) {
@@ -277,7 +279,7 @@ class PhotoGrid {
     const newFavoriteState = !wasAlreadyFavorite;
 
     // Optimistically update UI
-    button.textContent = newFavoriteState ? '❤️' : '🤍';
+    button.classList.toggle('active', newFavoriteState);
     button.title = newFavoriteState
       ? window.i18nManager
         ? window.i18nManager.t('ui.remove_from_favorites')
@@ -324,7 +326,7 @@ class PhotoGrid {
       });
     } catch (error) {
       // Revert UI on error
-      button.textContent = wasAlreadyFavorite ? '❤️' : '🤍';
+      button.classList.toggle('active', wasAlreadyFavorite);
       button.title = wasAlreadyFavorite
         ? window.i18nManager
           ? window.i18nManager.t('ui.remove_from_favorites')
@@ -374,7 +376,7 @@ class PhotoGrid {
   showEmptyState() {
     this.container.innerHTML = `
             <div class="error-state">
-                <div class="error-state-icon">📷</div>
+                <div class="error-state-icon">${window.iconHelper.getSemanticIcon('photo', { size: 64 })}</div>
                 <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('ui.no_photos_found') : 'No Photos Found'}</div>
                 <div class="error-state-message">
                     ${
@@ -405,7 +407,7 @@ class PhotoGrid {
   showErrorState(message) {
     this.container.innerHTML = `
             <div class="error-state">
-                <div class="error-state-icon">⚠️</div>
+                <div class="error-state-icon">${window.iconHelper.getSemanticIcon('warning', { size: 64 })}</div>
                 <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('errors.error_loading_photos') : 'Error Loading Photos'}</div>
                 <div class="error-state-message">${message}</div>
                 <button class="error-state-button" onclick="photoGrid.loadPhotos()">

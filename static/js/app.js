@@ -148,7 +148,7 @@ class TurboPixApp {
     const header = utils.$('.header-content');
     if (header && !utils.$('.menu-btn')) {
       const menuBtn = utils.createElement('button', 'menu-btn');
-      menuBtn.innerHTML = '☰';
+      menuBtn.innerHTML = window.iconHelper.getSemanticIcon('menu', { size: 20 });
       menuBtn.title = window.i18nManager ? window.i18nManager.t('ui.menu') : 'Menu';
       header.insertBefore(menuBtn, header.firstChild);
 
@@ -161,7 +161,7 @@ class TurboPixApp {
     const searchContainer = utils.$('.search-container');
     if (searchContainer && !utils.$('.mobile-search-btn')) {
       const searchBtn = utils.createElement('button', 'mobile-search-btn view-btn');
-      searchBtn.innerHTML = '🔍';
+      searchBtn.innerHTML = window.iconHelper.getSemanticIcon('search', { size: 20 });
       searchBtn.title = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
 
       // Insert after search container since header-actions was removed

@@ -341,6 +341,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         });
 
+    let static_js_feather = warp::path("js")
+        .and(warp::path("feather.min.js"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and_then(|| async {
+            Ok::<_, Infallible>(warp::reply::with_header(
+                include_str!("../static/js/feather.min.js"),
+                "content-type",
+                "application/javascript",
+            ))
+        });
+
+    let static_js_icons = warp::path("js")
+        .and(warp::path("icons.js"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and_then(|| async {
+            Ok::<_, Infallible>(warp::reply::with_header(
+                include_str!("../static/js/icons.js"),
+                "content-type",
+                "application/javascript",
+            ))
+        });
+
     // i18n files
     let static_i18n_manager = warp::path("i18n")
         .and(warp::path("i18nManager.js"))
@@ -408,6 +432,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(static_js_search)
         .or(static_js_i18n)
         .or(static_js_app)
+        .or(static_js_feather)
+        .or(static_js_icons)
         .or(static_i18n_manager)
         .or(static_i18n_en)
         .or(static_i18n_de)

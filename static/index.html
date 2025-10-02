@@ -84,25 +84,22 @@
     <div id="photo-viewer" class="photo-viewer">
       <div class="viewer-overlay"></div>
       <div class="viewer-content">
-        <button class="viewer-close" title="Close" data-i18n-title="ui.close">✕</button>
-        <button class="viewer-prev" title="Previous" data-i18n-title="ui.previous">‹</button>
-        <button class="viewer-next" title="Next" data-i18n-title="ui.next">›</button>
+        <button class="viewer-close" title="Close" data-i18n-title="ui.close" data-icon="x"></button>
+        <button class="viewer-prev" title="Previous" data-i18n-title="ui.previous" data-icon="chevron-left"></button>
+        <button class="viewer-next" title="Next" data-i18n-title="ui.next" data-icon="chevron-right"></button>
 
         <div class="viewer-zoom-controls">
-          <button class="zoom-btn zoom-out" title="Zoom Out" data-i18n-title="ui.zoom_out">
-            −
-          </button>
-          <button class="zoom-btn zoom-in" title="Zoom In" data-i18n-title="ui.zoom_in">+</button>
+          <button class="zoom-btn zoom-out" title="Zoom Out" data-i18n-title="ui.zoom_out" data-icon="minus"></button>
+          <button class="zoom-btn zoom-in" title="Zoom In" data-i18n-title="ui.zoom_in" data-icon="plus"></button>
           <button
             class="zoom-btn zoom-fit"
             title="Fit to Screen"
             data-i18n-title="ui.fit_to_screen"
-          >
-            ⤢
-          </button>
+            data-icon="maximize-2"
+          ></button>
         </div>
 
-        <button class="info-toggle" title="Toggle Info" data-i18n-title="ui.toggle_info">ℹ</button>
+        <button class="info-toggle" title="Toggle Info" data-i18n-title="ui.toggle_info" data-icon="info"></button>
 
         <div class="viewer-main">
           <img id="viewer-image" class="viewer-image" alt="Photo" data-i18n-alt="ui.photo" />
@@ -135,16 +132,14 @@
                 class="action-btn favorite-btn"
                 title="Add to Favorites"
                 data-i18n-title="ui.add_to_favorites"
-              >
-                ★
-              </button>
+                data-icon="heart"
+              ></button>
               <button
                 class="action-btn download-btn"
                 title="Download"
                 data-i18n-title="ui.download"
-              >
-                ⬇
-              </button>
+                data-icon="download"
+              ></button>
             </div>
           </div>
         </div>
@@ -160,6 +155,8 @@
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
+    <script src="/js/feather.min.js"></script>
+    <script src="/js/icons.js"></script>
     <script src="/js/utils.js"></script>
     <script src="/js/logger.js"></script>
     <script src="/i18n/i18nManager.js"></script>

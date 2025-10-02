@@ -8,7 +8,6 @@ use crate::db_schema::initialize_schema;
 pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
 
 pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    // Create parent directory if it doesn't exist
     if let Some(parent) = std::path::Path::new(database_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -16,12 +15,8 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     let manager = SqliteConnectionManager::file(database_path);
     let pool = Pool::new(manager)?;
 
-    // Initialize schema and configure pragmas on a connection from the pool
-    // These pragmas improve concurrency and set a sensible busy timeout.
     {
         let conn = pool.get()?;
-        // Set WAL mode (database-level), reasonable sync, keep temp tables in memory,
-        // and set a busy timeout so that transient locks are waited on instead of failing immediately.
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -34,7 +29,6 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     Ok(pool)
 }
 
-// Utility functions
 #[allow(dead_code)]
 pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;

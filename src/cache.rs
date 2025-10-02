@@ -1,4 +1,3 @@
-// Re-exports for backward compatibility
 pub use crate::cache_manager::CacheManager;
 pub use crate::thumbnail_generator::ThumbnailGenerator;
 pub use crate::thumbnail_types::ThumbnailSize;
@@ -66,7 +65,11 @@ mod tests {
             let cache_path = temp_dir.path().join("cache");
 
             let data_path = temp_dir.path().to_string_lossy().to_string();
-            let db_path = temp_dir.path().join("database/turbo-pix.db").to_string_lossy().to_string();
+            let db_path = temp_dir
+                .path()
+                .join("database/turbo-pix.db")
+                .to_string_lossy()
+                .to_string();
 
             let config = Config {
                 port: 8080,

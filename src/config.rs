@@ -16,8 +16,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let data_path = env::var("TURBO_PIX_DATA_PATH")
-            .unwrap_or_else(|_| "./data".to_string());
+        let data_path = env::var("TURBO_PIX_DATA_PATH").unwrap_or_else(|_| "./data".to_string());
 
         let db_path = format!("{}/database/turbo-pix.db", data_path);
         let thumbnail_cache_path = format!("{}/cache/thumbnails", data_path);

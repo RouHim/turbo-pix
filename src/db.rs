@@ -2,16 +2,14 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
 
-// Re-exports from split modules
 pub use crate::db_pool::{
     create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
 };
 pub use crate::db_types::{SearchQuery, SearchSuggestion};
 
-// Main Photo struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
-    pub hash_sha256: String, // Now the primary key - always present
+    pub hash_sha256: String,
     pub file_path: String,
     pub filename: String,
     pub file_size: i64,
@@ -225,7 +223,6 @@ impl Photo {
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
-        // Try to find existing photo by hash
         let existing = conn.query_row(
             "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
             [&self.hash_sha256],
@@ -233,10 +230,8 @@ impl Photo {
         );
 
         if existing.is_ok() {
-            // Photo exists, update it
             self.update(pool)
         } else {
-            // Create new photo
             self.create(pool)?;
             Ok(())
         }

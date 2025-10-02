@@ -124,5 +124,4 @@ mod tests {
         assert_eq!(total, 2, "Should return all 2 photos");
         assert_eq!(photos.len(), 2);
     }
-
 }

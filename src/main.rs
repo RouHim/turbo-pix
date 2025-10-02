@@ -24,7 +24,6 @@ mod warp_helpers;
 
 use std::convert::Infallible;
 use std::path::PathBuf;
-// use std::sync::Arc; // Unused after thumbnail service removal
 use log::info;
 use warp::Filter;
 
@@ -37,18 +36,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let config = config::Config::from_env()?;
+    let port = config.port;
 
-    info!("Starting TurboPix server on 127.0.0.1:{}", config.port);
+    info!("Starting TurboPix server on Port {}", port);
     info!("Photo paths: {:?}", config.photo_paths);
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
+    info!("Cache path: {}", config.cache.thumbnail_cache_path);
 
     let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
     start_background_tasks(photo_scheduler);
 
-    let port = config.port;
-
-    // Build routes
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(db_pool.clone());
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
@@ -64,38 +62,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(warp::log("turbo_pix"))
         .recover(handle_rejection);
 
-    info!("Server started successfully, listening on 127.0.0.1:{}", port);
+    info!(
+        "Server started successfully, listening on http://localhost:{}",
+        port
+    );
 
-    let server = warp::serve(routes).run(([127, 0, 0, 1], port));
-
-    // Start server directly without tokio::select! for now
-    server.await;
+    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 
     Ok(())
 }
 
 fn initialize_services(
     config: &config::Config,
-) -> Result<
-    (
-        db_pool::DbPool,
-        ThumbnailGenerator,
-        PhotoScheduler,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    // Create database pool
+) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler), Box<dyn std::error::Error>> {
     let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
-    // Initialize cache manager
     let cache_manager = CacheManager::new(config.cache.thumbnail_cache_path.clone().into());
 
-    // Initialize thumbnail generator
     let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;
     info!("Cache and thumbnail system initialized");
 
-    // Start photo scheduler with cache manager
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
     let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager);
     let _scheduler_handle = photo_scheduler.start();
@@ -223,7 +210,8 @@ fn build_stats_routes(
         .and_then(warp_handlers::get_stats)
 }
 
-fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone
+{
     let static_index = warp::path::end().and(warp::get()).and_then(|| async {
         Ok::<_, Infallible>(warp::reply::html(include_str!("../static/index.html")))
     });

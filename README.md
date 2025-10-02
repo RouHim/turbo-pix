@@ -58,24 +58,19 @@ docker run -p 18473:18473 \
 
 ## Configuration
 
-| Environment Variable                 | Default               | Description                                 |
-| ------------------------------------ | --------------------- | ------------------------------------------- |
-| `TURBO_PIX_PHOTO_PATHS`              | `./photos`            | Comma-separated list of photo directories   |
-| `TURBO_PIX_DB_PATH`                  | `./data/turbo-pix.db` | SQLite database path                        |
-| `TURBO_PIX_PORT`                     | `18473`               | Server port                                 |
-| `TURBO_PIX_HOST`                     | `0.0.0.0`             | Server host address                         |
-| `TURBO_PIX_CACHE_PATH`               | `./data/cache`        | Cache directory path                        |
-| `TURBO_PIX_THUMBNAIL_SIZES`          | `200,400,800`         | Comma-separated thumbnail sizes             |
-| `TURBO_PIX_WORKERS`                  | `4`                   | Number of worker threads                    |
-| `TURBO_PIX_MAX_CONNECTIONS`          | `100`                 | Maximum database connections                |
-| `TURBO_PIX_CACHE_SIZE_MB`            | `512`                 | LRU cache size in MB                        |
-| `TURBO_PIX_MEMORY_CACHE_SIZE`        | `1000`                | In-memory cache item count                  |
-| `TURBO_PIX_MEMORY_CACHE_MAX_SIZE_MB` | `100`                 | In-memory cache size limit                  |
-| `TURBO_PIX_SCAN_INTERVAL`            | `3600`                | Directory scan interval in seconds          |
-| `TURBO_PIX_BATCH_SIZE`               | `1000`                | Processing batch size                       |
-| `TURBO_PIX_METRICS_ENABLED`          | `true`                | Enable metrics collection                   |
-| `TURBO_PIX_HEALTH_CHECK_PATH`        | `/health`             | Health check endpoint path                  |
-| `RUST_LOG`                           | `info`                | Log level (trace, debug, info, warn, error) |
+TurboPix uses sensible defaults and requires minimal configuration:
+
+| Environment Variable    | Default    | Description                               |
+| ----------------------- | ---------- | ----------------------------------------- |
+| `TURBO_PIX_PHOTO_PATHS` | `./photos` | Comma-separated list of photo directories |
+| `TURBO_PIX_PORT`        | `18473`    | Server port                               |
+| `RUST_LOG`              | `info`     | Log level (trace, debug, info, warn)      |
+
+**Built-in Defaults:**
+- Server binds to `127.0.0.1` (localhost only)
+- Database stored at `./data/database/turbo-pix.db`
+- Cache directory at `./data/cache/thumbnails`
+- Thumbnail sizes: 200px, 400px, 800px
 
 ## Architecture
 

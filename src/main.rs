@@ -38,17 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::Config::from_env()?;
 
-    info!(
-        "Starting TurboPix server on {}:{}",
-        config.host, config.port
-    );
+    info!("Starting TurboPix server on 127.0.0.1:{}", config.port);
     info!("Photo paths: {:?}", config.photo_paths);
-    info!("Database: {}", config.db_path);
+    info!("Database: ./data/database/turbo-pix.db");
 
     let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
     start_background_tasks(photo_scheduler);
 
-    let host = config.host.clone();
     let port = config.port;
 
     // Build routes
@@ -67,10 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(warp::log("turbo_pix"))
         .recover(handle_rejection);
 
-    info!(
-        "Server started successfully, listening on {}:{}",
-        host, port
-    );
+    info!("Server started successfully, listening on 127.0.0.1:{}", port);
 
     let server = warp::serve(routes).run(([127, 0, 0, 1], port));
 
@@ -91,7 +84,7 @@ fn initialize_services(
     Box<dyn std::error::Error>,
 > {
     // Create database pool
-    let db_pool = db::create_db_pool(&config.db_path)?;
+    let db_pool = db::create_db_pool("./data/database/turbo-pix.db")?;
     info!("Database initialized successfully");
 
     // Initialize cache manager

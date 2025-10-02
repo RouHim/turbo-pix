@@ -67,23 +67,13 @@ mod tests {
 
             let config = Config {
                 port: 8080,
-                host: "localhost".to_string(),
                 photo_paths: vec![],
-                db_path: "test.db".to_string(),
-                cache_path: cache_path.to_string_lossy().to_string(),
                 cache: CacheConfig {
                     thumbnail_cache_path: cache_path
                         .join("thumbnails")
                         .to_string_lossy()
                         .to_string(),
                 },
-                thumbnail_sizes: vec![200, 400, 800],
-                workers: 1,
-                max_connections: 10,
-                cache_size_mb: 100,
-                scan_interval: 3600,
-                batch_size: 1000,
-                health_check_path: "/health".to_string(),
             };
 
             (config, temp_dir)

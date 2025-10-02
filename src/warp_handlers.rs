@@ -250,6 +250,7 @@ pub async fn get_video_file(
     }
 }
 
+#[allow(dead_code)]
 pub async fn get_photo_metadata(
     photo_hash: String,
     db_pool: DbPool,
@@ -288,6 +289,7 @@ pub async fn get_photo_metadata(
     }
 }
 
+#[allow(dead_code)]
 pub async fn update_photo(
     photo_hash: String,
     update_req: PhotoUpdateRequest,
@@ -350,6 +352,7 @@ pub async fn update_photo(
     }
 }
 
+#[allow(dead_code)]
 pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(_)) => match Photo::delete(&db_pool, &photo_hash) {
@@ -409,6 +412,7 @@ pub async fn toggle_favorite(
     }
 }
 
+#[allow(dead_code)]
 pub async fn search_photos(query: SearchQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(50).min(100);
@@ -447,6 +451,7 @@ pub async fn search_photos(query: SearchQuery, db_pool: DbPool) -> Result<impl R
     }
 }
 
+#[allow(dead_code)]
 pub async fn search_suggestions(
     query: SearchQuery,
     db_pool: DbPool,
@@ -464,6 +469,7 @@ pub async fn search_suggestions(
     }
 }
 
+#[allow(dead_code)]
 pub async fn get_cameras(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_cameras(&db_pool) {
         Ok(cameras) => Ok(warp::reply::json(&cameras)),

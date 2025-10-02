@@ -96,6 +96,11 @@ pub const SCHEMA_SQL: &[&str] = &[
 
 // Connection pool functions
 pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = std::path::Path::new(database_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
     let manager = SqliteConnectionManager::file(database_path);
     let pool = Pool::new(manager)?;
 

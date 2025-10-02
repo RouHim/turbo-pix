@@ -41,6 +41,8 @@ window.EN_TRANSLATIONS = {
     zoom_out: 'Zoom Out',
     zoom_in: 'Zoom In',
     fit_to_screen: 'Fit to Screen',
+    fullscreen: 'Fullscreen',
+    toggle_info: 'Toggle Info',
 
     // Buttons and actions
     add_to_favorites: 'Add to Favorites',

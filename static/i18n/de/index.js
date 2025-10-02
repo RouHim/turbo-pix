@@ -41,6 +41,8 @@ window.DE_TRANSLATIONS = {
     zoom_out: 'Verkleinern',
     zoom_in: 'Vergrößern',
     fit_to_screen: 'An Bildschirm anpassen',
+    fullscreen: 'Vollbild',
+    toggle_info: 'Info umschalten',
 
     // Buttons and actions
     add_to_favorites: 'Zu Favoriten hinzufügen',

@@ -34,6 +34,7 @@ class PhotoViewer {
       zoomIn: utils.$('.zoom-in'),
       zoomOut: utils.$('.zoom-out'),
       zoomFit: utils.$('.zoom-fit'),
+      fullscreenBtn: utils.$('.fullscreen-btn'),
       infoToggle: utils.$('.info-toggle'),
     };
 
@@ -86,6 +87,11 @@ class PhotoViewer {
 
     if (this.elements.zoomFit) {
       utils.on(this.elements.zoomFit, 'click', () => this.fitToScreen());
+    }
+
+    // Fullscreen button
+    if (this.elements.fullscreenBtn) {
+      utils.on(this.elements.fullscreenBtn, 'click', () => this.toggleFullscreen());
     }
 
     // Info toggle button (mobile sidebar toggle)
@@ -552,6 +558,40 @@ class PhotoViewer {
     this.isDragging = false;
     if (this.elements.image) {
       this.elements.image.style.cursor = this.zoomLevel > 1 ? 'grab' : 'default';
+    }
+  }
+
+  toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      // Enter fullscreen
+      if (this.elements.viewer) {
+        if (this.elements.viewer.requestFullscreen) {
+          this.elements.viewer.requestFullscreen();
+        } else if (this.elements.viewer.mozRequestFullScreen) {
+          // Firefox
+          this.elements.viewer.mozRequestFullScreen();
+        } else if (this.elements.viewer.webkitRequestFullscreen) {
+          // Chrome, Safari and Opera
+          this.elements.viewer.webkitRequestFullscreen();
+        } else if (this.elements.viewer.msRequestFullscreen) {
+          // IE/Edge
+          this.elements.viewer.msRequestFullscreen();
+        }
+      }
+    } else {
+      // Exit fullscreen
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.mozCancelFullScreen) {
+        // Firefox
+        document.mozCancelFullScreen();
+      } else if (document.webkitExitFullscreen) {
+        // Chrome, Safari and Opera
+        document.webkitExitFullscreen();
+      } else if (document.msExitFullscreen) {
+        // IE/Edge
+        document.msExitFullscreen();
+      }
     }
   }
 

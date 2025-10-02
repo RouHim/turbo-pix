@@ -110,24 +110,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::get_video_file);
 
-    let api_photo_metadata = warp::path("api")
-        .and(warp::path("photos"))
-        .and(warp::path::param::<String>())
-        .and(warp::path("metadata"))
-        .and(warp::path::end())
-        .and(warp::get())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::get_photo_metadata);
-
-    let api_photo_update = warp::path("api")
-        .and(warp::path("photos"))
-        .and(warp::path::param::<String>())
-        .and(warp::path::end())
-        .and(warp::put())
-        .and(warp::body::json::<warp_handlers::PhotoUpdateRequest>())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::update_photo);
-
     let api_photo_favorite = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -137,14 +119,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::body::json::<warp_handlers::FavoriteRequest>())
         .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::toggle_favorite);
-
-    let api_photo_delete = warp::path("api")
-        .and(warp::path("photos"))
-        .and(warp::path::param::<String>())
-        .and(warp::path::end())
-        .and(warp::delete())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::delete_photo);
 
     // Thumbnail endpoints
     let api_photo_thumbnail = warp::path("api")
@@ -169,32 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(with_thumbnail_generator(thumbnail_generator.clone()))
         .and_then(warp_handlers::get_thumbnail_by_hash);
 
-    // Search endpoints
-    let api_search = warp::path("api")
-        .and(warp::path("search"))
-        .and(warp::path::end())
-        .and(warp::get())
-        .and(warp::query::<db::SearchQuery>())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::search_photos);
-
-    let api_search_suggestions = warp::path("api")
-        .and(warp::path("search"))
-        .and(warp::path("suggestions"))
-        .and(warp::path::end())
-        .and(warp::get())
-        .and(warp::query::<db::SearchQuery>())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::search_suggestions);
-
-    // Camera and stats endpoints
-    let api_cameras = warp::path("api")
-        .and(warp::path("cameras"))
-        .and(warp::path::end())
-        .and(warp::get())
-        .and(with_db(db_pool.clone()))
-        .and_then(warp_handlers::get_cameras);
-
+    // Stats endpoints
     let api_stats = warp::path("api")
         .and(warp::path("stats"))
         .and(warp::path::end())
@@ -409,15 +358,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(api_photo_get)
         .or(api_photo_file)
         .or(api_photo_video)
-        .or(api_photo_metadata)
-        .or(api_photo_update)
         .or(api_photo_favorite)
-        .or(api_photo_delete)
         .or(api_photo_thumbnail)
         .or(api_thumbnail_by_hash)
-        .or(api_search)
-        .or(api_search_suggestions)
-        .or(api_cameras)
         .or(api_stats);
 
     // Combine static file routes

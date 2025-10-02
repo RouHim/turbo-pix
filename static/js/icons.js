@@ -103,7 +103,8 @@ class IconHelper {
       // Zoom/View
       zoomIn: 'plus',
       zoomOut: 'minus',
-      fitToScreen: 'maximize-2',
+      fitToScreen: 'minimize',
+      fullscreen: 'maximize',
       info: 'info',
 
       // Interface

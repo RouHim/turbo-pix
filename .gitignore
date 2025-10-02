@@ -32,3 +32,9 @@ data/
 
 # Log files
 *.log
+
+# PID files
+*.pid
+
+# Container runtime data
+container-data/

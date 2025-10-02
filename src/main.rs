@@ -22,8 +22,9 @@ mod video_processor;
 mod warp_handlers;
 mod warp_helpers;
 
-use log::info;
+use log::{error, info};
 use std::convert::Infallible;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use warp::Filter;
 
@@ -43,6 +44,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
     info!("Cache path: {}", config.cache.thumbnail_cache_path);
+
+    // Check if port is available BEFORE initializing services
+    if !is_port_available(port) {
+        error!(
+            "Port {} is already in use. Please stop any existing TurboPix instances or use a different port.",
+            port
+        );
+        error!("You can check what's using the port with: lsof -i :{}", port);
+        error!("Or kill the process with: pkill -9 turbo-pix");
+        return Err(format!("Port {} is already in use", port).into());
+    }
 
     let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
     start_background_tasks(photo_scheduler);
@@ -70,6 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 
     Ok(())
+}
+
+fn is_port_available(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 fn initialize_services(

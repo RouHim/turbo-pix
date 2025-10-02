@@ -44,10 +44,10 @@ class Search {
         }
       });
 
-      // Focus and blur events
-      utils.on(this.searchInput, 'focus', () => {
-        this.showSearchSuggestions();
-      });
+      // Focus and blur events - suggestions disabled
+      // utils.on(this.searchInput, 'focus', () => {
+      //   this.showSearchSuggestions();
+      // });
 
       utils.on(this.searchInput, 'blur', () => {
         // Delay hiding to allow clicking on suggestions

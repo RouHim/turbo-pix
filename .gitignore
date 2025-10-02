@@ -36,5 +36,6 @@ data/
 # PID files
 *.pid
 
-# Container runtime data
-container-data/
+# E2E test files
+e2e-puppeteer-test.js
+smoke-test.js

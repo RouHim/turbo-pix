@@ -51,7 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Port {} is already in use. Please stop any existing TurboPix instances or use a different port.",
             port
         );
-        error!("You can check what's using the port with: lsof -i :{}", port);
+        error!(
+            "You can check what's using the port with: lsof -i :{}",
+            port
+        );
         error!("Or kill the process with: pkill -9 turbo-pix");
         return Err(format!("Port {} is already in use", port).into());
     }

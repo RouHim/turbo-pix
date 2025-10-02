@@ -17,6 +17,7 @@ class PhotoGrid {
     this.observer = null;
     this.currentQuery = null;
     this.currentFilters = {};
+    this.loadingStartTime = null; // Track when loading started
 
     this.init();
   }
@@ -58,13 +59,65 @@ class PhotoGrid {
         this.updateGridLayout();
       }, 250)
     );
+
+    // Infinite scroll - listen to main-content scroll since it's the scrollable container
+    const scrollContainer = utils.$('.main-content');
+    if (scrollContainer) {
+      utils.on(
+        scrollContainer,
+        'scroll',
+        utils.throttle(() => {
+          this.checkScrollPosition();
+        }, 250)
+      );
+    }
+  }
+
+  checkScrollPosition() {
+    // Don't trigger if already loading or no more photos
+    if (this.loading || !this.hasMore) return;
+
+    // Get the scrollable container
+    const scrollContainer = utils.$('.main-content');
+    if (!scrollContainer) return;
+
+    // Calculate distance from bottom using the container's scroll properties
+    const scrollTop = scrollContainer.scrollTop;
+    const containerHeight = scrollContainer.clientHeight;
+    const scrollHeight = scrollContainer.scrollHeight;
+    const distanceFromBottom = scrollHeight - (scrollTop + containerHeight);
+
+    // Debug logging
+    if (window.logger) {
+      window.logger.debug('Scroll position check', {
+        scrollTop,
+        containerHeight,
+        scrollHeight,
+        distanceFromBottom,
+        loading: this.loading,
+        hasMore: this.hasMore,
+      });
+    }
+
+    // Trigger load more when within 800px of bottom (increased threshold to catch bottom edge)
+    // Use <= to catch exact bottom position
+    if (distanceFromBottom <= 800) {
+      if (window.logger) {
+        window.logger.info('Infinite scroll triggered', {
+          distanceFromBottom,
+        });
+      }
+      this.loadMore();
+    }
   }
 
   async loadPhotos(query = null, filters = {}, reset = true) {
     if (this.loading) return;
 
     this.loading = true;
+    this.loadingStartTime = Date.now(); // Record when loading started
     this.updateLoadingState(true);
+    this.updateLoadMoreButton(); // Show loading indicator immediately
 
     try {
       if (reset) {
@@ -130,9 +183,25 @@ class PhotoGrid {
       this.showErrorState(error.message);
       utils.handleError(error, 'PhotoGrid.loadPhotos');
     } finally {
-      this.loading = false;
-      this.updateLoadingState(false);
-      this.updateLoadMoreButton();
+      // Ensure loading indicator shows for at least 300ms so it's visible
+      const loadingDuration = Date.now() - this.loadingStartTime;
+      const minDisplayTime = 300;
+      const remainingTime = Math.max(0, minDisplayTime - loadingDuration);
+
+      setTimeout(() => {
+        this.loading = false;
+        this.updateLoadingState(false);
+        this.updateLoadMoreButton();
+
+        // Check scroll position again after loading completes
+        // This handles the case where user is still at bottom after photos load
+        // Use requestAnimationFrame to ensure DOM has updated
+        window.requestAnimationFrame(() => {
+          setTimeout(() => {
+            this.checkScrollPosition();
+          }, 50);
+        });
+      }, remainingTime);
     }
   }
 
@@ -435,22 +504,46 @@ class PhotoGrid {
 
   updateLoadMoreButton() {
     const loadMoreContainer = utils.$('#load-more-container');
-    const loadMoreBtn = utils.$('#load-more-btn');
 
-    if (loadMoreContainer && loadMoreBtn) {
-      if (this.hasMore && this.photos.length > 0) {
-        loadMoreContainer.style.display = 'flex';
-        loadMoreBtn.disabled = this.loading;
-        loadMoreBtn.textContent = this.loading
-          ? window.i18nManager
-            ? window.i18nManager.t('ui.loading')
-            : 'Loading...'
-          : window.i18nManager
-            ? window.i18nManager.t('ui.load_more')
-            : 'Load More';
-      } else {
-        loadMoreContainer.style.display = 'none';
-      }
+    if (!loadMoreContainer) return;
+
+    // Show loading indicator when loading more photos (but not on initial load)
+    if (this.loading && this.photos.length > 0) {
+      loadMoreContainer.style.display = 'flex';
+      loadMoreContainer.innerHTML = `
+        <div class="infinite-scroll-loading">
+          <div class="dot-wave">
+            <div class="dot-wave-dot"></div>
+            <div class="dot-wave-dot"></div>
+            <div class="dot-wave-dot"></div>
+          </div>
+        </div>
+      `;
+      console.log('✨ Showing wave loading indicator', {
+        loading: this.loading,
+        photosCount: this.photos.length,
+      });
+    } else if (!this.loading && !this.hasMore && this.photos.length > 0) {
+      // Show "end of results" indicator - just dots without animation
+      loadMoreContainer.style.display = 'flex';
+      loadMoreContainer.innerHTML = `
+        <div class="infinite-scroll-end">
+          <div class="end-dots">
+            <div class="end-dot"></div>
+            <div class="end-dot"></div>
+            <div class="end-dot"></div>
+          </div>
+        </div>
+      `;
+      console.log('🏁 Showing end indicator');
+    } else {
+      // Hide when not loading and has more
+      loadMoreContainer.style.display = 'none';
+      console.log('👻 Hiding indicator', {
+        loading: this.loading,
+        hasMore: this.hasMore,
+        photosCount: this.photos.length,
+      });
     }
   }
 

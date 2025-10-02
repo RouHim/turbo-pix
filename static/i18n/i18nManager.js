@@ -118,7 +118,7 @@ class I18nManager {
 
     // Replace placeholders like {{query}} with actual values
     if (params && typeof translation === 'string') {
-      Object.keys(params).forEach(paramKey => {
+      Object.keys(params).forEach((paramKey) => {
         const placeholder = `{{${paramKey}}}`;
         translation = translation.replace(placeholder, params[paramKey]);
       });

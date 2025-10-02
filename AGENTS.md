@@ -101,10 +101,13 @@
 
 ### Static File Development
 
-- **Always run `cargo clean && cargo build`** after modifying files in `/static/`
+- **Incremental rebuild for static files**: `rm target/debug/turbo-pix && cargo build` after modifying `/static/` files
+- **Full clean rebuild**: `cargo clean && cargo build` (slower, recompiles all dependencies)
 - Rust embeds static files at compile-time using `include_str!()` macro - changes require recompilation
+- Delete binary or incremental cache: `rm -rf target/debug/turbo-pix target/debug/incremental/turbo_pix-*`
 - Use browser dev tools to verify latest changes are served
 - **Common pitfall**: Modified static files won't be served until recompilation forces re-embedding
+- **Why incremental doesn't detect changes**: Rust build system doesn't track files referenced by `include_str!()` macros
 
 ### JavaScript Debugging
 

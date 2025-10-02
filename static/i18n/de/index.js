@@ -9,6 +9,7 @@ window.DE_TRANSLATIONS = {
     favorite_photos: 'Lieblingsfotos',
     load_more: 'Mehr laden',
     loading: 'Wird geladen...',
+    all_photos_loaded: 'Alle Fotos geladen',
     no_photos_found: 'Keine Fotos gefunden',
     try_again: 'Erneut versuchen',
     refresh: 'Aktualisieren',

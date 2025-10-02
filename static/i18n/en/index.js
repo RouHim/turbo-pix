@@ -9,6 +9,7 @@ window.EN_TRANSLATIONS = {
     favorite_photos: 'Favorite Photos',
     load_more: 'Load More',
     loading: 'Loading...',
+    all_photos_loaded: 'All photos loaded',
     no_photos_found: 'No Photos Found',
     try_again: 'Try Again',
     refresh: 'Refresh',

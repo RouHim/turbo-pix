@@ -65,9 +65,14 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             let cache_path = temp_dir.path().join("cache");
 
+            let data_path = temp_dir.path().to_string_lossy().to_string();
+            let db_path = temp_dir.path().join("database/turbo-pix.db").to_string_lossy().to_string();
+
             let config = Config {
                 port: 8080,
                 photo_paths: vec![],
+                data_path,
+                db_path,
                 cache: CacheConfig {
                     thumbnail_cache_path: cache_path
                         .join("thumbnails")

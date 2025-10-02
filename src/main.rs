@@ -40,7 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting TurboPix server on 127.0.0.1:{}", config.port);
     info!("Photo paths: {:?}", config.photo_paths);
-    info!("Database: ./data/database/turbo-pix.db");
+    info!("Data path: {}", config.data_path);
+    info!("Database: {}", config.db_path);
 
     let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
     start_background_tasks(photo_scheduler);
@@ -84,7 +85,7 @@ fn initialize_services(
     Box<dyn std::error::Error>,
 > {
     // Create database pool
-    let db_pool = db::create_db_pool("./data/database/turbo-pix.db")?;
+    let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
     // Initialize cache manager

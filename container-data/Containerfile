@@ -23,6 +23,7 @@ FROM scratch
 # Set environment variables in one layer
 ENV USER="1000" \
     TURBO_PIX_PHOTO_PATHS="/photos" \
+    TURBO_PIX_DATA_PATH="/data" \
     DATA_FOLDER="/data" \
     RUST_LOG="info"
 

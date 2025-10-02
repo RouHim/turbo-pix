@@ -60,16 +60,19 @@ docker run -p 18473:18473 \
 
 TurboPix uses sensible defaults and requires minimal configuration:
 
-| Environment Variable    | Default    | Description                               |
-| ----------------------- | ---------- | ----------------------------------------- |
-| `TURBO_PIX_PHOTO_PATHS` | `./photos` | Comma-separated list of photo directories |
-| `TURBO_PIX_PORT`        | `18473`    | Server port                               |
-| `RUST_LOG`              | `info`     | Log level (trace, debug, info, warn)      |
+| Environment Variable     | Default    | Description                               |
+| ------------------------ | ---------- | ----------------------------------------- |
+| `TURBO_PIX_PHOTO_PATHS`  | `./photos` | Comma-separated list of photo directories |
+| `TURBO_PIX_DATA_PATH`    | `./data`   | Data directory for database and cache     |
+| `TURBO_PIX_PORT`         | `18473`    | Server port                               |
+| `RUST_LOG`               | `info`     | Log level (trace, debug, info, warn)      |
+
+**Derived Paths from DATA_PATH:**
+- Database: `{DATA_PATH}/database/turbo-pix.db`
+- Thumbnails: `{DATA_PATH}/cache/thumbnails`
 
 **Built-in Defaults:**
 - Server binds to `127.0.0.1` (localhost only)
-- Database stored at `./data/database/turbo-pix.db`
-- Cache directory at `./data/cache/thumbnails`
 - Thumbnail sizes: 200px, 400px, 800px
 
 ## Architecture

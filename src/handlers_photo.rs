@@ -336,3 +336,65 @@ pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
         }
     }
 }
+
+pub async fn get_photo_exif(
+    photo_hash: String,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    use exif::Reader;
+    use std::collections::BTreeMap;
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    let file = match File::open(&photo.file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("Failed to open file {}: {}", photo.file_path, e);
+            return Err(reject::custom(NotFoundError));
+        }
+    };
+
+    let mut reader = BufReader::new(file);
+    let exif_reader = match Reader::new().read_from_container(&mut reader) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Failed to read EXIF from {}: {}", photo.file_path, e);
+            return Ok(warp::reply::json(&json!({
+                "error": "No EXIF data found",
+                "message": format!("{}", e)
+            })));
+        }
+    };
+
+    let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
+    for field in exif_reader.fields() {
+        let tag_name = format!("{}", field.tag);
+        let value = field.display_value().to_string();
+
+        exif_data.insert(
+            tag_name,
+            json!({
+                "value": value,
+                "ifd": format!("{:?}", field.ifd_num)
+            })
+        );
+    }
+
+    Ok(warp::reply::json(&json!({
+        "hash": photo_hash,
+        "filename": photo.filename,
+        "exif": exif_data
+    })))
+}

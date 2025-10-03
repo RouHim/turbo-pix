@@ -187,8 +187,17 @@ fn build_photo_routes(
         .and(warp::path("timeline"))
         .and(warp::path::end())
         .and(warp::get())
-        .and(with_db(db_pool))
+        .and(with_db(db_pool.clone()))
         .and_then(warp_handlers::get_timeline);
+
+    let api_photo_exif = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("exif"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool))
+        .and_then(warp_handlers::get_photo_exif);
 
     api_photos_list
         .or(api_photo_get)
@@ -196,6 +205,7 @@ fn build_photo_routes(
         .or(api_photo_video)
         .or(api_photo_favorite)
         .or(api_photo_timeline)
+        .or(api_photo_exif)
 }
 
 fn build_thumbnail_routes(

@@ -139,6 +139,7 @@
         <div class="viewer-sidebar">
           <div class="photo-info">
             <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
+
             <div class="photo-meta">
               <div class="meta-item">
                 <label data-i18n="ui.date">Date:</label>
@@ -157,6 +158,7 @@
                 <span id="photo-location">-</span>
               </div>
             </div>
+
             <div class="photo-actions">
               <button
                 class="action-btn favorite-btn"
@@ -170,7 +172,144 @@
                 data-i18n-title="ui.download"
                 data-icon="download"
               ></button>
+              <button
+                class="action-btn metadata-btn"
+                title="View Details"
+                data-i18n-title="ui.view_details"
+                data-icon="info"
+              ></button>
             </div>
+
+            <div class="photo-meta-full" style="display: none;">
+              <div class="meta-section">
+                <h4 class="meta-section-title">File Information</h4>
+                <div class="meta-item">
+                  <label>Filename:</label>
+                  <span id="meta-filename">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>File Size:</label>
+                  <span id="meta-filesize">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Dimensions:</label>
+                  <span id="meta-dimensions">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Type:</label>
+                  <span id="meta-type">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Date Taken:</label>
+                  <span id="meta-date-taken">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Date Modified:</label>
+                  <span id="meta-date-modified">-</span>
+                </div>
+              </div>
+
+              <div class="meta-section" id="camera-section">
+                <h4 class="meta-section-title">Camera</h4>
+                <div class="meta-item">
+                  <label>Make:</label>
+                  <span id="meta-camera-make">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Model:</label>
+                  <span id="meta-camera-model">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Lens Make:</label>
+                  <span id="meta-lens-make">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Lens Model:</label>
+                  <span id="meta-lens-model">-</span>
+                </div>
+              </div>
+
+              <div class="meta-section" id="settings-section">
+                <h4 class="meta-section-title">Camera Settings</h4>
+                <div class="meta-item">
+                  <label>ISO:</label>
+                  <span id="meta-iso">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Aperture:</label>
+                  <span id="meta-aperture">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Shutter Speed:</label>
+                  <span id="meta-shutter">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Focal Length:</label>
+                  <span id="meta-focal">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Exposure Mode:</label>
+                  <span id="meta-exposure">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Metering Mode:</label>
+                  <span id="meta-metering">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>White Balance:</label>
+                  <span id="meta-wb">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Flash:</label>
+                  <span id="meta-flash">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Orientation:</label>
+                  <span id="meta-orientation">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Color Space:</label>
+                  <span id="meta-colorspace">-</span>
+                </div>
+              </div>
+
+              <div class="meta-section" id="location-section">
+                <h4 class="meta-section-title">Location</h4>
+                <div class="meta-item">
+                  <label>GPS:</label>
+                  <span id="meta-gps">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Location Name:</label>
+                  <span id="meta-location-name">-</span>
+                </div>
+              </div>
+
+              <div class="meta-section" id="video-section" style="display: none;">
+                <h4 class="meta-section-title">Video Information</h4>
+                <div class="meta-item">
+                  <label>Duration:</label>
+                  <span id="meta-duration">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Video Codec:</label>
+                  <span id="meta-video-codec">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Audio Codec:</label>
+                  <span id="meta-audio-codec">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Frame Rate:</label>
+                  <span id="meta-framerate">-</span>
+                </div>
+                <div class="meta-item">
+                  <label>Bitrate:</label>
+                  <span id="meta-bitrate">-</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>

@@ -349,11 +349,22 @@
 .viewer-sidebar {
   grid-area: sidebar;
   background: var(--surface-color);
-  padding: 16px;
-  overflow-y: auto;
+  padding: 16px 8px 16px 16px;
+  overflow: hidden;
   height: 100vh;
   min-height: 100vh;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.photo-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding-right: 8px;
 }
 
 .photo-info h3 {
@@ -364,10 +375,41 @@
 }
 
 .photo-meta {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
-.meta-item {
+.photo-meta-full {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 16px;
+  padding-right: 8px;
+  display: none;
+}
+
+.meta-section {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--divider-color);
+}
+
+.meta-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.meta-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--primary-color);
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--divider-color);
+}
+
+.photo-meta .meta-item {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
@@ -375,25 +417,49 @@
   border-bottom: 1px solid var(--divider-color);
 }
 
-.meta-item:last-child {
+.photo-meta .meta-item:last-child {
   border-bottom: none;
   margin-bottom: 0;
   padding-bottom: 0;
 }
 
-.meta-item label {
+.photo-meta .meta-item label {
   font-weight: 600;
   color: var(--text-secondary);
 }
 
-.meta-item span {
+.photo-meta .meta-item span {
   color: var(--text-primary);
+}
+
+.photo-meta-full .meta-item {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 0;
+  align-items: start;
+}
+
+.photo-meta-full .meta-item label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.photo-meta-full .meta-item span {
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-word;
+  text-align: right;
 }
 
 .photo-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+  margin-top: 16px;
 }
 
 .action-btn {

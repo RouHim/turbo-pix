@@ -337,10 +337,7 @@ pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     }
 }
 
-pub async fn get_photo_exif(
-    photo_hash: String,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
+pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     use exif::Reader;
     use std::collections::BTreeMap;
     use std::fs::File;
@@ -388,7 +385,7 @@ pub async fn get_photo_exif(
             json!({
                 "value": value,
                 "ifd": format!("{:?}", field.ifd_num)
-            })
+            }),
         );
     }
 

@@ -91,9 +91,10 @@ impl ThumbnailGenerator {
         }
 
         let thumbnail_data = if self.is_video_file(photo) {
-            self.generate_video_thumbnail(&photo_path, size).await?
+            self.generate_video_thumbnail(&photo_path, size, photo.orientation).await?
         } else {
             let img = image::open(&photo_path)?;
+            let img = self.apply_orientation(img, photo.orientation);
             let thumbnail = self.resize_image(img, size);
             self.encode_image(thumbnail)?
         };
@@ -106,6 +107,19 @@ impl ThumbnailGenerator {
         // Note: Thumbnail status tracking removed as part of cleanup
 
         Ok(thumbnail_data)
+    }
+
+    fn apply_orientation(&self, img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
+        match orientation {
+            Some(2) => img.fliph(),
+            Some(3) => img.rotate180(),
+            Some(4) => img.flipv(),
+            Some(5) => img.fliph().rotate90(),
+            Some(6) => img.rotate90(),
+            Some(7) => img.fliph().rotate270(),
+            Some(8) => img.rotate270(),
+            _ => img, // 1 or None = no transformation needed
+        }
     }
 
     fn resize_image(&self, img: DynamicImage, size: ThumbnailSize) -> DynamicImage {
@@ -132,6 +146,7 @@ impl ThumbnailGenerator {
         &self,
         video_path: &Path,
         size: ThumbnailSize,
+        orientation: Option<i32>,
     ) -> CacheResult<Vec<u8>> {
         // Extract video metadata to get duration
         let metadata = video_processor::extract_video_metadata(video_path).await?;
@@ -158,6 +173,7 @@ impl ThumbnailGenerator {
             CacheError::VideoProcessingError(format!("Failed to load extracted frame: {}", e))
         })?;
 
+        let img = self.apply_orientation(img, orientation);
         let thumbnail = self.resize_image(img, size);
         let thumbnail_data = self.encode_image(thumbnail)?;
 

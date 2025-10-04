@@ -519,10 +519,6 @@ class PhotoGrid {
           </div>
         </div>
       `;
-      console.log('✨ Showing wave loading indicator', {
-        loading: this.loading,
-        photosCount: this.photos.length,
-      });
     } else if (!this.loading && !this.hasMore && this.photos.length > 0) {
       // Show "end of results" indicator - just dots without animation
       loadMoreContainer.style.display = 'flex';
@@ -535,15 +531,9 @@ class PhotoGrid {
           </div>
         </div>
       `;
-      console.log('🏁 Showing end indicator');
     } else {
       // Hide when not loading and has more
       loadMoreContainer.style.display = 'none';
-      console.log('👻 Hiding indicator', {
-        loading: this.loading,
-        hasMore: this.hasMore,
-        photosCount: this.photos.length,
-      });
     }
   }
 

@@ -1,11 +1,14 @@
 // Main Application Controller
 
+// Constants
+const MOBILE_BREAKPOINT = 768;
+
 class TurboPixApp {
   constructor() {
     this.state = new utils.SimpleState({
       currentView: 'all',
       isLoading: false,
-      isMobile: window.innerWidth <= 768,
+      isMobile: window.innerWidth <= MOBILE_BREAKPOINT,
       sidebarOpen: false,
       sortBy: 'date_desc',
       totalPhotos: 0,
@@ -44,9 +47,13 @@ class TurboPixApp {
       // Initialize the i18n system
       await window.i18nManager.initializeI18n();
 
-      console.log('✅ i18n system initialized');
+      if (window.logger) {
+        window.logger.info('i18n system initialized');
+      }
     } catch (error) {
-      console.error('Failed to initialize i18n:', error);
+      if (window.logger) {
+        window.logger.error('Failed to initialize i18n', error);
+      }
     }
   }
 
@@ -124,7 +131,7 @@ class TurboPixApp {
   }
 
   setupResponsiveLayout() {
-    const isMobile = window.innerWidth <= 768;
+    const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
     this.state.set('isMobile', isMobile);
 
     if (isMobile) {
@@ -303,7 +310,7 @@ class TurboPixApp {
 
   handleResize() {
     const wasMobile = this.state.get('isMobile');
-    const isMobile = window.innerWidth <= 768;
+    const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
 
     this.state.set('isMobile', isMobile);
 
@@ -453,29 +460,18 @@ class TurboPixApp {
   }
 
   setTheme(theme) {
-    console.log('🎨 setTheme called with:', theme);
-    const hadDark = document.documentElement.classList.contains('dark-theme');
-    const hadLight = document.documentElement.classList.contains('light-theme');
-
     document.documentElement.classList.toggle('dark-theme', theme === 'dark');
     document.documentElement.classList.toggle('light-theme', theme === 'light');
-
-    const nowHasDark = document.documentElement.classList.contains('dark-theme');
-    const nowHasLight = document.documentElement.classList.contains('light-theme');
-
-    console.log('🎨 HTML classes changed:', { hadDark, hadLight, nowHasDark, nowHasLight });
 
     utils.storage.set('theme', theme);
     this.updateThemeToggle(theme);
   }
 
   toggleTheme() {
-    console.log('🎨 toggleTheme called');
     const currentTheme = document.documentElement.classList.contains('dark-theme')
       ? 'dark'
       : 'light';
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    console.log('🎨 Toggling from', currentTheme, 'to', newTheme);
     this.setTheme(newTheme);
 
     // Visual feedback
@@ -487,7 +483,6 @@ class TurboPixApp {
   }
 
   updateThemeToggle(theme) {
-    console.log('🎨 updateThemeToggle called with:', theme);
     const themeToggle = utils.$('#theme-toggle');
     if (themeToggle) {
       // When in dark mode, button should have 'dark' class to show sun icon
@@ -497,9 +492,6 @@ class TurboPixApp {
       } else {
         themeToggle.classList.remove('dark');
       }
-      console.log('🎨 Button classes:', themeToggle.className);
-    } else {
-      console.error('🎨 Theme toggle button not found!');
     }
   }
 
@@ -536,5 +528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   utils.performance.mark('app-init-end');
   utils.performance.measure('app-init', 'app-init-start', 'app-init-end');
 
-  console.log('🚀 TurboPix app initialized');
+  if (window.logger) {
+    window.logger.info('TurboPix app initialized');
+  }
 });

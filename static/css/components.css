@@ -380,8 +380,7 @@
 
 .photo-meta-full {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: auto hidden;
   margin-top: 16px;
   padding-right: 8px;
   display: none;
@@ -409,6 +408,15 @@
   border-bottom: 1px solid var(--divider-color);
 }
 
+.photo-meta-full .meta-item {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 0;
+  align-items: start;
+}
+
 .photo-meta .meta-item {
   display: flex;
   justify-content: space-between;
@@ -430,15 +438,6 @@
 
 .photo-meta .meta-item span {
   color: var(--text-primary);
-}
-
-.photo-meta-full .meta-item {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 6px 0;
-  align-items: start;
 }
 
 .photo-meta-full .meta-item label {

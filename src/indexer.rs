@@ -88,7 +88,7 @@ mod tests {
             {
                 let path = std::path::PathBuf::from("test-data/sample_with_exif.jpg");
                 let metadata = std::fs::metadata(&path)
-                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                    .expect("Test file test-data/sample_with_exif.jpg should exist");
                 PhotoFile {
                     path,
                     size: metadata.len(),
@@ -106,7 +106,7 @@ mod tests {
             {
                 let path = std::path::PathBuf::from("test-data/test_image_1.jpg");
                 let metadata = std::fs::metadata(&path)
-                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                    .expect("Test file test-data/test_image_1.jpg should exist");
                 PhotoFile {
                     path,
                     size: metadata.len(),
@@ -124,7 +124,7 @@ mod tests {
             {
                 let path = std::path::PathBuf::from("test-data/test_image_3.jpg");
                 let metadata = std::fs::metadata(&path)
-                    .unwrap_or_else(|_| panic!("Failed to get metadata for {}", path.display()));
+                    .expect("Test file test-data/test_image_3.jpg should exist");
                 PhotoFile {
                     path,
                     size: metadata.len(),

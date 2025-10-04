@@ -60,6 +60,8 @@ mod tests {
             true
         }
 
+        const TEST_PORT: u16 = 8080;
+
         fn create_test_config() -> (Config, TempDir) {
             let temp_dir = TempDir::new().unwrap();
             let cache_path = temp_dir.path().join("cache");
@@ -72,7 +74,7 @@ mod tests {
                 .to_string();
 
             let config = Config {
-                port: 8080,
+                port: TEST_PORT,
                 photo_paths: vec![],
                 data_path,
                 db_path,

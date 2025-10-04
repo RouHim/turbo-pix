@@ -2,8 +2,16 @@ use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
 use std::path::Path;
 use std::process::Command;
 
+fn get_ffmpeg_path() -> String {
+    std::env::var("FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string())
+}
+
+fn get_ffprobe_path() -> String {
+    std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string())
+}
+
 pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
-    let output = Command::new("ffprobe")
+    let output = Command::new(get_ffprobe_path())
         .args([
             "-v",
             "quiet",
@@ -83,7 +91,7 @@ pub async fn extract_frame_at_time(
     time_seconds: f64,
     output_path: &Path,
 ) -> CacheResult<()> {
-    let output = Command::new("ffmpeg")
+    let output = Command::new(get_ffmpeg_path())
         .args([
             "-y", // Overwrite output file
             "-i",

@@ -1,4 +1,18 @@
 # # # # # # # # # # # # # # # # # # # #
+# FFmpeg Downloader
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+FROM alpine:latest AS ffmpeg-downloader
+
+# Download and extract static ffmpeg build
+RUN apk add --no-cache curl tar xz && \
+    curl -L -o ffmpeg-release.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
+    tar xf ffmpeg-release.tar.xz && \
+    mv ffmpeg-*-amd64-static/ffmpeg /ffmpeg && \
+    mv ffmpeg-*-amd64-static/ffprobe /ffprobe && \
+    chmod +x /ffmpeg /ffprobe && \
+    rm -rf ffmpeg-* ffmpeg-release.tar.xz
+
+# # # # # # # # # # # # # # # # # # # #
 # Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
@@ -25,7 +39,9 @@ ENV USER="1000" \
     TURBO_PIX_PHOTO_PATHS="/photos" \
     TURBO_PIX_DATA_PATH="/data" \
     DATA_FOLDER="/data" \
-    RUST_LOG="info"
+    RUST_LOG="info" \
+    FFMPEG_PATH="/ffmpeg" \
+    FFPROBE_PATH="/ffprobe"
 
 # For performance reasons write data to docker volume instead of containers writeable fs layer
 VOLUME $DATA_FOLDER
@@ -35,7 +51,11 @@ COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
 COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory
-COPY --chown=$USER:$USER --from=builder /app/target/x86_64-unknown-linux-musl/release/turbo-pix /turbo-pix
+COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/x86_64-unknown-linux-musl/release/turbo-pix /turbo-pix
+
+# Copy ffmpeg and ffprobe static binaries
+COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffmpeg /ffmpeg
+COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffprobe /ffprobe
 
 EXPOSE 18473
 USER $USER

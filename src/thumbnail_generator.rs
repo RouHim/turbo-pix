@@ -3,6 +3,7 @@ use log::{debug, warn};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use tokio::fs;
 
 use crate::config::Config;
@@ -10,10 +11,18 @@ use crate::db::{DbPool, Photo};
 use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailSize};
 use crate::video_processor;
 
+#[derive(Clone, Debug)]
+struct CacheEntry {
+    path: PathBuf,
+    last_access: SystemTime,
+    file_size: u64,
+}
+
 #[derive(Clone)]
 pub struct ThumbnailGenerator {
     cache_dir: PathBuf,
-    disk_cache: Arc<Mutex<HashMap<String, PathBuf>>>,
+    disk_cache: Arc<Mutex<HashMap<String, CacheEntry>>>,
+    max_cache_size_bytes: u64,
 }
 
 impl ThumbnailGenerator {
@@ -22,9 +31,13 @@ impl ThumbnailGenerator {
 
         std::fs::create_dir_all(&cache_dir)?;
 
+        // Convert MB to bytes
+        let max_cache_size_bytes = config.cache.max_cache_size_mb * 1024 * 1024;
+
         Ok(Self {
             cache_dir,
             disk_cache: Arc::new(Mutex::new(HashMap::new())),
+            max_cache_size_bytes,
         })
     }
 
@@ -49,7 +62,21 @@ impl ThumbnailGenerator {
 
         match fs::read(&cache_path).await {
             Ok(data) => {
-                self.update_disk_cache_index(key.to_string(), cache_path);
+                let file_size = data.len() as u64;
+                let now = SystemTime::now();
+
+                // Update access time in cache index
+                if let Ok(mut cache) = self.disk_cache.lock() {
+                    cache.insert(
+                        key.to_string(),
+                        CacheEntry {
+                            path: cache_path,
+                            last_access: now,
+                            file_size,
+                        },
+                    );
+                }
+
                 Some(data)
             }
             Err(_) => None,
@@ -150,9 +177,27 @@ impl ThumbnailGenerator {
         }
 
         fs::write(&cache_path, data).await?;
-        self.update_disk_cache_index(key.to_string(), cache_path.clone());
+
+        let file_size = data.len() as u64;
+        let now = SystemTime::now();
+
+        // Update cache index with metadata
+        if let Ok(mut cache) = self.disk_cache.lock() {
+            cache.insert(
+                key.to_string(),
+                CacheEntry {
+                    path: cache_path.clone(),
+                    last_access: now,
+                    file_size,
+                },
+            );
+        }
 
         debug!("Saved thumbnail to cache: {:?}", cache_path);
+
+        // Enforce cache limit after saving
+        self.enforce_cache_limit().await?;
+
         Ok(())
     }
 
@@ -169,12 +214,58 @@ impl ThumbnailGenerator {
         self.cache_dir.join(subdir).join(filename)
     }
 
-    fn update_disk_cache_index(&self, key: String, path: PathBuf) {
-        if let Ok(mut cache) = self.disk_cache.lock() {
-            cache.insert(key, path);
+    fn get_current_cache_size(&self) -> u64 {
+        if let Ok(cache) = self.disk_cache.lock() {
+            cache.values().map(|entry| entry.file_size).sum()
         } else {
-            warn!("Failed to acquire disk cache lock");
+            0
         }
+    }
+
+    async fn enforce_cache_limit(&self) -> CacheResult<()> {
+        let current_size = self.get_current_cache_size();
+
+        if current_size <= self.max_cache_size_bytes {
+            return Ok(());
+        }
+
+        debug!(
+            "Cache size {}MB exceeds limit {}MB, evicting oldest entries",
+            current_size / 1024 / 1024,
+            self.max_cache_size_bytes / 1024 / 1024
+        );
+
+        // Get all entries sorted by last access time (oldest first)
+        let mut entries_to_evict = Vec::new();
+
+        if let Ok(cache) = self.disk_cache.lock() {
+            let mut sorted_entries: Vec<_> = cache.iter().collect();
+            sorted_entries.sort_by_key(|(_, entry)| entry.last_access);
+
+            let mut size_to_free = current_size - self.max_cache_size_bytes;
+            for (key, entry) in sorted_entries {
+                if size_to_free == 0 {
+                    break;
+                }
+                entries_to_evict.push((key.clone(), entry.clone()));
+                size_to_free = size_to_free.saturating_sub(entry.file_size);
+            }
+        }
+
+        // Delete files and update cache index
+        for (key, entry) in entries_to_evict {
+            if let Err(e) = fs::remove_file(&entry.path).await {
+                warn!("Failed to remove cache file {:?}: {}", entry.path, e);
+            } else {
+                debug!("Evicted cache entry: {:?}", entry.path);
+            }
+
+            if let Ok(mut cache) = self.disk_cache.lock() {
+                cache.remove(&key);
+            }
+        }
+
+        Ok(())
     }
 
     // Test helper methods
@@ -190,7 +281,7 @@ impl ThumbnailGenerator {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub async fn get_cache_stats(&self) -> (usize, u64) {
         let mut total_files = 0;
         let mut total_size = 0;
@@ -214,7 +305,6 @@ impl ThumbnailGenerator {
         (total_files, total_size)
     }
 
-    #[cfg(test)]
     async fn get_subdir_stats(&self, dir_path: &Path) -> (usize, u64) {
         let mut files = 0;
         let mut size = 0;

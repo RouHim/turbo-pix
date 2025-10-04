@@ -3,6 +3,7 @@ use std::env;
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
     pub thumbnail_cache_path: String,
+    pub max_cache_size_mb: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,9 @@ impl Config {
 
         let db_path = format!("{}/database/turbo-pix.db", data_path);
         let thumbnail_cache_path = format!("{}/cache/thumbnails", data_path);
+        let max_cache_size_mb = env::var("TURBO_PIX_MAX_CACHE_SIZE_MB")
+            .unwrap_or_else(|_| "1024".to_string())
+            .parse()?;
 
         Ok(Config {
             port: env::var("TURBO_PIX_PORT")
@@ -34,6 +38,7 @@ impl Config {
             db_path,
             cache: CacheConfig {
                 thumbnail_cache_path,
+                max_cache_size_mb,
             },
         })
     }

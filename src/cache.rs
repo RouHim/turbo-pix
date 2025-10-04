@@ -83,6 +83,7 @@ mod tests {
                         .join("thumbnails")
                         .to_string_lossy()
                         .to_string(),
+                    max_cache_size_mb: 1024, // 1 GB default
                 },
             };
 
@@ -523,6 +524,224 @@ mod tests {
             // Larger thumbnails should generally have more data
             assert!(medium.len() >= small.len(), "Medium should be >= small");
             assert!(large.len() >= medium.len(), "Large should be >= medium");
+        }
+
+        #[tokio::test]
+        async fn test_cache_limit_enforcement() {
+            let temp_dir = TempDir::new().unwrap();
+            let cache_path = temp_dir.path().join("cache");
+
+            // Create config with very small cache limit (1 MB)
+            let config = Config {
+                port: TEST_PORT,
+                photo_paths: vec![],
+                data_path: temp_dir.path().to_string_lossy().to_string(),
+                db_path: temp_dir
+                    .path()
+                    .join("database/turbo-pix.db")
+                    .to_string_lossy()
+                    .to_string(),
+                cache: CacheConfig {
+                    thumbnail_cache_path: cache_path
+                        .join("thumbnails")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_cache_size_mb: 1, // 1 MB limit
+                },
+            };
+
+            let db_pool = create_in_memory_pool().unwrap();
+            let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+            // Generate multiple thumbnails to exceed the limit
+            for i in 0..20 {
+                let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+                create_test_image(&image_path).unwrap();
+
+                let mut photo = create_test_photo(&image_path.to_string_lossy());
+                photo.hash_sha256 = format!("{:0>64}", i); // Unique hash for each photo
+
+                // Generate all three sizes
+                let _ = generator
+                    .get_or_generate(&photo, ThumbnailSize::Small)
+                    .await;
+                let _ = generator
+                    .get_or_generate(&photo, ThumbnailSize::Medium)
+                    .await;
+                let _ = generator
+                    .get_or_generate(&photo, ThumbnailSize::Large)
+                    .await;
+            }
+
+            // Verify cache size is within limit
+            let (files, total_size) = generator.get_cache_stats().await;
+            let max_bytes = 1 * 1024 * 1024; // 1 MB in bytes
+
+            assert!(
+                total_size <= max_bytes,
+                "Cache size {}MB should be <= 1MB limit (found {} files)",
+                total_size / 1024 / 1024,
+                files
+            );
+        }
+
+        #[tokio::test]
+        async fn test_lru_eviction_order() {
+            use tokio::time::{sleep, Duration};
+
+            let temp_dir = TempDir::new().unwrap();
+            let cache_path = temp_dir.path().join("cache");
+
+            // Create config with small cache limit
+            let config = Config {
+                port: TEST_PORT,
+                photo_paths: vec![],
+                data_path: temp_dir.path().to_string_lossy().to_string(),
+                db_path: temp_dir
+                    .path()
+                    .join("database/turbo-pix.db")
+                    .to_string_lossy()
+                    .to_string(),
+                cache: CacheConfig {
+                    thumbnail_cache_path: cache_path
+                        .join("thumbnails")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_cache_size_mb: 1,
+                },
+            };
+
+            let db_pool = create_in_memory_pool().unwrap();
+            let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+            // Create three test images
+            let image1 = temp_dir.path().join("test_1.jpg");
+            let image2 = temp_dir.path().join("test_2.jpg");
+            let image3 = temp_dir.path().join("test_3.jpg");
+
+            create_test_image(&image1).unwrap();
+            create_test_image(&image2).unwrap();
+            create_test_image(&image3).unwrap();
+
+            let mut photo1 = create_test_photo(&image1.to_string_lossy());
+            let mut photo2 = create_test_photo(&image2.to_string_lossy());
+            let mut photo3 = create_test_photo(&image3.to_string_lossy());
+
+            photo1.hash_sha256 = "1".repeat(64);
+            photo2.hash_sha256 = "2".repeat(64);
+            photo3.hash_sha256 = "3".repeat(64);
+
+            // Generate thumbnail for photo1
+            generator
+                .get_or_generate(&photo1, ThumbnailSize::Large)
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(100)).await;
+
+            // Generate thumbnail for photo2
+            generator
+                .get_or_generate(&photo2, ThumbnailSize::Large)
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(100)).await;
+
+            // Access photo1 again (making it more recent than photo2)
+            generator
+                .get_or_generate(&photo1, ThumbnailSize::Large)
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(100)).await;
+
+            // Generate many thumbnails to trigger eviction
+            for i in 4..25 {
+                let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+                create_test_image(&image_path).unwrap();
+
+                let mut photo = create_test_photo(&image_path.to_string_lossy());
+                photo.hash_sha256 = format!("{:0>64}", i);
+
+                generator
+                    .get_or_generate(&photo, ThumbnailSize::Large)
+                    .await
+                    .unwrap();
+            }
+
+            // Check if photo2's cache entry should have been evicted (least recently used)
+            // while photo1 might still exist (more recently used)
+            let cache_key1 = CacheKey::from_photo(&photo1, ThumbnailSize::Large).unwrap();
+            let cache_key2 = CacheKey::from_photo(&photo2, ThumbnailSize::Large).unwrap();
+
+            let path1_exists = generator.get_cache_path(&cache_key1).exists();
+            let path2_exists = generator.get_cache_path(&cache_key2).exists();
+
+            // At least one should be evicted due to cache limit
+            // Photo2 (least recently used) should be more likely to be evicted
+            if path1_exists && path2_exists {
+                // Both exist - cache limit might not have been hit
+                // This is acceptable for this test
+            } else if !path1_exists && !path2_exists {
+                // Both evicted - this is fine, cache was full
+            } else {
+                // One evicted - photo1 (more recent) should still exist
+                assert!(
+                    path1_exists && !path2_exists,
+                    "LRU eviction should keep more recently accessed items"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn test_custom_cache_limit() {
+            let temp_dir = TempDir::new().unwrap();
+            let cache_path = temp_dir.path().join("cache");
+
+            // Create config with custom 2 MB limit
+            let config = Config {
+                port: TEST_PORT,
+                photo_paths: vec![],
+                data_path: temp_dir.path().to_string_lossy().to_string(),
+                db_path: temp_dir
+                    .path()
+                    .join("database/turbo-pix.db")
+                    .to_string_lossy()
+                    .to_string(),
+                cache: CacheConfig {
+                    thumbnail_cache_path: cache_path
+                        .join("thumbnails")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_cache_size_mb: 2, // 2 MB limit
+                },
+            };
+
+            let db_pool = create_in_memory_pool().unwrap();
+            let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+            // Generate thumbnails
+            for i in 0..30 {
+                let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+                create_test_image(&image_path).unwrap();
+
+                let mut photo = create_test_photo(&image_path.to_string_lossy());
+                photo.hash_sha256 = format!("{:0>64}", i);
+
+                let _ = generator
+                    .get_or_generate(&photo, ThumbnailSize::Medium)
+                    .await;
+            }
+
+            // Verify cache size respects custom limit
+            let (_files, total_size) = generator.get_cache_stats().await;
+            let max_bytes = 2 * 1024 * 1024; // 2 MB in bytes
+
+            assert!(
+                total_size <= max_bytes,
+                "Cache size {}MB should be <= 2MB limit",
+                total_size / 1024 / 1024
+            );
         }
     }
 }

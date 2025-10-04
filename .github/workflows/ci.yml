@@ -69,7 +69,7 @@ jobs:
 
       - name: Test container startup and health
         run: |
-          podman run -d --name turbo-pix-test -p 18473:8080 turbo-pix:latest
+          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 --tmpfs /data:rw,size=100M turbo-pix:latest
           sleep 5
           curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health
           podman stop turbo-pix-test

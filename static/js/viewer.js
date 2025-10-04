@@ -23,6 +23,7 @@ class PhotoViewer {
       next: utils.$('.viewer-next'),
       image: utils.$('#viewer-image'),
       video: utils.$('#viewer-video'),
+      viewerLoading: utils.$('.viewer-loading-indicator'),
       sidebar: utils.$('.viewer-sidebar'),
       title: utils.$('#photo-title'),
       date: utils.$('#photo-date'),
@@ -253,7 +254,18 @@ class PhotoViewer {
     // Hide detailed metadata when changing photos
     this.hideMetadata();
 
-    utils.showLoading();
+    // Hide current image/video immediately (no fade) and show viewer loading indicator
+    if (this.elements.image) {
+      this.elements.image.classList.remove('loaded');
+      this.elements.image.style.display = 'none';
+    }
+    if (this.elements.video) {
+      this.elements.video.classList.remove('loaded');
+      this.elements.video.style.display = 'none';
+    }
+    if (this.elements.viewerLoading) {
+      this.elements.viewerLoading.classList.add('show');
+    }
 
     try {
       const isVideo = this.isVideoFile(photo.filename);
@@ -284,7 +296,10 @@ class PhotoViewer {
       }
       this.showError('Failed to load photo');
     } finally {
-      utils.hideLoading();
+      // Hide viewer loading indicator
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.classList.remove('show');
+      }
     }
   }
 
@@ -314,6 +329,7 @@ class PhotoViewer {
     if (this.elements.image && this.elements.video) {
       this.elements.image.src = src;
       this.elements.image.style.display = 'block';
+      this.elements.image.classList.add('loaded');
       this.elements.video.style.display = 'none';
     }
   }
@@ -329,6 +345,7 @@ class PhotoViewer {
       // Now set the new source
       this.elements.video.src = videoUrl;
       this.elements.video.style.display = 'block';
+      this.elements.video.classList.add('loaded');
       this.elements.image.style.display = 'none';
 
       // Auto-play if user preference allows

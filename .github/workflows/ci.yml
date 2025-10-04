@@ -62,9 +62,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build container image
-        run: |
-          cd container-data
-          podman build -t turbo-pix:latest -f Containerfile .
+        run: podman build -t turbo-pix:latest -f container-data/Containerfile .
 
       - name: Test container image
         run: |

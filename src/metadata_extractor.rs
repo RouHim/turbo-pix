@@ -38,6 +38,20 @@ pub struct PhotoMetadata {
 pub struct MetadataExtractor;
 
 impl MetadataExtractor {
+    /// Clean EXIF string values by removing null bytes, trimming whitespace,
+    /// and handling arrays with empty trailing values
+    fn clean_exif_string(value: String) -> String {
+        value
+            .replace('\0', "") // Remove null bytes first
+            .split(',') // Split by comma to handle array-like values
+            .next() // Take first value
+            .unwrap_or("")
+            .trim() // Trim whitespace
+            .trim_matches('"') // Remove surrounding quotes
+            .trim() // Final trim in case quotes had spaces
+            .to_string()
+    }
+
     pub fn extract_with_metadata(
         path: &Path,
         file_metadata: Option<&std::fs::Metadata>,
@@ -113,19 +127,31 @@ impl MetadataExtractor {
         }
 
         if let Some(field) = reader.get_field(Tag::ColorSpace, In::PRIMARY) {
-            metadata.color_space = Some(field.display_value().to_string());
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.color_space = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::WhiteBalance, In::PRIMARY) {
-            metadata.white_balance = Some(field.display_value().to_string());
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.white_balance = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::ExposureMode, In::PRIMARY) {
-            metadata.exposure_mode = Some(field.display_value().to_string());
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.exposure_mode = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::MeteringMode, In::PRIMARY) {
-            metadata.metering_mode = Some(field.display_value().to_string());
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.metering_mode = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::Orientation, In::PRIMARY) {
@@ -159,43 +185,31 @@ impl MetadataExtractor {
 
     fn extract_camera_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
         if let Some(field) = reader.get_field(Tag::Make, In::PRIMARY) {
-            metadata.camera_make = Some(
-                field
-                    .display_value()
-                    .to_string()
-                    .trim_matches('"')
-                    .to_string(),
-            );
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.camera_make = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::Model, In::PRIMARY) {
-            metadata.camera_model = Some(
-                field
-                    .display_value()
-                    .to_string()
-                    .trim_matches('"')
-                    .to_string(),
-            );
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.camera_model = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::LensMake, In::PRIMARY) {
-            metadata.lens_make = Some(
-                field
-                    .display_value()
-                    .to_string()
-                    .trim_matches('"')
-                    .to_string(),
-            );
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.lens_make = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::LensModel, In::PRIMARY) {
-            metadata.lens_model = Some(
-                field
-                    .display_value()
-                    .to_string()
-                    .trim_matches('"')
-                    .to_string(),
-            );
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.lens_model = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::ISOSpeed, In::PRIMARY) {
@@ -215,13 +229,10 @@ impl MetadataExtractor {
         }
 
         if let Some(field) = reader.get_field(Tag::ExposureTime, In::PRIMARY) {
-            metadata.shutter_speed = Some(
-                field
-                    .display_value()
-                    .to_string()
-                    .trim_matches('"')
-                    .to_string(),
-            );
+            let value = Self::clean_exif_string(field.display_value().to_string());
+            if !value.is_empty() {
+                metadata.shutter_speed = Some(value);
+            }
         }
 
         if let Some(field) = reader.get_field(Tag::FocalLength, In::PRIMARY) {
@@ -355,5 +366,64 @@ impl MetadataExtractor {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_exif_string_removes_quotes() {
+        assert_eq!(
+            MetadataExtractor::clean_exif_string("\"Canon\"".to_string()),
+            "Canon"
+        );
+    }
+
+    #[test]
+    fn test_clean_exif_string_removes_null_bytes() {
+        assert_eq!(
+            MetadataExtractor::clean_exif_string("Canon\0\0\0".to_string()),
+            "Canon"
+        );
+    }
+
+    #[test]
+    fn test_clean_exif_string_handles_arrays() {
+        // Simulates array-like EXIF values with commas and empty strings
+        assert_eq!(
+            MetadataExtractor::clean_exif_string(
+                "EF-S18-55mm f/3.5-5.6 IS\", \"\", \"\", \"\"".to_string()
+            ),
+            "EF-S18-55mm f/3.5-5.6 IS"
+        );
+    }
+
+    #[test]
+    fn test_clean_exif_string_trims_whitespace() {
+        assert_eq!(
+            MetadataExtractor::clean_exif_string("  Canon  ".to_string()),
+            "Canon"
+        );
+    }
+
+    #[test]
+    fn test_clean_exif_string_empty_input() {
+        assert_eq!(
+            MetadataExtractor::clean_exif_string("\"\"".to_string()),
+            ""
+        );
+    }
+
+    #[test]
+    fn test_clean_exif_string_complex_case() {
+        // Complex case with quotes, null bytes, and array-like structure
+        assert_eq!(
+            MetadataExtractor::clean_exif_string(
+                "\"EF-S18-55mm f/3.5-5.6 IS\0\0\", \"\", \"\", \"\"".to_string()
+            ),
+            "EF-S18-55mm f/3.5-5.6 IS"
+        );
     }
 }

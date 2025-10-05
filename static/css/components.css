@@ -335,7 +335,9 @@
   max-height: 100%;
   object-fit: contain;
   border-radius: var(--border-radius);
-  transition: transform var(--transition-medium), opacity 50ms ease-out;
+  transition:
+    transform var(--transition-medium),
+    opacity 50ms ease-out;
   cursor: grab;
   opacity: 0;
 }
@@ -386,6 +388,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }

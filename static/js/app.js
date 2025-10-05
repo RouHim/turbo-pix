@@ -163,7 +163,9 @@ class TurboPixApp {
       const searchInput = utils.createElement('input', 'search-input');
       searchInput.type = 'text';
       searchInput.id = 'mobile-search-input';
-      searchInput.placeholder = window.i18nManager ? window.i18nManager.t('ui.search_photos_placeholder') : 'Search photos...';
+      searchInput.placeholder = window.i18nManager
+        ? window.i18nManager.t('ui.search_photos_placeholder')
+        : 'Search photos...';
 
       const searchBtn = utils.createElement('button', 'search-btn');
       searchBtn.textContent = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';

@@ -160,8 +160,20 @@
 
 ## CLIP Semantic Search Architecture
 
-- **Model**: nllb-clip-base-siglip__v1 (ONNX), 512-dim embeddings, cosine similarity threshold 0.7
-- **Backend**: `clip_encoder.rs` (ONNX inference), `db.rs` (save/search embeddings with sqlite-vec)
-- **API**: `/api/search/clip?q={query}` → encodes text → searches `photo_embeddings` table
-- **Config**: `CLIP_ENABLE`, `CLIP_MODEL_PATH` env vars
-- **Known issues**: No auto-embedding during indexing, hardcoded threshold, mutex bottleneck
+CLIP-based semantic search for natural language photo queries in 100+ languages.
+
+**Model**: nllb-clip-base-siglip__v1 (~2GB, 512-dim embeddings, cosine threshold 0.7)
+**Config**: `CLIP_ENABLE=true`, `CLIP_MODEL_PATH=./models/clip`
+**API**: `GET /api/search/clip?q={query}` → text encoding → sqlite-vec similarity search
+**Auto-indexing**: Embeddings generated during photo indexing (startup + midnight rescan), images only
+
+**Key Files**:
+- `clip_encoder.rs`: ONNX inference (384x384 visual, 77-token textual)
+- `scheduler.rs`: Async embedding generation (tokio::spawn)
+- `db.rs`: `save_embedding()`, `search_by_clip_embedding()` with sqlite-vec
+
+**ONNX Specifics** (nllb-clip-base-siglip__v1):
+- Visual: input=`"image"` `[1,3,384,384]`, output=`[0]` (not named)
+- Textual: input=`"text"` `[1,77]` i32, output=`[0]` (not named)
+
+**Limitations**: Hardcoded threshold (0.7), mutex bottleneck, no batching/caching

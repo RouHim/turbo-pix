@@ -16,21 +16,20 @@ if ! command -v huggingface-cli &> /dev/null; then
 fi
 
 # Download the model files
-echo "Downloading visual encoder..."
+echo "Downloading visual encoder (~356MB)..."
 huggingface-cli download immich-app/nllb-clip-base-siglip__v1 visual.onnx --local-dir .
 
-echo "Downloading textual encoder..."
+echo "Downloading textual encoder (~1.6GB)..."
 huggingface-cli download immich-app/nllb-clip-base-siglip__v1 textual.onnx --local-dir .
-
-echo "Downloading tokenizer configuration..."
-huggingface-cli download immich-app/nllb-clip-base-siglip__v1 tokenizer.json --local-dir .
 
 echo ""
 echo "✅ CLIP models downloaded successfully!"
 echo "Location: $(pwd)"
 echo ""
 echo "Files:"
-ls -lh *.onnx tokenizer.json 2>/dev/null || echo "Model files downloaded"
+ls -lh *.onnx 2>/dev/null || echo "Model files downloaded"
+echo ""
+echo "Note: Tokenizer is built into the instant-clip-tokenizer crate (no separate file needed)"
 
 echo ""
 echo "You can now enable CLIP search in your configuration:"

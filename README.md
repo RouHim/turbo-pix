@@ -83,7 +83,7 @@ TurboPix uses sensible defaults and requires minimal configuration:
 
 CLIP enables searching photos using natural language in 100+ languages.
 
-1. **Download CLIP models** (~600MB):
+1. **Download CLIP models** (~2GB):
    ```bash
    bash scripts/download_clip_models.sh
    ```
@@ -94,13 +94,18 @@ CLIP enables searching photos using natural language in 100+ languages.
    export CLIP_MODEL_PATH=./models/clip
    ```
 
-3. **Search examples**:
+3. **Start the application**:
+   ```bash
+   cargo run
+   ```
+
+4. **Search examples**:
    - `cat` - Find photos of cats
    - `Katze` - Same in German
    - `sunset beach` - Find beach sunset photos
    - `birthday party` - Find party photos
 
-**Note**: First run will generate embeddings for all photos (may take time for large libraries).
+**Note**: Embeddings are automatically generated during photo indexing (startup + midnight rescan). Initial embedding generation for large libraries may take time (~1-2 seconds per image).
 
 ## Architecture
 

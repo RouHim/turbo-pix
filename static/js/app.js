@@ -153,17 +153,57 @@ class TurboPixApp {
       });
     }
 
-    // Add search toggle
-    const searchContainer = utils.$('.search-container');
-    if (searchContainer && !utils.$('.mobile-search-btn')) {
-      const searchBtn = utils.createElement('button', 'mobile-search-btn view-btn');
-      searchBtn.innerHTML = window.iconHelper.getSemanticIcon('search', { size: 20 });
-      searchBtn.title = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
+    // Create mobile search container if it doesn't exist
+    if (!utils.$('.mobile-search')) {
+      const mobileSearch = utils.createElement('div', 'mobile-search');
+      const searchContainer = utils.createElement('div', 'search-container');
 
-      // Insert after search container since header-actions was removed
-      searchContainer.parentNode.insertBefore(searchBtn, searchContainer.nextSibling);
+      const searchInput = utils.createElement('input', 'search-input');
+      searchInput.type = 'text';
+      searchInput.id = 'mobile-search-input';
+      searchInput.placeholder = window.i18nManager ? window.i18nManager.t('ui.search_photos_placeholder') : 'Search photos...';
 
-      utils.on(searchBtn, 'click', () => {
+      const searchBtn = utils.createElement('button', 'search-btn');
+      searchBtn.textContent = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
+
+      searchContainer.appendChild(searchInput);
+      searchContainer.appendChild(searchBtn);
+      mobileSearch.appendChild(searchContainer);
+
+      const headerEl = utils.$('.header');
+      if (headerEl) {
+        headerEl.parentNode.insertBefore(mobileSearch, headerEl.nextSibling);
+      }
+
+      // Connect mobile search to main search functionality
+      if (window.searchManager) {
+        utils.on(searchInput, 'input', (e) => {
+          const mainSearchInput = utils.$('#search-input');
+          if (mainSearchInput) mainSearchInput.value = e.target.value;
+        });
+
+        utils.on(searchBtn, 'click', () => {
+          window.searchManager.performSearch(searchInput.value);
+        });
+
+        utils.on(searchInput, 'keypress', (e) => {
+          if (e.key === 'Enter') {
+            window.searchManager.performSearch(searchInput.value);
+          }
+        });
+      }
+    }
+
+    // Add search toggle button
+    const headerActions = utils.$('.header-actions');
+    if (headerActions && !utils.$('.mobile-search-btn')) {
+      const searchToggle = utils.createElement('button', 'mobile-search-btn view-btn');
+      searchToggle.innerHTML = window.iconHelper.getSemanticIcon('search', { size: 20 });
+      searchToggle.title = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
+
+      headerActions.insertBefore(searchToggle, utils.$('.theme-toggle'));
+
+      utils.on(searchToggle, 'click', () => {
         this.toggleMobileSearch();
       });
     }

@@ -104,15 +104,17 @@
     padding: 16px;
     border-bottom: 1px solid var(--divider-color);
     z-index: 100;
-    transform: translateY(-100%);
+    transform: translateY(-120%);
     transition: var(--transition-medium);
     box-shadow: var(--shadow-medium);
     pointer-events: none;
+    opacity: 0;
   }
 
   .mobile-search.show {
     transform: translateY(0);
     pointer-events: auto;
+    opacity: 1;
   }
 
   .mobile-search .search-input {

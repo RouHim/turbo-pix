@@ -96,15 +96,23 @@ pub async fn get_cameras(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 pub async fn search_photos_clip(
     query: SearchQuery,
     db_pool: DbPool,
-    clip_encoder: Arc<tokio::sync::Mutex<ClipEncoder>>,
+    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
 ) -> Result<impl Reply, Rejection> {
+    // Check if CLIP is enabled
+    let encoder = clip_encoder.ok_or_else(|| {
+        log::error!("CLIP search requested but CLIP is not enabled");
+        reject::custom(DatabaseError {
+            message: "CLIP search is not enabled. Set CLIP_ENABLE=true and provide CLIP model files.".to_string(),
+        })
+    })?;
+
     if let Some(ref q) = query.q {
         let limit = query.limit.unwrap_or(50).min(100);
         let similarity_threshold = 0.7; // Can be made configurable
 
         // Generate text embedding for the query
-        let mut encoder = clip_encoder.lock().await;
-        let query_embedding = encoder
+        let mut enc = encoder.lock().await;
+        let query_embedding = enc
             .encode_text(q)
             .map_err(|e| {
                 log::error!("Failed to encode query '{}': {}", q, e);
@@ -112,7 +120,7 @@ pub async fn search_photos_clip(
                     message: format!("Failed to encode query: {}", e),
                 })
             })?;
-        drop(encoder); // Release lock
+        drop(enc); // Release lock
 
         // Search using vector similarity
         match crate::db::search_by_clip_embedding(&db_pool, &query_embedding, limit as i64, similarity_threshold) {

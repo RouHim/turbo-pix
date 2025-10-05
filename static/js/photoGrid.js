@@ -137,7 +137,32 @@ class PhotoGrid {
       };
 
       utils.performance.mark('photos-load-start');
-      const response = await api.getPhotos(params);
+
+      // Use CLIP search for natural language queries
+      let response;
+      if (this.currentQuery && api.isNaturalLanguageQuery(this.currentQuery)) {
+        try {
+          if (window.logger) {
+            window.logger.info('Using CLIP semantic search', {
+              component: 'PhotoGrid',
+              query: this.currentQuery,
+            });
+          }
+          response = await api.searchPhotosClip(this.currentQuery, params);
+        } catch (error) {
+          // Fallback to traditional search if CLIP fails
+          if (window.logger) {
+            window.logger.warn('CLIP search failed, falling back to traditional search', {
+              component: 'PhotoGrid',
+              error: error.message,
+            });
+          }
+          response = await api.getPhotos(params);
+        }
+      } else {
+        response = await api.getPhotos(params);
+      }
+
       utils.performance.mark('photos-load-end');
       utils.performance.measure('photos-load', 'photos-load-start', 'photos-load-end');
 

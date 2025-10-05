@@ -105,6 +105,52 @@ class TurboPixAPI {
     return this.getPhotos({ ...params, query });
   }
 
+  // CLIP semantic search
+  async searchPhotosClip(query, params = {}) {
+    const searchParams = new URLSearchParams();
+
+    // Add query and parameters
+    if (query) searchParams.set('q', query);
+    if (params.limit !== undefined) searchParams.set('limit', params.limit);
+
+    const queryString = searchParams.toString();
+    const endpoint = `/api/search/clip${queryString ? `?${queryString}` : ''}`;
+
+    return this.request(endpoint);
+  }
+
+  // Detect if query should use CLIP search (natural language vs structured)
+  isNaturalLanguageQuery(query) {
+    if (!query) return false;
+
+    // Check for structured search patterns
+    const structuredPatterns = [
+      /^camera:/i,        // camera:canon
+      /^date:/i,          // date:2024
+      /^type:/i,          // type:video
+      /^has:/i,           // has:gps
+      /^is_favorite:/i,   // is_favorite:true
+      /year=\d{4}/,       // year=2024
+      /month=\d{1,2}/,    // month=12
+    ];
+
+    // If matches any structured pattern, use traditional search
+    if (structuredPatterns.some(pattern => pattern.test(query))) {
+      return false;
+    }
+
+    // Natural language: simple words, phrases, concepts
+    // Examples: "cat", "sunset beach", "Katze", "birthday party"
+    const words = query.trim().split(/\s+/);
+
+    // If 1-3 simple words without special characters, likely natural language
+    if (words.length <= 3 && !/[=:]/.test(query)) {
+      return true;
+    }
+
+    return false;
+  }
+
   // Health check
   async healthCheck() {
     return this.request('/health');

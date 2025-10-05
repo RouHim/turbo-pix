@@ -58,6 +58,7 @@ impl ClipEncoder {
     ///
     /// # Returns
     /// A normalized 512-dimensional embedding vector
+    #[allow(dead_code)]
     pub fn encode_image(&mut self, image_path: &Path) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         // Load image
         let img = image::open(image_path)?;

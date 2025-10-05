@@ -27,9 +27,11 @@ use log::{error, info};
 use std::convert::Infallible;
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::Arc;
 use warp::Filter;
 
 use cache::{CacheManager, ThumbnailGenerator};
+use clip_encoder::ClipEncoder;
 use scheduler::PhotoScheduler;
 use warp_helpers::{cors, handle_rejection, with_db, with_thumbnail_generator};
 
@@ -45,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
     info!("Cache path: {}", config.cache.thumbnail_cache_path);
+    info!("CLIP search enabled: {}", config.clip.enabled);
 
     // Check if port is available BEFORE initializing services
     if !is_port_available(port) {
@@ -60,19 +63,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("Port {} is already in use", port).into());
     }
 
-    let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
+    let (db_pool, thumbnail_generator, photo_scheduler, clip_encoder) = initialize_services(&config)?;
     start_background_tasks(photo_scheduler);
 
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(db_pool.clone());
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
-    let stats_routes = build_stats_routes(db_pool);
+    let stats_routes = build_stats_routes(db_pool.clone());
+    let search_routes = build_search_routes(db_pool.clone(), clip_encoder);
     let static_routes = build_static_routes();
 
     let routes = health_routes
         .or(photo_routes)
         .or(thumbnail_routes)
         .or(stats_routes)
+        .or(search_routes)
         .or(static_routes)
         .with(cors())
         .with(warp::log("turbo_pix"))
@@ -94,7 +99,7 @@ fn is_port_available(port: u16) -> bool {
 
 fn initialize_services(
     config: &config::Config,
-) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler), Box<dyn std::error::Error>> {
+) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler, Option<Arc<tokio::sync::Mutex<ClipEncoder>>>), Box<dyn std::error::Error>> {
     let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
@@ -103,12 +108,30 @@ fn initialize_services(
     let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;
     info!("Cache and thumbnail system initialized");
 
+    // Initialize CLIP encoder if enabled
+    let clip_encoder = if config.clip.enabled {
+        match ClipEncoder::new(&PathBuf::from(&config.clip.model_path)) {
+            Ok(encoder) => {
+                info!("CLIP encoder initialized successfully");
+                Some(Arc::new(tokio::sync::Mutex::new(encoder)))
+            }
+            Err(e) => {
+                error!("Failed to initialize CLIP encoder: {}", e);
+                error!("CLIP search will be disabled");
+                None
+            }
+        }
+    } else {
+        info!("CLIP search disabled in configuration");
+        None
+    };
+
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
     let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager);
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");
 
-    Ok((db_pool, thumbnail_generator, photo_scheduler))
+    Ok((db_pool, thumbnail_generator, photo_scheduler, clip_encoder))
 }
 
 fn start_background_tasks(photo_scheduler: PhotoScheduler) {
@@ -247,6 +270,27 @@ fn build_stats_routes(
         .and(warp::get())
         .and(with_db(db_pool))
         .and_then(warp_handlers::get_stats)
+}
+
+fn build_search_routes(
+    db_pool: db_pool::DbPool,
+    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("api")
+        .and(warp::path("search"))
+        .and(warp::path("clip"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<db::SearchQuery>())
+        .and(with_db(db_pool))
+        .and(with_optional_clip_encoder(clip_encoder))
+        .and_then(handlers_search::search_photos_clip)
+}
+
+fn with_optional_clip_encoder(
+    encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+) -> impl Filter<Extract = (Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,), Error = Infallible> + Clone {
+    warp::any().map(move || encoder.clone())
 }
 
 fn build_static_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone

@@ -27,6 +27,9 @@ Thumbs.db
 *.sqlite3
 data/
 
+# CLIP model files
+models/
+
 # CLI Rules files
 *.clinerules*
 

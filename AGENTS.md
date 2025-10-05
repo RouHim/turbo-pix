@@ -157,3 +157,61 @@
 
 - **Prefer iterator chains over for loops**: Use `.iter().filter_map().next()` instead of nested loops and conditionals
 - **Use arrays over vecs for known sizes**: `[A, B, C]` instead of `vec![A, B, C]` (avoids heap allocation)
+
+## CLIP Semantic Search Architecture
+
+### Overview
+
+TurboPix implements CLIP-based semantic search for natural language photo queries in 100+ languages.
+
+### Key Components
+
+**Backend (Rust):**
+- `src/clip_encoder.rs` - ONNX Runtime CLIP inference (visual + textual encoders)
+- `src/db.rs:save_embedding()` - Stores 512-dim f32 vectors as bytes
+- `src/db.rs:search_by_clip_embedding()` - Vector similarity using `vec_distance_cosine()`
+- `src/handlers_search.rs:search_photos_clip()` - HTTP handler for `/api/search/clip`
+- `src/main.rs:initialize_services()` - Optional CLIP encoder initialization
+- `src/config.rs` - `CLIP_ENABLE` and `CLIP_MODEL_PATH` env vars
+
+**Frontend (JavaScript):**
+- `static/js/api.js:searchPhotosClip()` - CLIP API client
+- `static/js/api.js:isNaturalLanguageQuery()` - Always returns true (routes all queries to CLIP)
+- `static/js/photoGrid.js:loadPhotos()` - Auto-routes queries to CLIP with fallback
+
+**Database:**
+- `photo_embeddings` virtual table using sqlite-vec's `vec0()` extension
+- Schema: `photo_hash TEXT PRIMARY KEY, embedding FLOAT[512]`
+- Similarity threshold: 0.7 (configurable in handlers_search.rs:111)
+
+### Search Flow
+
+1. User enters query in search bar
+2. Frontend detects query → routes to `/api/search/clip?q={query}`
+3. Backend locks CLIP encoder mutex, encodes text query → 512-dim vector
+4. Executes SQL: `SELECT * FROM photos JOIN photo_embeddings WHERE vec_distance_cosine(embedding, ?) < threshold`
+5. Returns photos sorted by similarity score
+
+### Model Details
+
+- **Model**: nllb-clip-base-siglip__v1 (Hugging Face)
+- **Files**: visual.onnx (image encoder), textual.onnx (text encoder), tokenizer.json
+- **Size**: ~600MB total
+- **Input**: 224x224 RGB images, tokenized text (max 77 tokens)
+- **Output**: Normalized 512-dimensional embeddings
+- **Normalization**: L2 norm for cosine similarity via dot product
+
+### Known Limitations
+
+1. **Embeddings not generated during indexing yet** - Need to integrate CLIP encoder with photo_processor.rs
+2. **No pagination for CLIP results** - Returns all matches (sorted by similarity)
+3. **Similarity threshold hardcoded** - Should be configurable via env var
+4. **Single-threaded encoding** - CLIP encoder uses mutex lock (potential bottleneck)
+
+### Future Improvements
+
+- Batch embedding generation during photo indexing
+- Async embedding generation for new photos
+- Configurable similarity threshold
+- Caching frequently searched embeddings
+- Model optimization (quantization, TensorRT)

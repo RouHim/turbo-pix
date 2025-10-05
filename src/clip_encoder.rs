@@ -101,22 +101,27 @@ impl ClipEncoder {
         let mut tokens = Vec::new();
         self.tokenizer.encode(text, &mut tokens);
 
-        // Convert Token to i64 using to_u16() method
-        let token_ids: Vec<i64> = tokens.iter().map(|t| t.to_u16() as i64).collect();
+        // Convert Token to i32 (ONNX model expects int32, not int64)
+        let mut token_ids: Vec<i32> = tokens.iter().map(|t| t.to_u16() as i32).collect();
+
+        // CLIP expects exactly 77 tokens - pad or truncate
+        const CLIP_CONTEXT_LENGTH: usize = 77;
+        token_ids.resize(CLIP_CONTEXT_LENGTH, 0); // Pad with zeros
 
         // Convert to ndarray format expected by ONNX model
-        let input_ids = Array::from_shape_vec((1, token_ids.len()), token_ids)?;
+        let input_ids = Array::from_shape_vec((1, CLIP_CONTEXT_LENGTH), token_ids)?;
 
         // Convert to ort::Value
         let input_value = Value::from_array(input_ids)?;
 
         // Run inference through textual encoder
+        // Try "text" as input name (common for CLIP ONNX models)
         let outputs = self
             .textual_session
-            .run(ort::inputs!["input_ids" => input_value])?;
+            .run(ort::inputs!["text" => input_value])?;
 
-        // Extract embedding from output
-        let embedding = outputs["text_embeds"]
+        // Extract embedding from output (use first output by index)
+        let embedding = outputs[0]
             .try_extract_array::<f32>()?
             .view()
             .to_owned();

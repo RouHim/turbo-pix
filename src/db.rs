@@ -891,8 +891,15 @@ pub fn save_embedding(
         .flat_map(|f| f.to_ne_bytes())
         .collect();
 
+    // Virtual tables (sqlite-vec) don't support INSERT OR REPLACE properly
+    // Delete existing entry first, then insert
     conn.execute(
-        "INSERT OR REPLACE INTO photo_embeddings (photo_hash, embedding) VALUES (?, ?)",
+        "DELETE FROM photo_embeddings WHERE photo_hash = ?",
+        rusqlite::params![photo_hash],
+    )?;
+
+    conn.execute(
+        "INSERT INTO photo_embeddings (photo_hash, embedding) VALUES (?, ?)",
         rusqlite::params![photo_hash, bytes],
     )?;
     Ok(())

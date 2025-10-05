@@ -91,7 +91,8 @@ impl ThumbnailGenerator {
         }
 
         let thumbnail_data = if self.is_video_file(photo) {
-            self.generate_video_thumbnail(&photo_path, size, photo.orientation).await?
+            self.generate_video_thumbnail(&photo_path, size, photo.orientation)
+                .await?
         } else {
             let img = image::open(&photo_path)?;
             let img = self.apply_orientation(img, photo.orientation);

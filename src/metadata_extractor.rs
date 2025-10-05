@@ -410,10 +410,7 @@ mod tests {
 
     #[test]
     fn test_clean_exif_string_empty_input() {
-        assert_eq!(
-            MetadataExtractor::clean_exif_string("\"\"".to_string()),
-            ""
-        );
+        assert_eq!(MetadataExtractor::clean_exif_string("\"\"".to_string()), "");
     }
 
     #[test]

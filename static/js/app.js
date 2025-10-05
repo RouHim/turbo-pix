@@ -64,6 +64,8 @@ class TurboPixApp {
         const view = item.dataset.view;
         if (view) {
           this.switchView(view);
+          // Close mobile sidebar after selection
+          this.closeMobileSidebar();
         }
       });
     });

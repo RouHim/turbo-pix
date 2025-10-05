@@ -260,6 +260,7 @@ class PhotoViewer {
       this.elements.image.style.display = 'none';
     }
     if (this.elements.video) {
+      this.elements.video.pause();
       this.elements.video.classList.remove('loaded');
       this.elements.video.style.display = 'none';
     }

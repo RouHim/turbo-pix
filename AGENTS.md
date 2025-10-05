@@ -162,7 +162,7 @@
 
 CLIP-based semantic search for natural language photo queries in 100+ languages.
 
-**Model**: nllb-clip-base-siglip__v1 (~2GB, 512-dim embeddings, cosine threshold 0.7)
+**Model**: nllb-clip-base-siglip__v1 (~2GB, 768-dim embeddings, cosine threshold 0.25)
 **Config**: `CLIP_ENABLE=true`, `CLIP_MODEL_PATH=./models/clip`
 **API**: `GET /api/search/clip?q={query}` → text encoding → sqlite-vec similarity search
 **Auto-indexing**: Embeddings generated during photo indexing (startup + midnight rescan), images only

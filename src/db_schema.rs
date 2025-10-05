@@ -49,11 +49,12 @@ CREATE TABLE IF NOT EXISTS photos (
 "#;
 
 // CLIP embeddings virtual table (requires sqlite-vec extension)
+// nllb-clip-base-siglip__v1 outputs 768-dimensional embeddings
 pub const EMBEDDINGS_TABLE: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS photo_embeddings
 USING vec0(
     photo_hash TEXT PRIMARY KEY,
-    embedding FLOAT[512]
+    embedding FLOAT[768]
 )
 "#;
 

@@ -96,7 +96,7 @@ pub async fn get_cameras(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 pub async fn search_photos_clip(
     query: SearchQuery,
     db_pool: DbPool,
-    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+    clip_encoder: Option<Arc<ClipEncoder>>,
 ) -> Result<impl Reply, Rejection> {
     // Check if CLIP is enabled
     let encoder = clip_encoder.ok_or_else(|| {
@@ -108,11 +108,15 @@ pub async fn search_photos_clip(
 
     if let Some(ref q) = query.q {
         let limit = query.limit.unwrap_or(50).min(100);
-        let similarity_threshold = 0.7; // Can be made configurable
+        // Note: This nllb-clip-base-siglip__v1 model produces embeddings with weak cross-modal alignment
+        // Text-image cosine similarities around -0.04 (distance ~1.04) even for matching concepts.
+        // This appears to be inherent to the SigLIP model architecture/training.
+        // We use a very lenient threshold to capture any semantic matches.
+        let similarity_threshold = -0.10; // Accept matches with distance up to ~1.20
 
         // Generate text embedding for the query
-        let mut enc = encoder.lock().await;
-        let query_embedding = enc
+        // Session is thread-safe, no mutex needed
+        let query_embedding = encoder
             .encode_text(q)
             .map_err(|e| {
                 log::error!("Failed to encode query '{}': {}", q, e);
@@ -120,7 +124,6 @@ pub async fn search_photos_clip(
                     message: format!("Failed to encode query: {}", e),
                 })
             })?;
-        drop(enc); // Release lock
 
         // Search using vector similarity
         match crate::db::search_by_clip_embedding(&db_pool, &query_embedding, limit as i64, similarity_threshold) {

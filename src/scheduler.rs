@@ -15,7 +15,7 @@ pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
     db_pool: DbPool,
     cache_manager: CacheManager,
-    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+    clip_encoder: Option<Arc<ClipEncoder>>,
 }
 
 impl PhotoScheduler {
@@ -23,7 +23,7 @@ impl PhotoScheduler {
         photo_paths: Vec<PathBuf>,
         db_pool: DbPool,
         cache_manager: CacheManager,
-        clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+        clip_encoder: Option<Arc<ClipEncoder>>,
     ) -> Self {
         Self {
             photo_paths,
@@ -76,14 +76,20 @@ impl PhotoScheduler {
                                                       file_path.to_lowercase().ends_with(".webp");
 
                                         if is_image {
+                                            // Skip if embedding already exists
+                                            let has_embedding = crate::db::has_embedding(&db_pool, &hash).unwrap_or(false);
+                                            if has_embedding {
+                                                continue;
+                                            }
+
                                             let encoder_clone = encoder.clone();
                                             let db_pool_clone = db_pool.clone();
                                             let hash_clone = hash.clone();
                                             let path_clone = file_path.clone();
 
                                             tokio::spawn(async move {
-                                                let mut enc = encoder_clone.lock().await;
-                                                match enc.encode_image(std::path::Path::new(&path_clone)) {
+                                                // Use async version for better I/O performance
+                                                match encoder_clone.encode_image_async(std::path::Path::new(&path_clone)).await {
                                                     Ok(embedding) => {
                                                         if let Err(e) = crate::db::save_embedding(&db_pool_clone, &hash_clone, &embedding) {
                                                             error!("Failed to save embedding for {}: {}", hash_clone, e);
@@ -168,14 +174,22 @@ impl PhotoScheduler {
                                       file_path.to_lowercase().ends_with(".webp");
 
                         if is_image {
+                            // Skip if embedding already exists
+                            let has_embedding = crate::db::has_embedding(&self.db_pool, &hash).unwrap_or(false);
+                            if has_embedding {
+                                info!("Skipping embedding for {} - already exists", hash);
+                                continue;
+                            }
+                            info!("Generating CLIP embedding for {}", hash);
+
                             let encoder_clone = encoder.clone();
                             let db_pool_clone = self.db_pool.clone();
                             let hash_clone = hash.clone();
                             let path_clone = file_path.clone();
 
                             tokio::spawn(async move {
-                                let mut enc = encoder_clone.lock().await;
-                                match enc.encode_image(std::path::Path::new(&path_clone)) {
+                                // Use async version for better I/O performance
+                                match encoder_clone.encode_image_async(std::path::Path::new(&path_clone)).await {
                                     Ok(embedding) => {
                                         if let Err(e) = crate::db::save_embedding(&db_pool_clone, &hash_clone, &embedding) {
                                             error!("Failed to save embedding for {}: {}", hash_clone, e);

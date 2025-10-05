@@ -4,12 +4,14 @@ use ndarray::{Array, Array4};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Value;
 use std::path::Path;
+use std::sync::RwLock;
 
 /// CLIP encoder for generating image and text embeddings
 /// Supports multilingual text encoding (100+ languages including German, English)
+/// Uses RwLock for interior mutability to allow concurrent inference
 pub struct ClipEncoder {
-    visual_session: Session,
-    textual_session: Session,
+    visual_session: RwLock<Session>,
+    textual_session: RwLock<Session>,
     tokenizer: Tokenizer,
 }
 
@@ -21,11 +23,16 @@ impl ClipEncoder {
     pub fn new(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         log::info!("Loading CLIP models from {:?}", model_path);
 
+        // Optimize thread count based on CPU cores
+        let num_threads = num_cpus::get();
+        log::info!("Using {} threads per ONNX session", num_threads);
+
         // Load visual encoder (for images)
         let visual_path = model_path.join("visual.onnx");
         let visual_session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(4)?
+            .with_intra_threads(num_threads)?
+            .with_inter_threads(2)?
             .commit_from_file(visual_path)?;
 
         log::info!("Visual encoder loaded");
@@ -34,7 +41,8 @@ impl ClipEncoder {
         let textual_path = model_path.join("textual.onnx");
         let textual_session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(4)?
+            .with_intra_threads(num_threads)?
+            .with_inter_threads(2)?
             .commit_from_file(textual_path)?;
 
         log::info!("Textual encoder loaded");
@@ -45,21 +53,65 @@ impl ClipEncoder {
         log::info!("CLIP encoder initialized successfully");
 
         Ok(Self {
-            visual_session,
-            textual_session,
+            visual_session: RwLock::new(visual_session),
+            textual_session: RwLock::new(textual_session),
             tokenizer,
         })
     }
 
-    /// Generate embedding vector for an image
+    /// Generate embedding vector for an image (async with I/O optimization)
     ///
     /// # Arguments
     /// * `image_path` - Path to the image file
     ///
     /// # Returns
-    /// A normalized 512-dimensional embedding vector
+    /// A normalized 768-dimensional embedding vector
     #[allow(dead_code)]
-    pub fn encode_image(&mut self, image_path: &Path) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    pub async fn encode_image_async(&self, image_path: &Path) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        // Load image asynchronously to reduce I/O blocking
+        let path = image_path.to_path_buf();
+        let bytes = tokio::fs::read(&path).await?;
+
+        // Decode image in blocking task pool (CPU intensive)
+        let img = tokio::task::spawn_blocking(move || {
+            image::load_from_memory(&bytes)
+        }).await??;
+
+        // Preprocess for CLIP
+        let preprocessed = self.preprocess_image(img)?;
+
+        // Convert ndarray to ort::Value
+        let input_value = Value::from_array(preprocessed)?;
+
+        // Run inference through visual encoder
+        // Use RwLock for thread-safe interior mutability (Session.run() requires &mut self)
+        let mut session = self.visual_session.write().unwrap();
+        let outputs = session.run(ort::inputs!["image" => input_value])?;
+
+        // Extract embedding from output (use first output by index)
+        let embedding = outputs[0]
+            .try_extract_array::<f32>()?
+            .view()
+            .to_owned();
+
+        // Normalize to unit length for cosine similarity
+        let embedding_slice = embedding
+            .as_slice()
+            .ok_or("Failed to convert embedding to slice")?;
+        let normalized = Self::normalize_vector(embedding_slice);
+
+        Ok(normalized)
+    }
+
+    /// Generate embedding vector for an image (synchronous version for compatibility)
+    ///
+    /// # Arguments
+    /// * `image_path` - Path to the image file
+    ///
+    /// # Returns
+    /// A normalized 768-dimensional embedding vector
+    #[allow(dead_code)]
+    pub fn encode_image(&self, image_path: &Path) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         // Load image
         let img = image::open(image_path)?;
 
@@ -70,10 +122,9 @@ impl ClipEncoder {
         let input_value = Value::from_array(preprocessed)?;
 
         // Run inference through visual encoder
-        // Try "image" as input name (similar to text encoder)
-        let outputs = self
-            .visual_session
-            .run(ort::inputs!["image" => input_value])?;
+        // Use RwLock for thread-safe interior mutability (Session.run() requires &mut self)
+        let mut session = self.visual_session.write().unwrap();
+        let outputs = session.run(ort::inputs!["image" => input_value])?;
 
         // Extract embedding from output (use first output by index)
         let embedding = outputs[0]
@@ -96,8 +147,8 @@ impl ClipEncoder {
     /// * `text` - Search query in any supported language (e.g., "cat", "Katze", "gato")
     ///
     /// # Returns
-    /// A normalized 512-dimensional embedding vector
-    pub fn encode_text(&mut self, text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    /// A normalized 768-dimensional embedding vector
+    pub fn encode_text(&self, text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         // Tokenize text (handles multilingual input automatically)
         let mut tokens = Vec::new();
         self.tokenizer.encode(text, &mut tokens);
@@ -116,10 +167,9 @@ impl ClipEncoder {
         let input_value = Value::from_array(input_ids)?;
 
         // Run inference through textual encoder
-        // Try "text" as input name (common for CLIP ONNX models)
-        let outputs = self
-            .textual_session
-            .run(ort::inputs!["text" => input_value])?;
+        // Use RwLock for thread-safe interior mutability (Session.run() requires &mut self)
+        let mut session = self.textual_session.write().unwrap();
+        let outputs = session.run(ort::inputs!["text" => input_value])?;
 
         // Extract embedding from output (use first output by index)
         let embedding = outputs[0]
@@ -143,8 +193,9 @@ impl ClipEncoder {
         img: DynamicImage,
     ) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
         // Resize to 384x384 (SigLIP input size, larger than standard CLIP's 224)
+        // Triangle filter is faster than Lanczos3 with minimal quality loss for ML preprocessing
         const SIZE: u32 = 384;
-        let img = img.resize_exact(SIZE, SIZE, image::imageops::FilterType::Lanczos3);
+        let img = img.resize_exact(SIZE, SIZE, image::imageops::FilterType::Triangle);
         let rgb = img.to_rgb8();
 
         // ImageNet normalization parameters (same as PyTorch/Python CLIP)
@@ -152,18 +203,12 @@ impl ClipEncoder {
         let std = [0.26862954, 0.26130258, 0.27577711];
 
         // Convert to ndarray with shape [1, 3, 384, 384] (batch, channels, height, width)
-        let mut array = Array4::<f32>::zeros((1, 3, SIZE as usize, SIZE as usize));
-
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                let pixel = rgb.get_pixel(x, y);
-                for c in 0..3 {
-                    // Normalize: (pixel/255 - mean) / std
-                    let normalized = (pixel[c] as f32 / 255.0 - mean[c]) / std[c];
-                    array[[0, c, y as usize, x as usize]] = normalized;
-                }
-            }
-        }
+        // Vectorized initialization is faster than nested loops
+        let array = Array4::<f32>::from_shape_fn((1, 3, SIZE as usize, SIZE as usize), |(_, c, y, x)| {
+            let pixel = rgb.get_pixel(x as u32, y as u32);
+            // Normalize: (pixel/255 - mean) / std
+            (pixel[c] as f32 / 255.0 - mean[c]) / std[c]
+        });
 
         Ok(array)
     }

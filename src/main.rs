@@ -99,7 +99,7 @@ fn is_port_available(port: u16) -> bool {
 
 fn initialize_services(
     config: &config::Config,
-) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler, Option<Arc<tokio::sync::Mutex<ClipEncoder>>>), Box<dyn std::error::Error>> {
+) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler, Option<Arc<ClipEncoder>>), Box<dyn std::error::Error>> {
     let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
@@ -109,11 +109,12 @@ fn initialize_services(
     info!("Cache and thumbnail system initialized");
 
     // Initialize CLIP encoder if enabled
+    // ONNX Runtime Session is thread-safe, no mutex needed
     let clip_encoder = if config.clip.enabled {
         match ClipEncoder::new(&PathBuf::from(&config.clip.model_path)) {
             Ok(encoder) => {
                 info!("CLIP encoder initialized successfully");
-                Some(Arc::new(tokio::sync::Mutex::new(encoder)))
+                Some(Arc::new(encoder))
             }
             Err(e) => {
                 error!("Failed to initialize CLIP encoder: {}", e);
@@ -279,7 +280,7 @@ fn build_stats_routes(
 
 fn build_search_routes(
     db_pool: db_pool::DbPool,
-    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+    clip_encoder: Option<Arc<ClipEncoder>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path("api")
         .and(warp::path("search"))
@@ -293,8 +294,8 @@ fn build_search_routes(
 }
 
 fn with_optional_clip_encoder(
-    encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
-) -> impl Filter<Extract = (Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,), Error = Infallible> + Clone {
+    encoder: Option<Arc<ClipEncoder>>,
+) -> impl Filter<Extract = (Option<Arc<ClipEncoder>>,), Error = Infallible> + Clone {
     warp::any().map(move || encoder.clone())
 }
 

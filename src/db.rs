@@ -885,10 +885,10 @@ pub fn save_embedding(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let conn = pool.get()?;
 
-    // Convert f32 slice to byte slice
+    // Convert f32 slice to byte slice (use little-endian for sqlite-vec compatibility)
     let bytes: Vec<u8> = embedding
         .iter()
-        .flat_map(|f| f.to_ne_bytes())
+        .flat_map(|f| f.to_le_bytes())
         .collect();
 
     // Virtual tables (sqlite-vec) don't support INSERT OR REPLACE properly
@@ -903,6 +903,20 @@ pub fn save_embedding(
         rusqlite::params![photo_hash, bytes],
     )?;
     Ok(())
+}
+
+/// Check if a photo has a CLIP embedding
+pub fn has_embedding(
+    pool: &DbPool,
+    photo_hash: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photo_embeddings WHERE photo_hash = ?",
+        [photo_hash],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 /// Get CLIP embedding for a photo
@@ -941,15 +955,34 @@ pub fn search_by_clip_embedding(
 ) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
 
-    // Convert query embedding to bytes
+    // Check if embeddings exist
+    let embedding_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM photo_embeddings",
+        [],
+        |row| row.get(0)
+    )?;
+
+    if embedding_count == 0 {
+        log::warn!("No CLIP embeddings in database - search will return empty results");
+        return Ok(Vec::new());
+    }
+
+    // Convert query embedding to bytes (use little-endian for sqlite-vec compatibility)
     let query_bytes: Vec<u8> = query_embedding
         .iter()
-        .flat_map(|f| f.to_ne_bytes())
+        .flat_map(|f| f.to_le_bytes())
         .collect();
 
     // Use sqlite-vec for vector similarity search
     // vec_distance_cosine returns distance (lower is more similar)
     // We want similarity, so we use threshold as max distance
+
+    // Cosine distance for normalized vectors ranges 0-2:
+    // distance=0 means similarity=1.0 (identical), distance=2 means similarity=-1.0 (opposite)
+    // Convert similarity threshold to max distance: distance = 2.0 * (1.0 - similarity)
+    let max_distance = 2.0 * (1.0 - similarity_threshold);
+
+    // Get results ordered by similarity
     let mut stmt = conn.prepare(
         "SELECT p.*
          FROM photos p
@@ -958,8 +991,6 @@ pub fn search_by_clip_embedding(
          ORDER BY vec_distance_cosine(e.embedding, ?) ASC
          LIMIT ?",
     )?;
-
-    let max_distance = 1.0 - similarity_threshold; // Convert similarity to distance
 
     let photo_iter = stmt.query_map(
         params![&query_bytes, max_distance, &query_bytes, limit],

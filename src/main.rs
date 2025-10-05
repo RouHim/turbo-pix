@@ -1,5 +1,6 @@
 mod cache;
 mod cache_manager;
+mod clip_encoder;
 mod config;
 mod db;
 mod db_pool;

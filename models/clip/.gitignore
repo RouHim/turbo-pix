@@ -1,0 +1,7 @@
+# Ignore large ONNX model files
+*.onnx
+tokenizer.json
+
+# Keep the README
+!README.md
+!.gitignore

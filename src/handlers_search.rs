@@ -1,6 +1,8 @@
 use serde::Serialize;
+use std::sync::Arc;
 use warp::{reject, Rejection, Reply};
 
+use crate::clip_encoder::ClipEncoder;
 use crate::db::{DbPool, Photo, SearchQuery, SearchSuggestion};
 use crate::warp_helpers::DatabaseError;
 
@@ -86,5 +88,52 @@ pub async fn get_cameras(db_pool: DbPool) -> Result<impl Reply, Rejection> {
                 message: format!("Database error: {}", e),
             }))
         }
+    }
+}
+
+/// CLIP-based semantic search handler
+#[allow(dead_code)]
+pub async fn search_photos_clip(
+    query: SearchQuery,
+    db_pool: DbPool,
+    clip_encoder: Arc<tokio::sync::Mutex<ClipEncoder>>,
+) -> Result<impl Reply, Rejection> {
+    if let Some(ref q) = query.q {
+        let limit = query.limit.unwrap_or(50).min(100);
+        let similarity_threshold = 0.7; // Can be made configurable
+
+        // Generate text embedding for the query
+        let mut encoder = clip_encoder.lock().await;
+        let query_embedding = encoder
+            .encode_text(q)
+            .map_err(|e| {
+                log::error!("Failed to encode query '{}': {}", q, e);
+                reject::custom(DatabaseError {
+                    message: format!("Failed to encode query: {}", e),
+                })
+            })?;
+        drop(encoder); // Release lock
+
+        // Search using vector similarity
+        match crate::db::search_by_clip_embedding(&db_pool, &query_embedding, limit as i64, similarity_threshold) {
+            Ok(photos) => Ok(warp::reply::json(&PhotosResponse {
+                photos: photos.clone(),
+                total: photos.len(),
+                page: 1,
+                limit,
+                has_next: false,
+                has_prev: false,
+            })),
+            Err(e) => {
+                log::error!("CLIP search error: {}", e);
+                Err(reject::custom(DatabaseError {
+                    message: format!("CLIP search error: {}", e),
+                }))
+            }
+        }
+    } else {
+        Err(reject::custom(DatabaseError {
+            message: "No search query provided".to_string(),
+        }))
     }
 }

@@ -2,12 +2,21 @@ use chrono::{DateTime, Utc};
 use log::info;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::ffi::sqlite3_auto_extension;
+use sqlite_vec::sqlite3_vec_init;
 
 use crate::db_schema::initialize_schema;
 
 pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
 
 pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
+    // Register sqlite-vec extension before creating any connections
+    unsafe {
+        sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite3_vec_init as *const (),
+        )));
+    }
+
     if let Some(parent) = std::path::Path::new(database_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -108,6 +117,13 @@ pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> 
 
 #[cfg(test)]
 pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
+    // Register sqlite-vec extension
+    unsafe {
+        sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite3_vec_init as *const (),
+        )));
+    }
+
     let manager = SqliteConnectionManager::memory();
     let pool = Pool::new(manager)?;
 

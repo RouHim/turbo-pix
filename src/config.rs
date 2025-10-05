@@ -7,12 +7,19 @@ pub struct CacheConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct ClipConfig {
+    pub enabled: bool,
+    pub model_path: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
     pub photo_paths: Vec<String>,
     pub data_path: String,
     pub db_path: String,
     pub cache: CacheConfig,
+    pub clip: ClipConfig,
 }
 
 impl Config {
@@ -24,6 +31,12 @@ impl Config {
         let max_cache_size_mb = env::var("TURBO_PIX_MAX_CACHE_SIZE_MB")
             .unwrap_or_else(|_| "1024".to_string())
             .parse()?;
+
+        let clip_enabled = env::var("CLIP_ENABLE")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()?;
+        let clip_model_path = env::var("CLIP_MODEL_PATH")
+            .unwrap_or_else(|_| "./models/clip".to_string());
 
         Ok(Config {
             port: env::var("TURBO_PIX_PORT")
@@ -39,6 +52,10 @@ impl Config {
             cache: CacheConfig {
                 thumbnail_cache_path,
                 max_cache_size_mb,
+            },
+            clip: ClipConfig {
+                enabled: clip_enabled,
+                model_path: clip_model_path,
             },
         })
     }

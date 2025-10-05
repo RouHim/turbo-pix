@@ -874,3 +874,95 @@ mod tests {
         assert_eq!(timeline.density.len(), 0);
     }
 }
+
+// CLIP embedding functions
+
+/// Save CLIP embedding for a photo
+pub fn save_embedding(
+    pool: &DbPool,
+    photo_hash: &str,
+    embedding: &[f32],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+
+    // Convert f32 slice to byte slice
+    let bytes: Vec<u8> = embedding
+        .iter()
+        .flat_map(|f| f.to_ne_bytes())
+        .collect();
+
+    conn.execute(
+        "INSERT OR REPLACE INTO photo_embeddings (photo_hash, embedding) VALUES (?, ?)",
+        rusqlite::params![photo_hash, bytes],
+    )?;
+    Ok(())
+}
+
+/// Get CLIP embedding for a photo
+#[allow(dead_code)]
+pub fn get_embedding(
+    pool: &DbPool,
+    photo_hash: &str,
+) -> Result<Option<Vec<f32>>, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare("SELECT embedding FROM photo_embeddings WHERE photo_hash = ?")?;
+
+    match stmt.query_row([photo_hash], |row| {
+        let bytes: Vec<u8> = row.get(0)?;
+        Ok(bytes)
+    }) {
+        Ok(bytes) => {
+            // Convert bytes back to f32 vector
+            let floats: Vec<f32> = bytes
+                .chunks_exact(4)
+                .map(|chunk| f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            Ok(Some(floats))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(Box::new(e)),
+    }
+}
+
+/// Search photos by CLIP embedding similarity
+#[allow(dead_code)]
+pub fn search_by_clip_embedding(
+    pool: &DbPool,
+    query_embedding: &[f32],
+    limit: i64,
+    similarity_threshold: f32,
+) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+
+    // Convert query embedding to bytes
+    let query_bytes: Vec<u8> = query_embedding
+        .iter()
+        .flat_map(|f| f.to_ne_bytes())
+        .collect();
+
+    // Use sqlite-vec for vector similarity search
+    // vec_distance_cosine returns distance (lower is more similar)
+    // We want similarity, so we use threshold as max distance
+    let mut stmt = conn.prepare(
+        "SELECT p.*
+         FROM photos p
+         JOIN photo_embeddings e ON p.hash_sha256 = e.photo_hash
+         WHERE vec_distance_cosine(e.embedding, ?) < ?
+         ORDER BY vec_distance_cosine(e.embedding, ?) ASC
+         LIMIT ?",
+    )?;
+
+    let max_distance = 1.0 - similarity_threshold; // Convert similarity to distance
+
+    let photo_iter = stmt.query_map(
+        params![&query_bytes, max_distance, &query_bytes, limit],
+        Photo::from_row,
+    )?;
+
+    let mut photos = Vec::new();
+    for photo in photo_iter {
+        photos.push(photo?);
+    }
+
+    Ok(photos)
+}

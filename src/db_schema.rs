@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS photos (
 ) WITHOUT ROWID;
 "#;
 
+// CLIP embeddings virtual table (requires sqlite-vec extension)
+pub const EMBEDDINGS_TABLE: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS photo_embeddings
+USING vec0(
+    photo_hash TEXT PRIMARY KEY,
+    embedding FLOAT[512]
+)
+"#;
+
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
@@ -60,6 +69,7 @@ pub const SCHEMA_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
     "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
     "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
+    EMBEDDINGS_TABLE,
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

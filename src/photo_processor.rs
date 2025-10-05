@@ -43,6 +43,7 @@ pub struct ProcessedPhoto {
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
     pub bitrate: Option<i32>,        // Bitrate in kbps
     pub frame_rate: Option<f64>,     // Frame rate for videos
+    pub embedding: Option<Vec<f32>>, // CLIP embedding vector
 }
 
 impl ProcessedPhoto {
@@ -96,7 +97,15 @@ impl ProcessedPhoto {
             updated_at: Utc::now(),
         };
 
-        photo.create(db_pool)
+        photo.create(db_pool)?;
+
+        // Save CLIP embedding if available
+        if let Some(ref embedding) = self.embedding {
+            let hash = self.hash_sha256.as_ref().expect("Must have hash");
+            crate::db::save_embedding(db_pool, hash, embedding)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -258,6 +267,7 @@ impl PhotoProcessor {
             audio_codec: metadata.audio_codec,
             bitrate: metadata.bitrate,
             frame_rate: metadata.frame_rate,
+            embedding: None, // Will be generated separately if CLIP is enabled
         })
     }
 

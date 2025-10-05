@@ -1,10 +1,12 @@
 use clokwerk::{Job, Scheduler, TimeUnits};
 use log::{error, info};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::cache::CacheManager;
+use crate::clip_encoder::ClipEncoder;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 
@@ -13,14 +15,21 @@ pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
     db_pool: DbPool,
     cache_manager: CacheManager,
+    clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
 }
 
 impl PhotoScheduler {
-    pub fn new(photo_paths: Vec<PathBuf>, db_pool: DbPool, cache_manager: CacheManager) -> Self {
+    pub fn new(
+        photo_paths: Vec<PathBuf>,
+        db_pool: DbPool,
+        cache_manager: CacheManager,
+        clip_encoder: Option<Arc<tokio::sync::Mutex<ClipEncoder>>>,
+    ) -> Self {
         Self {
             photo_paths,
             db_pool,
             cache_manager,
+            clip_encoder,
         }
     }
 
@@ -30,6 +39,7 @@ impl PhotoScheduler {
         let photo_paths = self.photo_paths.clone();
         let db_pool = self.db_pool.clone();
         let cache_manager = self.cache_manager.clone();
+        let clip_encoder = self.clip_encoder.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -48,9 +58,45 @@ impl PhotoScheduler {
                         let mut error_count = 0;
 
                         for processed_photo in processed_photos {
+                            let hash = processed_photo.hash_sha256.clone().unwrap_or_default();
+                            let file_path = processed_photo.file_path.clone();
+
                             let photo: crate::db::Photo = processed_photo.into();
                             match photo.create_or_update(&db_pool) {
-                                Ok(_) => indexed_count += 1,
+                                Ok(_) => {
+                                    indexed_count += 1;
+
+                                    // Generate CLIP embedding if encoder is available (skip videos)
+                                    if let Some(ref encoder) = clip_encoder {
+                                        // Only generate embeddings for image files
+                                        let is_image = file_path.to_lowercase().ends_with(".jpg") ||
+                                                      file_path.to_lowercase().ends_with(".jpeg") ||
+                                                      file_path.to_lowercase().ends_with(".png") ||
+                                                      file_path.to_lowercase().ends_with(".gif") ||
+                                                      file_path.to_lowercase().ends_with(".webp");
+
+                                        if is_image {
+                                            let encoder_clone = encoder.clone();
+                                            let db_pool_clone = db_pool.clone();
+                                            let hash_clone = hash.clone();
+                                            let path_clone = file_path.clone();
+
+                                            tokio::spawn(async move {
+                                                let mut enc = encoder_clone.lock().await;
+                                                match enc.encode_image(std::path::Path::new(&path_clone)) {
+                                                    Ok(embedding) => {
+                                                        if let Err(e) = crate::db::save_embedding(&db_pool_clone, &hash_clone, &embedding) {
+                                                            error!("Failed to save embedding for {}: {}", hash_clone, e);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to encode image {}: {}", path_clone, e);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
                                 Err(e) => {
                                     error!("Failed to save photo to database: {}", e);
                                     error_count += 1;
@@ -104,9 +150,47 @@ impl PhotoScheduler {
         let mut error_count = 0;
 
         for processed_photo in processed_photos {
+            let hash = processed_photo.hash_sha256.clone().unwrap_or_default();
+            let file_path = processed_photo.file_path.clone();
+
             let photo: crate::db::Photo = processed_photo.into();
             match photo.create_or_update(&self.db_pool) {
-                Ok(_) => indexed_count += 1,
+                Ok(_) => {
+                    indexed_count += 1;
+
+                    // Generate CLIP embedding if encoder is available (skip videos)
+                    if let Some(ref encoder) = self.clip_encoder {
+                        // Only generate embeddings for image files
+                        let is_image = file_path.to_lowercase().ends_with(".jpg") ||
+                                      file_path.to_lowercase().ends_with(".jpeg") ||
+                                      file_path.to_lowercase().ends_with(".png") ||
+                                      file_path.to_lowercase().ends_with(".gif") ||
+                                      file_path.to_lowercase().ends_with(".webp");
+
+                        if is_image {
+                            let encoder_clone = encoder.clone();
+                            let db_pool_clone = self.db_pool.clone();
+                            let hash_clone = hash.clone();
+                            let path_clone = file_path.clone();
+
+                            tokio::spawn(async move {
+                                let mut enc = encoder_clone.lock().await;
+                                match enc.encode_image(std::path::Path::new(&path_clone)) {
+                                    Ok(embedding) => {
+                                        if let Err(e) = crate::db::save_embedding(&db_pool_clone, &hash_clone, &embedding) {
+                                            error!("Failed to save embedding for {}: {}", hash_clone, e);
+                                        } else {
+                                            info!("Generated CLIP embedding for {}", hash_clone);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to encode image {}: {}", path_clone, e);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
                 Err(e) => {
                     error!("Failed to save photo to database: {}", e);
                     error_count += 1;

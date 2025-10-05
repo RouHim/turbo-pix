@@ -127,7 +127,12 @@ fn initialize_services(
     };
 
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
-    let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager);
+    let photo_scheduler = PhotoScheduler::new(
+        photo_paths,
+        db_pool.clone(),
+        cache_manager,
+        clip_encoder.clone(),
+    );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");
 

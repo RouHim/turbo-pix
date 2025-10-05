@@ -70,12 +70,13 @@ impl ClipEncoder {
         let input_value = Value::from_array(preprocessed)?;
 
         // Run inference through visual encoder
+        // Try "image" as input name (similar to text encoder)
         let outputs = self
             .visual_session
-            .run(ort::inputs!["pixel_values" => input_value])?;
+            .run(ort::inputs!["image" => input_value])?;
 
-        // Extract embedding from output
-        let embedding = outputs["image_embeds"]
+        // Extract embedding from output (use first output by index)
+        let embedding = outputs[0]
             .try_extract_array::<f32>()?
             .view()
             .to_owned();
@@ -136,24 +137,25 @@ impl ClipEncoder {
     }
 
     /// Preprocess image for CLIP model
-    /// CLIP expects 224x224 RGB images with ImageNet normalization
+    /// SigLIP CLIP expects 384x384 RGB images with ImageNet normalization
     fn preprocess_image(
         &self,
         img: DynamicImage,
     ) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
-        // Resize to 224x224 (CLIP input size)
-        let img = img.resize_exact(224, 224, image::imageops::FilterType::Lanczos3);
+        // Resize to 384x384 (SigLIP input size, larger than standard CLIP's 224)
+        const SIZE: u32 = 384;
+        let img = img.resize_exact(SIZE, SIZE, image::imageops::FilterType::Lanczos3);
         let rgb = img.to_rgb8();
 
         // ImageNet normalization parameters (same as PyTorch/Python CLIP)
         let mean = [0.48145466, 0.4578275, 0.40821073];
         let std = [0.26862954, 0.26130258, 0.27577711];
 
-        // Convert to ndarray with shape [1, 3, 224, 224] (batch, channels, height, width)
-        let mut array = Array4::<f32>::zeros((1, 3, 224, 224));
+        // Convert to ndarray with shape [1, 3, 384, 384] (batch, channels, height, width)
+        let mut array = Array4::<f32>::zeros((1, 3, SIZE as usize, SIZE as usize));
 
-        for y in 0..224 {
-            for x in 0..224 {
+        for y in 0..SIZE {
+            for x in 0..SIZE {
                 let pixel = rgb.get_pixel(x, y);
                 for c in 0..3 {
                     // Normalize: (pixel/255 - mean) / std

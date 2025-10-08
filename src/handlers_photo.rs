@@ -38,17 +38,8 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
     let result = if query.q.is_some() || query.year.is_some() || query.month.is_some() {
         let search_query = SearchQuery {
             q: query.q.clone(),
-            camera_make: None,
-            camera_model: None,
             year: query.year,
             month: query.month,
-            keywords: None,
-            has_location: None,
-            country: None,
-            limit: Some(limit),
-            page: Some(page),
-            sort: query.sort.clone(),
-            order: query.order.clone(),
         };
         Photo::search_photos(
             &db_pool,

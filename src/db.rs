@@ -2,9 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
 
-pub use crate::db_pool::{
-    create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
-};
+pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,16 +428,6 @@ impl Photo {
             }
         }
 
-        if let Some(ref camera_make) = query.camera_make {
-            where_clause.push_str(" AND camera_make LIKE ?");
-            params.push(Box::new(format!("%{}%", camera_make)));
-        }
-
-        if let Some(ref camera_model) = query.camera_model {
-            where_clause.push_str(" AND camera_model LIKE ?");
-            params.push(Box::new(format!("%{}%", camera_model)));
-        }
-
         if let Some(year) = query.year {
             where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
             params.push(Box::new(year.to_string()));
@@ -448,24 +436,6 @@ impl Photo {
         if let Some(month) = query.month {
             where_clause.push_str(" AND strftime('%m', taken_at) = ?");
             params.push(Box::new(format!("{:02}", month)));
-        }
-
-        if let Some(ref keywords) = query.keywords {
-            where_clause.push_str(" AND keywords LIKE ?");
-            params.push(Box::new(format!("%{}%", keywords)));
-        }
-
-        if let Some(has_location) = query.has_location {
-            if has_location {
-                where_clause.push_str(" AND latitude IS NOT NULL AND longitude IS NOT NULL");
-            } else {
-                where_clause.push_str(" AND (latitude IS NULL OR longitude IS NULL)");
-            }
-        }
-
-        if let Some(ref country) = query.country {
-            where_clause.push_str(" AND country LIKE ?");
-            params.push(Box::new(format!("%{}%", country)));
         }
 
         // Get total count

@@ -1,6 +1,6 @@
-use crate::cache::ThumbnailGenerator;
 use crate::db::DbPool;
 use crate::semantic_search::SemanticSearchEngine;
+use crate::thumbnail_generator::ThumbnailGenerator;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::sync::Arc;

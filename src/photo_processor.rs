@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::cache::CacheManager;
+use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo};
 use crate::file_scanner::{FileScanner, PhotoFile};
 use crate::metadata_extractor::MetadataExtractor;
@@ -173,7 +173,7 @@ impl PhotoProcessor {
     pub async fn full_rescan_and_cleanup(
         &self,
         db_pool: &DbPool,
-        _cache_manager: &CacheManager,
+        cache_manager: &CacheManager,
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
         // Step 1: Get all photo files on disk
         let photo_files = self.scanner.scan();
@@ -184,9 +184,17 @@ impl PhotoProcessor {
             .map(|pf| pf.path.to_string_lossy().to_string())
             .collect();
 
-        // Step 3: Delete orphaned photos (in database but not on disk)
-        if let Err(e) = crate::db::delete_orphaned_photos(db_pool, &existing_paths) {
-            eprintln!("Failed to delete orphaned photos: {}", e);
+        // Step 3: Delete orphaned photos (in database but not on disk) and clear their caches
+        let deleted_paths = crate::db::delete_orphaned_photos(db_pool, &existing_paths)
+            .unwrap_or_else(|e| {
+                error!("Failed to delete orphaned photos: {}", e);
+                Vec::new()
+            });
+
+        for path in deleted_paths {
+            if let Err(e) = cache_manager.clear_for_path(&path).await {
+                error!("Failed to clear cache for {}: {}", path, e);
+            }
         }
 
         // Step 4: Process all files found on disk (parallel processing)

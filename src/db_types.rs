@@ -17,13 +17,6 @@ pub struct SearchQuery {
     pub order: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchSuggestion {
-    pub term: String,
-    pub count: i64,
-    pub category: String,
-}
-
 // Timeline related structs
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct TimelineDensity {

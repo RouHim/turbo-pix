@@ -81,28 +81,30 @@ pub fn needs_update(
 pub fn delete_orphaned_photos(
     pool: &DbPool,
     existing_paths: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
 
     if existing_paths.is_empty() {
-        // If no existing paths, delete all photos and semantic vectors
+        let mut stmt = conn.prepare("SELECT file_path FROM photos")?;
+        let deleted_paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
         conn.execute("DELETE FROM photos", [])?;
         conn.execute("DELETE FROM image_semantic_vectors", [])?;
         conn.execute("DELETE FROM semantic_vector_path_mapping", [])?;
         info!("Deleted all photos and semantic vectors from database (no files found)");
-        return Ok(());
+        return Ok(deleted_paths);
     }
 
-    // Create placeholders for the IN clause
     let placeholders = existing_paths
         .iter()
         .map(|_| "?")
         .collect::<Vec<_>>()
         .join(",");
 
-    // Delete orphaned photos
-    let sql = format!(
-        "DELETE FROM photos WHERE file_path NOT IN ({})",
+    let select_sql = format!(
+        "SELECT file_path FROM photos WHERE file_path NOT IN ({})",
         placeholders
     );
 
@@ -111,18 +113,24 @@ pub fn delete_orphaned_photos(
         .map(|p| p as &dyn rusqlite::ToSql)
         .collect();
 
-    let deleted_photos = conn.execute(&sql, params.as_slice())?;
+    let mut stmt = conn.prepare(&select_sql)?;
+    let deleted_paths: Vec<String> = stmt
+        .query_map(params.as_slice(), |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
 
-    // Delete orphaned semantic vectors (semantic vectors for paths not in existing_paths)
+    let delete_sql = format!(
+        "DELETE FROM photos WHERE file_path NOT IN ({})",
+        placeholders
+    );
+
+    let deleted_photos = conn.execute(&delete_sql, params.as_slice())?;
+
     let vector_cache_sql = format!(
         "DELETE FROM semantic_vector_path_mapping WHERE path NOT IN ({})",
         placeholders
     );
     let deleted_vectors = conn.execute(&vector_cache_sql, params.as_slice())?;
 
-    // Note: image_semantic_vectors table is automatically cleaned up via foreign key relationship with semantic_vector_path_mapping
-    // Actually, there's no foreign key, so we need to clean up orphaned semantic vectors manually
-    // Get IDs from semantic_vector_path_mapping, then delete semantic vectors not in that list
     conn.execute(
         "DELETE FROM image_semantic_vectors WHERE rowid NOT IN (SELECT id FROM semantic_vector_path_mapping)",
         [],
@@ -133,7 +141,7 @@ pub fn delete_orphaned_photos(
         deleted_photos, deleted_vectors
     );
 
-    Ok(())
+    Ok(deleted_paths)
 }
 
 pub fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {

@@ -1,159 +1,51 @@
 # Agent Guidelines for TurboPix
 
-## Build/Test/Lint Commands Backend
+## Project Context
 
-- `cargo run` - Start the application
-- `cargo build` - Build the project
-- `cargo test` - Run all tests
-- `cargo test <test_name>` - Run specific test
-- `cargo check` - Check for compilation errors without building
-- `cargo clippy` - Run linter (Clippy) for code quality
-- `cargo fmt` - Format code according to Rust standards
+Development/personal project - breaking changes acceptable, database can be recreated
 
-## Test/Lint/Format Commands Frontend
+## Development Commands
 
-- `npm run lint` - Run linter (ESLint) for code quality
-- `npm run format` - Format code using Prettier
+**Backend:** `cargo run` | `cargo test` | `cargo clippy` | `cargo fmt`  
+**Frontend:** `npm run lint` | `npm run format`
 
-## Test-Driven Development (TDD)
+## Code Style
 
-### Test Infrastructure
+**Rust:**
 
-- **Helpers**: `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
-- **Sample data**: `photos/sample_with_exif.jpg` for EXIF testing, `photos/test_video.mp4` for video processing tests
-- **Video tests**: Require `RUN_VIDEO_TESTS=1` env var, `ffmpeg` and `ffprobe` installed, and sample video file present
-- **Pattern**: Unit tests in `#[cfg(test)]` modules, integration in `tests/` dir
+- Iterator chains over loops: `.iter().filter_map().next()`
+- Arrays over vecs: `[A, B]` vs `vec![A, B]`
+- Error handling: `Result<T, E>` with `?`
+- Imports: std, external crates, local (blank lines between)
+- Zero warnings policy
 
-## E2E Testing with Browser Automation
+**General:**
 
-### Test Setup
+- KISS + SOLID principles
 
-- Start application in the background using `nohup` and continue
-- Wait until the app gets up by checking the health endpoint `curl --retry 5 --retry-delay 2 http://localhost:8080/health`
-- **IMPORTANT**: Use available MCP servers for browser automation (check for `mcp__` prefixed tools)
-  - Prefer Playwright MCP server if available (no additional dependencies)
-  - Only use Puppeteer MCP as fallback (avoids adding puppeteer to package.json)
-  - Do NOT install browser automation tools as project dependencies
-- Navigate to `http://localhost:18473` for testing
-- Finally don't forget to kill the app process
+## Testing
 
-### Key E2E Test Scenarios
+**TDD/BDD:** Write tests first (GIVEN, WHEN, THEN style)
 
-- **Photo Grid Loading**: Verify photos load and display correctly
-- **Search Functionality**: Test search queries and result filtering
-- **Photo Viewer**: Test image opening, navigation, and metadata display
-- **Thumbnail Generation**: Verify thumbnails render properly
-- **Responsive Design**: Test on different viewport sizes
-- **API Endpoints**: Verify `/api/photos`, `/api/search`, `/thumbnails/*` responses
+**Helpers:**
 
-## Post-Feature Testing Protocol
+- `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
+- Video tests need `RUN_VIDEO_TESTS=1`, ffmpeg/ffprobe
 
-**TDD-Enhanced Testing Workflow:**
+**E2E:**
 
-1. **Start with failing tests** - Write tests for new feature before implementation
-2. **Implement to pass tests** - Build minimal functionality to satisfy test requirements
-3. **Start application** with `cargo run` for manual verification
-4. **Run full test suite** - `cargo test` to ensure no regressions
-5. **E2E validation** - Use Puppeteer to test complete user workflows
-6. **Visual regression testing** - Take screenshots and verify UI changes
-7. **Performance verification** - Check application still processes photos efficiently
-8. **Browser console check** - Verify no JavaScript errors introduced
+- Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
+- Use Playwright MCP (preferred) or Puppeteer (fallback) - don't install as dependency
+- Test at `http://localhost:18473`
+- Use `[data-photo-id]` selectors
+- Kill process after testing
 
-**Test-First Feature Implementation:**
+## Common Issues
 
-- Define API contracts in tests before coding endpoints
-- Test error conditions before implementing error handling
-- Verify edge cases through unit tests before integration testing
+**Static files not updating:** `rm target/debug/turbo-pix && cargo build` (embedded via `include_str!()`)
 
-## Code Style & Conventions
+**UI state desync:** Update both: `appState.value = x; domElement.value = x;`
 
-- **Modules**: Use single-file modules for simplicity (completed module flattening)
-- **Imports**: Group std, external crates, then local modules with blank lines between
-- **Structs**: Use PascalCase, derive Debug/Clone/Serialize/Deserialize as needed
-- **Functions**: Use snake_case, make async where needed for web handlers
-- **Error Handling**: Use `Result<T, E>` types, propagate errors with `?` operator
-- **Dependencies**: Use specific versions in Cargo.toml, prefer stable crates
-- **Config**: Load from environment variables with sensible defaults
-- **Database**: Use connection pooling (r2d2), implement CRUD in separate modules
-- **Logging**: Use `log` crate with `env_logger` for standard logging
-- **JSON**: Use `serde_json::json!` macro for responses, consistent error format
-- **Web handlers**: Return `Result<HttpResponse>`, use proper HTTP status codes
-- **Clean Code**: KISS principle, avoid unnecessary complexity, comment non-obvious logic, remove dead code
-- **SOLID principles**: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion
+**Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
-## Code Quality Standards
-
-- **Zero warnings policy**: Maintain zero clippy warnings and compilation warnings
-- **Test coverage**: All tests must pass before commits
-- **Code review required**: Perform code review before committing
-- **Utility preservation**: Use `#[allow(dead_code)]` for potentially useful functions rather than deletion
-
-## Project Context & Development Guidelines
-
-### Project Status
-
-- **Non-production application**: TurboPix is a development/personal project, not a production system
-- **No legacy compatibility requirements**: Since this isn't serving production users, we can make breaking changes freely
-- **Database can be recreated**: No need to preserve existing data or maintain migration compatibility
-- **Modern approach preferred**: Can use latest APIs and remove fallback mechanisms without concern
-
-## Development Workflow & Common Pitfalls
-
-### Static File Development
-
-- **Incremental rebuild for static files**: `rm target/debug/turbo-pix && cargo build` after modifying `/static/` files
-- **Full clean rebuild**: `cargo clean && cargo build` (slower, recompiles all dependencies)
-- Rust embeds static files at compile-time using `include_str!()` macro - changes require recompilation
-- Delete binary or incremental cache: `rm -rf target/debug/turbo-pix target/debug/incremental/turbo_pix-*`
-- Use browser dev tools to verify latest changes are served
-- **Common pitfall**: Modified static files won't be served until recompilation forces re-embedding
-- **Why incremental doesn't detect changes**: Rust build system doesn't track files referenced by `include_str!()` macros
-
-### JavaScript Debugging
-
-- Access app objects via browser console (e.g., `window.turboPixApp`)
-- Test both functional behavior and UI state synchronization
-- **Common bug pattern**: Functions update app state but forget to sync UI elements
-- **Example**: setSortBy() bug where photos reordered correctly but select dropdown value didn't update
-
-### UI State Management
-
-- Always sync DOM elements after app state changes
-- **Pattern**: `appState.value = newValue; domElement.value = newValue;`
-- **Fix pattern**: After state changes, explicitly update corresponding DOM elements
-- Verify both functional behavior AND visual UI state changes in testing
-
-## Debugging Guidelines & Common Issues
-
-### Anti-Pattern: Development Code in Production Logic
-
-- **Avoid**: Hardcoded test paths, fallback logic, or development shortcuts in production code paths
-- **Key insight**: Remove all development convenience code before deployment - it often masks real bugs
-
-### Video Playback Debugging
-
-- **DOM structure**: Videos appear as photo cards in grid but play in `#viewer-video` element
-- **Grid selector**: Use `[data-photo-id]` for targeting specific photos in grid, not `.photo-grid-item`
-- **API testing**: Test both GET and HEAD requests - different error patterns may emerge
-- **Browser state**: Refresh page between E2E tests to avoid caching/state interference
-- **Database verification**: Check `mime_type` field consistency for media type detection
-
-### E2E Testing Best Practices
-
-- **Selector strategy**: Use data attributes (`[data-photo-id="176"]`) for reliable element targeting
-- **API verification**: Test endpoints directly before browser automation testing
-- **Response validation**: Check both status codes and content length for file serving
-- **Screenshot documentation**: Capture working states for regression comparison
-- **Process cleanup**: Always kill background processes after testing to avoid port conflicts
-
-### Backend Bug Investigation Workflow
-
-1. **API endpoint testing**: Verify raw API responses with curl/browser dev tools
-2. **Database state verification**: Check data consistency and field values
-3. **Hardcoded path detection**: Search for fallback logic that might override dynamic behavior
-4. **Documentation**: Update AGENTS.md with lessons learned and debugging insights, keep it short and to the point
-
-## Rust Code Style Preferences
-
-- **Prefer iterator chains over for loops**: Use `.iter().filter_map().next()` instead of nested loops and conditionals
-- **Use arrays over vecs for known sizes**: `[A, B, C]` instead of `vec![A, B, C]` (avoids heap allocation)
+**Avoid:** Hardcoded paths and fallback logic mask bugs

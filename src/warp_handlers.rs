@@ -1,12 +1,4 @@
-// Re-exports for backward compatibility
-pub use crate::handlers_health::{health_check, ready_check};
-pub use crate::handlers_photo::{
-    get_photo, get_photo_exif, get_photo_file, get_stats, get_timeline, list_photos,
-    toggle_favorite, FavoriteRequest, PhotoQuery,
-};
-pub use crate::handlers_search::{semantic_search, SemanticSearchQuery};
-pub use crate::handlers_thumbnail::{get_photo_thumbnail, get_thumbnail_by_hash, ThumbnailQuery};
-pub use crate::handlers_video::{get_video_file, VideoQuery};
+// Re-exports for backward compatibility (types only, handlers are now internal)
 
 #[cfg(test)]
 mod tests {

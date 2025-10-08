@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use serde_json::json;
 use std::path::Path;
-use warp::{reject, Rejection, Reply};
+use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::{DbPool, Photo, SearchQuery};
+use crate::handlers_video::{get_video_file, VideoQuery};
 use crate::mimetype_detector;
-use crate::warp_helpers::{DatabaseError, NotFoundError};
+use crate::warp_helpers::{with_db, DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
@@ -136,110 +137,6 @@ pub async fn get_photo_file(
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct PhotoUpdateRequest {
-    pub filename: Option<String>,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub iso: Option<i32>,
-    pub aperture: Option<f64>,
-    pub shutter_speed: Option<String>,
-    pub focal_length: Option<f64>,
-    pub gps_latitude: Option<f64>,
-    pub gps_longitude: Option<f64>,
-    pub location_name: Option<String>,
-    pub is_favorite: Option<bool>,
-}
-
-#[allow(dead_code)]
-pub async fn update_photo(
-    photo_hash: String,
-    update_req: PhotoUpdateRequest,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
-    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
-        Ok(Some(photo)) => photo,
-        Ok(None) => return Err(reject::custom(NotFoundError)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            return Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }));
-        }
-    };
-
-    // Update fields if provided
-    if let Some(filename) = &update_req.filename {
-        photo.filename = filename.clone();
-    }
-    if let Some(camera_make) = &update_req.camera_make {
-        photo.camera_make = Some(camera_make.clone());
-    }
-    if let Some(camera_model) = &update_req.camera_model {
-        photo.camera_model = Some(camera_model.clone());
-    }
-    if let Some(iso) = update_req.iso {
-        photo.iso = Some(iso);
-    }
-    if let Some(aperture) = update_req.aperture {
-        photo.aperture = Some(aperture);
-    }
-    if let Some(shutter_speed) = &update_req.shutter_speed {
-        photo.shutter_speed = Some(shutter_speed.clone());
-    }
-    if let Some(focal_length) = update_req.focal_length {
-        photo.focal_length = Some(focal_length);
-    }
-    if let Some(gps_latitude) = update_req.gps_latitude {
-        photo.latitude = Some(gps_latitude);
-    }
-    if let Some(gps_longitude) = update_req.gps_longitude {
-        photo.longitude = Some(gps_longitude);
-    }
-    if let Some(location_name) = &update_req.location_name {
-        photo.location_name = Some(location_name.clone());
-    }
-    if let Some(is_favorite) = update_req.is_favorite {
-        photo.is_favorite = Some(is_favorite);
-    }
-
-    match photo.update(&db_pool) {
-        Ok(_) => Ok(warp::reply::json(&photo)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }))
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub async fn delete_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_hash(&db_pool, &photo_hash) {
-        Ok(Some(_)) => match Photo::delete(&db_pool, &photo_hash) {
-            Ok(true) => Ok(warp::reply::with_status(
-                "",
-                warp::http::StatusCode::NO_CONTENT,
-            )),
-            Ok(false) => Err(reject::custom(NotFoundError)),
-            Err(e) => {
-                log::error!("Database error: {}", e);
-                Err(reject::custom(DatabaseError {
-                    message: format!("Database error: {}", e),
-                }))
-            }
-        },
-        Ok(None) => Err(reject::custom(NotFoundError)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }))
-        }
-    }
-}
-
 #[derive(Debug, serde::Deserialize)]
 pub struct FavoriteRequest {
     pub is_favorite: bool,
@@ -273,58 +170,6 @@ pub async fn toggle_favorite(
         }
     }
 }
-
-#[allow(dead_code)]
-pub async fn get_photo_metadata(
-    photo_hash: String,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_hash(&db_pool, &photo_hash) {
-        Ok(Some(photo)) => {
-            let metadata = json!({
-                "hash_sha256": photo.hash_sha256,
-                "filename": photo.filename,
-                "file_size": photo.file_size,
-                "mime_type": photo.mime_type,
-                "taken_at": photo.taken_at.map(|dt| dt.to_rfc3339()),
-                "date_modified": photo.date_modified.to_rfc3339(),
-                "camera_make": photo.camera_make,
-                "camera_model": photo.camera_model,
-                "iso": photo.iso,
-                "aperture": photo.aperture,
-                "shutter_speed": photo.shutter_speed,
-                "focal_length": photo.focal_length,
-                "width": photo.width,
-                "height": photo.height,
-                "orientation": photo.orientation,
-                "gps_latitude": photo.latitude,
-                "gps_longitude": photo.longitude,
-                "location_name": photo.location_name,
-            });
-            Ok(warp::reply::json(&metadata))
-        }
-        Ok(None) => Err(reject::custom(NotFoundError)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }))
-        }
-    }
-}
-
-pub async fn get_stats(db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::get_stats(&db_pool) {
-        Ok(stats) => Ok(warp::reply::json(&stats)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }))
-        }
-    }
-}
-
 pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_timeline_data(&db_pool) {
         Ok(timeline) => Ok(warp::reply::json(&timeline)),
@@ -394,4 +239,78 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         "filename": photo.filename,
         "exif": exif_data
     })))
+}
+
+pub fn build_photo_routes(
+    db_pool: DbPool,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let api_photos_list = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<PhotoQuery>())
+        .and(with_db(db_pool.clone()))
+        .and_then(list_photos);
+
+    let api_photo_get = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_photo);
+
+    let api_photo_file = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("file"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_photo_file);
+
+    let api_photo_video = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("video"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<VideoQuery>())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_video_file);
+
+    let api_photo_favorite = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("favorite"))
+        .and(warp::path::end())
+        .and(warp::put())
+        .and(warp::body::json::<FavoriteRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(toggle_favorite);
+
+    let api_photo_timeline = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("timeline"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_timeline);
+
+    let api_photo_exif = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("exif"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool))
+        .and_then(get_photo_exif);
+
+    api_photos_list
+        .or(api_photo_get)
+        .or(api_photo_file)
+        .or(api_photo_video)
+        .or(api_photo_favorite)
+        .or(api_photo_timeline)
+        .or(api_photo_exif)
 }

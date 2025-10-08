@@ -118,11 +118,6 @@ class TurboPixAPI {
     return this.request('/health');
   }
 
-  // Stats endpoints
-  async getStats() {
-    return this.request('/api/stats');
-  }
-
   // Collections and cameras features removed
 
   // Batch operations

@@ -162,7 +162,7 @@ const handleError = (error, context = '') => {
 // URL helpers
 const getPhotoUrl = (photoHash) => `/api/photos/${photoHash}/file`;
 const getThumbnailUrl = (photo, size = 'medium') =>
-  `/api/thumbnails/hash/${photo.hash_sha256}/${size}`;
+  `/api/photos/${photo.hash_sha256}/thumbnail?size=${size}`;
 const getVideoUrl = (photoHash) => `/api/photos/${photoHash}/video`;
 
 // Local storage helpers

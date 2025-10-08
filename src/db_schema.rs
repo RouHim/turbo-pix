@@ -64,15 +64,6 @@ pub const IMAGE_SEMANTIC_VECTORS_TABLE: &str =
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_make ON photos(camera_make);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_model ON photos(camera_model);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_file_modified ON photos(file_modified);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_keywords ON photos(keywords);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_faces_detected ON photos(faces_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
     IMAGE_SEMANTIC_VECTORS_TABLE,
     SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
 ];

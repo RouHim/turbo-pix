@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::cache::CacheManager;
+use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
@@ -144,7 +144,7 @@ mod tests {
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
-    use crate::cache::CacheManager;
+    use crate::cache_manager::CacheManager;
     use crate::db::{create_test_db_pool, DbPool, Photo};
 
     struct TestEnvironment {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::db_pool::{
     create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
 };
-pub use crate::db_types::{SearchQuery, SearchSuggestion, TimelineData, TimelineDensity};
+pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
@@ -365,65 +365,6 @@ impl Photo {
         Ok(())
     }
 
-    pub fn delete(pool: &DbPool, hash: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let deleted_rows = conn.execute("DELETE FROM photos WHERE hash_sha256 = ?", [hash])?;
-        Ok(deleted_rows > 0)
-    }
-
-    pub fn get_cameras(pool: &DbPool) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT camera_make, camera_model FROM photos 
-             WHERE camera_make IS NOT NULL AND camera_model IS NOT NULL 
-             ORDER BY camera_make, camera_model",
-        )?;
-
-        let camera_iter = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut cameras = Vec::new();
-        for camera in camera_iter {
-            cameras.push(camera?);
-        }
-        Ok(cameras)
-    }
-
-    pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
-        // Total photos
-        let total_photos: i64 =
-            conn.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?;
-
-        // Photos by year
-        let mut stmt = conn.prepare(
-            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count 
-             FROM photos 
-             WHERE taken_at IS NOT NULL 
-             GROUP BY year 
-             ORDER BY year DESC",
-        )?;
-
-        let year_iter = stmt.query_map([], |row| {
-            Ok(serde_json::json!({
-                "year": row.get::<_, String>(0)?,
-                "count": row.get::<_, i64>(1)?
-            }))
-        })?;
-
-        let mut years = Vec::new();
-        for year in year_iter {
-            years.push(year?);
-        }
-
-        Ok(serde_json::json!({
-            "total_photos": total_photos,
-            "photos_by_year": years
-        }))
-    }
-
     pub fn search_photos(
         pool: &DbPool,
         query: &SearchQuery,
@@ -566,60 +507,6 @@ impl Photo {
         }
 
         Ok((photos, total))
-    }
-
-    pub fn get_search_suggestions(
-        pool: &DbPool,
-        _query: Option<&str>,
-    ) -> Result<Vec<SearchSuggestion>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut suggestions = Vec::new();
-
-        // Camera makes
-        let mut stmt = conn.prepare(
-            "SELECT camera_make, COUNT(*) as count
-             FROM photos
-             WHERE camera_make IS NOT NULL
-             GROUP BY camera_make
-             ORDER BY count DESC
-             LIMIT 10",
-        )?;
-
-        let camera_iter = stmt.query_map([], |row| {
-            Ok(SearchSuggestion {
-                term: row.get::<_, String>(0)?,
-                count: row.get::<_, i64>(1)?,
-                category: "camera_make".to_string(),
-            })
-        })?;
-
-        for suggestion in camera_iter {
-            suggestions.push(suggestion?);
-        }
-
-        // Years
-        let mut stmt = conn.prepare(
-            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count
-             FROM photos
-             WHERE taken_at IS NOT NULL
-             GROUP BY year
-             ORDER BY count DESC
-             LIMIT 10",
-        )?;
-
-        let year_iter = stmt.query_map([], |row| {
-            Ok(SearchSuggestion {
-                term: row.get::<_, String>(0)?,
-                count: row.get::<_, i64>(1)?,
-                category: "year".to_string(),
-            })
-        })?;
-
-        for suggestion in year_iter {
-            suggestions.push(suggestion?);
-        }
-
-        Ok(suggestions)
     }
 
     pub fn get_timeline_data(pool: &DbPool) -> Result<TimelineData, Box<dyn std::error::Error>> {

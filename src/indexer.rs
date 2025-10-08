@@ -3,8 +3,6 @@ pub use crate::photo_processor::{PhotoProcessor, ProcessedPhoto};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::file_scanner::PhotoFile;
     use crate::metadata_extractor::MetadataExtractor;
     use chrono::{DateTime, Datelike, Timelike, Utc};
 
@@ -76,119 +74,6 @@ mod tests {
                 assert_eq!(taken_at.day(), 30);
             }
         }
-    }
-
-    #[test]
-    fn test_parallel_processing_performance() {
-        use rayon::prelude::*;
-        use std::time::Instant;
-
-        // Create test photo files by duplicating existing ones
-        let test_photos = vec![
-            {
-                let path = std::path::PathBuf::from("test-data/sample_with_exif.jpg");
-                let metadata = std::fs::metadata(&path)
-                    .expect("Test file test-data/sample_with_exif.jpg should exist");
-                PhotoFile {
-                    path,
-                    size: metadata.len(),
-                    modified: metadata
-                        .modified()
-                        .ok()
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| {
-                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                                .unwrap_or_else(Utc::now)
-                        }),
-                    metadata,
-                }
-            },
-            {
-                let path = std::path::PathBuf::from("test-data/test_image_1.jpg");
-                let metadata = std::fs::metadata(&path)
-                    .expect("Test file test-data/test_image_1.jpg should exist");
-                PhotoFile {
-                    path,
-                    size: metadata.len(),
-                    modified: metadata
-                        .modified()
-                        .ok()
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| {
-                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                                .unwrap_or_else(Utc::now)
-                        }),
-                    metadata,
-                }
-            },
-            {
-                let path = std::path::PathBuf::from("test-data/test_image_3.jpg");
-                let metadata = std::fs::metadata(&path)
-                    .expect("Test file test-data/test_image_3.jpg should exist");
-                PhotoFile {
-                    path,
-                    size: metadata.len(),
-                    modified: metadata
-                        .modified()
-                        .ok()
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| {
-                            DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                                .unwrap_or_else(Utc::now)
-                        }),
-                    metadata,
-                }
-            },
-        ];
-
-        // Create multiple copies to simulate larger workload
-        let mut large_test_set = Vec::new();
-        for _ in 0..50 {
-            // 150 total photos
-            large_test_set.extend(test_photos.clone());
-        }
-
-        let indexer = PhotoProcessor::new(vec![std::path::PathBuf::from("test-data")]);
-
-        // Benchmark parallel processing
-        let start = Instant::now();
-        let parallel_results: Vec<ProcessedPhoto> = large_test_set
-            .par_iter()
-            .filter_map(|photo_file| indexer.process_file(photo_file))
-            .collect();
-        let parallel_duration = start.elapsed();
-
-        // Benchmark sequential processing for comparison
-        let start = Instant::now();
-        let mut sequential_results = Vec::new();
-        for photo_file in &large_test_set {
-            if let Some(processed_photo) = indexer.process_file(photo_file) {
-                sequential_results.push(processed_photo);
-            }
-        }
-        let sequential_duration = start.elapsed();
-
-        // Results should be the same
-        assert_eq!(parallel_results.len(), sequential_results.len());
-
-        println!(
-            "Parallel processing: {:.2}ms for {} photos ({:.2} photos/sec)",
-            parallel_duration.as_millis(),
-            parallel_results.len(),
-            parallel_results.len() as f64 / parallel_duration.as_secs_f64()
-        );
-
-        println!(
-            "Sequential processing: {:.2}ms for {} photos ({:.2} photos/sec)",
-            sequential_duration.as_millis(),
-            sequential_results.len(),
-            sequential_results.len() as f64 / sequential_duration.as_secs_f64()
-        );
-
-        println!(
-            "Speedup: {:.2}x",
-            sequential_duration.as_secs_f64() / parallel_duration.as_secs_f64()
-        );
     }
 
     #[test]

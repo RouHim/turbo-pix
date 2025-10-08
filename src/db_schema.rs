@@ -48,6 +48,19 @@ CREATE TABLE IF NOT EXISTS photos (
 ) WITHOUT ROWID;
 "#;
 
+// Bridge table that maps file paths to semantic vector IDs.
+// SQLite's vec0 extension only supports vectors and implicit rowids,
+// so this table maintains the path-to-rowid mapping for the image_semantic_vectors table.
+pub const SEMANTIC_VECTOR_PATH_MAPPING_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS semantic_vector_path_mapping (
+    id INTEGER PRIMARY KEY,
+    path TEXT UNIQUE NOT NULL
+)
+"#;
+
+pub const IMAGE_SEMANTIC_VECTORS_TABLE: &str =
+    "CREATE VIRTUAL TABLE IF NOT EXISTS image_semantic_vectors USING vec0(semantic_vector float[512])";
+
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
@@ -60,6 +73,8 @@ pub const SCHEMA_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
     "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
     "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
+    IMAGE_SEMANTIC_VECTORS_TABLE,
+    SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

@@ -96,17 +96,15 @@ class Search {
 
     try {
       if (window.logger) {
-        window.logger.info('Performing search', {
+        window.logger.info('Performing AI semantic search', {
           component: 'Search',
           query,
           addToHistory,
         });
       }
 
-      // Perform the actual search
-      if (window.photoGrid) {
-        await window.photoGrid.search(query);
-      }
+      // Always use semantic search (AI search is default)
+      await this.performSemanticSearch(query);
 
       // Update URL without page reload
       const url = new URL(window.location);
@@ -127,6 +125,62 @@ class Search {
         console.error('Search error:', error);
       }
       utils.handleError(error, 'Search.performSearch');
+    }
+  }
+
+  async performSemanticSearch(query) {
+    // Remove @ prefix if present
+    const cleanQuery = query.startsWith('@') ? query.substring(1).trim() : query;
+
+    if (window.logger) {
+      window.logger.info('Performing semantic search', {
+        component: 'Search',
+        query: cleanQuery,
+      });
+    }
+
+    try {
+      const result = await api.semanticSearch(cleanQuery, 50);
+
+      if (window.photoGrid) {
+        // Convert semantic search results to photo hashes
+        const photoHashes = result.results.map((r) => r.hash);
+
+        // Load full photo data for these hashes
+        const photosData = await Promise.all(
+          photoHashes.map(async (hash) => {
+            try {
+              return await api.getPhoto(hash);
+            } catch (e) {
+              console.warn(`Failed to load photo ${hash}:`, e);
+              return null;
+            }
+          })
+        );
+
+        const photos = photosData.filter((p) => p !== null);
+
+        // Display results
+        window.photoGrid.displayPhotos(photos);
+        window.photoGrid.totalPhotos = photos.length;
+        window.photoGrid.hasMore = false;
+
+        if (window.logger) {
+          window.logger.info('Semantic search completed', {
+            component: 'Search',
+            query: cleanQuery,
+            resultsCount: photos.length,
+          });
+        }
+      }
+    } catch (error) {
+      if (window.logger) {
+        window.logger.error('Semantic search error', error, {
+          component: 'Search',
+          query: cleanQuery,
+        });
+      }
+      throw error;
     }
   }
 

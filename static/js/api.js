@@ -105,6 +105,14 @@ class TurboPixAPI {
     return this.getPhotos({ ...params, query });
   }
 
+  async semanticSearch(query, limit = 50) {
+    const searchParams = new URLSearchParams();
+    searchParams.set('q', query);
+    searchParams.set('limit', limit);
+    const endpoint = `/api/search/semantic?${searchParams.toString()}`;
+    return this.request(endpoint);
+  }
+
   // Health check
   async healthCheck() {
     return this.request('/health');

@@ -560,6 +560,13 @@ class PhotoGrid {
     this.loadPhotos(this.currentQuery, filters, true);
   }
 
+  displayPhotos(photos) {
+    this.photos = photos;
+    this.clearGrid();
+    this.renderPhotos(photos);
+    this.updateLoadMoreButton();
+  }
+
   getSelectedPhotos() {
     return this.photos.filter((photo) => {
       const card = this.container.querySelector(`[data-photo-id="${photo.hash_sha256}"]`);

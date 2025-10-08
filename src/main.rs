@@ -16,6 +16,7 @@ mod metadata_extractor;
 mod mimetype_detector;
 mod photo_processor;
 mod scheduler;
+mod semantic_search;
 mod thumbnail_generator;
 mod thumbnail_types;
 mod video_processor;
@@ -30,7 +31,11 @@ use warp::Filter;
 
 use cache::{CacheManager, ThumbnailGenerator};
 use scheduler::PhotoScheduler;
-use warp_helpers::{cors, handle_rejection, with_db, with_thumbnail_generator};
+use semantic_search::SemanticSearchEngine;
+use std::sync::Arc;
+use warp_helpers::{
+    cors, handle_rejection, with_db, with_semantic_search, with_thumbnail_generator,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,18 +64,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("Port {} is already in use", port).into());
     }
 
-    let (db_pool, thumbnail_generator, photo_scheduler) = initialize_services(&config)?;
-    start_background_tasks(photo_scheduler);
+    let (db_pool, thumbnail_generator, photo_scheduler, semantic_search) =
+        initialize_services(&config)?;
+    start_background_tasks(photo_scheduler, semantic_search.clone(), db_pool.clone());
 
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(db_pool.clone());
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
+    let search_routes = build_search_routes(db_pool.clone(), semantic_search);
     let stats_routes = build_stats_routes(db_pool);
     let static_routes = build_static_routes();
 
     let routes = health_routes
         .or(photo_routes)
         .or(thumbnail_routes)
+        .or(search_routes)
         .or(stats_routes)
         .or(static_routes)
         .with(cors())
@@ -91,9 +99,16 @@ fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
+type InitServicesResult = (
+    db_pool::DbPool,
+    ThumbnailGenerator,
+    PhotoScheduler,
+    Arc<SemanticSearchEngine>,
+);
+
 fn initialize_services(
     config: &config::Config,
-) -> Result<(db_pool::DbPool, ThumbnailGenerator, PhotoScheduler), Box<dyn std::error::Error>> {
+) -> Result<InitServicesResult, Box<dyn std::error::Error>> {
     let db_pool = db::create_db_pool(&config.db_path)?;
     info!("Database initialized successfully");
 
@@ -102,15 +117,36 @@ fn initialize_services(
     let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;
     info!("Cache and thumbnail system initialized");
 
+    // Initialize semantic search engine (lazy loading - model loads on first use)
+    let semantic_search = Arc::new(
+        SemanticSearchEngine::new(db_pool.clone())
+            .map_err(|e| format!("Failed to initialize semantic search: {}", e))?,
+    );
+    info!("Semantic search initialized");
+
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
-    let photo_scheduler = PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager);
+    let photo_scheduler = PhotoScheduler::new(
+        photo_paths,
+        db_pool.clone(),
+        cache_manager,
+        semantic_search.clone(),
+    );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");
 
-    Ok((db_pool, thumbnail_generator, photo_scheduler))
+    Ok((
+        db_pool,
+        thumbnail_generator,
+        photo_scheduler,
+        semantic_search,
+    ))
 }
 
-fn start_background_tasks(photo_scheduler: PhotoScheduler) {
+fn start_background_tasks(
+    photo_scheduler: PhotoScheduler,
+    _semantic_search: Arc<SemanticSearchEngine>,
+    _db_pool: db_pool::DbPool,
+) {
     info!("Running startup photo rescan and cleanup...");
     tokio::spawn(async move {
         if let Err(e) = photo_scheduler.run_startup_rescan().await {
@@ -235,6 +271,21 @@ fn build_thumbnail_routes(
         .and_then(warp_handlers::get_thumbnail_by_hash);
 
     api_photo_thumbnail.or(api_thumbnail_by_hash)
+}
+
+fn build_search_routes(
+    db_pool: db_pool::DbPool,
+    semantic_search: Arc<SemanticSearchEngine>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("api")
+        .and(warp::path("search"))
+        .and(warp::path("semantic"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<warp_handlers::SemanticSearchQuery>())
+        .and(with_db(db_pool))
+        .and(with_semantic_search(semantic_search))
+        .and_then(warp_handlers::semantic_search)
 }
 
 fn build_stats_routes(

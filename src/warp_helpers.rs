@@ -1,7 +1,9 @@
 use crate::cache::ThumbnailGenerator;
 use crate::db::DbPool;
+use crate::semantic_search::SemanticSearchEngine;
 use serde::Serialize;
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use warp::{reject, Filter, Rejection, Reply};
 
@@ -38,6 +40,12 @@ pub fn with_thumbnail_generator(
     thumbnail_generator: ThumbnailGenerator,
 ) -> impl Filter<Extract = (ThumbnailGenerator,), Error = Infallible> + Clone {
     warp::any().map(move || thumbnail_generator.clone())
+}
+
+pub fn with_semantic_search(
+    semantic_search: Arc<SemanticSearchEngine>,
+) -> impl Filter<Extract = (Arc<SemanticSearchEngine>,), Error = Infallible> + Clone {
+    warp::any().map(move || semantic_search.clone())
 }
 
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {

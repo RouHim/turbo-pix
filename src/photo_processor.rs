@@ -4,12 +4,14 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::cache::CacheManager;
 use crate::db::{DbPool, Photo};
 use crate::file_scanner::{FileScanner, PhotoFile};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
+use crate::semantic_search::SemanticSearchEngine;
 
 #[derive(Debug)]
 pub struct ProcessedPhoto {
@@ -102,12 +104,14 @@ impl ProcessedPhoto {
 
 pub struct PhotoProcessor {
     scanner: FileScanner,
+    semantic_search: Arc<SemanticSearchEngine>,
 }
 
 impl PhotoProcessor {
-    pub fn new(photo_paths: Vec<PathBuf>) -> Self {
+    pub fn new(photo_paths: Vec<PathBuf>, semantic_search: Arc<SemanticSearchEngine>) -> Self {
         Self {
             scanner: FileScanner::new(photo_paths),
+            semantic_search,
         }
     }
 
@@ -173,7 +177,6 @@ impl PhotoProcessor {
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
         // Step 1: Get all photo files on disk
         let photo_files = self.scanner.scan();
-        let mut processed_photos = Vec::new();
 
         // Step 2: Create list of existing paths for cleanup
         let existing_paths: Vec<String> = photo_files
@@ -187,13 +190,12 @@ impl PhotoProcessor {
         }
 
         // Step 4: Process all files found on disk (parallel processing)
-        let parallel_results: Vec<ProcessedPhoto> = photo_files
+        let photos: Vec<ProcessedPhoto> = photo_files
             .par_iter()
             .filter_map(|photo_file| self.process_file(photo_file))
             .collect();
-        processed_photos.extend(parallel_results);
 
-        Ok(processed_photos)
+        Ok(photos)
     }
 
     #[allow(dead_code)]
@@ -216,19 +218,22 @@ impl PhotoProcessor {
     }
 
     pub fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
-        let path = &photo_file.path;
+        log::info!("Processing file: {}", photo_file.path.display());
 
+        log::info!("\t* Computing metadata...");
+        let path = &photo_file.path;
         let filename = path.file_name()?.to_string_lossy().to_string();
         let file_path = path.to_string_lossy().to_string();
-
         let mime_type = mimetype_detector::from_path(path).map(|m| m.to_string());
-
         let metadata = MetadataExtractor::extract_with_metadata(path, Some(&photo_file.metadata));
-
         let hash_sha256 = self.calculate_file_hash(path).ok();
 
+        self.semantic_search
+            .compute_semantic_vector(&file_path)
+            .ok();
+
         Some(ProcessedPhoto {
-            file_path,
+            file_path: file_path.clone(),
             filename,
             file_size: photo_file.size as i64,
             mime_type,

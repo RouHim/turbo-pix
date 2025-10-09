@@ -298,7 +298,7 @@ impl ThumbnailGenerator {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn get_cache_stats(&self) -> (usize, u64) {
         let mut total_files = 0;
         let mut total_size = 0;
@@ -322,6 +322,7 @@ impl ThumbnailGenerator {
         (total_files, total_size)
     }
 
+    #[cfg(test)]
     async fn get_subdir_stats(&self, dir_path: &Path) -> (usize, u64) {
         let mut files = 0;
         let mut size = 0;

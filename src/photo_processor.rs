@@ -1,13 +1,12 @@
 use chrono::{DateTime, Utc};
-use log::{error, info};
+use log::error;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::cache_manager::CacheManager;
-use crate::db::{DbPool, Photo};
+use crate::db::DbPool;
 use crate::file_scanner::{FileScanner, PhotoFile};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
@@ -47,61 +46,6 @@ pub struct ProcessedPhoto {
     pub frame_rate: Option<f64>,     // Frame rate for videos
 }
 
-impl ProcessedPhoto {
-    #[allow(dead_code)]
-    pub fn save_to_db(&self, db_pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-        let photo = Photo {
-            hash_sha256: self
-                .hash_sha256
-                .clone()
-                .expect("ProcessedPhoto must have hash_sha256"),
-            file_path: self.file_path.clone(),
-            filename: self.filename.clone(),
-            file_size: self.file_size,
-            mime_type: self.mime_type.clone(),
-            taken_at: self.taken_at,
-            date_modified: self.date_modified,
-            date_indexed: Some(Utc::now()),
-            camera_make: self.camera_make.clone(),
-            camera_model: self.camera_model.clone(),
-            lens_make: self.lens_make.clone(),
-            lens_model: self.lens_model.clone(),
-            iso: self.iso,
-            aperture: self.aperture,
-            shutter_speed: self.shutter_speed.clone(),
-            focal_length: self.focal_length,
-            width: self.width,
-            height: self.height,
-            color_space: self.color_space.clone(),
-            white_balance: self.white_balance.clone(),
-            exposure_mode: self.exposure_mode.clone(),
-            metering_mode: self.metering_mode.clone(),
-            orientation: self.orientation,
-            flash_used: self.flash_used,
-            latitude: self.latitude,
-            longitude: self.longitude,
-            location_name: None,
-            thumbnail_path: None,
-            has_thumbnail: Some(false),
-            country: None,
-            keywords: None,
-            faces_detected: None,
-            objects_detected: None,
-            colors: None,
-            duration: self.duration,
-            video_codec: self.video_codec.clone(),
-            audio_codec: self.audio_codec.clone(),
-            bitrate: self.bitrate,
-            frame_rate: self.frame_rate,
-            is_favorite: Some(false),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-
-        photo.create(db_pool)
-    }
-}
-
 pub struct PhotoProcessor {
     scanner: FileScanner,
     semantic_search: Arc<SemanticSearchEngine>,
@@ -116,7 +60,6 @@ impl PhotoProcessor {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub fn process_all(&self) -> Vec<ProcessedPhoto> {
         let photo_files = self.scanner.scan();
         let mut processed_photos = Vec::new();
@@ -128,46 +71,6 @@ impl PhotoProcessor {
         }
 
         processed_photos
-    }
-
-    #[allow(dead_code)]
-    pub async fn process_new_photos(
-        &self,
-        db_pool: &DbPool,
-        cache_manager: &CacheManager,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
-        let photo_files = self.scanner.scan();
-        let existing_photos = crate::db::get_all_photo_paths(db_pool)?;
-        let existing_set: HashSet<String> = existing_photos.into_iter().collect();
-
-        let new_photos: Vec<_> = photo_files
-            .into_iter()
-            .filter(|photo| !existing_set.contains(&photo.path.to_string_lossy().to_string()))
-            .collect();
-
-        if new_photos.is_empty() {
-            info!("No new photos found");
-            return Ok(0);
-        }
-
-        info!("Processing {} new photos...", new_photos.len());
-
-        let mut processed_count = 0;
-        for photo_file in new_photos {
-            match self
-                .process_and_store(&photo_file, db_pool, cache_manager)
-                .await
-            {
-                Ok(_) => processed_count += 1,
-                Err(e) => error!(
-                    "Failed to process photo {}: {}",
-                    photo_file.path.display(),
-                    e
-                ),
-            }
-        }
-
-        Ok(processed_count)
     }
 
     pub async fn full_rescan_and_cleanup(
@@ -204,25 +107,6 @@ impl PhotoProcessor {
             .collect();
 
         Ok(photos)
-    }
-
-    #[allow(dead_code)]
-    async fn process_and_store(
-        &self,
-        photo_file: &PhotoFile,
-        db_pool: &DbPool,
-        _cache_manager: &CacheManager,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        if let Some(processed_photo) = self.process_file(photo_file) {
-            let hash = processed_photo
-                .hash_sha256
-                .clone()
-                .ok_or("Missing hash for processed photo")?;
-            processed_photo.save_to_db(db_pool)?;
-            Ok(hash)
-        } else {
-            Err("Failed to process photo file".into())
-        }
     }
 
     pub fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {

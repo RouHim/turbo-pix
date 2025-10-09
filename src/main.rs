@@ -20,7 +20,6 @@ mod semantic_search;
 mod thumbnail_generator;
 mod thumbnail_types;
 mod video_processor;
-mod warp_handlers;
 mod warp_helpers;
 
 use log::{error, info};

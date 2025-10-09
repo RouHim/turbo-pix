@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use log::info;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -41,41 +40,6 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     }
 
     Ok(pool)
-}
-
-#[allow(dead_code)]
-pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare("SELECT file_path FROM photos")?;
-    let photo_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
-
-    let mut paths = Vec::new();
-    for path in photo_iter {
-        paths.push(path?);
-    }
-    Ok(paths)
-}
-
-#[allow(dead_code)]
-pub fn needs_update(
-    pool: &DbPool,
-    file_path: &str,
-    file_modified: &DateTime<Utc>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare("SELECT file_modified FROM photos WHERE file_path = ?")?;
-
-    match stmt.query_row([file_path], |row| {
-        let db_modified_str: String = row.get(0)?;
-        let db_modified = DateTime::parse_from_rfc3339(&db_modified_str)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-            .with_timezone(&Utc);
-        Ok(db_modified)
-    }) {
-        Ok(db_modified) => Ok(file_modified > &db_modified),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true), // File not in DB, needs insert
-        Err(e) => Err(Box::new(e)),
-    }
 }
 
 pub fn delete_orphaned_photos(

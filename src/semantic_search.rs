@@ -158,36 +158,6 @@ impl SemanticSearchEngine {
 
         Ok(())
     }
-
-    /// Checks if semantic vector exists for an image
-    #[allow(dead_code)]
-    pub fn has_semantic_vector(&self, image_path: &str) -> Result<bool> {
-        let conn = self.pool.get()?;
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-            [image_path],
-            |row| row.get(0),
-        )?;
-        Ok(exists)
-    }
-
-    /// Gets all image paths that need semantic vectors computed
-    #[allow(dead_code)]
-    pub fn get_missing_semantic_vectors(&self, all_paths: &[String]) -> Result<Vec<String>> {
-        let conn = self.pool.get()?;
-
-        let cached: std::collections::HashSet<String> = conn
-            .prepare("SELECT path FROM semantic_vector_path_mapping")?
-            .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(all_paths
-            .iter()
-            .filter(|p| !cached.contains(*p))
-            .cloned()
-            .collect())
-    }
 }
 
 /// Loads CLIP ViT-B/32 model and tokenizer from HuggingFace Hub

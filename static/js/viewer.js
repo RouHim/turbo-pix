@@ -624,9 +624,8 @@ class PhotoViewer {
 
   isVideoFile(filename) {
     if (!filename) return false;
-    const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-    return videoExtensions.includes(ext);
+    return window.APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
   }
 
   zoomIn() {

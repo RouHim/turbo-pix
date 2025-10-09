@@ -9,6 +9,13 @@ class TurboPixAPI {
     };
   }
 
+  /**
+   * Makes an HTTP request to the API
+   * @param {string} endpoint - The API endpoint
+   * @param {Object} options - Fetch options (method, headers, body, etc.)
+   * @returns {Promise<any>} The response data
+   * @throws {Error} If the request fails
+   */
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const config = {
@@ -65,7 +72,11 @@ class TurboPixAPI {
     }
   }
 
-  // Photo endpoints
+  /**
+   * Retrieves photos with optional filtering and pagination
+   * @param {Object} params - Query parameters (page, limit, query, sort, order, etc.)
+   * @returns {Promise<Object>} Response containing photos array and metadata
+   */
   async getPhotos(params = {}) {
     const searchParams = new URLSearchParams();
 
@@ -105,6 +116,12 @@ class TurboPixAPI {
     return this.getPhotos({ ...params, query });
   }
 
+  /**
+   * Performs semantic search using AI/ML embeddings
+   * @param {string} query - Natural language search query
+   * @param {number} limit - Maximum number of results
+   * @returns {Promise<Object>} Search results with photo hashes and scores
+   */
   async semanticSearch(query, limit = 50) {
     const searchParams = new URLSearchParams();
     searchParams.set('q', query);

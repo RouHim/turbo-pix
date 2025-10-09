@@ -1,5 +1,8 @@
 // Utility functions
 
+// i18n helper
+const t = (key, fallback) => (window.i18nManager ? window.i18nManager.t(key) : fallback);
+
 // DOM helpers
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -305,6 +308,7 @@ const performanceUtils = {
 
 // Export to global scope
 window.utils = {
+  t,
   $,
   $$,
   createElement,

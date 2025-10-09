@@ -44,11 +44,6 @@ class Search {
         }
       });
 
-      // Focus and blur events - suggestions disabled
-      // utils.on(this.searchInput, 'focus', () => {
-      //   this.showSearchSuggestions();
-      // });
-
       utils.on(this.searchInput, 'blur', () => {
         // Delay hiding to allow clicking on suggestions
         setTimeout(() => this.hideSearchSuggestions(), 150);
@@ -81,6 +76,13 @@ class Search {
     }
   }
 
+  /**
+   * Performs a search with the given query
+   * Uses semantic AI search by default
+   * @param {string} query - The search query
+   * @param {boolean} addToHistory - Whether to add the query to search history
+   * @returns {Promise<void>}
+   */
   async performSearch(query, addToHistory = false) {
     if (!query || query === this.currentQuery) return;
 

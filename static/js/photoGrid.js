@@ -4,7 +4,7 @@ class PhotoGrid {
   constructor(container, options = {}) {
     this.container = container;
     this.options = {
-      batchSize: 50,
+      batchSize: window.APP_CONSTANTS.DEFAULT_BATCH_SIZE,
       threshold: 200,
       retryAttempts: 3,
       ...options,
@@ -111,6 +111,13 @@ class PhotoGrid {
     }
   }
 
+  /**
+   * Loads photos with pagination and filtering
+   * @param {string|null} query - Search query
+   * @param {Object} filters - Filter parameters (sort, order, year, month, etc.)
+   * @param {boolean} reset - Whether to reset pagination and clear existing photos
+   * @returns {Promise<void>}
+   */
   async loadPhotos(query = null, filters = {}, reset = true) {
     if (this.loading) return;
 
@@ -240,10 +247,10 @@ class PhotoGrid {
                 <div class="photo-card-meta">${this.getPhotoMeta(photo)}</div>
             </div>
             <div class="photo-card-actions">
-                <button class="card-action-btn favorite-btn ${photo.is_favorite ? 'active' : ''}" title="${window.i18nManager ? window.i18nManager.t('ui.add_to_favorites') : 'Add to Favorites'}" data-action="favorite">
+                <button class="card-action-btn favorite-btn ${photo.is_favorite ? 'active' : ''}" title="${utils.t('ui.add_to_favorites', 'Add to Favorites')}" data-action="favorite">
                     ${window.iconHelper.getSemanticIcon('favorite', { size: 18 })}
                 </button>
-                <button class="card-action-btn download-btn" title="${window.i18nManager ? window.i18nManager.t('ui.download') : 'Download'}" data-action="download">
+                <button class="card-action-btn download-btn" title="${utils.t('ui.download', 'Download')}" data-action="download">
                     ${window.iconHelper.getSemanticIcon('download', { size: 18 })}
                 </button>
             </div>
@@ -343,6 +350,12 @@ class PhotoGrid {
     return parts.join(' • ');
   }
 
+  /**
+   * Toggles the favorite status of a photo
+   * @param {Object} photo - The photo object
+   * @param {HTMLElement} button - The favorite button element
+   * @returns {Promise<void>}
+   */
   async toggleFavorite(photo, button) {
     const wasAlreadyFavorite = photo.is_favorite;
     const newFavoriteState = !wasAlreadyFavorite;
@@ -350,12 +363,8 @@ class PhotoGrid {
     // Optimistically update UI
     button.classList.toggle('active', newFavoriteState);
     button.title = newFavoriteState
-      ? window.i18nManager
-        ? window.i18nManager.t('ui.remove_from_favorites')
-        : 'Remove from Favorites'
-      : window.i18nManager
-        ? window.i18nManager.t('ui.add_to_favorites')
-        : 'Add to Favorites';
+      ? utils.t('ui.remove_from_favorites', 'Remove from Favorites')
+      : utils.t('ui.add_to_favorites', 'Add to Favorites');
 
     try {
       // Call backend API
@@ -370,20 +379,10 @@ class PhotoGrid {
 
       // Show success message
       utils.showToast(
+        newFavoriteState ? utils.t('ui.added', 'Added') : utils.t('ui.removed', 'Removed'),
         newFavoriteState
-          ? window.i18nManager
-            ? window.i18nManager.t('ui.added')
-            : 'Added'
-          : window.i18nManager
-            ? window.i18nManager.t('ui.removed')
-            : 'Removed',
-        newFavoriteState
-          ? window.i18nManager
-            ? window.i18nManager.t('messages.photo_added_to_favorites')
-            : 'Photo added to favorites'
-          : window.i18nManager
-            ? window.i18nManager.t('messages.photo_removed_from_favorites')
-            : 'Photo removed from favorites',
+          ? utils.t('messages.photo_added_to_favorites', 'Photo added to favorites')
+          : utils.t('messages.photo_removed_from_favorites', 'Photo removed from favorites'),
         'success',
         2000
       );
@@ -397,19 +396,13 @@ class PhotoGrid {
       // Revert UI on error
       button.classList.toggle('active', wasAlreadyFavorite);
       button.title = wasAlreadyFavorite
-        ? window.i18nManager
-          ? window.i18nManager.t('ui.remove_from_favorites')
-          : 'Remove from Favorites'
-        : window.i18nManager
-          ? window.i18nManager.t('ui.add_to_favorites')
-          : 'Add to Favorites';
+        ? utils.t('ui.remove_from_favorites', 'Remove from Favorites')
+        : utils.t('ui.add_to_favorites', 'Add to Favorites');
 
       console.error('Error toggling favorite:', error);
       utils.showToast(
-        window.i18nManager ? window.i18nManager.t('ui.error') : 'Error',
-        window.i18nManager
-          ? window.i18nManager.t('messages.error_updating_favorite')
-          : 'Error updating favorite status',
+        utils.t('ui.error', 'Error'),
+        utils.t('messages.error_updating_favorite', 'Error updating favorite status'),
         'error',
         3000
       );
@@ -423,10 +416,8 @@ class PhotoGrid {
     link.click();
 
     utils.showToast(
-      window.i18nManager ? window.i18nManager.t('ui.download') : 'Download',
-      window.i18nManager
-        ? window.i18nManager.t('messages.photo_download_started')
-        : 'Photo download started',
+      utils.t('ui.download', 'Download'),
+      utils.t('messages.photo_download_started', 'Photo download started'),
       'info',
       2000
     );
@@ -446,7 +437,7 @@ class PhotoGrid {
     this.container.innerHTML = `
             <div class="error-state">
                 <div class="error-state-icon">${window.iconHelper.getSemanticIcon('photo', { size: 64 })}</div>
-                <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('ui.no_photos_found') : 'No Photos Found'}</div>
+                <div class="error-state-title">${utils.t('ui.no_photos_found', 'No Photos Found')}</div>
                 <div class="error-state-message">
                     ${
                       this.currentQuery
@@ -455,16 +446,14 @@ class PhotoGrid {
                               query: this.currentQuery,
                             })
                           : `No photos match your search for "${this.currentQuery}"`
-                        : window.i18nManager
-                          ? window.i18nManager.t('messages.no_photos_indexed')
-                          : 'No photos have been indexed yet'
+                        : utils.t('messages.no_photos_indexed', 'No photos have been indexed yet')
                     }
                 </div>
                 ${
                   !this.currentQuery
                     ? `
                     <button class="error-state-button" onclick="window.location.reload()">
-                        ${window.i18nManager ? window.i18nManager.t('ui.refresh') : 'Refresh'}
+                        ${utils.t('ui.refresh', 'Refresh')}
                     </button>
                 `
                     : ''
@@ -477,10 +466,10 @@ class PhotoGrid {
     this.container.innerHTML = `
             <div class="error-state">
                 <div class="error-state-icon">${window.iconHelper.getSemanticIcon('warning', { size: 64 })}</div>
-                <div class="error-state-title">${window.i18nManager ? window.i18nManager.t('errors.error_loading_photos') : 'Error Loading Photos'}</div>
+                <div class="error-state-title">${utils.t('errors.error_loading_photos', 'Error Loading Photos')}</div>
                 <div class="error-state-message">${message}</div>
                 <button class="error-state-button" onclick="photoGrid.loadPhotos()">
-                    ${window.i18nManager ? window.i18nManager.t('ui.try_again') : 'Try Again'}
+                    ${utils.t('ui.try_again', 'Try Again')}
                 </button>
             </div>
         `;

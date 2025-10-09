@@ -35,7 +35,7 @@ Development/personal project - breaking changes acceptable, database can be recr
 **E2E:**
 
 - Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
-- Use Playwright MCP (preferred) or Puppeteer (fallback) - don't install as dependency
+- Use Playwright MCP (preferred) or Puppeteer (fallback) - don't install as dependency - don't create manual e2e tests
 - Test at `http://localhost:18473`
 - Use `[data-photo-id]` selectors
 - Kill process after testing

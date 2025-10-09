@@ -11,6 +11,7 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "css/main.css",
     "css/components.css",
     "css/responsive.css",
+    "js/constants.js",
     "js/utils.js",
     "js/logger.js",
     "js/api.js",

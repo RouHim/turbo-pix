@@ -5,7 +5,7 @@
 
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 20px;
+    gap: var(--space-5);
   }
 
   .viewer-content {
@@ -23,21 +23,21 @@
   }
 
   .header-content {
-    padding: 0 16px;
+    padding: 0 var(--space-4);
   }
 
   .search-container {
-    margin: 0 16px;
+    margin: 0 var(--space-4);
     max-width: 400px;
   }
 
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 16px;
+    gap: var(--space-4);
   }
 
   .main-content {
-    padding: 16px;
+    padding: var(--space-4);
   }
 
   .viewer-content {
@@ -101,9 +101,9 @@
     left: 0;
     right: 0;
     background: var(--surface-color);
-    padding: 16px;
+    padding: var(--space-4);
     border-bottom: 1px solid var(--divider-color);
-    z-index: 100;
+    z-index: var(--z-dropdown);
     transform: translateY(-120%);
     transition: var(--transition-medium);
     box-shadow: var(--shadow-medium);
@@ -133,17 +133,17 @@
 
   .menu-btn,
   .mobile-search-btn {
-    width: 44px;
-    height: 44px;
+    width: var(--button-size);
+    height: var(--button-size);
     border: none;
     background: none;
     cursor: pointer;
-    font-size: 20px;
+    font-size: var(--font-2xl);
     color: var(--text-primary);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--border-radius);
+    border-radius: var(--radius-md);
     transition: var(--transition-fast);
   }
 
@@ -155,54 +155,54 @@
 
   .header-actions {
     display: flex;
-    gap: 4px;
+    gap: var(--space-1);
     align-items: center;
   }
 
   .theme-toggle {
-    width: 44px;
-    height: 44px;
+    width: var(--button-size);
+    height: var(--button-size);
   }
 
   .photo-grid {
-    grid-template-columns: repeat(3, 1fr) !important;
-    gap: 4px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-1);
   }
 
   .photo-card {
     border-radius: 0;
     border: none;
-    aspect-ratio: 1 !important;
+    aspect-ratio: 1;
     overflow: hidden;
   }
 
   .photo-card-image-container {
-    height: 100% !important;
+    height: 100%;
     width: 100%;
     position: absolute;
     inset: 0;
   }
 
   .photo-card-image {
-    height: 100% !important;
+    height: 100%;
     width: 100%;
     object-fit: cover;
   }
 
   .photo-card-overlay {
-    display: none !important;
+    display: none;
   }
 
   .photo-card-info {
-    display: none !important;
+    display: none;
   }
 
   .photo-card-actions {
-    display: none !important;
+    display: none;
   }
 
   .content-header h2 {
-    font-size: 24px;
+    font-size: var(--font-3xl);
   }
 
   .viewer-content {
@@ -218,8 +218,8 @@
     height: 100vh;
     transform: translateY(100%);
     transition: var(--transition-medium);
-    border-top-left-radius: var(--border-radius);
-    border-top-right-radius: var(--border-radius);
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
   }
 
   .viewer-sidebar.show {
@@ -229,46 +229,46 @@
   .viewer-close,
   .viewer-prev,
   .viewer-next {
-    width: 48px;
-    height: 48px;
+    width: var(--button-size-lg);
+    height: var(--button-size-lg);
   }
 
   .viewer-close {
-    top: 12px;
-    right: 12px;
+    top: var(--space-3);
+    right: var(--space-3);
   }
 
   .viewer-prev {
-    left: 12px;
+    left: var(--space-3);
   }
 
   .viewer-next {
-    right: 12px;
+    right: var(--space-3);
   }
 
   .viewer-zoom-controls {
     bottom: 80px;
     left: 50%;
     transform: translateX(-50%);
-    gap: 12px;
+    gap: var(--space-3);
   }
 
   .zoom-btn {
-    width: 44px;
-    height: 44px;
+    width: var(--button-size);
+    height: var(--button-size);
   }
 
   .info-toggle {
     position: absolute;
-    bottom: 16px;
-    right: 16px;
+    bottom: var(--space-4);
+    right: var(--space-4);
     width: 56px;
     height: 56px;
     border: none;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--primary-color);
     color: white;
-    font-size: 24px;
+    font-size: var(--font-3xl);
     cursor: pointer;
     transition: var(--transition-fast);
     z-index: 10;
@@ -283,26 +283,26 @@
 
 @media (width <= 480px) {
   .header-content {
-    padding: 0 8px;
+    padding: 0 var(--space-2);
   }
 
   .logo {
-    font-size: 18px;
+    font-size: var(--font-xl);
   }
 
   .main-content {
-    padding: 12px 8px;
+    padding: var(--space-3) var(--space-2);
   }
 
   .content-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
   }
 
   .content-header h2 {
-    font-size: 20px;
+    font-size: var(--font-2xl);
     margin: 0;
   }
 
@@ -312,20 +312,20 @@
 
   .sort-select {
     width: 100%;
-    padding: 10px 12px;
-    font-size: 14px;
+    padding: 10px var(--space-3);
+    font-size: var(--font-base);
   }
 
   .timeline-dropdowns {
-    gap: 8px;
-    padding: 12px 8px;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-2);
   }
 
   .timeline-year-select,
   .timeline-month-select {
     flex: 1;
     min-width: 0;
-    font-size: 14px;
+    font-size: var(--font-base);
   }
 
   .timeline-reset {
@@ -335,54 +335,54 @@
   }
 
   .photo-grid {
-    grid-template-columns: repeat(3, 1fr) !important;
+    grid-template-columns: repeat(3, 1fr);
     gap: 2px;
   }
 
   .photo-card {
     border-radius: 0;
     border: none;
-    aspect-ratio: 1 !important;
+    aspect-ratio: 1;
     overflow: hidden;
   }
 
   .photo-card-image-container {
-    height: 100% !important;
+    height: 100%;
     width: 100%;
     position: absolute;
     inset: 0;
   }
 
   .photo-card-image {
-    height: 100% !important;
+    height: 100%;
     width: 100%;
     object-fit: cover;
   }
 
   .photo-card-overlay {
-    display: none !important;
+    display: none;
   }
 
   .photo-card-info {
-    display: none !important;
+    display: none;
   }
 
   .photo-card-actions {
-    display: none !important;
+    display: none;
   }
 
   .viewer-sidebar {
-    padding: 20px 16px;
+    padding: var(--space-5) var(--space-4);
   }
 
   .photo-info h3 {
-    font-size: 18px;
-    margin-bottom: 16px;
+    font-size: var(--font-xl);
+    margin-bottom: var(--space-4);
   }
 
   .photo-actions {
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .action-btn {
@@ -391,8 +391,8 @@
   }
 
   .nav-item {
-    padding: 14px 20px;
-    font-size: 15px;
+    padding: 14px var(--space-5);
+    font-size: var(--font-md);
   }
 }
 
@@ -409,7 +409,7 @@
 @media (width >= 1400px) {
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 32px;
+    gap: var(--space-8);
   }
 
   .photo-card-image {

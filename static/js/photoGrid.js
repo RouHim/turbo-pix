@@ -236,28 +236,54 @@ class PhotoGrid {
     // Check if this is a video
     const isVideo = photo.video_codec != null;
 
-    // Create card with thumbnail URL for lazy loading
-    card.innerHTML = `
-            <div class="photo-card-image-container" data-src="${utils.getThumbnailUrl(photo, 'medium')}">
-                <div class="photo-card-placeholder"></div>
-                ${isVideo ? '<div class="video-play-icon"></div>' : ''}
-            </div>
-            <div class="photo-card-overlay">
-                <div class="photo-card-title">${this.getPhotoTitle(photo)}</div>
-                <div class="photo-card-meta">${this.getPhotoMeta(photo)}</div>
-            </div>
-            <div class="photo-card-actions">
-                <button class="card-action-btn favorite-btn ${photo.is_favorite ? 'active' : ''}" title="${utils.t('ui.add_to_favorites', 'Add to Favorites')}" data-action="favorite">
-                    ${window.iconHelper.getSemanticIcon('favorite', { size: 18 })}
-                </button>
-                <button class="card-action-btn download-btn" title="${utils.t('ui.download', 'Download')}" data-action="download">
-                    ${window.iconHelper.getSemanticIcon('download', { size: 18 })}
-                </button>
-            </div>
-        `;
+    // Create image container with safe data attribute
+    const imageContainer = utils.createElement('div', 'photo-card-image-container');
+    imageContainer.dataset.src = utils.getThumbnailUrl(photo, 'medium');
+
+    // Add placeholder
+    const placeholder = utils.createElement('div', 'photo-card-placeholder');
+    imageContainer.appendChild(placeholder);
+
+    // Add video play icon if needed
+    if (isVideo) {
+      const playIcon = utils.createElement('div', 'video-play-icon');
+      imageContainer.appendChild(playIcon);
+    }
+
+    // Create overlay with SAFE text content
+    const overlay = utils.createElement('div', 'photo-card-overlay');
+    const title = utils.createElement('div', 'photo-card-title', this.getPhotoTitle(photo));
+    const meta = utils.createElement('div', 'photo-card-meta', this.getPhotoMeta(photo));
+    overlay.appendChild(title);
+    overlay.appendChild(meta);
+
+    // Create actions with buttons
+    const actions = utils.createElement('div', 'photo-card-actions');
+
+    // Favorite button
+    const favoriteBtn = utils.createElement('button',
+      `card-action-btn favorite-btn${photo.is_favorite ? ' active' : ''}`);
+    favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
+    favoriteBtn.dataset.action = 'favorite';
+    // Icon is safe - comes from internal SVG generator
+    favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
+
+    // Download button
+    const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
+    downloadBtn.title = utils.t('ui.download', 'Download');
+    downloadBtn.dataset.action = 'download';
+    // Icon is safe - comes from internal SVG generator
+    downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
+
+    actions.appendChild(favoriteBtn);
+    actions.appendChild(downloadBtn);
+
+    // Assemble card
+    card.appendChild(imageContainer);
+    card.appendChild(overlay);
+    card.appendChild(actions);
 
     // Set up lazy loading
-    const imageContainer = card.querySelector('.photo-card-image-container');
     this.observer.observe(imageContainer);
 
     // Bind events
@@ -434,45 +460,79 @@ class PhotoGrid {
   }
 
   showEmptyState() {
-    this.container.innerHTML = `
-            <div class="error-state">
-                <div class="error-state-icon">${window.iconHelper.getSemanticIcon('photo', { size: 64 })}</div>
-                <div class="error-state-title">${utils.t('ui.no_photos_found', 'No Photos Found')}</div>
-                <div class="error-state-message">
-                    ${
-                      this.currentQuery
-                        ? window.i18nManager
-                          ? window.i18nManager.t('messages.no_photos_match_search', {
-                              query: this.currentQuery,
-                            })
-                          : `No photos match your search for "${this.currentQuery}"`
-                        : utils.t('messages.no_photos_indexed', 'No photos have been indexed yet')
-                    }
-                </div>
-                ${
-                  !this.currentQuery
-                    ? `
-                    <button class="error-state-button" onclick="window.location.reload()">
-                        ${utils.t('ui.refresh', 'Refresh')}
-                    </button>
-                `
-                    : ''
-                }
-            </div>
-        `;
+    // Clear first
+    this.container.innerHTML = '';
+
+    const errorState = utils.createElement('div', 'error-state');
+
+    // Icon (safe - internal SVG)
+    const iconDiv = utils.createElement('div', 'error-state-icon');
+    iconDiv.innerHTML = window.iconHelper.getSemanticIcon('photo', { size: 64 });
+
+    // Title (safe - i18n string)
+    const title = utils.createElement('div', 'error-state-title',
+      utils.t('ui.no_photos_found', 'No Photos Found'));
+
+    // Message (safe - uses textContent for user query)
+    const message = utils.createElement('div', 'error-state-message');
+    if (this.currentQuery) {
+      // Check if i18n has template support
+      if (window.i18nManager) {
+        const translatedMsg = window.i18nManager.t('messages.no_photos_match_search', {
+          query: this.currentQuery,
+        });
+        message.textContent = translatedMsg;
+      } else {
+        // Fallback: safe concatenation
+        message.textContent = `No photos match your search for "${this.currentQuery}"`;
+      }
+    } else {
+      message.textContent = utils.t('messages.no_photos_indexed', 'No photos have been indexed yet');
+    }
+
+    errorState.appendChild(iconDiv);
+    errorState.appendChild(title);
+    errorState.appendChild(message);
+
+    // Refresh button (only if no query)
+    if (!this.currentQuery) {
+      const button = utils.createElement('button', 'error-state-button',
+        utils.t('ui.refresh', 'Refresh'));
+      button.onclick = () => window.location.reload();
+      errorState.appendChild(button);
+    }
+
+    this.container.appendChild(errorState);
   }
 
   showErrorState(message) {
-    this.container.innerHTML = `
-            <div class="error-state">
-                <div class="error-state-icon">${window.iconHelper.getSemanticIcon('warning', { size: 64 })}</div>
-                <div class="error-state-title">${utils.t('errors.error_loading_photos', 'Error Loading Photos')}</div>
-                <div class="error-state-message">${message}</div>
-                <button class="error-state-button" onclick="photoGrid.loadPhotos()">
-                    ${utils.t('ui.try_again', 'Try Again')}
-                </button>
-            </div>
-        `;
+    // Clear first
+    this.container.innerHTML = '';
+
+    const errorState = utils.createElement('div', 'error-state');
+
+    // Icon (safe - internal SVG)
+    const iconDiv = utils.createElement('div', 'error-state-icon');
+    iconDiv.innerHTML = window.iconHelper.getSemanticIcon('warning', { size: 64 });
+
+    // Title (safe - i18n string)
+    const title = utils.createElement('div', 'error-state-title',
+      utils.t('errors.error_loading_photos', 'Error Loading Photos'));
+
+    // Message (safe - uses textContent)
+    const messageDiv = utils.createElement('div', 'error-state-message', message);
+
+    // Try again button
+    const button = utils.createElement('button', 'error-state-button',
+      utils.t('ui.try_again', 'Try Again'));
+    button.onclick = () => this.loadPhotos();
+
+    errorState.appendChild(iconDiv);
+    errorState.appendChild(title);
+    errorState.appendChild(messageDiv);
+    errorState.appendChild(button);
+
+    this.container.appendChild(errorState);
   }
 
   updateLoadingState(loading) {

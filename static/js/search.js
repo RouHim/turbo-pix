@@ -248,25 +248,32 @@ class Search {
       return;
     }
 
-    suggestionsEl.innerHTML = suggestions
-      .map(
-        (suggestion) => `
-            <div class="suggestion-item" data-query="${suggestion.query}">
-                <span class="suggestion-icon">${suggestion.icon}</span>
-                <span class="suggestion-text">${suggestion.text}</span>
-                ${suggestion.subtitle ? `<span class="suggestion-subtitle">${suggestion.subtitle}</span>` : ''}
-            </div>
-        `
-      )
-      .join('');
+    // Clear existing suggestions (safe - no interpolation)
+    suggestionsEl.innerHTML = '';
 
-    // Bind click events
-    utils.$$('.suggestion-item').forEach((item) => {
+    // Build suggestions with DOM API to prevent XSS
+    suggestions.forEach((suggestion) => {
+      const item = utils.createElement('div', 'suggestion-item');
+      item.dataset.query = suggestion.query; // Safe - dataset API escapes
+
+      const icon = utils.createElement('span', 'suggestion-icon', suggestion.icon);
+      const text = utils.createElement('span', 'suggestion-text', suggestion.text);
+
+      item.appendChild(icon);
+      item.appendChild(text);
+
+      if (suggestion.subtitle) {
+        const subtitle = utils.createElement('span', 'suggestion-subtitle', suggestion.subtitle);
+        item.appendChild(subtitle);
+      }
+
+      // Bind click event
       utils.on(item, 'click', () => {
-        const query = item.dataset.query;
-        this.performSearch(query, true);
+        this.performSearch(suggestion.query, true);
         this.hideSearchSuggestions();
       });
+
+      suggestionsEl.appendChild(item);
     });
 
     suggestionsEl.classList.add('show');

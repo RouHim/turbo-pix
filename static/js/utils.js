@@ -13,6 +13,40 @@ const createElement = (tag, className = '', content = '') => {
   return element;
 };
 
+/**
+ * Safely sets attributes on an element, preventing javascript: URLs
+ * @param {HTMLElement} element - Target element
+ * @param {Object} attrs - Attribute key-value pairs
+ */
+const setSafeAttributes = (element, attrs) => {
+  for (const [key, value] of Object.entries(attrs)) {
+    // Prevent javascript: URLs in href/src attributes
+    if (key.toLowerCase().includes('href') || key.toLowerCase().includes('src')) {
+      const stringValue = String(value).trim().toLowerCase();
+      if (stringValue.startsWith('javascript:') || stringValue.startsWith('data:text/html')) {
+        if (window.logger) {
+          window.logger.warn('Blocked dangerous URL in attribute', { key, value });
+        }
+        continue;
+      }
+    }
+    element.setAttribute(key, value);
+  }
+};
+
+/**
+ * Creates an element with safe attributes
+ * @param {string} tag - Element tag name
+ * @param {string} className - CSS classes
+ * @param {Object} attrs - Attributes to set safely
+ * @returns {HTMLElement}
+ */
+const createElementWithAttrs = (tag, className = '', attrs = {}) => {
+  const element = createElement(tag, className);
+  setSafeAttributes(element, attrs);
+  return element;
+};
+
 // Event helpers
 const on = (element, event, handler) => element.addEventListener(event, handler);
 const off = (element, event, handler) => element.removeEventListener(event, handler);
@@ -98,10 +132,13 @@ const showToast = (title, message, type = 'info', duration = 4000) => {
   if (!container) return;
 
   const toast = createElement('div', `toast ${type}`);
-  toast.innerHTML = `
-        <div class="toast-title">${title}</div>
-        <div class="toast-message">${message}</div>
-    `;
+
+  // Build with DOM API to prevent XSS
+  const titleDiv = createElement('div', 'toast-title', title);
+  const messageDiv = createElement('div', 'toast-message', message);
+
+  toast.appendChild(titleDiv);
+  toast.appendChild(messageDiv);
 
   container.appendChild(toast);
 
@@ -312,6 +349,8 @@ window.utils = {
   $,
   $$,
   createElement,
+  setSafeAttributes,
+  createElementWithAttrs,
   on,
   off,
   emit,

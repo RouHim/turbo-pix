@@ -12,7 +12,7 @@ class TurboPixAPI {
   /**
    * Makes an HTTP request to the API
    * @param {string} endpoint - The API endpoint
-   * @param {Object} options - Fetch options (method, headers, body, etc.)
+   * @param {Object} options - Fetch options (method, headers, body, signal, etc.)
    * @returns {Promise<any>} The response data
    * @throws {Error} If the request fails
    */
@@ -75,9 +75,10 @@ class TurboPixAPI {
   /**
    * Retrieves photos with optional filtering and pagination
    * @param {Object} params - Query parameters (page, limit, query, sort, order, etc.)
+   * @param {Object} options - Fetch options (signal for AbortController, etc.)
    * @returns {Promise<Object>} Response containing photos array and metadata
    */
-  async getPhotos(params = {}) {
+  async getPhotos(params = {}, options = {}) {
     const searchParams = new URLSearchParams();
 
     // Add parameters
@@ -97,7 +98,7 @@ class TurboPixAPI {
     const queryString = searchParams.toString();
     const endpoint = `/api/photos${queryString ? `?${queryString}` : ''}`;
 
-    return this.request(endpoint);
+    return this.request(endpoint, options);
   }
 
   async getPhoto(hash) {

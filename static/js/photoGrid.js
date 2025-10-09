@@ -1,6 +1,6 @@
 // Photo Grid Component
 
-/* global InfiniteScroll, PhotoCard */
+/* global InfiniteScroll, PhotoCard, AbortController */
 class PhotoGrid {
   constructor(container, options = {}) {
     this.container = container;
@@ -18,6 +18,7 @@ class PhotoGrid {
     this.currentQuery = null;
     this.currentFilters = {};
     this.loadingStartTime = null;
+    this.abortController = null;
 
     this.init();
   }
@@ -48,7 +49,15 @@ class PhotoGrid {
    * @returns {Promise<void>}
    */
   async loadPhotos(query = null, filters = {}, reset = true) {
-    if (this.loading) return;
+    // Cancel any in-flight request to prevent race conditions
+    if (this.abortController) {
+      this.abortController.abort();
+      this.loading = false; // Reset loading state after cancelling
+    }
+
+    // Create new abort controller for this request
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
     this.loading = true;
     this.loadingStartTime = Date.now();
@@ -73,7 +82,7 @@ class PhotoGrid {
       };
 
       utils.performance.mark('photos-load-start');
-      const response = await api.getPhotos(params);
+      const response = await api.getPhotos(params, { signal });
       utils.performance.mark('photos-load-end');
       utils.performance.measure('photos-load', 'photos-load-start', 'photos-load-end');
 
@@ -106,6 +115,17 @@ class PhotoGrid {
         }
       }
     } catch (error) {
+      // Ignore abort errors - these are intentional cancellations
+      if (error.name === 'AbortError') {
+        if (window.logger) {
+          window.logger.debug('Photo load request was cancelled', {
+            component: 'PhotoGrid',
+            query: this.currentQuery,
+          });
+        }
+        return;
+      }
+
       if (window.logger) {
         window.logger.error('Error loading photos', error, {
           component: 'PhotoGrid',

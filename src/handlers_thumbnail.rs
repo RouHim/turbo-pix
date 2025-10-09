@@ -42,9 +42,13 @@ pub async fn get_photo_thumbnail(
     let format = ThumbnailFormat::from_str(&query.format.unwrap_or_else(|| "jpeg".to_string()))
         .unwrap_or(ThumbnailFormat::Jpeg);
 
-    match thumbnail_generator.get_or_generate(&photo, size, format).await {
+    match thumbnail_generator
+        .get_or_generate(&photo, size, format)
+        .await
+    {
         Ok(thumbnail_data) => {
-            let reply = warp::reply::with_header(thumbnail_data, "content-type", format.content_type());
+            let reply =
+                warp::reply::with_header(thumbnail_data, "content-type", format.content_type());
             let reply = warp::reply::with_header(
                 reply,
                 "cache-control",

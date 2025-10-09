@@ -45,8 +45,9 @@ impl fmt::Display for ThumbnailSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ThumbnailFormat {
+    #[default]
     Jpeg,
     Webp,
 }
@@ -64,12 +65,6 @@ impl ThumbnailFormat {
             ThumbnailFormat::Jpeg => "image/jpeg",
             ThumbnailFormat::Webp => "image/webp",
         }
-    }
-}
-
-impl Default for ThumbnailFormat {
-    fn default() -> Self {
-        ThumbnailFormat::Jpeg
     }
 }
 

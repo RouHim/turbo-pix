@@ -12,6 +12,7 @@ class TurboPixApp {
       selectedPhotos: [],
       timelineFilter: null, // { year: 2011, month: 5 } or null
     });
+    this.viewLoadId = 0; // Track current view load request
   }
 
   /**
@@ -260,6 +261,9 @@ class TurboPixApp {
   async loadViewData(view) {
     if (!window.photoGrid) return;
 
+    // Increment view load ID to track this request
+    const currentLoadId = ++this.viewLoadId;
+
     const sortBy = this.state.get('sortBy');
     const [sort, order] = sortBy.split('_');
 
@@ -280,7 +284,10 @@ class TurboPixApp {
 
         case 'favorites':
           const favoritePhotos = await api.getFavoritePhotos();
-          this.displayFavoritePhotos(favoritePhotos);
+          // Only update UI if this is still the current request
+          if (currentLoadId === this.viewLoadId) {
+            this.displayFavoritePhotos(favoritePhotos);
+          }
           break;
 
         case 'videos':
@@ -289,6 +296,9 @@ class TurboPixApp {
           break;
       }
     } catch (error) {
+      // Only show error if this is still the current request
+      if (currentLoadId !== this.viewLoadId) return;
+
       if (window.logger) {
         window.logger.error(`Error loading ${view} view`, error, {
           component: 'App',

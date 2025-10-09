@@ -39,12 +39,12 @@ pub struct ProcessedPhoto {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub hash_sha256: Option<String>,
-    pub blurhash: Option<String>,    // BlurHash for progressive image loading
-    pub duration: Option<f64>,       // Video duration in seconds
+    pub blurhash: Option<String>, // BlurHash for progressive image loading
+    pub duration: Option<f64>,    // Video duration in seconds
     pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>,        // Bitrate in kbps
-    pub frame_rate: Option<f64>,     // Frame rate for videos
+    pub bitrate: Option<i32>,     // Bitrate in kbps
+    pub frame_rate: Option<f64>,  // Frame rate for videos
 }
 
 pub struct PhotoProcessor {

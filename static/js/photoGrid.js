@@ -1,5 +1,6 @@
 // Photo Grid Component
 
+/* global InfiniteScroll, PhotoCard */
 class PhotoGrid {
   constructor(container, options = {}) {
     this.container = container;
@@ -17,15 +18,18 @@ class PhotoGrid {
     this.observer = null;
     this.currentQuery = null;
     this.currentFilters = {};
-    this.loadingStartTime = null; // Track when loading started
+    this.loadingStartTime = null;
 
     this.init();
   }
 
   init() {
     this.setupIntersectionObserver();
-    this.setupLoadMoreButton();
     this.bindEvents();
+    this.infiniteScroll = new InfiniteScroll(this, {
+      threshold: 800,
+      throttleDelay: 250,
+    });
   }
 
   setupIntersectionObserver() {
@@ -44,13 +48,6 @@ class PhotoGrid {
     );
   }
 
-  setupLoadMoreButton() {
-    const loadMoreBtn = utils.$('#load-more-btn');
-    if (loadMoreBtn) {
-      utils.on(loadMoreBtn, 'click', () => this.loadMore());
-    }
-  }
-
   bindEvents() {
     utils.on(
       window,
@@ -59,56 +56,6 @@ class PhotoGrid {
         this.updateGridLayout();
       }, 250)
     );
-
-    // Infinite scroll - listen to main-content scroll since it's the scrollable container
-    const scrollContainer = utils.$('.main-content');
-    if (scrollContainer) {
-      utils.on(
-        scrollContainer,
-        'scroll',
-        utils.throttle(() => {
-          this.checkScrollPosition();
-        }, 250)
-      );
-    }
-  }
-
-  checkScrollPosition() {
-    // Don't trigger if already loading or no more photos
-    if (this.loading || !this.hasMore) return;
-
-    // Get the scrollable container
-    const scrollContainer = utils.$('.main-content');
-    if (!scrollContainer) return;
-
-    // Calculate distance from bottom using the container's scroll properties
-    const scrollTop = scrollContainer.scrollTop;
-    const containerHeight = scrollContainer.clientHeight;
-    const scrollHeight = scrollContainer.scrollHeight;
-    const distanceFromBottom = scrollHeight - (scrollTop + containerHeight);
-
-    // Debug logging
-    if (window.logger) {
-      window.logger.debug('Scroll position check', {
-        scrollTop,
-        containerHeight,
-        scrollHeight,
-        distanceFromBottom,
-        loading: this.loading,
-        hasMore: this.hasMore,
-      });
-    }
-
-    // Trigger load more when within 800px of bottom (increased threshold to catch bottom edge)
-    // Use <= to catch exact bottom position
-    if (distanceFromBottom <= 800) {
-      if (window.logger) {
-        window.logger.info('Infinite scroll triggered', {
-          distanceFromBottom,
-        });
-      }
-      this.loadMore();
-    }
   }
 
   /**
@@ -122,9 +69,9 @@ class PhotoGrid {
     if (this.loading) return;
 
     this.loading = true;
-    this.loadingStartTime = Date.now(); // Record when loading started
+    this.loadingStartTime = Date.now();
     this.updateLoadingState(true);
-    this.updateLoadMoreButton(); // Show loading indicator immediately
+    this.infiniteScroll.updateLoadingIndicator();
 
     try {
       if (reset) {
@@ -198,16 +145,8 @@ class PhotoGrid {
       setTimeout(() => {
         this.loading = false;
         this.updateLoadingState(false);
-        this.updateLoadMoreButton();
-
-        // Check scroll position again after loading completes
-        // This handles the case where user is still at bottom after photos load
-        // Use requestAnimationFrame to ensure DOM has updated
-        window.requestAnimationFrame(() => {
-          setTimeout(() => {
-            this.checkScrollPosition();
-          }, 50);
-        });
+        this.infiniteScroll.updateLoadingIndicator();
+        this.infiniteScroll.recheckAfterLoad();
       }, remainingTime);
     }
   }
@@ -221,7 +160,8 @@ class PhotoGrid {
     const fragment = document.createDocumentFragment();
 
     photos.forEach((photo) => {
-      const card = this.createPhotoCard(photo);
+      const photoCard = new PhotoCard(photo, this);
+      const card = photoCard.create();
       fragment.appendChild(card);
     });
 
@@ -229,100 +169,11 @@ class PhotoGrid {
     this.updateGridLayout();
   }
 
-  createPhotoCard(photo) {
-    const card = utils.createElement('div', 'photo-card');
-    card.dataset.photoId = photo.hash_sha256;
-
-    // Check if this is a video
-    const isVideo = photo.video_codec != null;
-
-    // Create image container with safe data attribute
-    const imageContainer = utils.createElement('div', 'photo-card-image-container');
-    imageContainer.dataset.src = utils.getThumbnailUrl(photo, 'medium');
-
-    // Add placeholder
-    const placeholder = utils.createElement('div', 'photo-card-placeholder');
-    imageContainer.appendChild(placeholder);
-
-    // Add video play icon if needed
-    if (isVideo) {
-      const playIcon = utils.createElement('div', 'video-play-icon');
-      imageContainer.appendChild(playIcon);
-    }
-
-    // Create overlay with SAFE text content
-    const overlay = utils.createElement('div', 'photo-card-overlay');
-    const title = utils.createElement('div', 'photo-card-title', this.getPhotoTitle(photo));
-    const meta = utils.createElement('div', 'photo-card-meta', this.getPhotoMeta(photo));
-    overlay.appendChild(title);
-    overlay.appendChild(meta);
-
-    // Create actions with buttons
-    const actions = utils.createElement('div', 'photo-card-actions');
-
-    // Favorite button
-    const favoriteBtn = utils.createElement(
-      'button',
-      `card-action-btn favorite-btn${photo.is_favorite ? ' active' : ''}`
-    );
-    favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
-    favoriteBtn.dataset.action = 'favorite';
-    // Icon is safe - comes from internal SVG generator
-    favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
-
-    // Download button
-    const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
-    downloadBtn.title = utils.t('ui.download', 'Download');
-    downloadBtn.dataset.action = 'download';
-    // Icon is safe - comes from internal SVG generator
-    downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
-
-    actions.appendChild(favoriteBtn);
-    actions.appendChild(downloadBtn);
-
-    // Assemble card
-    card.appendChild(imageContainer);
-    card.appendChild(overlay);
-    card.appendChild(actions);
-
-    // Set up lazy loading
-    this.observer.observe(imageContainer);
-
-    // Bind events
-    this.bindCardEvents(card, photo);
-
-    return card;
-  }
-
-  bindCardEvents(card, photo) {
-    // Click to open viewer
-    utils.on(card, 'click', (e) => {
-      if (!e.target.closest('.card-action-btn')) {
-        this.openPhotoViewer(photo, this.photos);
-      }
-    });
-
-    // Action buttons
-    const favoriteBtn = card.querySelector('[data-action="favorite"]');
-    const downloadBtn = card.querySelector('[data-action="download"]');
-
-    utils.on(favoriteBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.toggleFavorite(photo, favoriteBtn);
-    });
-
-    utils.on(downloadBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.downloadPhoto(photo);
-    });
-  }
-
   async loadImageForCard(container) {
     const src = container.dataset.src;
     if (!src || container.dataset.loaded) return;
 
     try {
-      // Create image directly instead of using utils.createLazyImage() to avoid intersection observer conflicts
       const img = document.createElement('img');
       img.src = src;
       img.alt = '';
@@ -352,108 +203,6 @@ class PhotoGrid {
       };
     } catch (error) {
       console.error('Error loading image:', error);
-    }
-  }
-
-  getPhotoTitle(photo) {
-    return photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
-  }
-
-  getPhotoMeta(photo) {
-    const parts = [];
-
-    if (photo.taken_at) {
-      const date = new Date(photo.taken_at);
-      parts.push(date.toLocaleDateString());
-    }
-
-    if (photo.camera_make && photo.camera_model) {
-      parts.push(`${photo.camera_make} ${photo.camera_model}`);
-    }
-
-    if (photo.file_size) {
-      parts.push(utils.formatFileSize(photo.file_size));
-    }
-
-    return parts.join(' • ');
-  }
-
-  /**
-   * Toggles the favorite status of a photo
-   * @param {Object} photo - The photo object
-   * @param {HTMLElement} button - The favorite button element
-   * @returns {Promise<void>}
-   */
-  async toggleFavorite(photo, button) {
-    const wasAlreadyFavorite = photo.is_favorite;
-    const newFavoriteState = !wasAlreadyFavorite;
-
-    // Optimistically update UI
-    button.classList.toggle('active', newFavoriteState);
-    button.title = newFavoriteState
-      ? utils.t('ui.remove_from_favorites', 'Remove from Favorites')
-      : utils.t('ui.add_to_favorites', 'Add to Favorites');
-
-    try {
-      // Call backend API
-      if (newFavoriteState) {
-        await api.addToFavorites(photo.hash_sha256);
-      } else {
-        await api.removeFromFavorites(photo.hash_sha256);
-      }
-
-      // Update photo object
-      photo.is_favorite = newFavoriteState;
-
-      // Show success message
-      utils.showToast(
-        newFavoriteState ? utils.t('ui.added', 'Added') : utils.t('ui.removed', 'Removed'),
-        newFavoriteState
-          ? utils.t('messages.photo_added_to_favorites', 'Photo added to favorites')
-          : utils.t('messages.photo_removed_from_favorites', 'Photo removed from favorites'),
-        'success',
-        2000
-      );
-
-      // Emit event for other components
-      utils.emit(window, 'favoriteToggled', {
-        photoHash: photo.hash_sha256,
-        isFavorite: newFavoriteState,
-      });
-    } catch (error) {
-      // Revert UI on error
-      button.classList.toggle('active', wasAlreadyFavorite);
-      button.title = wasAlreadyFavorite
-        ? utils.t('ui.remove_from_favorites', 'Remove from Favorites')
-        : utils.t('ui.add_to_favorites', 'Add to Favorites');
-
-      console.error('Error toggling favorite:', error);
-      utils.showToast(
-        utils.t('ui.error', 'Error'),
-        utils.t('messages.error_updating_favorite', 'Error updating favorite status'),
-        'error',
-        3000
-      );
-    }
-  }
-
-  downloadPhoto(photo) {
-    const link = utils.createElement('a');
-    link.href = utils.getPhotoUrl(photo.hash_sha256);
-    link.download = photo.filename || `photo-${photo.hash_sha256.substring(0, 8)}`;
-    link.click();
-
-    utils.showToast(
-      utils.t('ui.download', 'Download'),
-      utils.t('messages.photo_download_started', 'Photo download started'),
-      'info',
-      2000
-    );
-  }
-
-  openPhotoViewer(photo, allPhotos) {
-    if (window.photoViewer) {
-      window.photoViewer.open(photo, allPhotos);
     }
   }
 
@@ -568,41 +317,6 @@ class PhotoGrid {
     }
   }
 
-  updateLoadMoreButton() {
-    const loadMoreContainer = utils.$('#load-more-container');
-
-    if (!loadMoreContainer) return;
-
-    // Show loading indicator when loading more photos (but not on initial load)
-    if (this.loading && this.photos.length > 0) {
-      loadMoreContainer.style.display = 'flex';
-      loadMoreContainer.innerHTML = `
-        <div class="infinite-scroll-loading">
-          <div class="dot-wave">
-            <div class="dot-wave-dot"></div>
-            <div class="dot-wave-dot"></div>
-            <div class="dot-wave-dot"></div>
-          </div>
-        </div>
-      `;
-    } else if (!this.loading && !this.hasMore && this.photos.length > 0) {
-      // Show "end of results" indicator - just dots without animation
-      loadMoreContainer.style.display = 'flex';
-      loadMoreContainer.innerHTML = `
-        <div class="infinite-scroll-end">
-          <div class="end-dots">
-            <div class="end-dot"></div>
-            <div class="end-dot"></div>
-            <div class="end-dot"></div>
-          </div>
-        </div>
-      `;
-    } else {
-      // Hide when not loading and has more
-      loadMoreContainer.style.display = 'none';
-    }
-  }
-
   updateGridLayout() {
     // Dynamic grid sizing based on container width
     const containerWidth = this.container.offsetWidth;
@@ -630,7 +344,7 @@ class PhotoGrid {
     this.photos = photos;
     this.clearGrid();
     this.renderPhotos(photos);
-    this.updateLoadMoreButton();
+    this.infiniteScroll.updateLoadingIndicator();
   }
 
   getSelectedPhotos() {

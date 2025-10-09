@@ -81,20 +81,24 @@ class TurboPixLogger {
     const prefix = `[${entry.timestamp}] [${level}] [${entry.context.component || 'App'}]`;
     const message = `${prefix} ${entry.message}`;
 
-    switch (level) {
-      case 'DEBUG':
-        console.debug(message, entry.data);
-        break;
-      case 'INFO':
-        console.info(message, entry.data);
-        break;
-      case 'WARN':
-        console.warn(message, entry.data);
-        break;
-      case 'ERROR':
-      case 'FATAL':
-        console.error(message, entry.error || entry.data);
-        break;
+    try {
+      switch (level) {
+        case 'DEBUG':
+          console.debug(message, JSON.parse(JSON.stringify(entry.data)));
+          break;
+        case 'INFO':
+          console.info(message, JSON.parse(JSON.stringify(entry.data)));
+          break;
+        case 'WARN':
+          console.warn(message, JSON.parse(JSON.stringify(entry.data)));
+          break;
+        case 'ERROR':
+        case 'FATAL':
+          console.error(message, entry.error || JSON.parse(JSON.stringify(entry.data)));
+          break;
+      }
+    } catch {
+      console.log(message);
     }
   }
 

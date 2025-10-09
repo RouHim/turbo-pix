@@ -41,9 +41,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Run frontend linters
-        run: |
-          npm run lint:js
-          npm run lint:css
+        run: npm run lint
 
       - name: Run tests
         run: cargo test

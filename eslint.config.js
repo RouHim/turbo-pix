@@ -6,7 +6,12 @@ export default [
     ignores: ['static/js/**/*.min.js'],
   },
   {
-    files: ['static/js/**/*.js'],
+    linterOptions: {
+      reportUnusedDisableDirectives: 'error',
+    },
+  },
+  {
+    files: ['static/js/**/*.js', '!static/js/**/*.min.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'script',
@@ -29,16 +34,16 @@ export default [
         performance: 'readonly',
         module: 'readonly',
         utils: 'readonly',
-        api: 'readonly'
-      }
+        api: 'readonly',
+      },
     },
     rules: {
       'no-unused-vars': 'warn',
       'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
-      'no-case-declarations': 'off'
-    }
+      'no-case-declarations': 'off',
+    },
   },
   {
     files: ['static/i18n/**/*.js', 'static/js/i18n.js', 'tests/**/*.js'],
@@ -58,11 +63,11 @@ export default [
         expect: 'readonly',
         beforeEach: 'readonly',
         afterEach: 'readonly',
-        jest: 'readonly'
-      }
+        jest: 'readonly',
+      },
     },
     rules: {
-      'no-unused-vars': 'off'
-    }
-  }
+      'no-unused-vars': 'off',
+    },
+  },
 ];

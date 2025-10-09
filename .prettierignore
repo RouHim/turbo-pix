@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Build output
+target/
+
+# Minified files
+*.min.js
+*.min.css
+
+# Test artifacts
+.playwright-mcp/

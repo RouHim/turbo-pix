@@ -261,8 +261,10 @@ class PhotoGrid {
     const actions = utils.createElement('div', 'photo-card-actions');
 
     // Favorite button
-    const favoriteBtn = utils.createElement('button',
-      `card-action-btn favorite-btn${photo.is_favorite ? ' active' : ''}`);
+    const favoriteBtn = utils.createElement(
+      'button',
+      `card-action-btn favorite-btn${photo.is_favorite ? ' active' : ''}`
+    );
     favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
     favoriteBtn.dataset.action = 'favorite';
     // Icon is safe - comes from internal SVG generator
@@ -470,8 +472,11 @@ class PhotoGrid {
     iconDiv.innerHTML = window.iconHelper.getSemanticIcon('photo', { size: 64 });
 
     // Title (safe - i18n string)
-    const title = utils.createElement('div', 'error-state-title',
-      utils.t('ui.no_photos_found', 'No Photos Found'));
+    const title = utils.createElement(
+      'div',
+      'error-state-title',
+      utils.t('ui.no_photos_found', 'No Photos Found')
+    );
 
     // Message (safe - uses textContent for user query)
     const message = utils.createElement('div', 'error-state-message');
@@ -487,7 +492,10 @@ class PhotoGrid {
         message.textContent = `No photos match your search for "${this.currentQuery}"`;
       }
     } else {
-      message.textContent = utils.t('messages.no_photos_indexed', 'No photos have been indexed yet');
+      message.textContent = utils.t(
+        'messages.no_photos_indexed',
+        'No photos have been indexed yet'
+      );
     }
 
     errorState.appendChild(iconDiv);
@@ -496,8 +504,11 @@ class PhotoGrid {
 
     // Refresh button (only if no query)
     if (!this.currentQuery) {
-      const button = utils.createElement('button', 'error-state-button',
-        utils.t('ui.refresh', 'Refresh'));
+      const button = utils.createElement(
+        'button',
+        'error-state-button',
+        utils.t('ui.refresh', 'Refresh')
+      );
       button.onclick = () => window.location.reload();
       errorState.appendChild(button);
     }
@@ -516,15 +527,21 @@ class PhotoGrid {
     iconDiv.innerHTML = window.iconHelper.getSemanticIcon('warning', { size: 64 });
 
     // Title (safe - i18n string)
-    const title = utils.createElement('div', 'error-state-title',
-      utils.t('errors.error_loading_photos', 'Error Loading Photos'));
+    const title = utils.createElement(
+      'div',
+      'error-state-title',
+      utils.t('errors.error_loading_photos', 'Error Loading Photos')
+    );
 
     // Message (safe - uses textContent)
     const messageDiv = utils.createElement('div', 'error-state-message', message);
 
     // Try again button
-    const button = utils.createElement('button', 'error-state-button',
-      utils.t('ui.try_again', 'Try Again'));
+    const button = utils.createElement(
+      'button',
+      'error-state-button',
+      utils.t('ui.try_again', 'Try Again')
+    );
     button.onclick = () => this.loadPhotos();
 
     errorState.appendChild(iconDiv);

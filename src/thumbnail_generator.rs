@@ -8,7 +8,7 @@ use tokio::fs;
 
 use crate::config::Config;
 use crate::db::{DbPool, Photo};
-use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailSize};
+use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailFormat, ThumbnailSize};
 use crate::video_processor;
 
 #[derive(Clone, Debug)]
@@ -45,8 +45,9 @@ impl ThumbnailGenerator {
         &self,
         photo: &Photo,
         size: ThumbnailSize,
+        format: ThumbnailFormat,
     ) -> CacheResult<Vec<u8>> {
-        let cache_key = CacheKey::from_photo(photo, size)?;
+        let cache_key = CacheKey::from_photo(photo, size, format)?;
 
         if let Some(cached_data) = self.get_from_disk_cache(&cache_key).await {
             debug!("Cache hit for {}", cache_key);
@@ -54,7 +55,7 @@ impl ThumbnailGenerator {
         }
 
         debug!("Cache miss for {}, generating thumbnail", cache_key);
-        self.generate_thumbnail(photo, size).await
+        self.generate_thumbnail(photo, size, format).await
     }
 
     async fn get_from_disk_cache(&self, key: &CacheKey) -> Option<Vec<u8>> {
@@ -83,7 +84,12 @@ impl ThumbnailGenerator {
         }
     }
 
-    async fn generate_thumbnail(&self, photo: &Photo, size: ThumbnailSize) -> CacheResult<Vec<u8>> {
+    async fn generate_thumbnail(
+        &self,
+        photo: &Photo,
+        size: ThumbnailSize,
+        format: ThumbnailFormat,
+    ) -> CacheResult<Vec<u8>> {
         let photo_path = PathBuf::from(&photo.file_path);
 
         if !photo_path.exists() {
@@ -91,16 +97,16 @@ impl ThumbnailGenerator {
         }
 
         let thumbnail_data = if self.is_video_file(photo) {
-            self.generate_video_thumbnail(&photo_path, size, photo.orientation)
+            self.generate_video_thumbnail(&photo_path, size, photo.orientation, format)
                 .await?
         } else {
             let img = image::open(&photo_path)?;
             let img = self.apply_orientation(img, photo.orientation);
             let thumbnail = self.resize_image(img, size);
-            self.encode_image(thumbnail)?
+            self.encode_image(thumbnail, format)?
         };
 
-        let cache_key = CacheKey::from_photo(photo, size)?;
+        let cache_key = CacheKey::from_photo(photo, size, format)?;
         let _cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
@@ -129,9 +135,13 @@ impl ThumbnailGenerator {
         img.thumbnail(target_size, target_size)
     }
 
-    fn encode_image(&self, img: DynamicImage) -> CacheResult<Vec<u8>> {
+    fn encode_image(&self, img: DynamicImage, format: ThumbnailFormat) -> CacheResult<Vec<u8>> {
         let mut buffer = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut buffer, ImageFormat::Jpeg)?;
+        let image_format = match format {
+            ThumbnailFormat::Jpeg => ImageFormat::Jpeg,
+            ThumbnailFormat::Webp => ImageFormat::WebP,
+        };
+        img.write_to(&mut buffer, image_format)?;
         Ok(buffer.into_inner())
     }
 
@@ -148,6 +158,7 @@ impl ThumbnailGenerator {
         video_path: &Path,
         size: ThumbnailSize,
         orientation: Option<i32>,
+        format: ThumbnailFormat,
     ) -> CacheResult<Vec<u8>> {
         // Extract video metadata to get duration
         let metadata = video_processor::extract_video_metadata(video_path).await?;
@@ -176,7 +187,7 @@ impl ThumbnailGenerator {
 
         let img = self.apply_orientation(img, orientation);
         let thumbnail = self.resize_image(img, size);
-        let thumbnail_data = self.encode_image(thumbnail)?;
+        let thumbnail_data = self.encode_image(thumbnail, format)?;
 
         // Clean up temporary file
         if temp_frame_path.exists() {

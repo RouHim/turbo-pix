@@ -45,25 +45,80 @@ impl fmt::Display for ThumbnailSize {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThumbnailFormat {
+    Jpeg,
+    Webp,
+}
+
+impl ThumbnailFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThumbnailFormat::Jpeg => "jpeg",
+            ThumbnailFormat::Webp => "webp",
+        }
+    }
+
+    pub fn content_type(&self) -> &'static str {
+        match self {
+            ThumbnailFormat::Jpeg => "image/jpeg",
+            ThumbnailFormat::Webp => "image/webp",
+        }
+    }
+}
+
+impl Default for ThumbnailFormat {
+    fn default() -> Self {
+        ThumbnailFormat::Jpeg
+    }
+}
+
+impl FromStr for ThumbnailFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "jpeg" | "jpg" => Ok(ThumbnailFormat::Jpeg),
+            "webp" => Ok(ThumbnailFormat::Webp),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for ThumbnailFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey {
     pub content_hash: String,
     pub size: ThumbnailSize,
+    pub format: ThumbnailFormat,
 }
 
 impl CacheKey {
-    pub fn new(content_hash: String, size: ThumbnailSize) -> Self {
-        Self { content_hash, size }
+    pub fn new(content_hash: String, size: ThumbnailSize, format: ThumbnailFormat) -> Self {
+        Self {
+            content_hash,
+            size,
+            format,
+        }
     }
 
-    pub fn from_photo(photo: &crate::db::Photo, size: ThumbnailSize) -> Result<Self, CacheError> {
-        Ok(Self::new(photo.hash_sha256.clone(), size))
+    pub fn from_photo(
+        photo: &crate::db::Photo,
+        size: ThumbnailSize,
+        format: ThumbnailFormat,
+    ) -> Result<Self, CacheError> {
+        Ok(Self::new(photo.hash_sha256.clone(), size, format))
     }
 }
 
 impl fmt::Display for CacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}", self.content_hash, self.size)
+        write!(f, "{}_{}_{}", self.content_hash, self.size, self.format)
     }
 }
 

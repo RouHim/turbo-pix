@@ -14,6 +14,7 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "js/constants.js",
     "js/utils.js",
     "js/logger.js",
+    "js/blurhash.js",
     "js/api.js",
     "js/viewerControls.js",
     "js/viewerMetadata.js",

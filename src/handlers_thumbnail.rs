@@ -4,12 +4,13 @@ use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::{DbPool, Photo};
 use crate::thumbnail_generator::ThumbnailGenerator;
-use crate::thumbnail_types::ThumbnailSize;
+use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
 use crate::warp_helpers::{with_db, with_thumbnail_generator, DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
 pub struct ThumbnailQuery {
     pub size: Option<String>,
+    pub format: Option<String>,
 }
 
 pub async fn get_photo_thumbnail(
@@ -38,9 +39,12 @@ pub async fn get_photo_thumbnail(
     let size = ThumbnailSize::from_str(&query.size.unwrap_or_else(|| "medium".to_string()))
         .unwrap_or(ThumbnailSize::Medium);
 
-    match thumbnail_generator.get_or_generate(&photo, size).await {
+    let format = ThumbnailFormat::from_str(&query.format.unwrap_or_else(|| "jpeg".to_string()))
+        .unwrap_or(ThumbnailFormat::Jpeg);
+
+    match thumbnail_generator.get_or_generate(&photo, size, format).await {
         Ok(thumbnail_data) => {
-            let reply = warp::reply::with_header(thumbnail_data, "content-type", "image/jpeg");
+            let reply = warp::reply::with_header(thumbnail_data, "content-type", format.content_type());
             let reply = warp::reply::with_header(
                 reply,
                 "cache-control",

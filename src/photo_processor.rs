@@ -39,6 +39,7 @@ pub struct ProcessedPhoto {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub hash_sha256: Option<String>,
+    pub blurhash: Option<String>,    // BlurHash for progressive image loading
     pub duration: Option<f64>,       // Video duration in seconds
     pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
@@ -119,6 +120,7 @@ impl PhotoProcessor {
         let mime_type = mimetype_detector::from_path(path).map(|m| m.to_string());
         let metadata = MetadataExtractor::extract_with_metadata(path, Some(&photo_file.metadata));
         let hash_sha256 = self.calculate_file_hash(path).ok();
+        let blurhash = self.generate_blurhash(path);
 
         self.semantic_search
             .compute_semantic_vector(&file_path)
@@ -150,6 +152,7 @@ impl PhotoProcessor {
             latitude: metadata.latitude,
             longitude: metadata.longitude,
             hash_sha256,
+            blurhash,
             duration: metadata.duration,
             video_codec: metadata.video_codec,
             audio_codec: metadata.audio_codec,
@@ -162,5 +165,45 @@ impl PhotoProcessor {
         let mut hasher = Sha256::new();
         hasher.update(path.to_string_lossy().as_bytes());
         Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    fn generate_blurhash(&self, path: &Path) -> Option<String> {
+        // Only generate blurhash for image files (not videos)
+        let mime_type = mimetype_detector::from_path(path)?;
+        if mime_type.type_() != "image" {
+            return None;
+        }
+
+        // Load and resize image to small dimensions for blurhash
+        let img = image::open(path).ok()?;
+        let resized = img.thumbnail(32, 32); // Small size for blurhash generation
+
+        // Convert to RGBA8 (fast-blurhash expects u32 pixels)
+        let rgba = resized.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        // Convert RGBA bytes to u32 pixels
+        let pixels: Vec<u32> = rgba
+            .chunks(4)
+            .map(|chunk| {
+                let r = chunk[0] as u32;
+                let g = chunk[1] as u32;
+                let b = chunk[2] as u32;
+                let a = chunk[3] as u32;
+                (a << 24) | (r << 16) | (g << 8) | b
+            })
+            .collect();
+
+        // Generate blurhash with 4x3 components (good balance between quality and size)
+        // fast-blurhash uses a two-step process: compute_dct -> into_blurhash
+        let dct_result = fast_blurhash::compute_dct(
+            &pixels,
+            width as usize,
+            height as usize,
+            4, // x_components
+            3, // y_components
+        );
+        let hash = dct_result.into_blurhash();
+        Some(hash)
     }
 }

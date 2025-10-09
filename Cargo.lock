@@ -804,6 +804,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-blurhash"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ee43bf33e29174a8fc38cdb4fba8641f6cb6f21931a1669bc0f834766821503"
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3635,6 +3641,7 @@ dependencies = [
  "chrono",
  "clokwerk",
  "env_logger",
+ "fast-blurhash",
  "hf-hub",
  "image",
  "kamadak-exif",

@@ -36,6 +36,7 @@ pub struct Photo {
     pub location_name: Option<String>,
     pub thumbnail_path: Option<String>,
     pub has_thumbnail: Option<bool>,
+    pub blurhash: Option<String>,
     pub country: Option<String>,
     pub keywords: Option<String>,
     pub faces_detected: Option<String>,
@@ -93,24 +94,25 @@ impl Photo {
             location_name: row.get(26)?,
             thumbnail_path: row.get(27)?, // hash_sha256 removed from index 27
             has_thumbnail: row.get(28)?,
-            country: row.get(29)?,
-            keywords: row.get(30)?,
-            faces_detected: row.get(31)?,
-            objects_detected: row.get(32)?,
-            colors: row.get(33)?,
-            duration: row.get(34)?,
-            video_codec: row.get(35)?,
-            audio_codec: row.get(36)?,
-            bitrate: row.get(37)?,
-            frame_rate: row.get(38)?,
-            is_favorite: row.get(39)?,
+            blurhash: row.get(29)?,
+            country: row.get(30)?,
+            keywords: row.get(31)?,
+            faces_detected: row.get(32)?,
+            objects_detected: row.get(33)?,
+            colors: row.get(34)?,
+            duration: row.get(35)?,
+            video_codec: row.get(36)?,
+            audio_codec: row.get(37)?,
+            bitrate: row.get(38)?,
+            frame_rate: row.get(39)?,
+            is_favorite: row.get(40)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(40)?;
+                let datetime_str = row.get::<_, String>(41)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                40,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -120,7 +122,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                40,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -129,12 +131,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(41)?;
+                let datetime_str = row.get::<_, String>(42)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -144,7 +146,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -166,7 +168,7 @@ impl Photo {
                  width = ?, height = ?, color_space = ?, white_balance = ?,
                  exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
                  latitude = ?, longitude = ?, location_name = ?,
-                 thumbnail_path = ?, has_thumbnail = ?,
+                 thumbnail_path = ?, has_thumbnail = ?, blurhash = ?,
                  country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
                  duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
                  is_favorite = ?, updated_at = ?
@@ -200,6 +202,7 @@ impl Photo {
                 self.location_name,
                 self.thumbnail_path,
                 self.has_thumbnail,
+                self.blurhash,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -302,13 +305,13 @@ impl Photo {
                 date_indexed, camera_make, camera_model, lens_make, lens_model,
                 iso, aperture, shutter_speed, focal_length, width, height, color_space,
                 white_balance, exposure_mode, metering_mode, orientation, flash_used,
-                latitude, longitude, location_name, thumbnail_path, has_thumbnail,
+                latitude, longitude, location_name, thumbnail_path, has_thumbnail, blurhash,
                 country, keywords, faces_detected, objects_detected, colors,
                 duration, video_codec, audio_codec, bitrate, frame_rate,
                 is_favorite, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
             )
         "#;
 
@@ -344,6 +347,7 @@ impl Photo {
                 self.location_name,
                 self.thumbnail_path,
                 self.has_thumbnail,
+                self.blurhash,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -556,6 +560,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             location_name: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: processed.blurhash,
             country: None,
             keywords: None,
             faces_detected: None,

@@ -2,7 +2,6 @@ class PhotoCard {
   constructor(photo, grid) {
     this.photo = photo;
     this.grid = grid;
-    this.observer = grid.observer;
   }
 
   create() {
@@ -12,10 +11,49 @@ class PhotoCard {
     const isVideo = this.photo.video_codec != null;
 
     const imageContainer = utils.createElement('div', 'photo-card-image-container');
-    imageContainer.dataset.src = utils.getThumbnailUrl(this.photo, 'medium');
 
-    const placeholder = utils.createElement('div', 'photo-card-placeholder');
-    imageContainer.appendChild(placeholder);
+    // BlurHash placeholder for progressive loading
+    if (this.photo.blurhash && window.blurhash) {
+      try {
+        const canvas = window.blurhash.createCanvas(this.photo.blurhash, 32, 32, 1);
+        canvas.className = 'photo-card-blurhash';
+        imageContainer.appendChild(canvas);
+      } catch (e) {
+        console.warn('Failed to decode blurhash:', e);
+      }
+    }
+
+    // Responsive images with WebP and JPEG fallback
+    const picture = utils.createElement('picture');
+
+    // WebP source with srcset for responsive images
+    const webpSource = utils.createElement('source');
+    webpSource.type = 'image/webp';
+    webpSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=webp 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=webp 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=webp 800w`;
+    webpSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+    picture.appendChild(webpSource);
+
+    // JPEG fallback source with srcset
+    const jpegSource = utils.createElement('source');
+    jpegSource.type = 'image/jpeg';
+    jpegSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=jpeg 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=jpeg 800w`;
+    jpegSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+    picture.appendChild(jpegSource);
+
+    // img fallback for browsers that don't support picture
+    const img = utils.createElement('img', 'photo-card-image');
+    img.src = `${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg`;
+    img.alt = this.getTitle();
+    img.loading = 'lazy';
+    img.decoding = 'async';
+
+    // Fade in image when loaded
+    img.onload = () => {
+      imageContainer.classList.add('image-loaded');
+    };
+
+    picture.appendChild(img);
+    imageContainer.appendChild(picture);
 
     if (isVideo) {
       const playIcon = utils.createElement('div', 'video-play-icon');
@@ -34,7 +72,6 @@ class PhotoCard {
     card.appendChild(overlay);
     card.appendChild(actions);
 
-    this.observer.observe(imageContainer);
     this.bindEvents(card);
 
     return card;

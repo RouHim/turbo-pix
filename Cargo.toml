@@ -18,6 +18,7 @@ clokwerk = "0.4"
 # Image processing & MIME
 image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "hdr", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 kamadak-exif = "0.6"
+fast-blurhash = "1.0"
 
 # ML model for semantic search
 candle-core = "0.9.1"

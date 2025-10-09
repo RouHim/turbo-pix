@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS photos (
     location_name TEXT,
     thumbnail_path TEXT,
     has_thumbnail BOOLEAN,
+    blurhash TEXT, -- BlurHash string for progressive image loading
     country TEXT,
     keywords TEXT,
     faces_detected TEXT,

@@ -15,7 +15,6 @@ class PhotoGrid {
     this.currentPage = 1;
     this.loading = false;
     this.hasMore = true;
-    this.observer = null;
     this.currentQuery = null;
     this.currentFilters = {};
     this.loadingStartTime = null;
@@ -24,28 +23,11 @@ class PhotoGrid {
   }
 
   init() {
-    this.setupIntersectionObserver();
     this.bindEvents();
     this.infiniteScroll = new InfiniteScroll(this, {
       threshold: 800,
       throttleDelay: 250,
     });
-  }
-
-  setupIntersectionObserver() {
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            this.loadImageForCard(entry.target);
-          }
-        });
-      },
-      {
-        rootMargin: '50px',
-        threshold: 0.1,
-      }
-    );
   }
 
   bindEvents() {
@@ -145,8 +127,8 @@ class PhotoGrid {
       setTimeout(() => {
         this.loading = false;
         this.updateLoadingState(false);
-        this.infiniteScroll.updateLoadingIndicator();
-        this.infiniteScroll.recheckAfterLoad();
+        this.infiniteScroll?.updateLoadingIndicator();
+        this.infiniteScroll?.recheckAfterLoad();
       }, remainingTime);
     }
   }
@@ -167,43 +149,6 @@ class PhotoGrid {
 
     this.container.appendChild(fragment);
     this.updateGridLayout();
-  }
-
-  async loadImageForCard(container) {
-    const src = container.dataset.src;
-    if (!src || container.dataset.loaded) return;
-
-    try {
-      const img = document.createElement('img');
-      img.src = src;
-      img.alt = '';
-      img.className = 'photo-card-image';
-
-      img.onload = () => {
-        const placeholder = container.querySelector('.photo-card-placeholder');
-        if (placeholder) {
-          container.replaceChild(img, placeholder);
-          container.dataset.loaded = 'true';
-        }
-      };
-
-      img.onerror = () => {
-        const placeholder = container.querySelector('.photo-card-placeholder');
-        if (placeholder) {
-          placeholder.innerHTML = `<div class="error-placeholder">${window.iconHelper.getSemanticIcon('error', { size: 24 })}</div>`;
-        }
-
-        if (window.logger) {
-          window.logger.warn('Failed to load image', {
-            component: 'PhotoGrid',
-            src,
-            photoId: container.dataset.photoId,
-          });
-        }
-      };
-    } catch (error) {
-      console.error('Error loading image:', error);
-    }
   }
 
   clearGrid() {
@@ -318,13 +263,7 @@ class PhotoGrid {
   }
 
   updateGridLayout() {
-    // Dynamic grid sizing based on container width
-    const containerWidth = this.container.offsetWidth;
-    const minCardWidth = 200;
-    const gap = 24;
-    const columns = Math.floor((containerWidth + gap) / (minCardWidth + gap));
-
-    this.container.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+    // Grid layout is handled by CSS
   }
 
   // Public API

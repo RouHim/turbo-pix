@@ -70,6 +70,7 @@ TurboPix uses sensible defaults and requires minimal configuration:
 **Derived Paths from DATA_PATH:**
 - Database: `{DATA_PATH}/database/turbo-pix.db`
 - Thumbnails: `{DATA_PATH}/cache/thumbnails`
+- AI Models: `{DATA_PATH}/models`
 
 **Built-in Defaults:**
 - Server binds to `127.0.0.1` (localhost only)

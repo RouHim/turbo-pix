@@ -58,11 +58,11 @@ pub struct SemanticSearchEngine {
 
 impl SemanticSearchEngine {
     /// Creates a new semantic search engine with model and database initialization
-    pub fn new(db_pool: Pool<SqliteConnectionManager>) -> Result<Self> {
+    pub fn new(db_pool: Pool<SqliteConnectionManager>, data_path: &str) -> Result<Self> {
         let device = Arc::new(Device::Cpu);
 
         log::info!("Loading semantic search model...");
-        let (model, tokenizer) = load_clip_model(&device)?;
+        let (model, tokenizer) = load_clip_model(&device, data_path)?;
 
         Ok(Self {
             model: Arc::new(RwLock::new(model)),
@@ -161,8 +161,8 @@ impl SemanticSearchEngine {
 }
 
 /// Loads CLIP ViT-B/32 model and tokenizer from HuggingFace Hub
-fn load_clip_model(device: &Device) -> Result<(clip::ClipModel, Tokenizer)> {
-    let cache_dir = std::path::PathBuf::from("./models");
+fn load_clip_model(device: &Device, data_path: &str) -> Result<(clip::ClipModel, Tokenizer)> {
+    let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
     let model_repo = hf_hub::api::sync::ApiBuilder::new()
         .with_cache_dir(cache_dir)
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn test_duplicate_semantic_vector_skipped() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone()).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         let path = "test-data/cat.jpg";
 
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_semantic_search_basic() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone()).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         // Index both images
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn test_semantic_search_concept_understanding() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone()).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_semantic_similarity_synonyms() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
 
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn test_search_empty_database() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
 
         let results = engine.search("cat", 10).unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn test_minimum_similarity_threshold() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone()).unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();

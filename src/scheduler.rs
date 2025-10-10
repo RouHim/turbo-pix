@@ -159,7 +159,8 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             let db_pool = create_test_db_pool().unwrap();
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-            let semantic_search = Arc::new(SemanticSearchEngine::new(db_pool.clone()).unwrap());
+            let semantic_search =
+                Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let scheduler = PhotoScheduler::new(
@@ -424,7 +425,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_pool = create_test_db_pool().unwrap();
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-        let semantic_search = Arc::new(SemanticSearchEngine::new(db_pool.clone()).unwrap());
+        let semantic_search =
+            Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];

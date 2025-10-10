@@ -38,16 +38,15 @@ FROM scratch
 ENV USER="1000" \
     TURBO_PIX_PHOTO_PATHS="/photos" \
     TURBO_PIX_DATA_PATH="/data" \
-    DATA_FOLDER="/data" \
     RUST_LOG="info" \
     FFMPEG_PATH="/ffmpeg" \
     FFPROBE_PATH="/ffprobe"
 
 # For performance reasons write data to docker volume instead of containers writeable fs layer
-VOLUME $DATA_FOLDER
+VOLUME $TURBO_PIX_DATA_PATH
 
 # Copy the empty directory as data and temp folder
-COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $DATA_FOLDER
+COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $TURBO_PIX_DATA_PATH
 COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory

@@ -40,6 +40,12 @@ use std::sync::Arc;
 use thumbnail_generator::ThumbnailGenerator;
 use warp_helpers::{cors, handle_rejection};
 
+// Avoid musl's default allocator due to lackluster performance
+// https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -129,7 +135,7 @@ fn initialize_services(
 
     // Initialize semantic search engine
     let semantic_search = Arc::new(
-        SemanticSearchEngine::new(db_pool.clone())
+        SemanticSearchEngine::new(db_pool.clone(), &config.data_path)
             .map_err(|e| format!("Failed to initialize semantic search: {}", e))?,
     );
     info!("Semantic search initialized");

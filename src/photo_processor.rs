@@ -60,21 +60,6 @@ impl PhotoProcessor {
         }
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn process_all(&self) -> Vec<ProcessedPhoto> {
-        let photo_files = self.scanner.scan();
-        let mut processed_photos = Vec::new();
-
-        for photo_file in photo_files {
-            if let Some(processed_photo) = self.process_file(&photo_file) {
-                processed_photos.push(processed_photo);
-            }
-        }
-
-        processed_photos
-    }
-
     pub async fn full_rescan_and_cleanup(
         &self,
         db_pool: &DbPool,

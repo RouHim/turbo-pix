@@ -34,11 +34,6 @@ RUN cargo fetch --target x86_64-unknown-linux-musl && \
 
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
-# Download AI models for semantic search
-ENV TURBO_PIX_DATA_PATH="/data"
-RUN mkdir -p /data && \
-    /app/target/x86_64-unknown-linux-musl/release/turbo-pix --download-models
-
 # # # # # # # # # # # # # # # # # # # #
 # Run image
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -54,8 +49,8 @@ ENV USER="1000" \
 # For performance reasons write data to docker volume instead of containers writeable fs layer
 VOLUME $TURBO_PIX_DATA_PATH
 
-# Copy the data directory with pre-downloaded models
-COPY --chmod=777 --chown=$USER:$USER --from=builder /data $TURBO_PIX_DATA_PATH
+# Copy the empty directory as data and temp folder
+COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $TURBO_PIX_DATA_PATH
 COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory

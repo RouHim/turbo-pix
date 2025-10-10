@@ -230,7 +230,12 @@ impl ThumbnailGenerator {
     }
 
     pub fn get_cache_path(&self, key: &CacheKey) -> PathBuf {
-        let filename = format!("{}_{}.jpg", key.content_hash, key.size.as_str());
+        let filename = format!(
+            "{}_{}.{}",
+            key.content_hash,
+            key.size.as_str(),
+            key.format.as_str()
+        );
 
         // Use first 3 characters of hash for subdirectory distribution
         let subdir = if key.content_hash.len() >= 3 {
@@ -812,5 +817,64 @@ mod tests {
             "Cache size {}MB should be <= 2MB limit",
             total_size / 1024 / 1024
         );
+    }
+
+    #[tokio::test]
+    async fn test_webp_and_jpeg_cached_separately() {
+        // GIVEN: A photo and thumbnail generator
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let mut photo = create_test_photo(&image_path.to_string_lossy());
+        photo.hash_sha256 = "abc123".repeat(11); // 66 chars, will use "abc" as subdir
+
+        // WHEN: Generating both WebP and JPEG thumbnails
+        let webp_data = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Webp)
+            .await
+            .unwrap();
+
+        let jpeg_data = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        // THEN: Both formats should be cached with different filenames
+        let webp_key = CacheKey::new(
+            photo.hash_sha256.clone(),
+            ThumbnailSize::Medium,
+            ThumbnailFormat::Webp,
+        );
+        let jpeg_key = CacheKey::new(
+            photo.hash_sha256.clone(),
+            ThumbnailSize::Medium,
+            ThumbnailFormat::Jpeg,
+        );
+
+        let webp_path = generator.get_cache_path(&webp_key);
+        let jpeg_path = generator.get_cache_path(&jpeg_key);
+
+        assert!(webp_path.exists(), "WebP cache file should exist");
+        assert!(jpeg_path.exists(), "JPEG cache file should exist");
+        assert_ne!(webp_path, jpeg_path, "Cache paths should be different");
+
+        // Verify file extensions
+        assert_eq!(
+            webp_path.extension().unwrap(),
+            "webp",
+            "WebP cache should have .webp extension"
+        );
+        assert_eq!(
+            jpeg_path.extension().unwrap(),
+            "jpeg",
+            "JPEG cache should have .jpeg extension"
+        );
+
+        // Verify content is different (WebP and JPEG produce different bytes)
+        assert_ne!(webp_data, jpeg_data, "WebP and JPEG data should differ");
     }
 }

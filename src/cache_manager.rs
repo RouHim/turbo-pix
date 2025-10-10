@@ -29,22 +29,24 @@ impl CacheManager {
         );
 
         for size in ["small", "medium", "large"] {
-            let thumbnail_path = self
-                .thumbnail_cache_dir
-                .join(format!("{}_{}.jpg", filename, size));
-            info!("Checking thumbnail path: {}", thumbnail_path.display());
-            if thumbnail_path.exists() {
-                if let Err(e) = std::fs::remove_file(&thumbnail_path) {
-                    error!(
-                        "Failed to remove thumbnail {}: {}",
-                        thumbnail_path.display(),
-                        e
-                    );
+            for format in ["jpeg", "webp"] {
+                let thumbnail_path = self
+                    .thumbnail_cache_dir
+                    .join(format!("{}_{}.{}", filename, size, format));
+                info!("Checking thumbnail path: {}", thumbnail_path.display());
+                if thumbnail_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&thumbnail_path) {
+                        error!(
+                            "Failed to remove thumbnail {}: {}",
+                            thumbnail_path.display(),
+                            e
+                        );
+                    } else {
+                        info!("Removed thumbnail: {}", thumbnail_path.display());
+                    }
                 } else {
-                    info!("Removed thumbnail: {}", thumbnail_path.display());
+                    info!("Thumbnail does not exist: {}", thumbnail_path.display());
                 }
-            } else {
-                info!("Thumbnail does not exist: {}", thumbnail_path.display());
             }
         }
 

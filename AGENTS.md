@@ -49,3 +49,5 @@ Development/personal project - breaking changes acceptable, database can be recr
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
 **Avoid:** Hardcoded paths and fallback logic mask bugs
+- when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
+- lint and format before commiting

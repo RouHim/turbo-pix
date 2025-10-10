@@ -43,6 +43,9 @@ jobs:
       - name: Run frontend linters
         run: npm run lint
 
+      - name: Download AI models
+        run: cargo run -- --download-models
+
       - name: Run tests
         run: cargo test
 

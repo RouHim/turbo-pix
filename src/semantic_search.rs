@@ -160,6 +160,40 @@ impl SemanticSearchEngine {
     }
 }
 
+/// Downloads CLIP model files to the cache directory
+pub fn download_models(data_path: &str) -> Result<()> {
+    log::info!("Downloading CLIP model to cache...");
+    let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
+
+    let model_repo = hf_hub::api::sync::ApiBuilder::new()
+        .with_cache_dir(cache_dir.clone())
+        .build()
+        .context("Failed to build HuggingFace API")?
+        .repo(hf_hub::Repo::with_revision(
+            CLIP_MODEL.into(),
+            hf_hub::RepoType::Model,
+            MODEL_REVISION.into(),
+        ));
+
+    log::info!("Downloading model weights...");
+    let weights_path = model_repo
+        .get("model.safetensors")
+        .context("Failed to download model weights")?;
+    log::info!("Model weights downloaded: {}", weights_path.display());
+
+    log::info!("Downloading tokenizer...");
+    let tokenizer_path = model_repo
+        .get("tokenizer.json")
+        .context("Failed to download tokenizer")?;
+    log::info!("Tokenizer downloaded: {}", tokenizer_path.display());
+
+    log::info!(
+        "All models downloaded successfully to: {}",
+        cache_dir.display()
+    );
+    Ok(())
+}
+
 /// Loads CLIP ViT-B/32 model and tokenizer from HuggingFace Hub
 fn load_clip_model(device: &Device, data_path: &str) -> Result<(clip::ClipModel, Tokenizer)> {
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");

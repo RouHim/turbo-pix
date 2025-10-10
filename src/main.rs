@@ -51,6 +51,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let config = config::Config::from_env()?;
+
+    // Handle --download-models flag
+    if std::env::args().any(|arg| arg == "--download-models") {
+        info!("Downloading AI models...");
+        semantic_search::download_models(&config.data_path)?;
+        info!("Download complete. You can now run tests.");
+        return Ok(());
+    }
+
     let port = config.port;
 
     info!("Starting TurboPix server on Port {}", port);

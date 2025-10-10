@@ -63,6 +63,17 @@ jobs:
       - name: Login to Docker Hub
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Download AI models for container test
+        run: |
+          mkdir -p data/models
+          cargo run -- --download-models
+
       - name: Build and tag container image
         run: |
           podman build -t turbo-pix:latest -f container-data/Containerfile .
@@ -70,7 +81,7 @@ jobs:
 
       - name: Test container startup and health
         run: |
-          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 --tmpfs /data:rw,size=100M turbo-pix:latest
+          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 -v $(pwd)/data:/data:z turbo-pix:latest
           sleep 5
           echo "=== Container logs after 5s ==="
           podman logs turbo-pix-test

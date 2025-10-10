@@ -8,6 +8,8 @@ macro_rules! include_static {
 
 const STATIC_FILES: &[(&str, &str)] = include_static![
     "index.html",
+    "favicon.svg",
+    "site.webmanifest",
     "css/main.css",
     "css/components.css",
     "css/responsive.css",
@@ -38,6 +40,7 @@ fn content_type_from_path(path: &str) -> &'static str {
         Some("css") => "text/css",
         Some("js") => "application/javascript",
         Some("html") => "text/html",
+        Some("svg") => "image/svg+xml",
         _ => "text/plain",
     }
 }

@@ -1,22 +1,25 @@
 // Main Application Controller
 
-// Constants
-const MOBILE_BREAKPOINT = 768;
-
 class TurboPixApp {
   constructor() {
     this.state = new utils.SimpleState({
       currentView: 'all',
       isLoading: false,
-      isMobile: window.innerWidth <= MOBILE_BREAKPOINT,
+      isMobile: window.innerWidth <= window.APP_CONSTANTS.MOBILE_BREAKPOINT,
       sidebarOpen: false,
       sortBy: 'date_desc',
       totalPhotos: 0,
       selectedPhotos: [],
       timelineFilter: null, // { year: 2011, month: 5 } or null
     });
+    this.viewLoadId = 0; // Track current view load request
   }
 
+  /**
+   * Initializes the TurboPix application
+   * Sets up i18n, event bindings, navigation, theme, and loads initial data
+   * @returns {Promise<void>}
+   */
   async init() {
     if (window.logger) {
       window.logger.info('TurboPix App initializing', {
@@ -58,6 +61,16 @@ class TurboPixApp {
   }
 
   bindEvents() {
+    // Logo link - navigate to home
+    const logoLink = utils.$('#logo-link');
+    if (logoLink) {
+      utils.on(logoLink, 'click', (e) => {
+        e.preventDefault();
+        this.switchView('all');
+        this.closeMobileSidebar();
+      });
+    }
+
     // Navigation
     utils.$$('.nav-item').forEach((item) => {
       utils.on(item, 'click', () => {
@@ -69,9 +82,6 @@ class TurboPixApp {
         }
       });
     });
-
-    // View mode toggles
-    // Removed - view switching functionality removed
 
     // Sort controls
     const sortSelect = utils.$('#sort-select');
@@ -133,7 +143,7 @@ class TurboPixApp {
   }
 
   setupResponsiveLayout() {
-    const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+    const isMobile = window.innerWidth <= window.APP_CONSTANTS.MOBILE_BREAKPOINT;
     this.state.set('isMobile', isMobile);
 
     if (isMobile) {
@@ -147,7 +157,7 @@ class TurboPixApp {
     if (header && !utils.$('.menu-btn')) {
       const menuBtn = utils.createElement('button', 'menu-btn');
       menuBtn.innerHTML = window.iconHelper.getSemanticIcon('menu', { size: 20 });
-      menuBtn.title = window.i18nManager ? window.i18nManager.t('ui.menu') : 'Menu';
+      menuBtn.title = utils.t('ui.menu', 'Menu');
       header.insertBefore(menuBtn, header.firstChild);
 
       utils.on(menuBtn, 'click', () => {
@@ -163,12 +173,10 @@ class TurboPixApp {
       const searchInput = utils.createElement('input', 'search-input');
       searchInput.type = 'text';
       searchInput.id = 'mobile-search-input';
-      searchInput.placeholder = window.i18nManager
-        ? window.i18nManager.t('ui.search_photos_placeholder')
-        : 'Search photos...';
+      searchInput.placeholder = utils.t('ui.search_photos_placeholder', 'Search photos...');
 
       const searchBtn = utils.createElement('button', 'search-btn');
-      searchBtn.textContent = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
+      searchBtn.textContent = utils.t('ui.search', 'Search');
 
       searchContainer.appendChild(searchInput);
       searchContainer.appendChild(searchBtn);
@@ -180,19 +188,19 @@ class TurboPixApp {
       }
 
       // Connect mobile search to main search functionality
-      if (window.searchManager) {
+      if (window.search) {
         utils.on(searchInput, 'input', (e) => {
           const mainSearchInput = utils.$('#search-input');
           if (mainSearchInput) mainSearchInput.value = e.target.value;
         });
 
         utils.on(searchBtn, 'click', () => {
-          window.searchManager.performSearch(searchInput.value);
+          window.search.performSearch(searchInput.value);
         });
 
         utils.on(searchInput, 'keypress', (e) => {
           if (e.key === 'Enter') {
-            window.searchManager.performSearch(searchInput.value);
+            window.search.performSearch(searchInput.value);
           }
         });
       }
@@ -203,7 +211,7 @@ class TurboPixApp {
     if (headerActions && !utils.$('.mobile-search-btn')) {
       const searchToggle = utils.createElement('button', 'mobile-search-btn view-btn');
       searchToggle.innerHTML = window.iconHelper.getSemanticIcon('search', { size: 20 });
-      searchToggle.title = window.i18nManager ? window.i18nManager.t('ui.search') : 'Search';
+      searchToggle.title = utils.t('ui.search', 'Search');
 
       headerActions.insertBefore(searchToggle, utils.$('.theme-toggle'));
 
@@ -245,6 +253,11 @@ class TurboPixApp {
     }
   }
 
+  /**
+   * Switches to a different view (all, favorites, videos)
+   * @param {string} view - The view to switch to
+   * @returns {Promise<void>}
+   */
   async switchView(view) {
     if (view === this.state.get('currentView')) return;
 
@@ -257,6 +270,9 @@ class TurboPixApp {
 
   async loadViewData(view) {
     if (!window.photoGrid) return;
+
+    // Increment view load ID to track this request
+    const currentLoadId = ++this.viewLoadId;
 
     const sortBy = this.state.get('sortBy');
     const [sort, order] = sortBy.split('_');
@@ -278,7 +294,10 @@ class TurboPixApp {
 
         case 'favorites':
           const favoritePhotos = await api.getFavoritePhotos();
-          this.displayFavoritePhotos(favoritePhotos);
+          // Only update UI if this is still the current request
+          if (currentLoadId === this.viewLoadId) {
+            this.displayFavoritePhotos(favoritePhotos);
+          }
           break;
 
         case 'videos':
@@ -287,6 +306,9 @@ class TurboPixApp {
           break;
       }
     } catch (error) {
+      // Only show error if this is still the current request
+      if (currentLoadId !== this.viewLoadId) return;
+
       if (window.logger) {
         window.logger.error(`Error loading ${view} view`, error, {
           component: 'App',
@@ -354,7 +376,7 @@ class TurboPixApp {
 
   handleResize() {
     const wasMobile = this.state.get('isMobile');
-    const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+    const isMobile = window.innerWidth <= window.APP_CONSTANTS.MOBILE_BREAKPOINT;
 
     this.state.set('isMobile', isMobile);
 
@@ -445,10 +467,8 @@ class TurboPixApp {
           console.warn('Health check failed:', error);
         }
         utils.showToast(
-          window.i18nManager ? window.i18nManager.t('ui.connection') : 'Connection',
-          window.i18nManager
-            ? window.i18nManager.t('errors.server_connection_lost')
-            : 'Server connection lost',
+          utils.t('ui.connection', 'Connection'),
+          utils.t('errors.server_connection_lost', 'Server connection lost'),
           'warning',
           3000
         );

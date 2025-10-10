@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+data/models/
 
 # Node.js dependencies
 node_modules/
@@ -39,3 +40,7 @@ data/
 # E2E test files
 e2e-puppeteer-test.js
 smoke-test.js
+
+# Working notes
+FRONTEND_IMPROVEMENTS.md
+SECURITY_PLAN.md

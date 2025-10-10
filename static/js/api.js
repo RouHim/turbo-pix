@@ -9,6 +9,13 @@ class TurboPixAPI {
     };
   }
 
+  /**
+   * Makes an HTTP request to the API
+   * @param {string} endpoint - The API endpoint
+   * @param {Object} options - Fetch options (method, headers, body, signal, etc.)
+   * @returns {Promise<any>} The response data
+   * @throws {Error} If the request fails
+   */
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const config = {
@@ -65,8 +72,13 @@ class TurboPixAPI {
     }
   }
 
-  // Photo endpoints
-  async getPhotos(params = {}) {
+  /**
+   * Retrieves photos with optional filtering and pagination
+   * @param {Object} params - Query parameters (page, limit, query, sort, order, etc.)
+   * @param {Object} options - Fetch options (signal for AbortController, etc.)
+   * @returns {Promise<Object>} Response containing photos array and metadata
+   */
+  async getPhotos(params = {}, options = {}) {
     const searchParams = new URLSearchParams();
 
     // Add parameters
@@ -86,7 +98,7 @@ class TurboPixAPI {
     const queryString = searchParams.toString();
     const endpoint = `/api/photos${queryString ? `?${queryString}` : ''}`;
 
-    return this.request(endpoint);
+    return this.request(endpoint, options);
   }
 
   async getPhoto(hash) {
@@ -105,14 +117,23 @@ class TurboPixAPI {
     return this.getPhotos({ ...params, query });
   }
 
+  /**
+   * Performs semantic search using AI/ML embeddings
+   * @param {string} query - Natural language search query
+   * @param {number} limit - Maximum number of results
+   * @returns {Promise<Object>} Search results with photo hashes and scores
+   */
+  async semanticSearch(query, limit = 50) {
+    const searchParams = new URLSearchParams();
+    searchParams.set('q', query);
+    searchParams.set('limit', limit);
+    const endpoint = `/api/search/semantic?${searchParams.toString()}`;
+    return this.request(endpoint);
+  }
+
   // Health check
   async healthCheck() {
     return this.request('/health');
-  }
-
-  // Stats endpoints
-  async getStats() {
-    return this.request('/api/stats');
   }
 
   // Collections and cameras features removed

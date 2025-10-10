@@ -8,7 +8,7 @@ use tokio::fs;
 
 use crate::config::Config;
 use crate::db::{DbPool, Photo};
-use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailSize};
+use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailFormat, ThumbnailSize};
 use crate::video_processor;
 
 #[derive(Clone, Debug)]
@@ -45,8 +45,9 @@ impl ThumbnailGenerator {
         &self,
         photo: &Photo,
         size: ThumbnailSize,
+        format: ThumbnailFormat,
     ) -> CacheResult<Vec<u8>> {
-        let cache_key = CacheKey::from_photo(photo, size)?;
+        let cache_key = CacheKey::from_photo(photo, size, format)?;
 
         if let Some(cached_data) = self.get_from_disk_cache(&cache_key).await {
             debug!("Cache hit for {}", cache_key);
@@ -54,7 +55,7 @@ impl ThumbnailGenerator {
         }
 
         debug!("Cache miss for {}, generating thumbnail", cache_key);
-        self.generate_thumbnail(photo, size).await
+        self.generate_thumbnail(photo, size, format).await
     }
 
     async fn get_from_disk_cache(&self, key: &CacheKey) -> Option<Vec<u8>> {
@@ -83,7 +84,12 @@ impl ThumbnailGenerator {
         }
     }
 
-    async fn generate_thumbnail(&self, photo: &Photo, size: ThumbnailSize) -> CacheResult<Vec<u8>> {
+    async fn generate_thumbnail(
+        &self,
+        photo: &Photo,
+        size: ThumbnailSize,
+        format: ThumbnailFormat,
+    ) -> CacheResult<Vec<u8>> {
         let photo_path = PathBuf::from(&photo.file_path);
 
         if !photo_path.exists() {
@@ -91,16 +97,16 @@ impl ThumbnailGenerator {
         }
 
         let thumbnail_data = if self.is_video_file(photo) {
-            self.generate_video_thumbnail(&photo_path, size, photo.orientation)
+            self.generate_video_thumbnail(&photo_path, size, photo.orientation, format)
                 .await?
         } else {
             let img = image::open(&photo_path)?;
             let img = self.apply_orientation(img, photo.orientation);
             let thumbnail = self.resize_image(img, size);
-            self.encode_image(thumbnail)?
+            self.encode_image(thumbnail, format)?
         };
 
-        let cache_key = CacheKey::from_photo(photo, size)?;
+        let cache_key = CacheKey::from_photo(photo, size, format)?;
         let _cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
@@ -129,9 +135,13 @@ impl ThumbnailGenerator {
         img.thumbnail(target_size, target_size)
     }
 
-    fn encode_image(&self, img: DynamicImage) -> CacheResult<Vec<u8>> {
+    fn encode_image(&self, img: DynamicImage, format: ThumbnailFormat) -> CacheResult<Vec<u8>> {
         let mut buffer = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut buffer, ImageFormat::Jpeg)?;
+        let image_format = match format {
+            ThumbnailFormat::Jpeg => ImageFormat::Jpeg,
+            ThumbnailFormat::Webp => ImageFormat::WebP,
+        };
+        img.write_to(&mut buffer, image_format)?;
         Ok(buffer.into_inner())
     }
 
@@ -148,6 +158,7 @@ impl ThumbnailGenerator {
         video_path: &Path,
         size: ThumbnailSize,
         orientation: Option<i32>,
+        format: ThumbnailFormat,
     ) -> CacheResult<Vec<u8>> {
         // Extract video metadata to get duration
         let metadata = video_processor::extract_video_metadata(video_path).await?;
@@ -176,7 +187,7 @@ impl ThumbnailGenerator {
 
         let img = self.apply_orientation(img, orientation);
         let thumbnail = self.resize_image(img, size);
-        let thumbnail_data = self.encode_image(thumbnail)?;
+        let thumbnail_data = self.encode_image(thumbnail, format)?;
 
         // Clean up temporary file
         if temp_frame_path.exists() {
@@ -298,7 +309,7 @@ impl ThumbnailGenerator {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn get_cache_stats(&self) -> (usize, u64) {
         let mut total_files = 0;
         let mut total_size = 0;
@@ -322,6 +333,7 @@ impl ThumbnailGenerator {
         (total_files, total_size)
     }
 
+    #[cfg(test)]
     async fn get_subdir_stats(&self, dir_path: &Path) -> (usize, u64) {
         let mut files = 0;
         let mut size = 0;
@@ -338,5 +350,467 @@ impl ThumbnailGenerator {
         }
 
         (files, size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CacheConfig, Config};
+    use crate::db::{create_in_memory_pool, Photo};
+    use chrono::Utc;
+    use tempfile::TempDir;
+
+    const TEST_PORT: u16 = 8080;
+
+    fn create_test_config() -> (Config, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("cache");
+
+        let data_path = temp_dir.path().to_string_lossy().to_string();
+        let db_path = temp_dir
+            .path()
+            .join("database/turbo-pix.db")
+            .to_string_lossy()
+            .to_string();
+
+        let config = Config {
+            port: TEST_PORT,
+            photo_paths: vec![],
+            data_path,
+            db_path,
+            cache: CacheConfig {
+                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                max_cache_size_mb: 1024,
+            },
+        };
+
+        (config, temp_dir)
+    }
+
+    fn create_test_image(path: &std::path::Path) -> std::io::Result<()> {
+        use image::{ImageBuffer, Rgb};
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(10, 10, |_x, _y| Rgb([255, 0, 0]));
+
+        img.save(path).map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    fn create_test_photo(path: &str) -> Photo {
+        let now = Utc::now();
+        Photo {
+            hash_sha256: "a".repeat(64),
+            file_path: path.to_string(),
+            filename: "test.jpg".to_string(),
+            file_size: 1024,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(now),
+            date_modified: now,
+            date_indexed: Some(now),
+            camera_make: Some("Test Camera".to_string()),
+            camera_model: Some("Test Model".to_string()),
+            lens_make: None,
+            lens_model: None,
+            iso: Some(100),
+            aperture: Some(2.8),
+            shutter_speed: Some("1/100".to_string()),
+            focal_length: Some(50.0),
+            width: Some(100),
+            height: Some(100),
+            color_space: Some("sRGB".to_string()),
+            white_balance: Some("Auto".to_string()),
+            exposure_mode: Some("Auto".to_string()),
+            metering_mode: Some("Center-weighted".to_string()),
+            orientation: Some(1),
+            flash_used: Some(false),
+            latitude: None,
+            longitude: None,
+            location_name: None,
+
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            country: None,
+            keywords: None,
+            faces_detected: None,
+            objects_detected: None,
+            colors: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
+            is_favorite: Some(false),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_thumbnail_generator_creation() {
+        let (config, _temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let _generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        assert!(config
+            .cache
+            .thumbnail_cache_path
+            .parse::<std::path::PathBuf>()
+            .unwrap()
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn test_thumbnail_generation() {
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let photo = create_test_photo(&image_path.to_string_lossy());
+
+        let result = generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await;
+        assert!(result.is_ok());
+
+        let thumbnail_data = result.unwrap();
+        assert!(!thumbnail_data.is_empty());
+
+        let cache_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
+        let cache_path = generator.get_cache_path(&cache_key);
+        assert!(cache_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_thumbnail_cache_hit() {
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let photo = create_test_photo(&image_path.to_string_lossy());
+
+        let result1 = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        let result2 = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        assert_eq!(result1, result2);
+    }
+
+    #[tokio::test]
+    async fn test_thumbnail_different_sizes() {
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let photo = create_test_photo(&image_path.to_string_lossy());
+
+        let small = generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+        let medium = generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+        let large = generator
+            .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        assert!(!small.is_empty());
+        assert!(!medium.is_empty());
+        assert!(!large.is_empty());
+
+        let small_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
+        let medium_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg).unwrap();
+        let large_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
+
+        assert!(generator.get_cache_path(&small_key).exists());
+        assert!(generator.get_cache_path(&medium_key).exists());
+        assert!(generator.get_cache_path(&large_key).exists());
+    }
+
+    #[tokio::test]
+    async fn test_thumbnail_nonexistent_photo() {
+        let (config, _temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let photo = create_test_photo("/nonexistent/path.jpg");
+
+        let result = generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await;
+        assert!(matches!(result, Err(CacheError::PhotoNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_cache_clear() {
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let photo = create_test_photo(&image_path.to_string_lossy());
+        generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        let cache_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
+        let cache_path = generator.get_cache_path(&cache_key);
+        assert!(cache_path.exists());
+
+        generator.clear_cache().await.unwrap();
+
+        assert!(!cache_path.exists());
+
+        assert!(std::path::PathBuf::from(&config.cache.thumbnail_cache_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_cache_stats() {
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let (files, size) = generator.get_cache_stats().await;
+        assert_eq!(files, 0);
+        assert_eq!(size, 0);
+
+        let image_path = temp_dir.path().join("test.jpg");
+        create_test_image(&image_path).unwrap();
+
+        let photo = create_test_photo(&image_path.to_string_lossy());
+        generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+        generator
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        let (files, size) = generator.get_cache_stats().await;
+        assert_eq!(files, 2);
+        assert!(size > 0);
+    }
+
+    #[tokio::test]
+    async fn test_cache_limit_enforcement() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("cache");
+
+        let config = Config {
+            port: TEST_PORT,
+            photo_paths: vec![],
+            data_path: temp_dir.path().to_string_lossy().to_string(),
+            db_path: temp_dir
+                .path()
+                .join("database/turbo-pix.db")
+                .to_string_lossy()
+                .to_string(),
+            cache: CacheConfig {
+                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                max_cache_size_mb: 1,
+            },
+        };
+
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        for i in 0..20 {
+            let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+            create_test_image(&image_path).unwrap();
+
+            let mut photo = create_test_photo(&image_path.to_string_lossy());
+            photo.hash_sha256 = format!("{:0>64}", i);
+
+            let _ = generator
+                .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+                .await;
+            let _ = generator
+                .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+                .await;
+            let _ = generator
+                .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+                .await;
+        }
+
+        let (files, total_size) = generator.get_cache_stats().await;
+        let max_bytes = 1024 * 1024;
+
+        assert!(
+            total_size <= max_bytes,
+            "Cache size {}MB should be <= 1MB limit (found {} files)",
+            total_size / 1024 / 1024,
+            files
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lru_eviction_order() {
+        use tokio::time::{sleep, Duration};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("cache");
+
+        let config = Config {
+            port: TEST_PORT,
+            photo_paths: vec![],
+            data_path: temp_dir.path().to_string_lossy().to_string(),
+            db_path: temp_dir
+                .path()
+                .join("database/turbo-pix.db")
+                .to_string_lossy()
+                .to_string(),
+            cache: CacheConfig {
+                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                max_cache_size_mb: 1,
+            },
+        };
+
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image1 = temp_dir.path().join("test_1.jpg");
+        let image2 = temp_dir.path().join("test_2.jpg");
+        let image3 = temp_dir.path().join("test_3.jpg");
+
+        create_test_image(&image1).unwrap();
+        create_test_image(&image2).unwrap();
+        create_test_image(&image3).unwrap();
+
+        let mut photo1 = create_test_photo(&image1.to_string_lossy());
+        let mut photo2 = create_test_photo(&image2.to_string_lossy());
+        let mut photo3 = create_test_photo(&image3.to_string_lossy());
+
+        photo1.hash_sha256 = "1".repeat(64);
+        photo2.hash_sha256 = "2".repeat(64);
+        photo3.hash_sha256 = "3".repeat(64);
+
+        generator
+            .get_or_generate(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(100)).await;
+
+        generator
+            .get_or_generate(&photo2, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(100)).await;
+
+        generator
+            .get_or_generate(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(100)).await;
+
+        for i in 4..25 {
+            let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+            create_test_image(&image_path).unwrap();
+
+            let mut photo = create_test_photo(&image_path.to_string_lossy());
+            photo.hash_sha256 = format!("{:0>64}", i);
+
+            generator
+                .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
+                .await
+                .unwrap();
+        }
+
+        let cache_key1 =
+            CacheKey::from_photo(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
+        let cache_key2 =
+            CacheKey::from_photo(&photo2, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
+
+        let path1_exists = generator.get_cache_path(&cache_key1).exists();
+        let path2_exists = generator.get_cache_path(&cache_key2).exists();
+
+        // Both exist or both don't exist: cache limit not exceeded
+        // If only one exists, it should be path1 (more recently accessed)
+        if path1_exists != path2_exists {
+            assert!(
+                path1_exists && !path2_exists,
+                "LRU eviction should keep more recently accessed items"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_custom_cache_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("cache");
+
+        let config = Config {
+            port: TEST_PORT,
+            photo_paths: vec![],
+            data_path: temp_dir.path().to_string_lossy().to_string(),
+            db_path: temp_dir
+                .path()
+                .join("database/turbo-pix.db")
+                .to_string_lossy()
+                .to_string(),
+            cache: CacheConfig {
+                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                max_cache_size_mb: 2,
+            },
+        };
+
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        for i in 0..30 {
+            let image_path = temp_dir.path().join(format!("test_{}.jpg", i));
+            create_test_image(&image_path).unwrap();
+
+            let mut photo = create_test_photo(&image_path.to_string_lossy());
+            photo.hash_sha256 = format!("{:0>64}", i);
+
+            let _ = generator
+                .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
+                .await;
+        }
+
+        let (_files, total_size) = generator.get_cache_stats().await;
+        let max_bytes = 2 * 1024 * 1024;
+
+        assert!(
+            total_size <= max_bytes,
+            "Cache size {}MB should be <= 2MB limit",
+            total_size / 1024 / 1024
+        );
     }
 }

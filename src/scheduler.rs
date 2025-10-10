@@ -1,26 +1,35 @@
 use clokwerk::{Job, Scheduler, TimeUnits};
 use log::{error, info};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::cache::CacheManager;
+use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
+use crate::semantic_search::SemanticSearchEngine;
 
 #[derive(Clone)]
 pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
     db_pool: DbPool,
     cache_manager: CacheManager,
+    semantic_search: Arc<SemanticSearchEngine>,
 }
 
 impl PhotoScheduler {
-    pub fn new(photo_paths: Vec<PathBuf>, db_pool: DbPool, cache_manager: CacheManager) -> Self {
+    pub fn new(
+        photo_paths: Vec<PathBuf>,
+        db_pool: DbPool,
+        cache_manager: CacheManager,
+        semantic_search: Arc<SemanticSearchEngine>,
+    ) -> Self {
         Self {
             photo_paths,
             db_pool,
             cache_manager,
+            semantic_search,
         }
     }
 
@@ -30,6 +39,7 @@ impl PhotoScheduler {
         let photo_paths = self.photo_paths.clone();
         let db_pool = self.db_pool.clone();
         let cache_manager = self.cache_manager.clone();
+        let semantic_search = self.semantic_search.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -37,7 +47,7 @@ impl PhotoScheduler {
 
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let processor = PhotoProcessor::new(photo_paths.clone());
+                let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
 
                 match processor
                     .full_rescan_and_cleanup(&db_pool, &cache_manager)
@@ -94,7 +104,7 @@ impl PhotoScheduler {
     pub async fn run_startup_rescan(&self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting startup photo rescan and cleanup");
 
-        let processor = PhotoProcessor::new(self.photo_paths.clone());
+        let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
 
         let processed_photos = processor
             .full_rescan_and_cleanup(&self.db_pool, &self.cache_manager)
@@ -106,7 +116,9 @@ impl PhotoScheduler {
         for processed_photo in processed_photos {
             let photo: crate::db::Photo = processed_photo.into();
             match photo.create_or_update(&self.db_pool) {
-                Ok(_) => indexed_count += 1,
+                Ok(_) => {
+                    indexed_count += 1;
+                }
                 Err(e) => {
                     error!("Failed to save photo to database: {}", e);
                     error_count += 1;
@@ -132,7 +144,7 @@ mod tests {
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
-    use crate::cache::CacheManager;
+    use crate::cache_manager::CacheManager;
     use crate::db::{create_test_db_pool, DbPool, Photo};
 
     struct TestEnvironment {
@@ -147,10 +159,16 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             let db_pool = create_test_db_pool().unwrap();
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
+            let semantic_search =
+                Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
-            let scheduler =
-                PhotoScheduler::new(photo_paths, db_pool.clone(), cache_manager.clone());
+            let scheduler = PhotoScheduler::new(
+                photo_paths,
+                db_pool.clone(),
+                cache_manager.clone(),
+                semantic_search,
+            );
 
             Self {
                 temp_dir,
@@ -181,7 +199,7 @@ mod tests {
             let photo = Photo {
                 hash_sha256: unique_hash,
                 file_path: path.to_string(),
-                filename: path.split('/').last().unwrap_or(path).to_string(),
+                filename: path.split('/').next_back().unwrap_or(path).to_string(),
                 file_size: 1024,
                 mime_type: Some("image/jpeg".to_string()),
                 taken_at: None,
@@ -209,6 +227,7 @@ mod tests {
 
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
+                blurhash: None,
                 country: None,
                 keywords: None,
                 faces_detected: None,
@@ -394,7 +413,7 @@ mod tests {
 
         let final_filenames: HashSet<String> = final_paths
             .iter()
-            .map(|p| p.split('/').last().unwrap_or(p).to_string())
+            .map(|p| p.split('/').next_back().unwrap_or(p).to_string())
             .collect();
 
         assert!(final_filenames.contains("existing1.jpg"));
@@ -407,10 +426,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_pool = create_test_db_pool().unwrap();
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
+        let semantic_search =
+            Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];
-        let scheduler = PhotoScheduler::new(invalid_paths, db_pool, cache_manager);
+        let scheduler = PhotoScheduler::new(invalid_paths, db_pool, cache_manager, semantic_search);
 
         // Should handle errors gracefully
         let result = scheduler.run_startup_rescan().await;

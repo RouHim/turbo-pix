@@ -1,5 +1,8 @@
 // Utility functions
 
+// i18n helper
+const t = (key, fallback) => (window.i18nManager ? window.i18nManager.t(key) : fallback);
+
 // DOM helpers
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -7,6 +10,40 @@ const createElement = (tag, className = '', content = '') => {
   const element = document.createElement(tag);
   if (className) element.className = className;
   if (content) element.textContent = content;
+  return element;
+};
+
+/**
+ * Safely sets attributes on an element, preventing javascript: URLs
+ * @param {HTMLElement} element - Target element
+ * @param {Object} attrs - Attribute key-value pairs
+ */
+const setSafeAttributes = (element, attrs) => {
+  for (const [key, value] of Object.entries(attrs)) {
+    // Prevent javascript: URLs in href/src attributes
+    if (key.toLowerCase().includes('href') || key.toLowerCase().includes('src')) {
+      const stringValue = String(value).trim().toLowerCase();
+      if (stringValue.startsWith('javascript:') || stringValue.startsWith('data:text/html')) {
+        if (window.logger) {
+          window.logger.warn('Blocked dangerous URL in attribute', { key, value });
+        }
+        continue;
+      }
+    }
+    element.setAttribute(key, value);
+  }
+};
+
+/**
+ * Creates an element with safe attributes
+ * @param {string} tag - Element tag name
+ * @param {string} className - CSS classes
+ * @param {Object} attrs - Attributes to set safely
+ * @returns {HTMLElement}
+ */
+const createElementWithAttrs = (tag, className = '', attrs = {}) => {
+  const element = createElement(tag, className);
+  setSafeAttributes(element, attrs);
   return element;
 };
 
@@ -95,10 +132,13 @@ const showToast = (title, message, type = 'info', duration = 4000) => {
   if (!container) return;
 
   const toast = createElement('div', `toast ${type}`);
-  toast.innerHTML = `
-        <div class="toast-title">${title}</div>
-        <div class="toast-message">${message}</div>
-    `;
+
+  // Build with DOM API to prevent XSS
+  const titleDiv = createElement('div', 'toast-title', title);
+  const messageDiv = createElement('div', 'toast-message', message);
+
+  toast.appendChild(titleDiv);
+  toast.appendChild(messageDiv);
 
   container.appendChild(toast);
 
@@ -162,7 +202,7 @@ const handleError = (error, context = '') => {
 // URL helpers
 const getPhotoUrl = (photoHash) => `/api/photos/${photoHash}/file`;
 const getThumbnailUrl = (photo, size = 'medium') =>
-  `/api/thumbnails/hash/${photo.hash_sha256}/${size}`;
+  `/api/photos/${photo.hash_sha256}/thumbnail?size=${size}`;
 const getVideoUrl = (photoHash) => `/api/photos/${photoHash}/video`;
 
 // Local storage helpers
@@ -305,9 +345,12 @@ const performanceUtils = {
 
 // Export to global scope
 window.utils = {
+  t,
   $,
   $$,
   createElement,
+  setSafeAttributes,
+  createElementWithAttrs,
   on,
   off,
   emit,

@@ -1,4 +1,5 @@
 // Photo Viewer Component
+/* global ViewerControls, ViewerMetadata */
 
 class PhotoViewer {
   constructor() {
@@ -7,12 +8,6 @@ class PhotoViewer {
     this.currentIndex = 0;
     this.photos = [];
     this.preloadedImages = new Map();
-    this.zoomLevel = 1;
-    this.maxZoom = 3;
-    this.minZoom = 0.5;
-    this.isDragging = false;
-    this.dragStart = { x: 0, y: 0 };
-    this.imagePosition = { x: 0, y: 0 };
 
     this.elements = {
       viewer: utils.$('#photo-viewer'),
@@ -41,6 +36,9 @@ class PhotoViewer {
       infoToggle: utils.$('.info-toggle'),
     };
 
+    this.controls = new ViewerControls(this, this.elements);
+    this.metadata = new ViewerMetadata(this.elements);
+
     this.init();
   }
 
@@ -51,17 +49,14 @@ class PhotoViewer {
   }
 
   bindEvents() {
-    // Close button
     if (this.elements.close) {
       utils.on(this.elements.close, 'click', () => this.close());
     }
 
-    // Overlay click to close
     if (this.elements.overlay) {
       utils.on(this.elements.overlay, 'click', () => this.close());
     }
 
-    // Navigation buttons
     if (this.elements.prev) {
       utils.on(this.elements.prev, 'click', () => this.showPrevious());
     }
@@ -70,7 +65,6 @@ class PhotoViewer {
       utils.on(this.elements.next, 'click', () => this.showNext());
     }
 
-    // Action buttons
     if (this.elements.favoriteBtn) {
       utils.on(this.elements.favoriteBtn, 'click', () => this.toggleFavorite());
     }
@@ -80,40 +74,13 @@ class PhotoViewer {
     }
 
     if (this.elements.metadataBtn) {
-      utils.on(this.elements.metadataBtn, 'click', () => this.toggleMetadata());
+      utils.on(this.elements.metadataBtn, 'click', () => this.metadata.toggleMetadata());
     }
 
-    // Zoom controls
-    if (this.elements.zoomIn) {
-      utils.on(this.elements.zoomIn, 'click', () => this.zoomIn());
-    }
-
-    if (this.elements.zoomOut) {
-      utils.on(this.elements.zoomOut, 'click', () => this.zoomOut());
-    }
-
-    if (this.elements.zoomFit) {
-      utils.on(this.elements.zoomFit, 'click', () => this.fitToScreen());
-    }
-
-    // Fullscreen button
-    if (this.elements.fullscreenBtn) {
-      utils.on(this.elements.fullscreenBtn, 'click', () => this.toggleFullscreen());
-    }
-
-    // Info toggle button (mobile sidebar toggle)
     if (this.elements.infoToggle) {
       utils.on(this.elements.infoToggle, 'click', () => this.toggleSidebar());
     }
 
-    // Image interaction for dragging when zoomed
-    if (this.elements.image) {
-      utils.on(this.elements.image, 'mousedown', (e) => this.startDrag(e));
-      utils.on(document, 'mousemove', (e) => this.drag(e));
-      utils.on(document, 'mouseup', () => this.endDrag());
-    }
-
-    // Prevent click propagation on content
     if (this.elements.content) {
       utils.on(this.elements.content, 'click', (e) => e.stopPropagation());
     }
@@ -248,11 +215,9 @@ class PhotoViewer {
   }
 
   async displayPhoto(photo) {
-    // Reset zoom when displaying new photo
-    this.fitToScreen();
+    this.controls.reset();
 
-    // Hide detailed metadata when changing photos
-    this.hideMetadata();
+    this.metadata.hideMetadata();
 
     // Hide current image/video immediately (no fade) and show viewer loading indicator
     if (this.elements.image) {
@@ -373,161 +338,8 @@ class PhotoViewer {
   updatePhotoInfo() {
     if (!this.currentPhoto) return;
 
-    const photo = this.currentPhoto;
-    const isVideo = this.isVideoFile(photo.filename);
-
-    // Title
-    if (this.elements.title) {
-      this.elements.title.textContent =
-        photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
-    }
-
-    // Basic metadata (always visible)
-    if (this.elements.date) {
-      this.elements.date.textContent = photo.taken_at
-        ? utils.formatDate(photo.taken_at)
-        : 'Unknown';
-    }
-
-    if (this.elements.size) {
-      const sizeText = photo.file_size ? utils.formatFileSize(photo.file_size) : 'Unknown';
-      const dimensions = photo.width && photo.height ? ` • ${photo.width}×${photo.height}` : '';
-      this.elements.size.textContent = sizeText + dimensions;
-    }
-
-    if (this.elements.camera) {
-      const camera =
-        photo.camera_make && photo.camera_model
-          ? `${photo.camera_make} ${photo.camera_model}`
-          : 'Unknown';
-      this.elements.camera.textContent = camera;
-    }
-
-    if (this.elements.location) {
-      const location =
-        photo.latitude && photo.longitude
-          ? `${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}`
-          : 'No location data';
-      this.elements.location.textContent = location;
-    }
-
-    // Detailed metadata (for the expandable section)
-    this.setMetaField('meta-filename', photo.filename);
-    this.setMetaField(
-      'meta-filesize',
-      photo.file_size ? utils.formatFileSize(photo.file_size) : null
-    );
-    this.setMetaField(
-      'meta-dimensions',
-      photo.width && photo.height ? `${photo.width} × ${photo.height} px` : null
-    );
-    this.setMetaField('meta-type', photo.mime_type);
-    this.setMetaField('meta-date-taken', photo.taken_at ? utils.formatDate(photo.taken_at) : null);
-    this.setMetaField(
-      'meta-date-modified',
-      photo.date_modified ? utils.formatDate(photo.date_modified) : null
-    );
-
-    const hasCamera =
-      photo.camera_make || photo.camera_model || photo.lens_make || photo.lens_model;
-    this.toggleSection('camera-section', hasCamera);
-    this.setMetaField('meta-camera-make', photo.camera_make);
-    this.setMetaField('meta-camera-model', photo.camera_model);
-    this.setMetaField('meta-lens-make', photo.lens_make);
-    this.setMetaField('meta-lens-model', photo.lens_model);
-
-    const hasSettings =
-      photo.iso ||
-      photo.aperture ||
-      photo.shutter_speed ||
-      photo.focal_length ||
-      photo.exposure_mode ||
-      photo.metering_mode ||
-      photo.white_balance ||
-      photo.flash_used !== null ||
-      photo.orientation ||
-      photo.color_space;
-    this.toggleSection('settings-section', hasSettings);
-    this.setMetaField('meta-iso', photo.iso ? `ISO ${photo.iso}` : null);
-    this.setMetaField('meta-aperture', photo.aperture ? `f/${photo.aperture.toFixed(1)}` : null);
-    this.setMetaField('meta-shutter', photo.shutter_speed);
-    this.setMetaField(
-      'meta-focal',
-      photo.focal_length ? `${photo.focal_length.toFixed(0)} mm` : null
-    );
-    this.setMetaField('meta-exposure', photo.exposure_mode);
-    this.setMetaField('meta-metering', photo.metering_mode);
-    this.setMetaField('meta-wb', photo.white_balance);
-    this.setMetaField(
-      'meta-flash',
-      photo.flash_used !== null ? (photo.flash_used ? 'Yes' : 'No') : null
-    );
-    this.setMetaField('meta-orientation', photo.orientation);
-    this.setMetaField('meta-colorspace', photo.color_space);
-
-    const hasLocation = photo.latitude || photo.longitude || photo.location_name;
-    this.toggleSection('location-section', hasLocation);
-    this.setMetaField(
-      'meta-gps',
-      photo.latitude && photo.longitude
-        ? `${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}`
-        : null
-    );
-    this.setMetaField('meta-location-name', photo.location_name);
-
-    this.toggleSection('video-section', isVideo);
-    if (isVideo) {
-      this.setMetaField(
-        'meta-duration',
-        photo.duration ? this.formatDuration(photo.duration) : null
-      );
-      this.setMetaField('meta-video-codec', photo.video_codec);
-      this.setMetaField('meta-audio-codec', photo.audio_codec);
-      this.setMetaField(
-        'meta-framerate',
-        photo.frame_rate ? `${photo.frame_rate.toFixed(2)} fps` : null
-      );
-      this.setMetaField('meta-bitrate', photo.bitrate ? `${photo.bitrate} kbps` : null);
-    }
-
-    // Update favorite button
-    if (this.elements.favoriteBtn) {
-      const isFavorite = api.isFavorite(photo);
-      this.elements.favoriteBtn.classList.toggle('active', isFavorite);
-      this.elements.favoriteBtn.title = isFavorite
-        ? window.i18nManager
-          ? window.i18nManager.t('ui.remove_from_favorites')
-          : 'Remove from Favorites'
-        : window.i18nManager
-          ? window.i18nManager.t('ui.add_to_favorites')
-          : 'Add to Favorites';
-    }
-  }
-
-  setMetaField(elementId, value) {
-    const element = utils.$(`#${elementId}`);
-    if (element) {
-      element.textContent = value || '-';
-      element.style.opacity = value ? '1' : '0.5';
-    }
-  }
-
-  toggleSection(sectionId, show) {
-    const section = utils.$(`#${sectionId}`);
-    if (section) {
-      section.style.display = show ? 'block' : 'none';
-    }
-  }
-
-  formatDuration(seconds) {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    }
-    return `${minutes}:${String(secs).padStart(2, '0')}`;
+    this.metadata.updatePhotoInfo(this.currentPhoto);
+    this.metadata.updateFavoriteButton(this.currentPhoto);
   }
 
   preloadAdjacentPhotos() {
@@ -578,9 +390,8 @@ class PhotoViewer {
         }
       }
 
-      this.updatePhotoInfo();
+      this.metadata.updateFavoriteButton(this.currentPhoto);
 
-      // Emit event for other components
       utils.emit(window, 'favoriteToggled', { photoHash, isFavorite: !isFavorite });
     } catch (error) {
       utils.showToast('Error', 'Failed to update favorite status', 'error', 2000);
@@ -624,139 +435,8 @@ class PhotoViewer {
 
   isVideoFile(filename) {
     if (!filename) return false;
-    const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-    return videoExtensions.includes(ext);
-  }
-
-  zoomIn() {
-    if (this.zoomLevel < this.maxZoom) {
-      this.zoomLevel = Math.min(this.zoomLevel * 1.5, this.maxZoom);
-      this.applyZoom();
-    }
-  }
-
-  zoomOut() {
-    if (this.zoomLevel > this.minZoom) {
-      this.zoomLevel = Math.max(this.zoomLevel / 1.5, this.minZoom);
-      this.applyZoom();
-    }
-  }
-
-  fitToScreen() {
-    this.zoomLevel = 1;
-    this.imagePosition = { x: 0, y: 0 };
-    this.applyZoom();
-  }
-
-  applyZoom() {
-    if (!this.elements.image) return;
-
-    const transform = `scale(${this.zoomLevel}) translate(${this.imagePosition.x}px, ${this.imagePosition.y}px)`;
-    this.elements.image.style.transform = transform;
-
-    // Update zoom class for cursor
-    this.elements.image.classList.toggle('zoomed', this.zoomLevel > 1);
-  }
-
-  startDrag(e) {
-    if (this.zoomLevel <= 1) return;
-
-    e.preventDefault();
-    this.isDragging = true;
-    this.dragStart = {
-      x: e.clientX - this.imagePosition.x,
-      y: e.clientY - this.imagePosition.y,
-    };
-    this.elements.image.style.cursor = 'grabbing';
-  }
-
-  drag(e) {
-    if (!this.isDragging || this.zoomLevel <= 1) return;
-
-    e.preventDefault();
-    this.imagePosition = {
-      x: e.clientX - this.dragStart.x,
-      y: e.clientY - this.dragStart.y,
-    };
-    this.applyZoom();
-  }
-
-  endDrag() {
-    if (!this.isDragging) return;
-
-    this.isDragging = false;
-    if (this.elements.image) {
-      this.elements.image.style.cursor = this.zoomLevel > 1 ? 'grab' : 'default';
-    }
-  }
-
-  toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      // Enter fullscreen
-      if (this.elements.viewer) {
-        if (this.elements.viewer.requestFullscreen) {
-          this.elements.viewer.requestFullscreen();
-        } else if (this.elements.viewer.mozRequestFullScreen) {
-          // Firefox
-          this.elements.viewer.mozRequestFullScreen();
-        } else if (this.elements.viewer.webkitRequestFullscreen) {
-          // Chrome, Safari and Opera
-          this.elements.viewer.webkitRequestFullscreen();
-        } else if (this.elements.viewer.msRequestFullscreen) {
-          // IE/Edge
-          this.elements.viewer.msRequestFullscreen();
-        }
-      }
-    } else {
-      // Exit fullscreen
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      } else if (document.mozCancelFullScreen) {
-        // Firefox
-        document.mozCancelFullScreen();
-      } else if (document.webkitExitFullscreen) {
-        // Chrome, Safari and Opera
-        document.webkitExitFullscreen();
-      } else if (document.msExitFullscreen) {
-        // IE/Edge
-        document.msExitFullscreen();
-      }
-    }
-  }
-
-  toggleMetadata() {
-    if (!this.elements.metadataContainer) return;
-
-    const isVisible = this.elements.metadataContainer.style.display !== 'none';
-
-    if (isVisible) {
-      this.hideMetadata();
-    } else {
-      this.showMetadata();
-    }
-  }
-
-  showMetadata() {
-    if (this.elements.metadataContainer) {
-      this.elements.metadataContainer.style.display = 'block';
-    }
-
-    // Update button state
-    if (this.elements.metadataBtn) {
-      this.elements.metadataBtn.classList.add('active');
-    }
-  }
-
-  hideMetadata() {
-    if (this.elements.metadataContainer) {
-      this.elements.metadataContainer.style.display = 'none';
-    }
-
-    // Update button state
-    if (this.elements.metadataBtn) {
-      this.elements.metadataBtn.classList.remove('active');
-    }
+    return window.APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
   }
 
   // Public API

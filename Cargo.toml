@@ -18,6 +18,17 @@ clokwerk = "0.4"
 # Image processing & MIME
 image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "hdr", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 kamadak-exif = "0.6"
+fast-blurhash = "1.0"
+
+# ML model for semantic search
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
+candle-transformers = "0.9.1"
+hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "ureq", "rustls-tls"] }
+tokenizers = "0.22.1"
+sqlite-vec = "0.1.7-alpha.2"
+zerocopy = "0.8"
+anyhow = "1.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -35,6 +46,9 @@ tokio = { version = "1.0", features = ["fs", "macros", "rt", "rt-multi-thread", 
 # Logging
 log = "0.4"
 env_logger = "0.11"
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1.48"
 
 [dev-dependencies]
 tempfile = "3.0"

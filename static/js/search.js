@@ -44,11 +44,6 @@ class Search {
         }
       });
 
-      // Focus and blur events - suggestions disabled
-      // utils.on(this.searchInput, 'focus', () => {
-      //   this.showSearchSuggestions();
-      // });
-
       utils.on(this.searchInput, 'blur', () => {
         // Delay hiding to allow clicking on suggestions
         setTimeout(() => this.hideSearchSuggestions(), 150);
@@ -81,6 +76,13 @@ class Search {
     }
   }
 
+  /**
+   * Performs a search with the given query
+   * Uses semantic AI search by default
+   * @param {string} query - The search query
+   * @param {boolean} addToHistory - Whether to add the query to search history
+   * @returns {Promise<void>}
+   */
   async performSearch(query, addToHistory = false) {
     if (!query || query === this.currentQuery) return;
 
@@ -96,17 +98,15 @@ class Search {
 
     try {
       if (window.logger) {
-        window.logger.info('Performing search', {
+        window.logger.info('Performing AI semantic search', {
           component: 'Search',
           query,
           addToHistory,
         });
       }
 
-      // Perform the actual search
-      if (window.photoGrid) {
-        await window.photoGrid.search(query);
-      }
+      // Always use semantic search (AI search is default)
+      await this.performSemanticSearch(query);
 
       // Update URL without page reload
       const url = new URL(window.location);
@@ -127,6 +127,62 @@ class Search {
         console.error('Search error:', error);
       }
       utils.handleError(error, 'Search.performSearch');
+    }
+  }
+
+  async performSemanticSearch(query) {
+    // Remove @ prefix if present
+    const cleanQuery = query.startsWith('@') ? query.substring(1).trim() : query;
+
+    if (window.logger) {
+      window.logger.info('Performing semantic search', {
+        component: 'Search',
+        query: cleanQuery,
+      });
+    }
+
+    try {
+      const result = await api.semanticSearch(cleanQuery, 50);
+
+      if (window.photoGrid) {
+        // Convert semantic search results to photo hashes
+        const photoHashes = result.results.map((r) => r.hash);
+
+        // Load full photo data for these hashes
+        const photosData = await Promise.all(
+          photoHashes.map(async (hash) => {
+            try {
+              return await api.getPhoto(hash);
+            } catch (e) {
+              console.warn(`Failed to load photo ${hash}:`, e);
+              return null;
+            }
+          })
+        );
+
+        const photos = photosData.filter((p) => p !== null);
+
+        // Display results
+        window.photoGrid.displayPhotos(photos);
+        window.photoGrid.totalPhotos = photos.length;
+        window.photoGrid.hasMore = false;
+
+        if (window.logger) {
+          window.logger.info('Semantic search completed', {
+            component: 'Search',
+            query: cleanQuery,
+            resultsCount: photos.length,
+          });
+        }
+      }
+    } catch (error) {
+      if (window.logger) {
+        window.logger.error('Semantic search error', error, {
+          component: 'Search',
+          query: cleanQuery,
+        });
+      }
+      throw error;
     }
   }
 
@@ -192,25 +248,32 @@ class Search {
       return;
     }
 
-    suggestionsEl.innerHTML = suggestions
-      .map(
-        (suggestion) => `
-            <div class="suggestion-item" data-query="${suggestion.query}">
-                <span class="suggestion-icon">${suggestion.icon}</span>
-                <span class="suggestion-text">${suggestion.text}</span>
-                ${suggestion.subtitle ? `<span class="suggestion-subtitle">${suggestion.subtitle}</span>` : ''}
-            </div>
-        `
-      )
-      .join('');
+    // Clear existing suggestions (safe - no interpolation)
+    suggestionsEl.innerHTML = '';
 
-    // Bind click events
-    utils.$$('.suggestion-item').forEach((item) => {
+    // Build suggestions with DOM API to prevent XSS
+    suggestions.forEach((suggestion) => {
+      const item = utils.createElement('div', 'suggestion-item');
+      item.dataset.query = suggestion.query; // Safe - dataset API escapes
+
+      const icon = utils.createElement('span', 'suggestion-icon', suggestion.icon);
+      const text = utils.createElement('span', 'suggestion-text', suggestion.text);
+
+      item.appendChild(icon);
+      item.appendChild(text);
+
+      if (suggestion.subtitle) {
+        const subtitle = utils.createElement('span', 'suggestion-subtitle', suggestion.subtitle);
+        item.appendChild(subtitle);
+      }
+
+      // Bind click event
       utils.on(item, 'click', () => {
-        const query = item.dataset.query;
-        this.performSearch(query, true);
+        this.performSearch(suggestion.query, true);
         this.hideSearchSuggestions();
       });
+
+      suggestionsEl.appendChild(item);
     });
 
     suggestionsEl.classList.add('show');

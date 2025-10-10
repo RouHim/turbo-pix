@@ -41,9 +41,10 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Run frontend linters
-        run: |
-          npm run lint:js
-          npm run lint:css
+        run: npm run lint
+
+      - name: Download AI models
+        run: cargo run -- --download-models
 
       - name: Run tests
         run: cargo test
@@ -67,11 +68,25 @@ jobs:
           podman build -t turbo-pix:latest -f container-data/Containerfile .
           podman tag turbo-pix:latest docker.io/rouhim/turbo-pix:latest
 
+      - name: Download AI models in container
+        run: |
+          mkdir -p data
+          podman run --rm --user=0 -v $(pwd)/data:/data:z turbo-pix:latest --download-models
+
       - name: Test container startup and health
         run: |
-          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 --tmpfs /data:rw,size=100M turbo-pix:latest
+          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 -v $(pwd)/data:/data:z turbo-pix:latest
           sleep 5
-          curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health
+          echo "=== Container logs after 5s ==="
+          podman logs turbo-pix-test
+          echo "=== Testing health endpoint ==="
+          if ! curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health; then
+            echo "=== Health check failed, dumping full logs ==="
+            podman logs turbo-pix-test
+            podman stop turbo-pix-test
+            podman rm turbo-pix-test
+            exit 1
+          fi
           podman stop turbo-pix-test
           podman rm turbo-pix-test
 

@@ -2,10 +2,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
 
-pub use crate::db_pool::{
-    create_db_pool, delete_orphaned_photos, get_all_photo_paths, vacuum_database, DbPool,
-};
-pub use crate::db_types::{SearchQuery, SearchSuggestion, TimelineData, TimelineDensity};
+pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
+pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
@@ -38,6 +36,7 @@ pub struct Photo {
     pub location_name: Option<String>,
     pub thumbnail_path: Option<String>,
     pub has_thumbnail: Option<bool>,
+    pub blurhash: Option<String>,
     pub country: Option<String>,
     pub keywords: Option<String>,
     pub faces_detected: Option<String>,
@@ -95,24 +94,25 @@ impl Photo {
             location_name: row.get(26)?,
             thumbnail_path: row.get(27)?, // hash_sha256 removed from index 27
             has_thumbnail: row.get(28)?,
-            country: row.get(29)?,
-            keywords: row.get(30)?,
-            faces_detected: row.get(31)?,
-            objects_detected: row.get(32)?,
-            colors: row.get(33)?,
-            duration: row.get(34)?,
-            video_codec: row.get(35)?,
-            audio_codec: row.get(36)?,
-            bitrate: row.get(37)?,
-            frame_rate: row.get(38)?,
-            is_favorite: row.get(39)?,
+            blurhash: row.get(29)?,
+            country: row.get(30)?,
+            keywords: row.get(31)?,
+            faces_detected: row.get(32)?,
+            objects_detected: row.get(33)?,
+            colors: row.get(34)?,
+            duration: row.get(35)?,
+            video_codec: row.get(36)?,
+            audio_codec: row.get(37)?,
+            bitrate: row.get(38)?,
+            frame_rate: row.get(39)?,
+            is_favorite: row.get(40)?,
             created_at: {
-                let datetime_str = row.get::<_, String>(40)?;
+                let datetime_str = row.get::<_, String>(41)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                40,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -122,7 +122,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                40,
+                                41,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -131,12 +131,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(41)?;
+                let datetime_str = row.get::<_, String>(42)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -146,7 +146,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                42,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -168,7 +168,7 @@ impl Photo {
                  width = ?, height = ?, color_space = ?, white_balance = ?,
                  exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
                  latitude = ?, longitude = ?, location_name = ?,
-                 thumbnail_path = ?, has_thumbnail = ?,
+                 thumbnail_path = ?, has_thumbnail = ?, blurhash = ?,
                  country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
                  duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
                  is_favorite = ?, updated_at = ?
@@ -202,6 +202,7 @@ impl Photo {
                 self.location_name,
                 self.thumbnail_path,
                 self.has_thumbnail,
+                self.blurhash,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -304,13 +305,13 @@ impl Photo {
                 date_indexed, camera_make, camera_model, lens_make, lens_model,
                 iso, aperture, shutter_speed, focal_length, width, height, color_space,
                 white_balance, exposure_mode, metering_mode, orientation, flash_used,
-                latitude, longitude, location_name, thumbnail_path, has_thumbnail,
+                latitude, longitude, location_name, thumbnail_path, has_thumbnail, blurhash,
                 country, keywords, faces_detected, objects_detected, colors,
                 duration, video_codec, audio_codec, bitrate, frame_rate,
                 is_favorite, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
             )
         "#;
 
@@ -346,6 +347,7 @@ impl Photo {
                 self.location_name,
                 self.thumbnail_path,
                 self.has_thumbnail,
+                self.blurhash,
                 self.country,
                 self.keywords,
                 self.faces_detected,
@@ -363,65 +365,6 @@ impl Photo {
         )?;
 
         Ok(())
-    }
-
-    pub fn delete(pool: &DbPool, hash: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let deleted_rows = conn.execute("DELETE FROM photos WHERE hash_sha256 = ?", [hash])?;
-        Ok(deleted_rows > 0)
-    }
-
-    pub fn get_cameras(pool: &DbPool) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT camera_make, camera_model FROM photos 
-             WHERE camera_make IS NOT NULL AND camera_model IS NOT NULL 
-             ORDER BY camera_make, camera_model",
-        )?;
-
-        let camera_iter = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut cameras = Vec::new();
-        for camera in camera_iter {
-            cameras.push(camera?);
-        }
-        Ok(cameras)
-    }
-
-    pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
-        // Total photos
-        let total_photos: i64 =
-            conn.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?;
-
-        // Photos by year
-        let mut stmt = conn.prepare(
-            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count 
-             FROM photos 
-             WHERE taken_at IS NOT NULL 
-             GROUP BY year 
-             ORDER BY year DESC",
-        )?;
-
-        let year_iter = stmt.query_map([], |row| {
-            Ok(serde_json::json!({
-                "year": row.get::<_, String>(0)?,
-                "count": row.get::<_, i64>(1)?
-            }))
-        })?;
-
-        let mut years = Vec::new();
-        for year in year_iter {
-            years.push(year?);
-        }
-
-        Ok(serde_json::json!({
-            "total_photos": total_photos,
-            "photos_by_year": years
-        }))
     }
 
     pub fn search_photos(
@@ -489,16 +432,6 @@ impl Photo {
             }
         }
 
-        if let Some(ref camera_make) = query.camera_make {
-            where_clause.push_str(" AND camera_make LIKE ?");
-            params.push(Box::new(format!("%{}%", camera_make)));
-        }
-
-        if let Some(ref camera_model) = query.camera_model {
-            where_clause.push_str(" AND camera_model LIKE ?");
-            params.push(Box::new(format!("%{}%", camera_model)));
-        }
-
         if let Some(year) = query.year {
             where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
             params.push(Box::new(year.to_string()));
@@ -507,24 +440,6 @@ impl Photo {
         if let Some(month) = query.month {
             where_clause.push_str(" AND strftime('%m', taken_at) = ?");
             params.push(Box::new(format!("{:02}", month)));
-        }
-
-        if let Some(ref keywords) = query.keywords {
-            where_clause.push_str(" AND keywords LIKE ?");
-            params.push(Box::new(format!("%{}%", keywords)));
-        }
-
-        if let Some(has_location) = query.has_location {
-            if has_location {
-                where_clause.push_str(" AND latitude IS NOT NULL AND longitude IS NOT NULL");
-            } else {
-                where_clause.push_str(" AND (latitude IS NULL OR longitude IS NULL)");
-            }
-        }
-
-        if let Some(ref country) = query.country {
-            where_clause.push_str(" AND country LIKE ?");
-            params.push(Box::new(format!("%{}%", country)));
         }
 
         // Get total count
@@ -566,60 +481,6 @@ impl Photo {
         }
 
         Ok((photos, total))
-    }
-
-    pub fn get_search_suggestions(
-        pool: &DbPool,
-        _query: Option<&str>,
-    ) -> Result<Vec<SearchSuggestion>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut suggestions = Vec::new();
-
-        // Camera makes
-        let mut stmt = conn.prepare(
-            "SELECT camera_make, COUNT(*) as count
-             FROM photos
-             WHERE camera_make IS NOT NULL
-             GROUP BY camera_make
-             ORDER BY count DESC
-             LIMIT 10",
-        )?;
-
-        let camera_iter = stmt.query_map([], |row| {
-            Ok(SearchSuggestion {
-                term: row.get::<_, String>(0)?,
-                count: row.get::<_, i64>(1)?,
-                category: "camera_make".to_string(),
-            })
-        })?;
-
-        for suggestion in camera_iter {
-            suggestions.push(suggestion?);
-        }
-
-        // Years
-        let mut stmt = conn.prepare(
-            "SELECT strftime('%Y', taken_at) as year, COUNT(*) as count
-             FROM photos
-             WHERE taken_at IS NOT NULL
-             GROUP BY year
-             ORDER BY count DESC
-             LIMIT 10",
-        )?;
-
-        let year_iter = stmt.query_map([], |row| {
-            Ok(SearchSuggestion {
-                term: row.get::<_, String>(0)?,
-                count: row.get::<_, i64>(1)?,
-                category: "year".to_string(),
-            })
-        })?;
-
-        for suggestion in year_iter {
-            suggestions.push(suggestion?);
-        }
-
-        Ok(suggestions)
     }
 
     pub fn get_timeline_data(pool: &DbPool) -> Result<TimelineData, Box<dyn std::error::Error>> {
@@ -699,6 +560,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             location_name: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: processed.blurhash,
             country: None,
             keywords: None,
             faces_detected: None,
@@ -727,6 +589,16 @@ pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
 #[cfg(test)]
 pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     crate::db_pool::create_in_memory_pool()
+}
+
+#[cfg(test)]
+pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare("SELECT file_path FROM photos ORDER BY file_path")?;
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -764,6 +636,7 @@ mod tests {
             location_name: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: None,
             country: None,
             keywords: None,
             faces_detected: None,

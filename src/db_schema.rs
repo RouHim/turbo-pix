@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS photos (
     location_name TEXT,
     thumbnail_path TEXT,
     has_thumbnail BOOLEAN,
+    blurhash TEXT, -- BlurHash string for progressive image loading
     country TEXT,
     keywords TEXT,
     faces_detected TEXT,
@@ -48,18 +49,24 @@ CREATE TABLE IF NOT EXISTS photos (
 ) WITHOUT ROWID;
 "#;
 
+// Bridge table that maps file paths to semantic vector IDs.
+// SQLite's vec0 extension only supports vectors and implicit rowids,
+// so this table maintains the path-to-rowid mapping for the image_semantic_vectors table.
+pub const SEMANTIC_VECTOR_PATH_MAPPING_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS semantic_vector_path_mapping (
+    id INTEGER PRIMARY KEY,
+    path TEXT UNIQUE NOT NULL
+)
+"#;
+
+pub const IMAGE_SEMANTIC_VECTORS_TABLE: &str =
+    "CREATE VIRTUAL TABLE IF NOT EXISTS image_semantic_vectors USING vec0(semantic_vector float[512])";
+
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_make ON photos(camera_make);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_camera_model ON photos(camera_model);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_file_modified ON photos(file_modified);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_keywords ON photos(keywords);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_faces_detected ON photos(faces_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_objects_detected ON photos(objects_detected);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_colors ON photos(colors);",
-    "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
+    IMAGE_SEMANTIC_VECTORS_TABLE,
+    SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

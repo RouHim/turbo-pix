@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TurboPix</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#4f46e5" />
     <link rel="stylesheet" href="/css/main.css" />
     <link rel="stylesheet" href="/css/components.css" />
     <link rel="stylesheet" href="/css/responsive.css" />
@@ -12,13 +15,13 @@
     <div id="app">
       <header class="header">
         <div class="header-content">
-          <h1 class="logo">TurboPix</h1>
+          <h1 class="logo"><a href="#" id="logo-link" style="text-decoration: none; color: inherit; display: flex; align-items: center;"><img src="/favicon.svg" alt="TurboPix logo" style="height: 2em; margin-right: 0.5em;" />TurboPix</a></h1>
           <div class="header-actions">
             <div class="search-container">
               <input
                 type="text"
                 id="search-input"
-                placeholder="Search photos..."
+                placeholder="AI-powered photo search..."
                 data-i18n-placeholder="ui.search_photos_placeholder"
                 class="search-input"
               />
@@ -108,13 +111,38 @@
     <div id="photo-viewer" class="photo-viewer">
       <div class="viewer-overlay"></div>
       <div class="viewer-content">
-        <button class="viewer-close" title="Close" data-i18n-title="ui.close" data-icon="x"></button>
-        <button class="viewer-prev" title="Previous" data-i18n-title="ui.previous" data-icon="chevron-left"></button>
-        <button class="viewer-next" title="Next" data-i18n-title="ui.next" data-icon="chevron-right"></button>
+        <button
+          class="viewer-close"
+          title="Close"
+          data-i18n-title="ui.close"
+          data-icon="x"
+        ></button>
+        <button
+          class="viewer-prev"
+          title="Previous"
+          data-i18n-title="ui.previous"
+          data-icon="chevron-left"
+        ></button>
+        <button
+          class="viewer-next"
+          title="Next"
+          data-i18n-title="ui.next"
+          data-icon="chevron-right"
+        ></button>
 
         <div class="viewer-zoom-controls">
-          <button class="zoom-btn zoom-out" title="Zoom Out" data-i18n-title="ui.zoom_out" data-icon="minus"></button>
-          <button class="zoom-btn zoom-in" title="Zoom In" data-i18n-title="ui.zoom_in" data-icon="plus"></button>
+          <button
+            class="zoom-btn zoom-out"
+            title="Zoom Out"
+            data-i18n-title="ui.zoom_out"
+            data-icon="minus"
+          ></button>
+          <button
+            class="zoom-btn zoom-in"
+            title="Zoom In"
+            data-i18n-title="ui.zoom_in"
+            data-icon="plus"
+          ></button>
           <button
             class="zoom-btn zoom-fit"
             title="Fit to Screen"
@@ -129,7 +157,12 @@
           ></button>
         </div>
 
-        <button class="info-toggle" title="Toggle Info" data-i18n-title="ui.toggle_info" data-icon="info"></button>
+        <button
+          class="info-toggle"
+          title="Toggle Info"
+          data-i18n-title="ui.toggle_info"
+          data-icon="info"
+        ></button>
 
         <div class="viewer-main">
           <img id="viewer-image" class="viewer-image" alt="Photo" data-i18n-alt="ui.photo" />
@@ -183,7 +216,7 @@
               ></button>
             </div>
 
-            <div class="photo-meta-full" style="display: none;">
+            <div class="photo-meta-full" style="display: none">
               <div class="meta-section">
                 <h4 class="meta-section-title">File Information</h4>
                 <div class="meta-item">
@@ -288,7 +321,7 @@
                 </div>
               </div>
 
-              <div class="meta-section" id="video-section" style="display: none;">
+              <div class="meta-section" id="video-section" style="display: none">
                 <h4 class="meta-section-title">Video Information</h4>
                 <div class="meta-item">
                   <label>Duration:</label>
@@ -312,7 +345,6 @@
                 </div>
               </div>
             </div>
-
           </div>
         </div>
       </div>
@@ -329,12 +361,18 @@
 
     <script src="/js/feather.min.js"></script>
     <script src="/js/icons.js"></script>
+    <script src="/js/constants.js"></script>
     <script src="/js/utils.js"></script>
     <script src="/js/logger.js"></script>
+    <script src="/js/blurhash.js"></script>
     <script src="/i18n/i18nManager.js"></script>
     <script src="/i18n/en/index.js"></script>
     <script src="/i18n/de/index.js"></script>
     <script src="/js/api.js"></script>
+    <script src="/js/viewerControls.js"></script>
+    <script src="/js/viewerMetadata.js"></script>
+    <script src="/js/photoCard.js"></script>
+    <script src="/js/infiniteScroll.js"></script>
     <script src="/js/photoGrid.js"></script>
     <script src="/js/viewer.js"></script>
     <script src="/js/search.js"></script>

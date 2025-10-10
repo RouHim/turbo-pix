@@ -1,14 +1,16 @@
 use serde::Deserialize;
 use std::str::FromStr;
-use warp::{reject, Rejection, Reply};
+use warp::{reject, Filter, Rejection, Reply};
 
-use crate::cache::{ThumbnailGenerator, ThumbnailSize};
 use crate::db::{DbPool, Photo};
-use crate::warp_helpers::{DatabaseError, NotFoundError};
+use crate::thumbnail_generator::ThumbnailGenerator;
+use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
+use crate::warp_helpers::{with_db, with_thumbnail_generator, DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
 pub struct ThumbnailQuery {
     pub size: Option<String>,
+    pub format: Option<String>,
 }
 
 pub async fn get_photo_thumbnail(
@@ -37,9 +39,16 @@ pub async fn get_photo_thumbnail(
     let size = ThumbnailSize::from_str(&query.size.unwrap_or_else(|| "medium".to_string()))
         .unwrap_or(ThumbnailSize::Medium);
 
-    match thumbnail_generator.get_or_generate(&photo, size).await {
+    let format = ThumbnailFormat::from_str(&query.format.unwrap_or_else(|| "jpeg".to_string()))
+        .unwrap_or(ThumbnailFormat::Jpeg);
+
+    match thumbnail_generator
+        .get_or_generate(&photo, size, format)
+        .await
+    {
         Ok(thumbnail_data) => {
-            let reply = warp::reply::with_header(thumbnail_data, "content-type", "image/jpeg");
+            let reply =
+                warp::reply::with_header(thumbnail_data, "content-type", format.content_type());
             let reply = warp::reply::with_header(
                 reply,
                 "cache-control",
@@ -55,47 +64,18 @@ pub async fn get_photo_thumbnail(
     }
 }
 
-pub async fn get_thumbnail_by_hash(
-    hash: String,
-    size: String,
+pub fn build_thumbnail_routes(
     db_pool: DbPool,
     thumbnail_generator: ThumbnailGenerator,
-) -> Result<Box<dyn Reply>, Rejection> {
-    log::debug!("Thumbnail by hash requested: {}, size: {}", hash, size);
-
-    let photo = match Photo::find_by_hash(&db_pool, &hash) {
-        Ok(Some(photo)) => photo,
-        Ok(None) => {
-            log::warn!("Photo not found by hash: {}", hash);
-            return Err(reject::custom(NotFoundError));
-        }
-        Err(e) => {
-            log::error!("Database error looking up photo by hash {}: {}", hash, e);
-            return Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }));
-        }
-    };
-
-    let thumbnail_size = ThumbnailSize::from_str(&size).unwrap_or(ThumbnailSize::Medium);
-
-    match thumbnail_generator
-        .get_or_generate(&photo, thumbnail_size)
-        .await
-    {
-        Ok(thumbnail_data) => {
-            let reply = warp::reply::with_header(thumbnail_data, "content-type", "image/jpeg");
-            let reply = warp::reply::with_header(
-                reply,
-                "cache-control",
-                "public, max-age=86400", // 24 hours cache for thumbnails
-            );
-
-            Ok(Box::new(reply))
-        }
-        Err(e) => {
-            log::error!("Failed to generate thumbnail for {}: {}", hash, e);
-            Err(reject::custom(NotFoundError))
-        }
-    }
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("thumbnail"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<ThumbnailQuery>())
+        .and(with_db(db_pool))
+        .and(with_thumbnail_generator(thumbnail_generator))
+        .and_then(get_photo_thumbnail)
 }

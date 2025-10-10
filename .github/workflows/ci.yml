@@ -72,7 +72,16 @@ jobs:
         run: |
           podman run -d --name turbo-pix-test -p 18473:18473 --user=0 --tmpfs /data:rw,size=100M turbo-pix:latest
           sleep 5
-          curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health
+          echo "=== Container logs after 5s ==="
+          podman logs turbo-pix-test
+          echo "=== Testing health endpoint ==="
+          if ! curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health; then
+            echo "=== Health check failed, dumping full logs ==="
+            podman logs turbo-pix-test
+            podman stop turbo-pix-test
+            podman rm turbo-pix-test
+            exit 1
+          fi
           podman stop turbo-pix-test
           podman rm turbo-pix-test
 

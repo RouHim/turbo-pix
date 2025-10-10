@@ -230,6 +230,7 @@ mod tests {
 
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: None,
             country: None,
             keywords: None,
             faces_detected: None,
@@ -262,7 +263,7 @@ mod tests {
         let photo = create_test_video_photo(&video_path_str);
 
         let result = generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await;
 
         assert!(result.is_ok(), "Video thumbnail generation should succeed");
@@ -277,8 +278,12 @@ mod tests {
             "Thumbnail should be a reasonable size (>1KB)"
         );
 
-        let cache_key =
-            crate::thumbnail_types::CacheKey::from_photo(&photo, ThumbnailSize::Medium).unwrap();
+        let cache_key = crate::thumbnail_types::CacheKey::from_photo(
+            &photo,
+            ThumbnailSize::Medium,
+            ThumbnailFormat::Jpeg,
+        )
+        .unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists(), "Thumbnail should be cached on disk");
     }
@@ -355,15 +360,15 @@ mod tests {
         let photo = create_test_video_photo(&video_path_str);
 
         let small = generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
         let medium = generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
         let large = generator
-            .get_or_generate(&photo, ThumbnailSize::Large)
+            .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 

@@ -592,6 +592,16 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare("SELECT file_path FROM photos ORDER BY file_path")?;
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(paths)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -626,6 +636,7 @@ mod tests {
             location_name: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: None,
             country: None,
             keywords: None,
             faces_detected: None,

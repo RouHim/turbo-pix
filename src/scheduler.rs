@@ -227,6 +227,7 @@ mod tests {
 
                 thumbnail_path: None,
                 has_thumbnail: Some(false),
+                blurhash: None,
                 country: None,
                 keywords: None,
                 faces_detected: None,

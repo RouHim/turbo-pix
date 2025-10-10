@@ -436,6 +436,7 @@ mod tests {
 
             thumbnail_path: None,
             has_thumbnail: Some(false),
+            blurhash: None,
             country: None,
             keywords: None,
             faces_detected: None,
@@ -478,14 +479,15 @@ mod tests {
         let photo = create_test_photo(&image_path.to_string_lossy());
 
         let result = generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await;
         assert!(result.is_ok());
 
         let thumbnail_data = result.unwrap();
         assert!(!thumbnail_data.is_empty());
 
-        let cache_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
+        let cache_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists());
     }
@@ -502,12 +504,12 @@ mod tests {
         let photo = create_test_photo(&image_path.to_string_lossy());
 
         let result1 = generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
         let result2 = generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
@@ -526,15 +528,15 @@ mod tests {
         let photo = create_test_photo(&image_path.to_string_lossy());
 
         let small = generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
         let medium = generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
         let large = generator
-            .get_or_generate(&photo, ThumbnailSize::Large)
+            .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
@@ -542,9 +544,12 @@ mod tests {
         assert!(!medium.is_empty());
         assert!(!large.is_empty());
 
-        let small_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
-        let medium_key = CacheKey::from_photo(&photo, ThumbnailSize::Medium).unwrap();
-        let large_key = CacheKey::from_photo(&photo, ThumbnailSize::Large).unwrap();
+        let small_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
+        let medium_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg).unwrap();
+        let large_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
 
         assert!(generator.get_cache_path(&small_key).exists());
         assert!(generator.get_cache_path(&medium_key).exists());
@@ -560,7 +565,7 @@ mod tests {
         let photo = create_test_photo("/nonexistent/path.jpg");
 
         let result = generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await;
         assert!(matches!(result, Err(CacheError::PhotoNotFound)));
     }
@@ -576,11 +581,12 @@ mod tests {
 
         let photo = create_test_photo(&image_path.to_string_lossy());
         generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
-        let cache_key = CacheKey::from_photo(&photo, ThumbnailSize::Small).unwrap();
+        let cache_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists());
 
@@ -606,11 +612,11 @@ mod tests {
 
         let photo = create_test_photo(&image_path.to_string_lossy());
         generator
-            .get_or_generate(&photo, ThumbnailSize::Small)
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
         generator
-            .get_or_generate(&photo, ThumbnailSize::Medium)
+            .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
@@ -650,13 +656,13 @@ mod tests {
             photo.hash_sha256 = format!("{:0>64}", i);
 
             let _ = generator
-                .get_or_generate(&photo, ThumbnailSize::Small)
+                .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
                 .await;
             let _ = generator
-                .get_or_generate(&photo, ThumbnailSize::Medium)
+                .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
                 .await;
             let _ = generator
-                .get_or_generate(&photo, ThumbnailSize::Large)
+                .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
                 .await;
         }
 
@@ -713,21 +719,21 @@ mod tests {
         photo3.hash_sha256 = "3".repeat(64);
 
         generator
-            .get_or_generate(&photo1, ThumbnailSize::Large)
+            .get_or_generate(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
         sleep(Duration::from_millis(100)).await;
 
         generator
-            .get_or_generate(&photo2, ThumbnailSize::Large)
+            .get_or_generate(&photo2, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
         sleep(Duration::from_millis(100)).await;
 
         generator
-            .get_or_generate(&photo1, ThumbnailSize::Large)
+            .get_or_generate(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
             .await
             .unwrap();
 
@@ -741,13 +747,15 @@ mod tests {
             photo.hash_sha256 = format!("{:0>64}", i);
 
             generator
-                .get_or_generate(&photo, ThumbnailSize::Large)
+                .get_or_generate(&photo, ThumbnailSize::Large, ThumbnailFormat::Jpeg)
                 .await
                 .unwrap();
         }
 
-        let cache_key1 = CacheKey::from_photo(&photo1, ThumbnailSize::Large).unwrap();
-        let cache_key2 = CacheKey::from_photo(&photo2, ThumbnailSize::Large).unwrap();
+        let cache_key1 =
+            CacheKey::from_photo(&photo1, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
+        let cache_key2 =
+            CacheKey::from_photo(&photo2, ThumbnailSize::Large, ThumbnailFormat::Jpeg).unwrap();
 
         let path1_exists = generator.get_cache_path(&cache_key1).exists();
         let path2_exists = generator.get_cache_path(&cache_key2).exists();
@@ -793,7 +801,7 @@ mod tests {
             photo.hash_sha256 = format!("{:0>64}", i);
 
             let _ = generator
-                .get_or_generate(&photo, ThumbnailSize::Medium)
+                .get_or_generate(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg)
                 .await;
         }
 

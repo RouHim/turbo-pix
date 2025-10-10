@@ -13,7 +13,7 @@ RUN apk add --no-cache curl tar xz && \
     rm -rf ffmpeg-* ffmpeg-release.tar.xz
 
 # # # # # # # # # # # # # # # # # # # #
-# Builder
+# Application Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
 
@@ -27,7 +27,11 @@ COPY ../Cargo.lock ./
 COPY ../src ./src
 COPY ../static ./static
 
-# Set environment variables for static linking and build
+# Build application with musl compatibility
+# Pre-fetch dependencies and patch sqlite-vec for musl (https://github.com/asg017/sqlite-vec/pull/199)
+RUN cargo fetch --target x86_64-unknown-linux-musl && \
+    find /root/.cargo/registry/src -name "sqlite-vec.c" -exec sed -i '/^typedef u_int8_t uint8_t;$/d; /^typedef u_int16_t uint16_t;$/d; /^typedef u_int64_t uint64_t;$/d' {} \;
+
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 # # # # # # # # # # # # # # # # # # # #

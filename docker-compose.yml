@@ -7,7 +7,7 @@ services:
       - "18473:18473"
     volumes:
       - ./data:/data
-      - ./photos:/photos:ro
+      - /home/rouven/Pictures:/photos:ro
     environment:
       - RUST_LOG=info
     restart: unless-stopped

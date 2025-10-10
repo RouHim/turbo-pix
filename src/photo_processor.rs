@@ -61,6 +61,7 @@ impl PhotoProcessor {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn process_all(&self) -> Vec<ProcessedPhoto> {
         let photo_files = self.scanner.scan();
         let mut processed_photos = Vec::new();

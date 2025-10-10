@@ -398,8 +398,7 @@ mod tests {
         let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(10, 10, |_x, _y| Rgb([255, 0, 0]));
 
-        img.save(path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        img.save(path).map_err(std::io::Error::other)?;
         Ok(())
     }
 
@@ -667,7 +666,7 @@ mod tests {
         }
 
         let (files, total_size) = generator.get_cache_stats().await;
-        let max_bytes = 1 * 1024 * 1024;
+        let max_bytes = 1024 * 1024;
 
         assert!(
             total_size <= max_bytes,
@@ -760,9 +759,9 @@ mod tests {
         let path1_exists = generator.get_cache_path(&cache_key1).exists();
         let path2_exists = generator.get_cache_path(&cache_key2).exists();
 
-        if path1_exists && path2_exists {
-        } else if !path1_exists && !path2_exists {
-        } else {
+        // Both exist or both don't exist: cache limit not exceeded
+        // If only one exists, it should be path1 (more recently accessed)
+        if path1_exists != path2_exists {
             assert!(
                 path1_exists && !path2_exists,
                 "LRU eviction should keep more recently accessed items"

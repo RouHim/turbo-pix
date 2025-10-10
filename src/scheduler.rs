@@ -199,7 +199,7 @@ mod tests {
             let photo = Photo {
                 hash_sha256: unique_hash,
                 file_path: path.to_string(),
-                filename: path.split('/').last().unwrap_or(path).to_string(),
+                filename: path.split('/').next_back().unwrap_or(path).to_string(),
                 file_size: 1024,
                 mime_type: Some("image/jpeg".to_string()),
                 taken_at: None,
@@ -413,7 +413,7 @@ mod tests {
 
         let final_filenames: HashSet<String> = final_paths
             .iter()
-            .map(|p| p.split('/').last().unwrap_or(p).to_string())
+            .map(|p| p.split('/').next_back().unwrap_or(p).to_string())
             .collect();
 
         assert!(final_filenames.contains("existing1.jpg"));

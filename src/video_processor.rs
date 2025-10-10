@@ -123,7 +123,7 @@ mod tests {
     use crate::config::{CacheConfig, Config};
     use crate::db::{create_in_memory_pool, Photo};
     use crate::thumbnail_generator::ThumbnailGenerator;
-    use crate::thumbnail_types::ThumbnailSize;
+    use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
     use chrono::Utc;
     use tempfile::TempDir;
 

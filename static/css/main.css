@@ -182,6 +182,17 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   letter-spacing: -0.5px;
+  display: flex;
+  align-items: center;
+}
+
+.logo a {
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.logo a:hover {
+  opacity: 0.8;
 }
 
 .search-container {

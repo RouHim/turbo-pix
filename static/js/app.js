@@ -61,6 +61,16 @@ class TurboPixApp {
   }
 
   bindEvents() {
+    // Logo link - navigate to home
+    const logoLink = utils.$('#logo-link');
+    if (logoLink) {
+      utils.on(logoLink, 'click', (e) => {
+        e.preventDefault();
+        this.switchView('all');
+        this.closeMobileSidebar();
+      });
+    }
+
     // Navigation
     utils.$$('.nav-item').forEach((item) => {
       utils.on(item, 'click', () => {

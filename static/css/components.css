@@ -303,7 +303,7 @@
   background: rgb(255 255 255 / 30%);
 }
 
-.viewer-zoom-controls {
+.viewer-controls {
   position: absolute;
   bottom: var(--space-6);
   left: 50%;

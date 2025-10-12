@@ -246,7 +246,7 @@
     right: var(--space-3);
   }
 
-  .viewer-zoom-controls {
+  .viewer-controls {
     bottom: 80px;
     left: 50%;
     transform: translateX(-50%);

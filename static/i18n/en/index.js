@@ -3,6 +3,7 @@ window.EN_TRANSLATIONS = {
     appTitle: 'TurboPix',
     search: 'Search',
     search_photos_placeholder: 'Search photos...',
+    search_ai_placeholder: 'AI-powered photo search...',
     all_photos: 'All media',
     favorites: 'Favorites',
     videos: 'Videos',
@@ -27,6 +28,12 @@ window.EN_TRANSLATIONS = {
     largest_first: 'Largest First',
     smallest_first: 'Smallest First',
 
+    // Timeline
+    all_dates: 'All Dates',
+    all_years: 'All Years',
+    all_months: 'All Months',
+    clear_timeline_filter: 'Clear timeline filter',
+
     // Photo viewer
     photo_title: 'Photo Title',
     photo: 'Photo',
@@ -44,6 +51,7 @@ window.EN_TRANSLATIONS = {
     fit_to_screen: 'Fit to Screen',
     fullscreen: 'Fullscreen',
     toggle_info: 'Toggle Info',
+    view_details: 'View Details',
 
     // Buttons and actions
     add_to_favorites: 'Add to Favorites',
@@ -53,6 +61,79 @@ window.EN_TRANSLATIONS = {
     // Values
     unknown: 'Unknown',
     no_location_data: 'No location data',
+    yes: 'Yes',
+    no: 'No',
+
+    // Months
+    months: {
+      january: 'January',
+      february: 'February',
+      march: 'March',
+      april: 'April',
+      may: 'May',
+      june: 'June',
+      july: 'July',
+      august: 'August',
+      september: 'September',
+      october: 'October',
+      november: 'November',
+      december: 'December',
+    },
+
+    // Metadata panel
+    metadata: {
+      file_information: 'File Information',
+      filename: 'Filename:',
+      file_size: 'File Size:',
+      dimensions: 'Dimensions:',
+      type: 'Type:',
+      date_taken: 'Date Taken:',
+      date_modified: 'Date Modified:',
+
+      camera_section: 'Camera',
+      make: 'Make:',
+      model: 'Model:',
+      lens_make: 'Lens Make:',
+      lens_model: 'Lens Model:',
+
+      camera_settings: 'Camera Settings',
+      iso: 'ISO:',
+      aperture: 'Aperture:',
+      shutter_speed: 'Shutter Speed:',
+      focal_length: 'Focal Length:',
+      exposure_mode: 'Exposure Mode:',
+      metering_mode: 'Metering Mode:',
+      white_balance: 'White Balance:',
+      flash: 'Flash:',
+      orientation: 'Orientation:',
+      color_space: 'Color Space:',
+
+      location_section: 'Location',
+      gps: 'GPS:',
+      location_name: 'Location Name:',
+
+      video_section: 'Video Information',
+      duration: 'Duration:',
+      video_codec: 'Video Codec:',
+      audio_codec: 'Audio Codec:',
+      frame_rate: 'Frame Rate:',
+      bitrate: 'Bitrate:',
+    },
+
+    // Search
+    search_results: 'Search: "{{query}}"',
+    recent_search: 'Recent search',
+    filter_by_camera: 'Filter by camera',
+    filter_by_type: 'Filter by type',
+    has_gps_data: 'Has GPS data',
+    videos_only: 'Videos only',
+    canon_photos: 'Canon photos',
+    nikon_photos: 'Nikon photos',
+    sony_photos: 'Sony photos',
+    photos_with_location: 'Photos with location',
+    photos_from_year: 'Photos from {{year}}',
+    raw_files_only: 'RAW files only',
+    photos_with_gps: 'Photos with GPS',
   },
 
   errors: {

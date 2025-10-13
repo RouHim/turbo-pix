@@ -78,7 +78,8 @@ class TimelineSlider {
 
     if (index >= this.positions.length - 1) {
       // At the end = show all
-      this.updateLabel('All Dates');
+      const allDatesText = window.i18nManager ? window.i18nManager.t('ui.all_dates') : 'All Dates';
+      this.updateLabel(allDatesText);
       this.currentFilter = null;
     } else {
       const pos = this.positions[index];
@@ -127,7 +128,8 @@ class TimelineSlider {
     if (this.yearSelect) this.yearSelect.value = '';
     if (this.monthSelect) this.monthSelect.value = '';
 
-    this.updateLabel('All Dates');
+    const allDatesText = window.i18nManager ? window.i18nManager.t('ui.all_dates') : 'All Dates';
+    this.updateLabel(allDatesText);
     this.applyFilter();
   }
 
@@ -138,21 +140,25 @@ class TimelineSlider {
   }
 
   formatDate(year, month) {
-    const monthNames = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
+    const monthKeys = [
+      'january',
+      'february',
+      'march',
+      'april',
+      'may',
+      'june',
+      'july',
+      'august',
+      'september',
+      'october',
+      'november',
+      'december',
     ];
-    return `${monthNames[month - 1]} ${year}`;
+    const monthKey = monthKeys[month - 1];
+    const monthName = window.i18nManager
+      ? window.i18nManager.t(`ui.months.${monthKey}`)
+      : monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
+    return `${monthName} ${year}`;
   }
 
   renderHeatmap() {
@@ -203,24 +209,26 @@ class TimelineSlider {
 
     // Populate month select
     if (this.monthSelect) {
-      const monthNames = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December',
+      const monthKeys = [
+        'january',
+        'february',
+        'march',
+        'april',
+        'may',
+        'june',
+        'july',
+        'august',
+        'september',
+        'october',
+        'november',
+        'december',
       ];
-      monthNames.forEach((name, index) => {
+      monthKeys.forEach((key, index) => {
         const option = document.createElement('option');
         option.value = index + 1;
-        option.textContent = name;
+        option.textContent = window.i18nManager
+          ? window.i18nManager.t(`ui.months.${key}`)
+          : key.charAt(0).toUpperCase() + key.slice(1);
         this.monthSelect.appendChild(option);
       });
     }

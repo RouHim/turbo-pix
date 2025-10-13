@@ -3,6 +3,7 @@ window.DE_TRANSLATIONS = {
     appTitle: 'TurboPix',
     search: 'Suchen',
     search_photos_placeholder: 'Fotos suchen...',
+    search_ai_placeholder: 'KI-gestützte Fotosuche...',
     all_photos: 'Alle Medien',
     favorites: 'Favoriten',
     videos: 'Videos',
@@ -27,6 +28,12 @@ window.DE_TRANSLATIONS = {
     largest_first: 'Größte zuerst',
     smallest_first: 'Kleinste zuerst',
 
+    // Timeline
+    all_dates: 'Alle Daten',
+    all_years: 'Alle Jahre',
+    all_months: 'Alle Monate',
+    clear_timeline_filter: 'Zeitfilter löschen',
+
     // Photo viewer
     photo_title: 'Foto Titel',
     photo: 'Foto',
@@ -44,6 +51,7 @@ window.DE_TRANSLATIONS = {
     fit_to_screen: 'An Bildschirm anpassen',
     fullscreen: 'Vollbild',
     toggle_info: 'Info umschalten',
+    view_details: 'Details anzeigen',
 
     // Buttons and actions
     add_to_favorites: 'Zu Favoriten hinzufügen',
@@ -53,6 +61,79 @@ window.DE_TRANSLATIONS = {
     // Values
     unknown: 'Unbekannt',
     no_location_data: 'Keine Ortsdaten',
+    yes: 'Ja',
+    no: 'Nein',
+
+    // Months
+    months: {
+      january: 'Januar',
+      february: 'Februar',
+      march: 'März',
+      april: 'April',
+      may: 'Mai',
+      june: 'Juni',
+      july: 'Juli',
+      august: 'August',
+      september: 'September',
+      october: 'Oktober',
+      november: 'November',
+      december: 'Dezember',
+    },
+
+    // Metadata panel
+    metadata: {
+      file_information: 'Dateiinformationen',
+      filename: 'Dateiname:',
+      file_size: 'Dateigröße:',
+      dimensions: 'Abmessungen:',
+      type: 'Typ:',
+      date_taken: 'Aufnahmedatum:',
+      date_modified: 'Änderungsdatum:',
+
+      camera_section: 'Kamera',
+      make: 'Hersteller:',
+      model: 'Modell:',
+      lens_make: 'Objektivhersteller:',
+      lens_model: 'Objektivmodell:',
+
+      camera_settings: 'Kameraeinstellungen',
+      iso: 'ISO:',
+      aperture: 'Blende:',
+      shutter_speed: 'Verschlusszeit:',
+      focal_length: 'Brennweite:',
+      exposure_mode: 'Belichtungsmodus:',
+      metering_mode: 'Messmodus:',
+      white_balance: 'Weißabgleich:',
+      flash: 'Blitz:',
+      orientation: 'Ausrichtung:',
+      color_space: 'Farbraum:',
+
+      location_section: 'Standort',
+      gps: 'GPS:',
+      location_name: 'Ortsname:',
+
+      video_section: 'Videoinformationen',
+      duration: 'Dauer:',
+      video_codec: 'Video-Codec:',
+      audio_codec: 'Audio-Codec:',
+      frame_rate: 'Bildrate:',
+      bitrate: 'Bitrate:',
+    },
+
+    // Search
+    search_results: 'Suche: "{{query}}"',
+    recent_search: 'Letzte Suche',
+    filter_by_camera: 'Nach Kamera filtern',
+    filter_by_type: 'Nach Typ filtern',
+    has_gps_data: 'Hat GPS-Daten',
+    videos_only: 'Nur Videos',
+    canon_photos: 'Canon-Fotos',
+    nikon_photos: 'Nikon-Fotos',
+    sony_photos: 'Sony-Fotos',
+    photos_with_location: 'Fotos mit Standort',
+    photos_from_year: 'Fotos aus {{year}}',
+    raw_files_only: 'Nur RAW-Dateien',
+    photos_with_gps: 'Fotos mit GPS',
   },
 
   errors: {

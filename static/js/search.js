@@ -211,9 +211,15 @@ class Search {
     const title = utils.$('#current-view-title');
     if (title) {
       if (query) {
-        title.textContent = `Search: "${query}"`;
+        const searchText = window.i18nManager
+          ? window.i18nManager.t('ui.search_results', { query })
+          : `Search: "${query}"`;
+        title.textContent = searchText;
       } else {
-        title.textContent = 'All Photos';
+        const allPhotosText = window.i18nManager
+          ? window.i18nManager.t('ui.all_photos')
+          : 'All Photos';
+        title.textContent = allPhotosText;
       }
     }
 
@@ -289,6 +295,8 @@ class Search {
   generateSuggestions(currentValue) {
     const suggestions = [];
 
+    const t = (key, fallback) => (window.i18nManager ? window.i18nManager.t(key) : fallback);
+
     // Recent searches
     if (this.searchHistory.length > 0) {
       const recentMatches = this.searchHistory
@@ -300,7 +308,7 @@ class Search {
           query: item.query,
           text: item.query,
           icon: '🕒',
-          subtitle: 'Recent search',
+          subtitle: t('ui.recent_search', 'Recent search'),
         }));
       suggestions.push(...recentMatches);
     }
@@ -314,10 +322,30 @@ class Search {
     // Quick filters
     if (!currentValue) {
       suggestions.push(
-        { query: 'camera:canon', text: 'Canon photos', icon: '📷', subtitle: 'Filter by camera' },
-        { query: 'camera:nikon', text: 'Nikon photos', icon: '📷', subtitle: 'Filter by camera' },
-        { query: 'has:gps', text: 'Photos with location', icon: '📍', subtitle: 'Has GPS data' },
-        { query: 'type:video', text: 'Videos only', icon: '🎥', subtitle: 'Filter by type' }
+        {
+          query: 'camera:canon',
+          text: t('ui.canon_photos', 'Canon photos'),
+          icon: '📷',
+          subtitle: t('ui.filter_by_camera', 'Filter by camera'),
+        },
+        {
+          query: 'camera:nikon',
+          text: t('ui.nikon_photos', 'Nikon photos'),
+          icon: '📷',
+          subtitle: t('ui.filter_by_camera', 'Filter by camera'),
+        },
+        {
+          query: 'has:gps',
+          text: t('ui.photos_with_location', 'Photos with location'),
+          icon: '📍',
+          subtitle: t('ui.has_gps_data', 'Has GPS data'),
+        },
+        {
+          query: 'type:video',
+          text: t('ui.videos_only', 'Videos only'),
+          icon: '🎥',
+          subtitle: t('ui.filter_by_type', 'Filter by type'),
+        }
       );
     }
 
@@ -328,36 +356,70 @@ class Search {
     const suggestions = [];
     const lowerValue = value.toLowerCase();
 
+    const t = (key, fallback) => (window.i18nManager ? window.i18nManager.t(key) : fallback);
+
     // Camera suggestions
     if (lowerValue.includes('canon') || lowerValue.includes('camera')) {
-      suggestions.push({ query: 'camera:canon', text: 'Canon cameras', icon: '📷' });
+      suggestions.push({
+        query: 'camera:canon',
+        text: t('ui.canon_photos', 'Canon photos'),
+        icon: '📷',
+      });
     }
     if (lowerValue.includes('nikon') || lowerValue.includes('camera')) {
-      suggestions.push({ query: 'camera:nikon', text: 'Nikon cameras', icon: '📷' });
+      suggestions.push({
+        query: 'camera:nikon',
+        text: t('ui.nikon_photos', 'Nikon photos'),
+        icon: '📷',
+      });
     }
     if (lowerValue.includes('sony') || lowerValue.includes('camera')) {
-      suggestions.push({ query: 'camera:sony', text: 'Sony cameras', icon: '📷' });
+      suggestions.push({
+        query: 'camera:sony',
+        text: t('ui.sony_photos', 'Sony photos'),
+        icon: '📷',
+      });
     }
 
     // Date suggestions
     if (lowerValue.includes('2024') || lowerValue.includes('today')) {
-      suggestions.push({ query: 'date:2024', text: 'Photos from 2024', icon: '📅' });
+      suggestions.push({
+        query: 'date:2024',
+        text: t('ui.photos_from_year', { year: '2024' }),
+        icon: '📅',
+      });
     }
     if (lowerValue.includes('2023')) {
-      suggestions.push({ query: 'date:2023', text: 'Photos from 2023', icon: '📅' });
+      suggestions.push({
+        query: 'date:2023',
+        text: t('ui.photos_from_year', { year: '2023' }),
+        icon: '📅',
+      });
     }
 
     // Type suggestions
     if (lowerValue.includes('video')) {
-      suggestions.push({ query: 'type:video', text: 'Videos only', icon: '🎥' });
+      suggestions.push({
+        query: 'type:video',
+        text: t('ui.videos_only', 'Videos only'),
+        icon: '🎥',
+      });
     }
     if (lowerValue.includes('raw')) {
-      suggestions.push({ query: 'type:raw', text: 'RAW files only', icon: '📸' });
+      suggestions.push({
+        query: 'type:raw',
+        text: t('ui.raw_files_only', 'RAW files only'),
+        icon: '📸',
+      });
     }
 
     // Location suggestions
     if (lowerValue.includes('gps') || lowerValue.includes('location')) {
-      suggestions.push({ query: 'has:gps', text: 'Photos with GPS', icon: '📍' });
+      suggestions.push({
+        query: 'has:gps',
+        text: t('ui.photos_with_gps', 'Photos with GPS'),
+        icon: '📍',
+      });
     }
 
     return suggestions;

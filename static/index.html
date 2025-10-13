@@ -22,7 +22,7 @@
                 type="text"
                 id="search-input"
                 placeholder="AI-powered photo search..."
-                data-i18n-placeholder="ui.search_photos_placeholder"
+                data-i18n-placeholder="ui.search_ai_placeholder"
                 class="search-input"
               />
               <button id="search-btn" class="search-btn" data-i18n="ui.search">Search</button>
@@ -68,23 +68,23 @@
         <div class="timeline-container">
           <!-- Desktop: Slider -->
           <div class="timeline-slider desktop-only">
-            <button class="timeline-reset" title="Clear timeline filter">✕</button>
+            <button class="timeline-reset" title="Clear timeline filter" data-i18n-title="ui.clear_timeline_filter">✕</button>
             <div class="timeline-track">
               <canvas class="timeline-heatmap" width="800" height="40"></canvas>
               <input type="range" class="timeline-input" min="0" max="100" value="100" />
             </div>
-            <div class="timeline-label">All Dates</div>
+            <div class="timeline-label" data-i18n="ui.all_dates">All Dates</div>
           </div>
 
           <!-- Mobile: Dropdowns -->
           <div class="timeline-dropdowns mobile-only">
             <select class="timeline-year-select">
-              <option value="">All Years</option>
+              <option value="" data-i18n="ui.all_years">All Years</option>
             </select>
             <select class="timeline-month-select">
-              <option value="">All Months</option>
+              <option value="" data-i18n="ui.all_months">All Months</option>
             </select>
-            <button class="timeline-reset" title="Clear timeline filter">✕</button>
+            <button class="timeline-reset" title="Clear timeline filter" data-i18n-title="ui.clear_timeline_filter">✕</button>
           </div>
         </div>
 
@@ -211,129 +211,129 @@
 
             <div class="photo-meta-full" style="display: none">
               <div class="meta-section">
-                <h4 class="meta-section-title">File Information</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.file_information">File Information</h4>
                 <div class="meta-item">
-                  <label>Filename:</label>
+                  <label data-i18n="ui.metadata.filename">Filename:</label>
                   <span id="meta-filename">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>File Size:</label>
+                  <label data-i18n="ui.metadata.file_size">File Size:</label>
                   <span id="meta-filesize">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Dimensions:</label>
+                  <label data-i18n="ui.metadata.dimensions">Dimensions:</label>
                   <span id="meta-dimensions">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Type:</label>
+                  <label data-i18n="ui.metadata.type">Type:</label>
                   <span id="meta-type">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Date Taken:</label>
+                  <label data-i18n="ui.metadata.date_taken">Date Taken:</label>
                   <span id="meta-date-taken">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Date Modified:</label>
+                  <label data-i18n="ui.metadata.date_modified">Date Modified:</label>
                   <span id="meta-date-modified">-</span>
                 </div>
               </div>
 
               <div class="meta-section" id="camera-section">
-                <h4 class="meta-section-title">Camera</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.camera_section">Camera</h4>
                 <div class="meta-item">
-                  <label>Make:</label>
+                  <label data-i18n="ui.metadata.make">Make:</label>
                   <span id="meta-camera-make">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Model:</label>
+                  <label data-i18n="ui.metadata.model">Model:</label>
                   <span id="meta-camera-model">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Lens Make:</label>
+                  <label data-i18n="ui.metadata.lens_make">Lens Make:</label>
                   <span id="meta-lens-make">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Lens Model:</label>
+                  <label data-i18n="ui.metadata.lens_model">Lens Model:</label>
                   <span id="meta-lens-model">-</span>
                 </div>
               </div>
 
               <div class="meta-section" id="settings-section">
-                <h4 class="meta-section-title">Camera Settings</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.camera_settings">Camera Settings</h4>
                 <div class="meta-item">
-                  <label>ISO:</label>
+                  <label data-i18n="ui.metadata.iso">ISO:</label>
                   <span id="meta-iso">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Aperture:</label>
+                  <label data-i18n="ui.metadata.aperture">Aperture:</label>
                   <span id="meta-aperture">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Shutter Speed:</label>
+                  <label data-i18n="ui.metadata.shutter_speed">Shutter Speed:</label>
                   <span id="meta-shutter">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Focal Length:</label>
+                  <label data-i18n="ui.metadata.focal_length">Focal Length:</label>
                   <span id="meta-focal">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Exposure Mode:</label>
+                  <label data-i18n="ui.metadata.exposure_mode">Exposure Mode:</label>
                   <span id="meta-exposure">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Metering Mode:</label>
+                  <label data-i18n="ui.metadata.metering_mode">Metering Mode:</label>
                   <span id="meta-metering">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>White Balance:</label>
+                  <label data-i18n="ui.metadata.white_balance">White Balance:</label>
                   <span id="meta-wb">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Flash:</label>
+                  <label data-i18n="ui.metadata.flash">Flash:</label>
                   <span id="meta-flash">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Orientation:</label>
+                  <label data-i18n="ui.metadata.orientation">Orientation:</label>
                   <span id="meta-orientation">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Color Space:</label>
+                  <label data-i18n="ui.metadata.color_space">Color Space:</label>
                   <span id="meta-colorspace">-</span>
                 </div>
               </div>
 
               <div class="meta-section" id="location-section">
-                <h4 class="meta-section-title">Location</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.location_section">Location</h4>
                 <div class="meta-item">
-                  <label>GPS:</label>
+                  <label data-i18n="ui.metadata.gps">GPS:</label>
                   <span id="meta-gps">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Location Name:</label>
+                  <label data-i18n="ui.metadata.location_name">Location Name:</label>
                   <span id="meta-location-name">-</span>
                 </div>
               </div>
 
               <div class="meta-section" id="video-section" style="display: none">
-                <h4 class="meta-section-title">Video Information</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.video_section">Video Information</h4>
                 <div class="meta-item">
-                  <label>Duration:</label>
+                  <label data-i18n="ui.metadata.duration">Duration:</label>
                   <span id="meta-duration">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Video Codec:</label>
+                  <label data-i18n="ui.metadata.video_codec">Video Codec:</label>
                   <span id="meta-video-codec">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Audio Codec:</label>
+                  <label data-i18n="ui.metadata.audio_codec">Audio Codec:</label>
                   <span id="meta-audio-codec">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Frame Rate:</label>
+                  <label data-i18n="ui.metadata.frame_rate">Frame Rate:</label>
                   <span id="meta-framerate">-</span>
                 </div>
                 <div class="meta-item">
-                  <label>Bitrate:</label>
+                  <label data-i18n="ui.metadata.bitrate">Bitrate:</label>
                   <span id="meta-bitrate">-</span>
                 </div>
               </div>

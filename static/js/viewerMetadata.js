@@ -13,6 +13,11 @@ class ViewerMetadata {
   }
 
   updateBasicInfo(photo) {
+    const unknownText = window.i18nManager ? window.i18nManager.t('ui.unknown') : 'Unknown';
+    const noLocationText = window.i18nManager
+      ? window.i18nManager.t('ui.no_location_data')
+      : 'No location data';
+
     if (this.elements.title) {
       this.elements.title.textContent =
         photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
@@ -21,11 +26,11 @@ class ViewerMetadata {
     if (this.elements.date) {
       this.elements.date.textContent = photo.taken_at
         ? utils.formatDate(photo.taken_at)
-        : 'Unknown';
+        : unknownText;
     }
 
     if (this.elements.size) {
-      const sizeText = photo.file_size ? utils.formatFileSize(photo.file_size) : 'Unknown';
+      const sizeText = photo.file_size ? utils.formatFileSize(photo.file_size) : unknownText;
       const dimensions = photo.width && photo.height ? ` • ${photo.width}×${photo.height}` : '';
       this.elements.size.textContent = sizeText + dimensions;
     }
@@ -34,7 +39,7 @@ class ViewerMetadata {
       const camera =
         photo.camera_make && photo.camera_model
           ? `${photo.camera_make} ${photo.camera_model}`
-          : 'Unknown';
+          : unknownText;
       this.elements.camera.textContent = camera;
     }
 
@@ -42,7 +47,7 @@ class ViewerMetadata {
       const location =
         photo.latitude && photo.longitude
           ? `${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}`
-          : 'No location data';
+          : noLocationText;
       this.elements.location.textContent = location;
     }
   }
@@ -93,6 +98,9 @@ class ViewerMetadata {
       photo.orientation ||
       photo.color_space;
     this.toggleSection('settings-section', hasSettings);
+    const yesText = window.i18nManager ? window.i18nManager.t('ui.yes') : 'Yes';
+    const noText = window.i18nManager ? window.i18nManager.t('ui.no') : 'No';
+
     this.setMetaField('meta-iso', photo.iso ? `ISO ${photo.iso}` : null);
     this.setMetaField('meta-aperture', photo.aperture ? `f/${photo.aperture.toFixed(1)}` : null);
     this.setMetaField('meta-shutter', photo.shutter_speed);
@@ -105,7 +113,7 @@ class ViewerMetadata {
     this.setMetaField('meta-wb', photo.white_balance);
     this.setMetaField(
       'meta-flash',
-      photo.flash_used !== null ? (photo.flash_used ? 'Yes' : 'No') : null
+      photo.flash_used !== null ? (photo.flash_used ? yesText : noText) : null
     );
     this.setMetaField('meta-orientation', photo.orientation);
     this.setMetaField('meta-colorspace', photo.color_space);

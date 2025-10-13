@@ -375,6 +375,12 @@
   cursor: grabbing;
 }
 
+/* Disable transition during gestures for better responsiveness */
+.viewer-image.gesture-active,
+.viewer-video.gesture-active {
+  transition: none !important;
+}
+
 .viewer-loading-indicator {
   position: absolute;
   top: 50%;

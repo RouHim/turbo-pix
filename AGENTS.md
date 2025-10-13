@@ -2,7 +2,7 @@
 
 ## Project Context
 
-Development/personal project - breaking changes acceptable, database can be recreated
+Development/personal project - breaking changes acceptable, database can be recreated!
 
 ## Development Commands
 
@@ -11,7 +11,7 @@ Development/personal project - breaking changes acceptable, database can be recr
 
 ## Code Style
 
-**Rust:**
+**Backend / Rust:**
 
 - Iterator chains over loops: `.iter().filter_map().next()`
 - Arrays over vecs: `[A, B]` vs `vec![A, B]`
@@ -19,35 +19,47 @@ Development/personal project - breaking changes acceptable, database can be recr
 - Imports: std, external crates, local (blank lines between)
 - Zero warnings policy
 
+**Frondend / Vanilla Javascript:**
+
+- `const` over `let` (no reassignment)
+- Arrow functions: `() => {}` over `function() {}`
+- Template literals: `` `string ${var}` `` over `'string ' + var`
+- When adding visible text to the frontend, add them to the `i18n` translation system.
+
 **General:**
 
-- KISS + SOLID principles
+- KISS: Keep It Simple, Stupid (DRY, YAGNI, etc.)
+- SOLID principles (single responsibility, open/closed, etc.)
+
+# Commit Gatekeeping
+
+- Lint and format before commiting
+- Tests must pass
+- Meaningful commit messages
+
+# Development pattern
+
+- TDD: Test Driven Development, write tests first, then implement the feature
+- BDD: Behavior Driven Development, focus on the behavior of the application, use GIVEN, WHEN, THEN style
+- E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
+- when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
+- **Avoid:** Hardcoded paths and fallback logic mask bugs
+
 
 ## Testing
 
-**TDD/BDD:** Write tests first (GIVEN, WHEN, THEN style)
-
-**Helpers:**
-
-- `create_test_db_pool()`, `Photo::new_test_photo()` in `src/db.rs`
-- Video tests need `RUN_VIDEO_TESTS=1`, ffmpeg/ffprobe
+* Test images and videos are located in `test-data/`
 
 **E2E:**
 
 - Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
-- Use Playwright MCP (preferred) or Puppeteer (fallback) - don't install as dependency - don't create manual e2e tests
+- Use Playwright MCP (preferred) Tool - don't install as dependency - don't create manual e2e tests
 - Test at `http://localhost:18473`
-- Use `[data-photo-id]` selectors
 - Kill process after testing
 
 ## Common Issues
-
-**Static files not updating:** `rm target/debug/turbo-pix && cargo build` (embedded via `include_str!()`)
 
 **UI state desync:** Update both: `appState.value = x; domElement.value = x;`
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
-**Avoid:** Hardcoded paths and fallback logic mask bugs
-- when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
-- lint and format before commiting

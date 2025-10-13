@@ -1,5 +1,5 @@
 // Photo Viewer Component
-/* global ViewerControls, ViewerMetadata */
+/* global ViewerControls, ViewerMetadata, GestureManager */
 
 class PhotoViewer {
   constructor() {
@@ -37,6 +37,7 @@ class PhotoViewer {
 
     this.controls = new ViewerControls(this, this.elements);
     this.metadata = new ViewerMetadata(this.elements);
+    this.gestureManager = null;
 
     this.init();
   }
@@ -120,19 +121,114 @@ class PhotoViewer {
   setupTouchGestures() {
     if (!this.elements.viewer) return;
 
-    utils.on(this.elements.viewer, 'touchstart', (e) => {
-      utils.touchHandler.handleTouchStart(e);
+    // Initialize GestureManager when available
+    if (typeof GestureManager !== 'undefined') {
+      this.initGestureManager();
+    } else {
+      // Wait for GestureManager to load
+      setTimeout(() => this.setupTouchGestures(), 100);
+    }
+  }
+
+  initGestureManager() {
+    this.gestureManager = new GestureManager(this.elements.viewer, {
+      enablePinch: true,
+      enableSwipe: true,
+      enableDoubleTap: true,
+      enablePan: true,
     });
 
-    utils.on(this.elements.viewer, 'touchend', (e) => {
-      utils.touchHandler.handleTouchEnd(
-        e,
-        () => this.showNext(), // swipe left -> next
-        () => this.showPrevious(), // swipe right -> previous
-        () => this.close(), // swipe up -> close
-        () => this.toggleSidebar() // swipe down -> toggle sidebar
-      );
+    // Pinch to zoom
+    this.gestureManager.on('pinch', (data) => {
+      const { scale, deltaScale, centerX, centerY, initialCenterX, initialCenterY } = data;
+
+      if (!this.pinchStarted) {
+        this.controls.startPinchZoom(scale, initialCenterX, initialCenterY);
+        this.pinchStarted = true;
+        // Disable transitions during gesture
+        if (this.elements.image) this.elements.image.classList.add('gesture-active');
+        if (this.elements.video) this.elements.video.classList.add('gesture-active');
+      }
+
+      this.controls.updatePinchZoom(scale, deltaScale, centerX, centerY);
     });
+
+    this.gestureManager.on('pinchEnd', () => {
+      this.controls.endPinchZoom();
+      this.pinchStarted = false;
+      // Re-enable transitions
+      if (this.elements.image) this.elements.image.classList.remove('gesture-active');
+      if (this.elements.video) this.elements.video.classList.remove('gesture-active');
+    });
+
+    // Double tap to zoom
+    this.gestureManager.on('doubleTap', (data) => {
+      const { x, y } = data;
+      this.controls.doubleTapZoom(x, y);
+    });
+
+    // Swipe navigation
+    this.gestureManager.on('swipe', (data) => {
+      const { direction, velocity } = data;
+
+      // Only allow swipe navigation when not zoomed
+      if (this.controls.isZoomed()) {
+        return;
+      }
+
+      if (direction === 'left') {
+        this.showNext();
+        this.triggerHapticFeedback('light');
+      } else if (direction === 'right') {
+        this.showPrevious();
+        this.triggerHapticFeedback('light');
+      } else if (direction === 'up') {
+        // Swipe up could toggle info in the future
+      } else if (direction === 'down') {
+        // Swipe down to close (with threshold)
+        if (velocity > 0.5) {
+          this.close();
+          this.triggerHapticFeedback('medium');
+        }
+      }
+    });
+
+    // Pan while zoomed
+    this.gestureManager.on('pan', (data) => {
+      const { deltaX, deltaY } = data;
+
+      // Only allow pan when zoomed
+      if (this.controls.isZoomed()) {
+        this.gestureManager.enablePan();
+        this.controls.updateTouchPan(deltaX, deltaY);
+        // Disable transitions during pan
+        if (this.elements.image) this.elements.image.classList.add('gesture-active');
+      } else {
+        this.gestureManager.disablePan();
+      }
+    });
+
+    this.gestureManager.on('panEnd', (data) => {
+      const { velocityX, velocityY } = data;
+
+      // Re-enable transitions
+      if (this.elements.image) this.elements.image.classList.remove('gesture-active');
+
+      if (this.controls.isZoomed()) {
+        this.controls.applyMomentum(velocityX, velocityY);
+      }
+    });
+  }
+
+  triggerHapticFeedback(intensity = 'light') {
+    if ('vibrate' in navigator) {
+      const patterns = {
+        light: 10,
+        medium: 20,
+        heavy: 50,
+      };
+      navigator.vibrate(patterns[intensity] || 10);
+    }
   }
 
   async open(photo, allPhotos = []) {

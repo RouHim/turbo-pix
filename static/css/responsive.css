@@ -247,7 +247,7 @@
   }
 
   .viewer-controls {
-    bottom: 80px;
+    bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
     gap: var(--space-3);

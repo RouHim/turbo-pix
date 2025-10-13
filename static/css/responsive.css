@@ -257,28 +257,6 @@
     width: var(--button-size);
     height: var(--button-size);
   }
-
-  .info-toggle {
-    position: absolute;
-    bottom: var(--space-4);
-    right: var(--space-4);
-    width: 56px;
-    height: 56px;
-    border: none;
-    border-radius: var(--radius-full);
-    background: var(--primary-color);
-    color: white;
-    font-size: var(--font-3xl);
-    cursor: pointer;
-    transition: var(--transition-fast);
-    z-index: 10;
-    box-shadow: var(--shadow-heavy);
-  }
-
-  .info-toggle:active {
-    transform: scale(0.95);
-    background: var(--primary-dark);
-  }
 }
 
 @media (width <= 480px) {
@@ -382,12 +360,23 @@
 
   .photo-actions {
     flex-wrap: wrap;
-    gap: var(--space-2);
+    gap: var(--space-3);
+    margin-top: var(--space-3);
   }
 
   .action-btn {
     flex: 1;
-    min-width: 120px;
+    min-width: 140px;
+    padding: 16px var(--space-4);
+    font-size: var(--font-xl);
+    font-weight: var(--font-semibold);
+    height: 52px;
+    box-shadow: var(--shadow-medium);
+  }
+
+  .action-btn:active {
+    transform: scale(0.98);
+    box-shadow: var(--shadow-light);
   }
 
   .nav-item {

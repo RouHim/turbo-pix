@@ -33,7 +33,6 @@ class PhotoViewer {
       zoomOut: utils.$('.zoom-out'),
       zoomFit: utils.$('.zoom-fit'),
       fullscreenBtn: utils.$('.fullscreen-btn'),
-      infoToggle: utils.$('.info-toggle'),
     };
 
     this.controls = new ViewerControls(this, this.elements);
@@ -74,11 +73,7 @@ class PhotoViewer {
     }
 
     if (this.elements.metadataBtn) {
-      utils.on(this.elements.metadataBtn, 'click', () => this.metadata.toggleMetadata());
-    }
-
-    if (this.elements.infoToggle) {
-      utils.on(this.elements.infoToggle, 'click', () => this.toggleSidebar());
+      utils.on(this.elements.metadataBtn, 'click', () => this.toggleInfo());
     }
 
     if (this.elements.content) {
@@ -419,6 +414,18 @@ class PhotoViewer {
   toggleSidebar() {
     if (this.elements.sidebar) {
       this.elements.sidebar.classList.toggle('show');
+    }
+  }
+
+  toggleInfo() {
+    // On mobile (width <= 768px), toggle the sidebar
+    // On desktop, toggle the metadata details
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+      this.toggleSidebar();
+    } else {
+      this.metadata.toggleMetadata();
     }
   }
 

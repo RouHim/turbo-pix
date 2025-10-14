@@ -23,7 +23,7 @@ that works self-hosted without the need to upload or move my existing photo dire
 TurboPix scans your photo directories at startup, reads metadata and generates CLIP embeddings for semantic search from
 your photos, and stores everything in a local database. You can then browse photos by date, search for specific cameras
 or filenames, and view detailed information about each photo. Thumbnails are generated on-the-fly and cached for faster
-loading.
+loading. Each night, TurboPix checks for new photos and updates the database accordingly.
 
 ## Features
 
@@ -34,11 +34,38 @@ loading.
 - **Dark Mode**: Switch between light and dark themes
 - **Favorites**: Mark photos to find them later
 - **Mobile Support**: Works on phones and tablets
-- **Self-Hosted**: Runs on your own computer, no cloud services
-- **Docker Support**: Can be deployed as a container
+- **Self-Hosted Container Support**: Runs on your own computer or as a container, no cloud services
 - **Speedy**: Written in Rust for performance
 
 ## Run the application
+
+### Docker
+
+Docker Example:
+
+```shell
+docker run -p 18473:18473 \
+        -v /path/to/pictures:/photos:ro \
+        -v ./data:/data \
+        -e TURBO_PIX_PHOTO_PATHS=/photos \
+        rouhim/turbo-pix
+```
+
+Docker compose example:
+
+```yaml
+services:
+  turbo-pix:
+    image: rouhim/turbo-pix
+    volumes:
+      - /path/to/pictures:/photos:ro  # mount read only
+      - ./data:/data
+    ports:
+      - "18473:18473"
+    environment:
+      TURBO_PIX_PHOTO_PATHS: /photos
+      RUST_LOG: info
+```
 
 ### Native execution
 
@@ -70,34 +97,6 @@ Start the application with:
 TURBO_PIX_PHOTO_PATHS=/path/to/pictures,/path/to/videos \
 TURBO_PIX_DATA_PATH=data \
 ./turbo-pix
-```
-
-### Docker
-
-Docker Example:
-
-```shell
-docker run -p 18473:18473 \
-        -v /path/to/pictures:/photos:ro \
-        -v ./data:/data \
-        -e TURBO_PIX_PHOTO_PATHS=/photos \
-        rouhim/turbo-pix
-```
-
-Docker compose example:
-
-```yaml
-services:
-  turbo-pix:
-    image: rouhim/turbo-pix
-    volumes:
-      - /path/to/pictures:/photos:ro  # mount read only
-      - ./data:/data
-    ports:
-      - "18473:18473"
-    environment:
-      TURBO_PIX_PHOTO_PATHS: /photos
-      RUST_LOG: info
 ```
 
 ## Configuration

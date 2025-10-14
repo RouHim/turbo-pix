@@ -23,18 +23,18 @@ TurboPix scans your photo directories at startup, extracts comprehensive EXIF me
 
 ## Features
 
-- 🚀 **Blazingly Fast**: Built with Rust and async I/O for instant photo browsing
-- 🖼️ **Smart Thumbnails**: Automatically generates WebP and JPEG thumbnails in multiple sizes (200px, 400px, 800px)
-- 🔍 **Powerful Search**: Search by filename, camera make/model, or semantic content
-- 📊 **Rich Metadata**: Comprehensive EXIF extraction including camera settings, GPS location, and video codec information
-- 🎨 **Modern UI**: Responsive design with BlurHash placeholders, dark mode, and gesture support
-- 🎥 **Video Support**: Playback and metadata extraction for common video formats
-- ⭐ **Favorites**: Mark and filter your favorite photos
-- 🌍 **GPS Location**: Display and search photos by location
-- 🤖 **AI-Powered**: Semantic search using local embeddings (optional)
-- 📱 **Mobile-First**: Optimized for mobile devices with touch gestures and adaptive layouts
-- 🔒 **Privacy-Focused**: Completely self-hosted, no external services required
-- 🐳 **Easy Deployment**: Docker support with multi-architecture images
+- **Blazingly Fast**: Built with Rust and async I/O for instant photo browsing
+- **Smart Thumbnails**: Automatically generates WebP and JPEG thumbnails in multiple sizes (200px, 400px, 800px)
+- **Powerful Search**: Search by filename, camera make/model, or semantic content
+- **Rich Metadata**: Comprehensive EXIF extraction including camera settings, GPS location, and video codec information
+- **Modern UI**: Responsive design with BlurHash placeholders, dark mode, and gesture support
+- **Video Support**: Playback and metadata extraction for common video formats
+- **Favorites**: Mark and filter your favorite photos
+- **GPS Location**: Display and search photos by location
+- **AI-Powered**: Semantic search using local embeddings (optional)
+- **Mobile-First**: Optimized for mobile devices with touch gestures and adaptive layouts
+- **Privacy-Focused**: Completely self-hosted, no external services required
+- **Easy Deployment**: Docker support with multi-architecture images
 
 ## Run the application
 
@@ -316,4 +316,4 @@ See [LICENSE](LICENSE) file for details.
 
 ## Support
 
-If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.com/rouhim) ☕
+If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.com/rouhim)

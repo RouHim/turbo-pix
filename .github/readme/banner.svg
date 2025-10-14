@@ -18,7 +18,7 @@
   </defs>
 
   <!-- Background -->
-  <rect width="600" height="200" fill="#f8fafc"/>
+  <rect width="600" height="200" fill="transparent"/>
 
   <!-- Icon container -->
   <g transform="translate(150, 50)">
@@ -55,5 +55,5 @@
 
   <!-- Text -->
   <text x="270" y="105" class="title">TurboPix</text>
-  <text x="270" y="130" class="subtitle">Blazingly fast photo gallery</text>
+  <text x="270" y="130" class="subtitle">Self-hosted photo gallery</text>
 </svg>

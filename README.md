@@ -10,31 +10,31 @@
 </p>
 
 <p align="center">
-    <i>A blazingly fast, self-hosted photo gallery with smart organization, EXIF metadata extraction, and AI-powered features.</i>
+    <i>A self-hosted photo gallery with metadata extraction and search capabilities.</i>
 </p>
 
 ## Motivation
 
-After migrating from cloud photo services to self-hosted solutions, I wanted a photo gallery that combines the speed of modern web technologies with the power of Rust. TurboPix provides instant photo browsing, intelligent organization by date and camera, and semantic search capabilities - all while being completely self-hosted and privacy-focused.
+After migrating from cloud photo services to self-hosted solutions, I wanted a simple photo gallery that works locally without depending on external services. TurboPix organizes photos by date and camera, lets you search through them, and keeps everything on your own hardware.
 
 ## How it works
 
-TurboPix scans your photo directories at startup, extracts comprehensive EXIF metadata, generates optimized thumbnails, and builds a searchable database. The metadata is stored in a structured JSON format for efficient querying. Photos are automatically organized by date, camera model, and can be searched semantically using AI-powered embeddings. The web interface is designed for speed, with lazy loading, BlurHash placeholders, and responsive image delivery.
+TurboPix scans your photo directories at startup, reads metadata from your photos, creates thumbnails, and stores everything in a local database. You can then browse photos by date, search for specific cameras or filenames, and view detailed information about each photo.
 
 ## Features
 
-- **Blazingly Fast**: Built with Rust and async I/O for instant photo browsing
-- **Smart Thumbnails**: Automatically generates WebP and JPEG thumbnails in multiple sizes (200px, 400px, 800px)
-- **Powerful Search**: Search by filename, camera make/model, or semantic content
-- **Rich Metadata**: Comprehensive EXIF extraction including camera settings, GPS location, and video codec information
-- **Modern UI**: Responsive design with BlurHash placeholders, dark mode, and gesture support
-- **Video Support**: Playback and metadata extraction for common video formats
-- **Favorites**: Mark and filter your favorite photos
-- **GPS Location**: Display and search photos by location
-- **AI-Powered**: Semantic search using local embeddings (optional)
-- **Mobile-First**: Optimized for mobile devices with touch gestures and adaptive layouts
-- **Privacy-Focused**: Completely self-hosted, no external services required
-- **Easy Deployment**: Docker support with multi-architecture images
+- **Photo Browsing**: View your photo collection organized by date
+- **Thumbnails**: Automatically creates smaller preview images
+- **Search**: Find photos by filename or camera model
+- **Metadata Display**: View camera settings, date taken, and GPS coordinates
+- **Dark Mode**: Switch between light and dark themes
+- **Video Playback**: View videos alongside your photos
+- **Favorites**: Mark photos to find them later
+- **Location View**: See where your photos were taken (if GPS data is available)
+- **Semantic Search**: Find photos by describing what's in them (optional, requires AI models)
+- **Mobile Support**: Works on phones and tablets
+- **Self-Hosted**: Runs on your own computer, no cloud services
+- **Docker Support**: Can be deployed as a container
 
 ## Run the application
 
@@ -157,23 +157,22 @@ TurboPix provides a RESTful API for programmatic access:
 
 ## Architecture
 
-TurboPix is built with modern Rust technologies for maximum performance and reliability:
+TurboPix is built with Rust and uses the following libraries:
 
-### Backend Stack
-- **Web Framework**: [Warp 0.3](https://github.com/seanmonstar/warp) - Fast, composable async web framework
+### Backend
+- **Web Framework**: [Warp 0.3](https://github.com/seanmonstar/warp)
 - **Database**: SQLite with [R2D2](https://github.com/sfackler/r2d2) connection pooling
-- **Image Processing**: [image](https://github.com/image-rs/image) crate with EXIF/IPTC metadata extraction
-- **Video Processing**: [ffmpeg](https://ffmpeg.org/) integration for video metadata and thumbnails
-- **AI/ML**: [tract](https://github.com/sonos/tract) ONNX runtime for semantic search embeddings
-- **Async Runtime**: [Tokio](https://tokio.rs/) for high-performance async I/O
-- **Logging**: Standard logging with `log` and `env_logger`
+- **Image Processing**: [image](https://github.com/image-rs/image) crate for EXIF/IPTC metadata
+- **Video Processing**: [ffmpeg](https://ffmpeg.org/) for video metadata and thumbnails
+- **AI/ML**: [tract](https://github.com/sonos/tract) ONNX runtime (optional, for semantic search)
+- **Async Runtime**: [Tokio](https://tokio.rs/)
+- **Logging**: Standard `log` and `env_logger`
 
-### Frontend Stack
-- **Pure Vanilla JavaScript**: No framework overhead, instant loading
-- **CSS3**: Modern responsive design with CSS Grid and Flexbox
-- **BlurHash**: Progressive image loading with low-quality placeholders
-- **Progressive Enhancement**: Works without JavaScript for basic functionality
-- **Internationalization**: Multi-language support (EN, DE)
+### Frontend
+- **Vanilla JavaScript**: No external frameworks
+- **CSS3**: Responsive design with CSS Grid and Flexbox
+- **BlurHash**: Placeholder images while loading
+- **i18n**: English and German translations
 
 ### Data Model
 
@@ -221,16 +220,16 @@ Photos are stored with a clean separation between computational and informationa
 
 ## Performance
 
-TurboPix is optimized for speed at every layer:
+TurboPix uses several techniques to improve performance:
 
-- **Fast Indexing**: Parallel photo processing with rayon
-- **Efficient Queries**: SQLite with JSON extraction and proper indexing
-- **Optimized Thumbnails**: Pre-generated WebP/JPEG in multiple sizes
-- **Lazy Loading**: Only load images when they enter the viewport
-- **HTTP Caching**: Aggressive caching headers for static assets
-- **BlurHash Placeholders**: Instant visual feedback while loading
+- **Parallel Processing**: Processes multiple photos at once during indexing
+- **Database Indexing**: Uses SQLite indexes for faster queries
+- **Thumbnail Generation**: Creates thumbnails in WebP and JPEG formats
+- **Lazy Loading**: Loads images only when you scroll to them
+- **HTTP Caching**: Caches static files to reduce server load
+- **BlurHash Placeholders**: Shows low-resolution previews while full images load
 
-Tested on various hardware from Raspberry Pi to desktop workstations with collections ranging from hundreds to tens of thousands of photos.
+Tested on hardware ranging from Raspberry Pi to desktop computers with photo collections from a few hundred to tens of thousands of photos.
 
 ## Limitations
 

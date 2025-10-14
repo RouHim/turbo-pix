@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200">
+  <defs>
+    <style>
+      .pixel { shape-rendering: crispEdges; }
+      .title {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        font-size: 64px;
+        font-weight: 700;
+        fill: #1e293b;
+      }
+      .subtitle {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        font-size: 18px;
+        font-weight: 400;
+        fill: #64748b;
+      }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="600" height="200" fill="#f8fafc"/>
+
+  <!-- Icon container -->
+  <g transform="translate(150, 50)">
+    <!-- Icon background -->
+    <rect width="100" height="100" fill="#1e293b" rx="12"/>
+
+    <!-- 8-bit pixel art style photo grid -->
+    <g class="pixel">
+      <!-- 3x3 photo grid -->
+      <rect x="18" y="18" width="16" height="16" fill="#4f46e5"/>
+      <rect x="38" y="18" width="16" height="16" fill="#6366f1"/>
+      <rect x="58" y="18" width="16" height="16" fill="#7c3aed"/>
+
+      <rect x="18" y="38" width="16" height="16" fill="#6366f1"/>
+      <rect x="38" y="38" width="16" height="16" fill="#7c3aed"/>
+      <rect x="58" y="38" width="16" height="16" fill="#4f46e5"/>
+
+      <rect x="18" y="58" width="16" height="16" fill="#7c3aed"/>
+      <rect x="38" y="58" width="16" height="16" fill="#4f46e5"/>
+      <rect x="58" y="58" width="16" height="16" fill="#6366f1"/>
+
+      <!-- Speed/turbo lines -->
+      <rect x="12" y="78" width="10" height="6" fill="#f59e0b" opacity="0.6"/>
+      <rect x="24" y="78" width="12" height="6" fill="#f59e0b" opacity="0.8"/>
+      <rect x="40" y="78" width="16" height="6" fill="#f59e0b"/>
+      <rect x="58" y="78" width="18" height="6" fill="#f59e0b"/>
+
+      <!-- Highlight pixels for retro glow effect -->
+      <rect x="20" y="20" width="3" height="3" fill="#ffffff" opacity="0.7"/>
+      <rect x="40" y="20" width="3" height="3" fill="#ffffff" opacity="0.7"/>
+      <rect x="60" y="20" width="3" height="3" fill="#ffffff" opacity="0.7"/>
+    </g>
+  </g>
+
+  <!-- Text -->
+  <text x="270" y="105" class="title">TurboPix</text>
+  <text x="270" y="130" class="subtitle">Blazingly fast photo gallery</text>
+</svg>

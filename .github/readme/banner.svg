@@ -54,6 +54,5 @@
   </g>
 
   <!-- Text -->
-  <text x="270" y="105" class="title">TurboPix</text>
-  <text x="270" y="130" class="subtitle">Self-hosted photo gallery</text>
+  <text x="270" y="115" class="title">TurboPix</text>
 </svg>

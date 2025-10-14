@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/RouHim/turbo-pix/main/.github/readme/banner.svg" width="600">
+  <img src="https://raw.githubusercontent.com/RouHim/turbo-pix/main/.github/readme/banner.png" width="600">
 </p>
 
 <p align="center">

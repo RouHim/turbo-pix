@@ -1,3 +1,4 @@
+use image::DynamicImage;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::Path;
@@ -82,6 +83,21 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
     }
 }
 
+/// Apply EXIF orientation transformation to an image
+/// Matches the orientation values from EXIF specification
+fn apply_orientation(img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
+    match orientation {
+        Some(2) => img.fliph(),
+        Some(3) => img.rotate180(),
+        Some(4) => img.flipv(),
+        Some(5) => img.fliph().rotate90(),
+        Some(6) => img.rotate90(),
+        Some(7) => img.fliph().rotate270(),
+        Some(8) => img.rotate270(),
+        _ => img, // 1 or None = no transformation needed
+    }
+}
+
 pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => Ok(warp::reply::json(&photo)),
@@ -110,6 +126,53 @@ pub async fn get_photo_file(
         }
     };
 
+    let file_path = Path::new(&photo.file_path);
+
+    // Check if this is a RAW file that needs conversion
+    if crate::raw_processor::is_raw_file(file_path) {
+        log::debug!(
+            "Converting RAW file to JPEG for detail view: {}",
+            photo.file_path
+        );
+
+        match crate::raw_processor::decode_raw_to_dynamic_image(file_path) {
+            Ok(img) => {
+                // Apply orientation correction
+                let img = apply_orientation(img, photo.orientation);
+
+                // Encode as JPEG with high quality
+                let mut jpeg_data = Vec::new();
+                let mut cursor = std::io::Cursor::new(&mut jpeg_data);
+
+                match img.write_to(&mut cursor, image::ImageFormat::Jpeg) {
+                    Ok(_) => {
+                        let reply =
+                            warp::reply::with_header(jpeg_data, "content-type", "image/jpeg");
+                        let reply = warp::reply::with_header(
+                            reply,
+                            "cache-control",
+                            "public, max-age=31536000",
+                        );
+                        return Ok(Box::new(reply));
+                    }
+                    Err(e) => {
+                        log::error!("Failed to encode RAW as JPEG: {}", e);
+                        return Err(reject::custom(DatabaseError {
+                            message: format!("Failed to encode RAW as JPEG: {}", e),
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to decode RAW file {}: {}", photo.file_path, e);
+                return Err(reject::custom(DatabaseError {
+                    message: format!("Failed to decode RAW file: {}", e),
+                }));
+            }
+        }
+    }
+
+    // For non-RAW files, serve directly
     match std::fs::read(&photo.file_path) {
         Ok(file_data) => {
             let content_type = photo.mime_type.unwrap_or_else(|| {

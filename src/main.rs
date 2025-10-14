@@ -15,7 +15,7 @@ mod indexer;
 mod metadata_extractor;
 mod mimetype_detector;
 mod photo_processor;
-mod raw_processor;
+pub mod raw_processor;
 mod scheduler;
 mod semantic_search;
 mod thumbnail_generator;

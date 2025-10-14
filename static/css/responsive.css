@@ -389,9 +389,6 @@
   }
 }
 
-@media (height <= 600px) {
-}
-
 @media (width >= 1400px) {
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

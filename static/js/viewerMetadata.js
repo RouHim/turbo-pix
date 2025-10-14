@@ -18,6 +18,10 @@ class ViewerMetadata {
       ? window.i18nManager.t('ui.no_location_data')
       : 'No location data';
 
+    const metadata = photo.metadata || {};
+    const camera = metadata.camera || {};
+    const location = metadata.location || {};
+
     if (this.elements.title) {
       this.elements.title.textContent =
         photo.filename || `Photo ${photo.hash_sha256.substring(0, 8)}`;
@@ -36,19 +40,17 @@ class ViewerMetadata {
     }
 
     if (this.elements.camera) {
-      const camera =
-        photo.camera_make && photo.camera_model
-          ? `${photo.camera_make} ${photo.camera_model}`
-          : unknownText;
-      this.elements.camera.textContent = camera;
+      const cameraText =
+        camera.make && camera.model ? `${camera.make} ${camera.model}` : unknownText;
+      this.elements.camera.textContent = cameraText;
     }
 
     if (this.elements.location) {
-      const location =
-        photo.latitude && photo.longitude
-          ? `${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}`
+      const locationText =
+        location.latitude && location.longitude
+          ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
           : noLocationText;
-      this.elements.location.textContent = location;
+      this.elements.location.textContent = locationText;
     }
   }
 
@@ -76,75 +78,84 @@ class ViewerMetadata {
   }
 
   updateCameraSection(photo) {
-    const hasCamera =
-      photo.camera_make || photo.camera_model || photo.lens_make || photo.lens_model;
+    const camera = photo.metadata?.camera || {};
+    const hasCamera = camera.make || camera.model || camera.lens_make || camera.lens_model;
+
     this.toggleSection('camera-section', hasCamera);
-    this.setMetaField('meta-camera-make', photo.camera_make);
-    this.setMetaField('meta-camera-model', photo.camera_model);
-    this.setMetaField('meta-lens-make', photo.lens_make);
-    this.setMetaField('meta-lens-model', photo.lens_model);
+    this.setMetaField('meta-camera-make', camera.make);
+    this.setMetaField('meta-camera-model', camera.model);
+    this.setMetaField('meta-lens-make', camera.lens_make);
+    this.setMetaField('meta-lens-model', camera.lens_model);
   }
 
   updateSettingsSection(photo) {
+    const settings = photo.metadata?.settings || {};
     const hasSettings =
-      photo.iso ||
-      photo.aperture ||
-      photo.shutter_speed ||
-      photo.focal_length ||
-      photo.exposure_mode ||
-      photo.metering_mode ||
-      photo.white_balance ||
-      photo.flash_used !== null ||
+      settings.iso ||
+      settings.aperture ||
+      settings.shutter_speed ||
+      settings.focal_length ||
+      settings.exposure_mode ||
+      settings.metering_mode ||
+      settings.white_balance ||
+      settings.flash_used !== undefined ||
       photo.orientation ||
-      photo.color_space;
+      settings.color_space;
+
     this.toggleSection('settings-section', hasSettings);
     const yesText = window.i18nManager ? window.i18nManager.t('ui.yes') : 'Yes';
     const noText = window.i18nManager ? window.i18nManager.t('ui.no') : 'No';
 
-    this.setMetaField('meta-iso', photo.iso ? `ISO ${photo.iso}` : null);
-    this.setMetaField('meta-aperture', photo.aperture ? `f/${photo.aperture.toFixed(1)}` : null);
-    this.setMetaField('meta-shutter', photo.shutter_speed);
+    this.setMetaField('meta-iso', settings.iso ? `ISO ${settings.iso}` : null);
+    this.setMetaField(
+      'meta-aperture',
+      settings.aperture ? `f/${settings.aperture.toFixed(1)}` : null
+    );
+    this.setMetaField('meta-shutter', settings.shutter_speed);
     this.setMetaField(
       'meta-focal',
-      photo.focal_length ? `${photo.focal_length.toFixed(0)} mm` : null
+      settings.focal_length ? `${settings.focal_length.toFixed(0)} mm` : null
     );
-    this.setMetaField('meta-exposure', photo.exposure_mode);
-    this.setMetaField('meta-metering', photo.metering_mode);
-    this.setMetaField('meta-wb', photo.white_balance);
+    this.setMetaField('meta-exposure', settings.exposure_mode);
+    this.setMetaField('meta-metering', settings.metering_mode);
+    this.setMetaField('meta-wb', settings.white_balance);
     this.setMetaField(
       'meta-flash',
-      photo.flash_used !== null ? (photo.flash_used ? yesText : noText) : null
+      settings.flash_used !== undefined ? (settings.flash_used ? yesText : noText) : null
     );
     this.setMetaField('meta-orientation', photo.orientation);
-    this.setMetaField('meta-colorspace', photo.color_space);
+    this.setMetaField('meta-colorspace', settings.color_space);
   }
 
   updateLocationSection(photo) {
-    const hasLocation = photo.latitude || photo.longitude || photo.location_name;
+    const location = photo.metadata?.location || {};
+    const hasLocation = location.latitude || location.longitude;
+
     this.toggleSection('location-section', hasLocation);
     this.setMetaField(
       'meta-gps',
-      photo.latitude && photo.longitude
-        ? `${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}`
+      location.latitude && location.longitude
+        ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
         : null
     );
-    this.setMetaField('meta-location-name', photo.location_name);
   }
 
   updateVideoSection(photo, isVideo) {
     this.toggleSection('video-section', isVideo);
     if (isVideo) {
+      const video = photo.metadata?.video || {};
+
       this.setMetaField(
         'meta-duration',
         photo.duration ? this.formatDuration(photo.duration) : null
       );
-      this.setMetaField('meta-video-codec', photo.video_codec);
-      this.setMetaField('meta-audio-codec', photo.audio_codec);
+      this.setMetaField('meta-video-codec', video.codec);
+      this.setMetaField('meta-audio-codec', video.audio_codec);
       this.setMetaField(
         'meta-framerate',
-        photo.frame_rate ? `${photo.frame_rate.toFixed(2)} fps` : null
+        video.frame_rate ? `${video.frame_rate.toFixed(2)} fps` : null
       );
-      this.setMetaField('meta-bitrate', photo.bitrate ? `${photo.bitrate} kbps` : null);
+      this.setMetaField('meta-bitrate', video.bitrate ? `${video.bitrate} kbps` : null);
     }
   }
 

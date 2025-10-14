@@ -1,118 +1,208 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
 
+/// Photo entity with metadata stored as JSON
+/// Breaking change: All EXIF/camera/location/video metadata moved to `metadata` JSON field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Photo {
+    // === CORE IDENTIFICATION ===
     pub hash_sha256: String,
     pub file_path: String,
     pub filename: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
+
+    // === COMPUTATIONAL (used in application logic) ===
     pub taken_at: Option<DateTime<Utc>>,
-    pub date_modified: DateTime<Utc>,
-    pub date_indexed: Option<DateTime<Utc>>,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub lens_make: Option<String>,
-    pub lens_model: Option<String>,
-    pub iso: Option<i32>,
-    pub aperture: Option<f64>,
-    pub shutter_speed: Option<String>,
-    pub focal_length: Option<f64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
-    pub color_space: Option<String>,
-    pub white_balance: Option<String>,
-    pub exposure_mode: Option<String>,
-    pub metering_mode: Option<String>,
     pub orientation: Option<i32>,
-    pub flash_used: Option<bool>,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-    pub location_name: Option<String>,
+    pub duration: Option<f64>, // Video duration in seconds
+
+    // === UI STATE ===
     pub thumbnail_path: Option<String>,
     pub has_thumbnail: Option<bool>,
     pub blurhash: Option<String>,
-    pub country: Option<String>,
-    pub keywords: Option<String>,
-    pub faces_detected: Option<String>,
-    pub objects_detected: Option<String>,
-    pub colors: Option<String>,
-    pub duration: Option<f64>,       // Video duration in seconds
-    pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
-    pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>,        // Bitrate in kbps
-    pub frame_rate: Option<f64>,     // Frame rate for videos
-    pub is_favorite: Option<bool>,   // Whether photo is marked as favorite
+    pub is_favorite: Option<bool>,
+
+    // === METADATA (JSON blob) ===
+    /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
+    /// location{latitude,longitude}, video{codec,audio_codec,bitrate,frame_rate}
+    pub metadata: serde_json::Value,
+
+    // === SYSTEM TIMESTAMPS ===
+    pub date_modified: DateTime<Utc>,
+    pub date_indexed: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl Photo {
+    // ===== METADATA ACCESSORS (for Rust code) =====
+    // Frontend reads metadata.* directly from JSON
+    // These are public API methods - not all are used internally yet
+
+    // Camera
+    #[allow(dead_code)]
+    pub fn camera_make(&self) -> Option<&str> {
+        self.metadata.get("camera")?.get("make")?.as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn camera_model(&self) -> Option<&str> {
+        self.metadata.get("camera")?.get("model")?.as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn lens_make(&self) -> Option<&str> {
+        self.metadata.get("camera")?.get("lens_make")?.as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn lens_model(&self) -> Option<&str> {
+        self.metadata.get("camera")?.get("lens_model")?.as_str()
+    }
+
+    // Settings
+    #[allow(dead_code)]
+    pub fn iso(&self) -> Option<i32> {
+        self.metadata
+            .get("settings")?
+            .get("iso")?
+            .as_i64()?
+            .try_into()
+            .ok()
+    }
+
+    #[allow(dead_code)]
+    pub fn aperture(&self) -> Option<f64> {
+        self.metadata.get("settings")?.get("aperture")?.as_f64()
+    }
+
+    #[allow(dead_code)]
+    pub fn shutter_speed(&self) -> Option<&str> {
+        self.metadata
+            .get("settings")?
+            .get("shutter_speed")?
+            .as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn focal_length(&self) -> Option<f64> {
+        self.metadata.get("settings")?.get("focal_length")?.as_f64()
+    }
+
+    #[allow(dead_code)]
+    pub fn exposure_mode(&self) -> Option<&str> {
+        self.metadata
+            .get("settings")?
+            .get("exposure_mode")?
+            .as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn metering_mode(&self) -> Option<&str> {
+        self.metadata
+            .get("settings")?
+            .get("metering_mode")?
+            .as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn white_balance(&self) -> Option<&str> {
+        self.metadata
+            .get("settings")?
+            .get("white_balance")?
+            .as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn color_space(&self) -> Option<&str> {
+        self.metadata.get("settings")?.get("color_space")?.as_str()
+    }
+
+    #[allow(dead_code)]
+    pub fn flash_used(&self) -> Option<bool> {
+        self.metadata.get("settings")?.get("flash_used")?.as_bool()
+    }
+
+    // Location
+    #[allow(dead_code)]
+    pub fn latitude(&self) -> Option<f64> {
+        self.metadata.get("location")?.get("latitude")?.as_f64()
+    }
+
+    #[allow(dead_code)]
+    pub fn longitude(&self) -> Option<f64> {
+        self.metadata.get("location")?.get("longitude")?.as_f64()
+    }
+
+    // Video
+    pub fn video_codec(&self) -> Option<&str> {
+        self.metadata.get("video")?.get("codec")?.as_str()
+    }
+
+    pub fn audio_codec(&self) -> Option<&str> {
+        self.metadata.get("video")?.get("audio_codec")?.as_str()
+    }
+
+    pub fn bitrate(&self) -> Option<i32> {
+        self.metadata
+            .get("video")?
+            .get("bitrate")?
+            .as_i64()?
+            .try_into()
+            .ok()
+    }
+
+    pub fn frame_rate(&self) -> Option<f64> {
+        self.metadata.get("video")?.get("frame_rate")?.as_f64()
+    }
+
+    // ===== DATABASE OPERATIONS =====
+
     pub fn from_row(row: &Row) -> SqlResult<Self> {
         Ok(Photo {
-            hash_sha256: row.get(0)?, // Now first column (PRIMARY KEY)
+            hash_sha256: row.get(0)?,
             file_path: row.get(1)?,
             filename: row.get(2)?,
             file_size: row.get(3)?,
             mime_type: row.get(4)?,
-            taken_at: row.get::<_, Option<String>>(5)?.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+            taken_at: row
+                .get::<_, Option<String>>(5)?
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
+            width: row.get(6)?,
+            height: row.get(7)?,
+            orientation: row.get(8)?,
+            duration: row.get(9)?,
+            thumbnail_path: row.get(10)?,
+            has_thumbnail: row.get(11)?,
+            blurhash: row.get(12)?,
+            is_favorite: row.get(13)?,
+            metadata: row
+                .get::<_, String>(14)?
+                .parse()
+                .unwrap_or_else(|_| json!({})),
+            date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(15)?)
                 .unwrap()
                 .with_timezone(&Utc),
-            date_indexed: row.get::<_, Option<String>>(7)?.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            camera_make: row.get(8)?,
-            camera_model: row.get(9)?,
-            lens_make: row.get(10)?,
-            lens_model: row.get(11)?,
-            iso: row.get(12)?,
-            aperture: row.get(13)?,
-            shutter_speed: row.get(14)?,
-            focal_length: row.get(15)?,
-            width: row.get(16)?,
-            height: row.get(17)?,
-            color_space: row.get(18)?,
-            white_balance: row.get(19)?,
-            exposure_mode: row.get(20)?,
-            metering_mode: row.get(21)?,
-            orientation: row.get(22)?,
-            flash_used: row.get(23)?,
-            latitude: row.get(24)?,
-            longitude: row.get(25)?,
-            location_name: row.get(26)?,
-            thumbnail_path: row.get(27)?, // hash_sha256 removed from index 27
-            has_thumbnail: row.get(28)?,
-            blurhash: row.get(29)?,
-            country: row.get(30)?,
-            keywords: row.get(31)?,
-            faces_detected: row.get(32)?,
-            objects_detected: row.get(33)?,
-            colors: row.get(34)?,
-            duration: row.get(35)?,
-            video_codec: row.get(36)?,
-            audio_codec: row.get(37)?,
-            bitrate: row.get(38)?,
-            frame_rate: row.get(39)?,
-            is_favorite: row.get(40)?,
+            date_indexed: row
+                .get::<_, Option<String>>(16)?
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
             created_at: {
-                let datetime_str = row.get::<_, String>(41)?;
+                let datetime_str = row.get::<_, String>(17)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                17,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -122,7 +212,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                41,
+                                17,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -131,12 +221,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(42)?;
+                let datetime_str = row.get::<_, String>(18)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                18,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -146,7 +236,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                42,
+                                18,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -160,62 +250,33 @@ impl Photo {
     pub fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         conn.execute(
-            "UPDATE photos SET
-                 file_path = ?, filename = ?, file_size = ?, mime_type = ?,
-                 taken_at = ?, file_modified = ?, date_indexed = ?,
-                 camera_make = ?, camera_model = ?, lens_make = ?, lens_model = ?,
-                 iso = ?, aperture = ?, shutter_speed = ?, focal_length = ?,
-                 width = ?, height = ?, color_space = ?, white_balance = ?,
-                 exposure_mode = ?, metering_mode = ?, orientation = ?, flash_used = ?,
-                 latitude = ?, longitude = ?, location_name = ?,
-                 thumbnail_path = ?, has_thumbnail = ?, blurhash = ?,
-                 country = ?, keywords = ?, faces_detected = ?, objects_detected = ?, colors = ?,
-                 duration = ?, video_codec = ?, audio_codec = ?, bitrate = ?, frame_rate = ?,
-                 is_favorite = ?, updated_at = ?
-              WHERE hash_sha256 = ?",
-            rusqlite::params![
+            r#"
+            UPDATE photos SET
+                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
+                taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
+                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?,
+                metadata = ?,
+                file_modified = ?, updated_at = ?
+            WHERE hash_sha256 = ?
+            "#,
+            params![
                 self.file_path,
                 self.filename,
                 self.file_size,
                 self.mime_type,
                 self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.date_modified.to_rfc3339(),
-                self.date_indexed.map(|dt| dt.to_rfc3339()),
-                self.camera_make,
-                self.camera_model,
-                self.lens_make,
-                self.lens_model,
-                self.iso,
-                self.aperture,
-                self.shutter_speed,
-                self.focal_length,
                 self.width,
                 self.height,
-                self.color_space,
-                self.white_balance,
-                self.exposure_mode,
-                self.metering_mode,
                 self.orientation,
-                self.flash_used,
-                self.latitude,
-                self.longitude,
-                self.location_name,
+                self.duration,
                 self.thumbnail_path,
                 self.has_thumbnail,
                 self.blurhash,
-                self.country,
-                self.keywords,
-                self.faces_detected,
-                self.objects_detected,
-                self.colors,
-                self.duration,
-                self.video_codec,
-                self.audio_codec,
-                self.bitrate,
-                self.frame_rate,
                 self.is_favorite.unwrap_or(false),
+                self.metadata.to_string(),
+                self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
-                self.hash_sha256
+                self.hash_sha256,
             ],
         )?;
         Ok(())
@@ -253,8 +314,6 @@ impl Photo {
         // Build ORDER BY clause
         let sort_field = match sort {
             Some("filename") | Some("name") => "filename",
-            Some("camera_make") => "camera_make",
-            Some("camera_model") => "camera_model",
             Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
             Some("date") => "taken_at",
@@ -299,24 +358,18 @@ impl Photo {
     pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 
-        let sql = r#"
-            INSERT INTO photos (
-                hash_sha256, file_path, filename, file_size, mime_type, taken_at, file_modified,
-                date_indexed, camera_make, camera_model, lens_make, lens_model,
-                iso, aperture, shutter_speed, focal_length, width, height, color_space,
-                white_balance, exposure_mode, metering_mode, orientation, flash_used,
-                latitude, longitude, location_name, thumbnail_path, has_thumbnail, blurhash,
-                country, keywords, faces_detected, objects_detected, colors,
-                duration, video_codec, audio_codec, bitrate, frame_rate,
-                is_favorite, created_at, updated_at
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
-            )
-        "#;
-
         conn.execute(
-            sql,
+            r#"
+            INSERT INTO photos (
+                hash_sha256, file_path, filename, file_size, mime_type,
+                taken_at, width, height, orientation, duration,
+                thumbnail_path, has_thumbnail, blurhash, is_favorite,
+                metadata,
+                file_modified, date_indexed, created_at, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+            )
+            "#,
             params![
                 self.hash_sha256,
                 self.file_path,
@@ -324,41 +377,17 @@ impl Photo {
                 self.file_size,
                 self.mime_type,
                 self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.date_modified.to_rfc3339(),
-                self.date_indexed.map(|dt| dt.to_rfc3339()),
-                self.camera_make,
-                self.camera_model,
-                self.lens_make,
-                self.lens_model,
-                self.iso,
-                self.aperture,
-                self.shutter_speed,
-                self.focal_length,
                 self.width,
                 self.height,
-                self.color_space,
-                self.white_balance,
-                self.exposure_mode,
-                self.metering_mode,
                 self.orientation,
-                self.flash_used,
-                self.latitude,
-                self.longitude,
-                self.location_name,
+                self.duration,
                 self.thumbnail_path,
                 self.has_thumbnail,
                 self.blurhash,
-                self.country,
-                self.keywords,
-                self.faces_detected,
-                self.objects_detected,
-                self.colors,
-                self.duration,
-                self.video_codec,
-                self.audio_codec,
-                self.bitrate,
-                self.frame_rate,
                 self.is_favorite.unwrap_or(false),
+                self.metadata.to_string(),
+                self.date_modified.to_rfc3339(),
+                self.date_indexed.map(|dt| dt.to_rfc3339()),
                 Utc::now().to_rfc3339(),
                 Utc::now().to_rfc3339(),
             ],
@@ -394,9 +423,8 @@ impl Photo {
                     }
                     _ => {
                         // Unknown type, fall back to general search
-                        where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                        where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                         let pattern = format!("%{}%", q);
-                        params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern));
@@ -413,19 +441,17 @@ impl Photo {
                     }
                     _ => {
                         // Unknown value, fall back to general search
-                        where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                        where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                         let pattern = format!("%{}%", q);
-                        params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern.clone()));
                         params.push(Box::new(pattern));
                     }
                 }
             } else {
-                // General search across multiple fields
-                where_clause.push_str(" AND (filename LIKE ? OR keywords LIKE ? OR camera_make LIKE ? OR camera_model LIKE ?)");
+                // General search across multiple fields (filename + JSON metadata)
+                where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                 let pattern = format!("%{}%", q);
-                params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
@@ -451,8 +477,6 @@ impl Photo {
         // Get the actual photos
         let sort_field = match sort {
             Some("filename") | Some("name") => "filename",
-            Some("camera_make") => "camera_make",
-            Some("camera_model") => "camera_model",
             Some("file_size") | Some("size") => "file_size",
             Some("created_at") => "created_at",
             Some("date") => "taken_at",
@@ -528,6 +552,86 @@ impl Photo {
 
 impl From<crate::indexer::ProcessedPhoto> for Photo {
     fn from(processed: crate::indexer::ProcessedPhoto) -> Self {
+        // Build metadata JSON from ProcessedPhoto fields
+        let mut camera = serde_json::Map::new();
+        if let Some(make) = processed.camera_make {
+            camera.insert("make".to_string(), json!(make));
+        }
+        if let Some(model) = processed.camera_model {
+            camera.insert("model".to_string(), json!(model));
+        }
+        if let Some(lens_make) = processed.lens_make {
+            camera.insert("lens_make".to_string(), json!(lens_make));
+        }
+        if let Some(lens_model) = processed.lens_model {
+            camera.insert("lens_model".to_string(), json!(lens_model));
+        }
+
+        let mut settings = serde_json::Map::new();
+        if let Some(iso) = processed.iso {
+            settings.insert("iso".to_string(), json!(iso));
+        }
+        if let Some(aperture) = processed.aperture {
+            settings.insert("aperture".to_string(), json!(aperture));
+        }
+        if let Some(shutter_speed) = processed.shutter_speed {
+            settings.insert("shutter_speed".to_string(), json!(shutter_speed));
+        }
+        if let Some(focal_length) = processed.focal_length {
+            settings.insert("focal_length".to_string(), json!(focal_length));
+        }
+        if let Some(exposure_mode) = processed.exposure_mode {
+            settings.insert("exposure_mode".to_string(), json!(exposure_mode));
+        }
+        if let Some(metering_mode) = processed.metering_mode {
+            settings.insert("metering_mode".to_string(), json!(metering_mode));
+        }
+        if let Some(white_balance) = processed.white_balance {
+            settings.insert("white_balance".to_string(), json!(white_balance));
+        }
+        if let Some(color_space) = processed.color_space {
+            settings.insert("color_space".to_string(), json!(color_space));
+        }
+        if let Some(flash_used) = processed.flash_used {
+            settings.insert("flash_used".to_string(), json!(flash_used));
+        }
+
+        let mut location = serde_json::Map::new();
+        if let Some(lat) = processed.latitude {
+            location.insert("latitude".to_string(), json!(lat));
+        }
+        if let Some(lng) = processed.longitude {
+            location.insert("longitude".to_string(), json!(lng));
+        }
+
+        let mut video = serde_json::Map::new();
+        if let Some(codec) = processed.video_codec {
+            video.insert("codec".to_string(), json!(codec));
+        }
+        if let Some(audio_codec) = processed.audio_codec {
+            video.insert("audio_codec".to_string(), json!(audio_codec));
+        }
+        if let Some(bitrate) = processed.bitrate {
+            video.insert("bitrate".to_string(), json!(bitrate));
+        }
+        if let Some(frame_rate) = processed.frame_rate {
+            video.insert("frame_rate".to_string(), json!(frame_rate));
+        }
+
+        let mut metadata = serde_json::Map::new();
+        if !camera.is_empty() {
+            metadata.insert("camera".to_string(), json!(camera));
+        }
+        if !settings.is_empty() {
+            metadata.insert("settings".to_string(), json!(settings));
+        }
+        if !location.is_empty() {
+            metadata.insert("location".to_string(), json!(location));
+        }
+        if !video.is_empty() {
+            metadata.insert("video".to_string(), json!(video));
+        }
+
         Photo {
             hash_sha256: processed
                 .hash_sha256
@@ -537,41 +641,17 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             file_size: processed.file_size,
             mime_type: processed.mime_type,
             taken_at: processed.taken_at,
-            date_modified: processed.date_modified,
-            date_indexed: Some(Utc::now()),
-            camera_make: processed.camera_make,
-            camera_model: processed.camera_model,
-            lens_make: processed.lens_make,
-            lens_model: processed.lens_model,
-            iso: processed.iso,
-            aperture: processed.aperture,
-            shutter_speed: processed.shutter_speed,
-            focal_length: processed.focal_length,
             width: processed.width,
             height: processed.height,
-            color_space: processed.color_space,
-            white_balance: processed.white_balance,
-            exposure_mode: processed.exposure_mode,
-            metering_mode: processed.metering_mode,
             orientation: processed.orientation,
-            flash_used: processed.flash_used,
-            latitude: processed.latitude,
-            longitude: processed.longitude,
-            location_name: None,
+            duration: processed.duration,
             thumbnail_path: None,
             has_thumbnail: Some(false),
             blurhash: processed.blurhash,
-            country: None,
-            keywords: None,
-            faces_detected: None,
-            objects_detected: None,
-            colors: None,
-            duration: processed.duration,
-            video_codec: processed.video_codec,
-            audio_codec: processed.audio_codec,
-            bitrate: processed.bitrate,
-            frame_rate: processed.frame_rate,
             is_favorite: None,
+            metadata: json!(metadata),
+            date_modified: processed.date_modified,
+            date_indexed: Some(Utc::now()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -613,41 +693,17 @@ mod tests {
             file_size: 1024,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: Some(taken_at),
-            date_modified: Utc::now(),
-            date_indexed: Some(Utc::now()),
-            camera_make: None,
-            camera_model: None,
-            lens_make: None,
-            lens_model: None,
-            iso: None,
-            aperture: None,
-            shutter_speed: None,
-            focal_length: None,
             width: Some(1920),
             height: Some(1080),
-            color_space: None,
-            white_balance: None,
-            exposure_mode: None,
-            metering_mode: None,
             orientation: None,
-            flash_used: None,
-            latitude: None,
-            longitude: None,
-            location_name: None,
+            duration: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
             blurhash: None,
-            country: None,
-            keywords: None,
-            faces_detected: None,
-            objects_detected: None,
-            colors: None,
-            duration: None,
-            video_codec: None,
-            audio_codec: None,
-            bitrate: None,
-            frame_rate: None,
             is_favorite: None,
+            metadata: json!({}), // Empty metadata for tests
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

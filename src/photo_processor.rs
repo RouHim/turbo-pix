@@ -99,7 +99,6 @@ impl PhotoProcessor {
     pub fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
         log::info!("Processing file: {}", photo_file.path.display());
 
-        log::info!("\t* Computing metadata...");
         let path = &photo_file.path;
         let filename = path.file_name()?.to_string_lossy().to_string();
         let file_path = path.to_string_lossy().to_string();

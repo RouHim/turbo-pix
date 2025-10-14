@@ -7,32 +7,43 @@ use std::path::Path;
 
 use crate::mimetype_detector;
 
+/// Metadata extracted from EXIF/video files
+/// This is the raw extraction layer - will be transformed into JSON for storage
 #[derive(Debug, Default)]
 pub struct PhotoMetadata {
+    // Computational fields (used in logic)
     pub taken_at: Option<DateTime<Utc>>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub orientation: Option<i32>,
+    pub duration: Option<f64>, // Video duration in seconds
+
+    // Camera metadata (stored in JSON)
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
     pub lens_make: Option<String>,
     pub lens_model: Option<String>,
+
+    // Settings metadata (stored in JSON)
     pub iso: Option<i32>,
     pub aperture: Option<f64>,
     pub shutter_speed: Option<String>,
     pub focal_length: Option<f64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
     pub color_space: Option<String>,
     pub white_balance: Option<String>,
     pub exposure_mode: Option<String>,
     pub metering_mode: Option<String>,
-    pub orientation: Option<i32>,
     pub flash_used: Option<bool>,
+
+    // Location metadata (stored in JSON)
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
-    pub duration: Option<f64>,       // Video duration in seconds
-    pub video_codec: Option<String>, // Video codec (e.g., "h264", "h265")
-    pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
-    pub bitrate: Option<i32>,        // Bitrate in kbps
-    pub frame_rate: Option<f64>,     // Frame rate for videos
+
+    // Video metadata (stored in JSON)
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub bitrate: Option<i32>,
+    pub frame_rate: Option<f64>,
 }
 
 pub struct MetadataExtractor;

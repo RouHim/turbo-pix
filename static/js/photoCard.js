@@ -8,7 +8,7 @@ class PhotoCard {
     const card = utils.createElement('div', 'photo-card');
     card.dataset.photoId = this.photo.hash_sha256;
 
-    const isVideo = this.photo.video_codec != null;
+    const isVideo = this.photo.metadata?.video?.codec != null;
 
     const imageContainer = utils.createElement('div', 'photo-card-image-container');
 
@@ -132,8 +132,9 @@ class PhotoCard {
       parts.push(date.toLocaleDateString());
     }
 
-    if (this.photo.camera_make && this.photo.camera_model) {
-      parts.push(`${this.photo.camera_make} ${this.photo.camera_model}`);
+    const camera = this.photo.metadata?.camera || {};
+    if (camera.make && camera.model) {
+      parts.push(`${camera.make} ${camera.model}`);
     }
 
     if (this.photo.file_size) {

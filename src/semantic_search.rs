@@ -145,8 +145,6 @@ impl SemanticSearchEngine {
             return Ok(());
         }
 
-        log::info!("\t* Computing semantic vector");
-
         let model_read = self
             .model
             .read()

@@ -3,47 +3,32 @@ use rusqlite::{Connection, Result as SqlResult};
 // Schema definitions
 pub const PHOTOS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS photos (
+    -- Core identification
     hash_sha256 TEXT PRIMARY KEY NOT NULL CHECK(length(hash_sha256) = 64),
     file_path TEXT NOT NULL UNIQUE,
     filename TEXT NOT NULL,
     file_size INTEGER NOT NULL,
     mime_type TEXT,
+
+    -- Computational fields (used in application logic)
     taken_at DATETIME,
-    file_modified DATETIME NOT NULL,
-    date_indexed DATETIME,
-    camera_make TEXT,
-    camera_model TEXT,
-    lens_make TEXT,
-    lens_model TEXT,
-    iso INTEGER,
-    aperture REAL,
-    shutter_speed TEXT,
-    focal_length REAL,
     width INTEGER,
     height INTEGER,
-    color_space TEXT,
-    white_balance TEXT,
-    exposure_mode TEXT,
-    metering_mode TEXT,
     orientation INTEGER,
-    flash_used BOOLEAN,
-    latitude REAL,
-    longitude REAL,
-    location_name TEXT,
+    duration REAL,
+
+    -- UI state
     thumbnail_path TEXT,
-    has_thumbnail BOOLEAN,
-    blurhash TEXT, -- BlurHash string for progressive image loading
-    country TEXT,
-    keywords TEXT,
-    faces_detected TEXT,
-    objects_detected TEXT,
-    colors TEXT,
-    duration REAL, -- Video duration in seconds
-    video_codec TEXT, -- Video codec (e.g., "h264", "h265")
-    audio_codec TEXT, -- Audio codec (e.g., "aac", "mp3")
-    bitrate INTEGER, -- Bitrate in kbps
-    frame_rate REAL, -- Frame rate for videos
+    has_thumbnail BOOLEAN DEFAULT FALSE,
+    blurhash TEXT,
     is_favorite BOOLEAN DEFAULT FALSE,
+
+    -- Metadata (JSON blob for all EXIF/camera/location/video metadata)
+    metadata TEXT NOT NULL DEFAULT '{}',
+
+    -- System timestamps
+    file_modified DATETIME NOT NULL,
+    date_indexed DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) WITHOUT ROWID;
@@ -65,6 +50,9 @@ pub const IMAGE_SEMANTIC_VECTORS_TABLE: &str =
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
+    "CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at);",
+    "CREATE INDEX IF NOT EXISTS idx_photos_mime_type ON photos(mime_type);",
+    "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
     IMAGE_SEMANTIC_VECTORS_TABLE,
     SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
 ];

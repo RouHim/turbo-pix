@@ -27,9 +27,12 @@ use candle_transformers::models::clip;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use zerocopy::IntoBytes;
+
+use crate::raw_processor;
 
 // Model configuration
 const CLIP_MODEL: &str = "openai/clip-vit-base-patch32";
@@ -253,13 +256,22 @@ fn encode_text(
 
 /// Encodes an image into a normalized 512-dimensional semantic vector
 fn encode_image(model: &clip::ClipModel, image_path: &str, device: &Device) -> Result<Tensor> {
-    let img = image::open(image_path)?.resize_exact(
+    let path = Path::new(image_path);
+
+    let img = if raw_processor::is_raw_file(path) {
+        raw_processor::decode_raw_to_dynamic_image(path)
+            .context("Failed to decode RAW file for CLIP encoding")?
+    } else {
+        image::open(path)?
+    };
+
+    let resized = img.resize_exact(
         CLIP_IMAGE_SIZE,
         CLIP_IMAGE_SIZE,
         image::imageops::FilterType::Triangle,
     );
 
-    let img_rgb = img.to_rgb8();
+    let img_rgb = resized.to_rgb8();
 
     let data: Vec<f32> = img_rgb
         .pixels()
@@ -390,6 +402,19 @@ mod tests {
         for (path, score) in &results {
             println!("  {}: {:.1}", path, score);
         }
+    }
+
+    #[test]
+    fn test_raw_image_embedding() {
+        let db_pool = create_test_db_pool().unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+
+        let result = engine.compute_semantic_vector("test-data/IMG_9899.CR2");
+        assert!(
+            result.is_ok(),
+            "RAW image should generate CLIP embedding: {:?}",
+            result.err()
+        );
     }
 
     #[test]

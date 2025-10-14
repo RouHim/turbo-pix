@@ -108,9 +108,12 @@ impl PhotoProcessor {
         let hash_sha256 = self.calculate_file_hash(path).ok();
         let blurhash = self.generate_blurhash(path);
 
-        self.semantic_search
-            .compute_semantic_vector(&file_path)
-            .ok();
+        if let Err(e) = self.semantic_search.compute_semantic_vector(&file_path) {
+            error!(
+                "Failed to generate semantic vector for {}: {}",
+                file_path, e
+            );
+        }
 
         Some(ProcessedPhoto {
             file_path: file_path.clone(),

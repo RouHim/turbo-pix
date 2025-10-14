@@ -8,6 +8,7 @@ use tokio::fs;
 
 use crate::config::Config;
 use crate::db::{DbPool, Photo};
+use crate::raw_processor;
 use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailFormat, ThumbnailSize};
 use crate::video_processor;
 
@@ -99,7 +100,15 @@ impl ThumbnailGenerator {
         let thumbnail_data = if self.is_video_file(photo) {
             self.generate_video_thumbnail(&photo_path, size, photo.orientation, format)
                 .await?
+        } else if raw_processor::is_raw_file(&photo_path) {
+            // Handle RAW files
+            let img = raw_processor::decode_raw_to_dynamic_image(&photo_path)
+                .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
+            let img = self.apply_orientation(img, photo.orientation);
+            let thumbnail = self.resize_image(img, size);
+            self.encode_image(thumbnail, format)?
         } else {
+            // Standard image formats
             let img = image::open(&photo_path)?;
             let img = self.apply_orientation(img, photo.orientation);
             let thumbnail = self.resize_image(img, size);

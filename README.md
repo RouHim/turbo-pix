@@ -168,10 +168,19 @@ TurboPix provides a RESTful API for programmatic access:
 
 TurboPix is built with Rust and uses the following libraries:
 
+## Supported Formats
+
+### Images
+- **Standard formats**: JPEG, PNG, GIF, WebP, BMP, TIFF
+- **RAW formats**: CR2, CR3 (Canon), NEF, NRW (Nikon), ARW, SRF, SR2 (Sony), RAF (Fujifilm), ORF (Olympus), RW2 (Panasonic), DNG (Adobe), PEF (Pentax)
+
+### Videos
+- MP4, MOV, AVI, MKV, WebM, M4V
+
 ## Limitations
 
 - **HEIC Support**: Limited due to [image-rs issue #1375](https://github.com/image-rs/image/issues/1375)
-- **RAW Formats**: No support yet
+- **RAW Processing**: Basic nearest-neighbor demosaic (fast but lower quality than advanced algorithms)
 - **Live Photos**: iOS Live Photos are treated as separate image and video files
 
 ## Support

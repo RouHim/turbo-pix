@@ -10,6 +10,7 @@ use crate::db::DbPool;
 use crate::file_scanner::{FileScanner, PhotoFile};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
+use crate::raw_processor;
 use crate::semantic_search::SemanticSearchEngine;
 
 #[derive(Debug)]
@@ -159,8 +160,12 @@ impl PhotoProcessor {
             return None;
         }
 
-        // Load and resize image to small dimensions for blurhash
-        let img = image::open(path).ok()?;
+        // Load image (RAW or standard format)
+        let img = if raw_processor::is_raw_file(path) {
+            raw_processor::decode_raw_to_dynamic_image(path).ok()?
+        } else {
+            image::open(path).ok()?
+        };
         let resized = img.thumbnail(32, 32); // Small size for blurhash generation
 
         // Convert to RGBA8 (fast-blurhash expects u32 pixels)

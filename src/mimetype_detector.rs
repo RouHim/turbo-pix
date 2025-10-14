@@ -19,7 +19,32 @@ fn from_extension(ext: &str) -> Option<MimeType> {
         "bmp" => Some(MimeType::new("image", "bmp")),
         "tiff" | "tif" => Some(MimeType::new("image", "tiff")),
         "heic" => Some(MimeType::new("image", "heic")),
-        "raw" => Some(MimeType::new("image", "x-raw")),
+
+        // RAW formats - Canon
+        "cr2" => Some(MimeType::new("image", "x-canon-cr2")),
+        "cr3" => Some(MimeType::new("image", "x-canon-cr3")),
+
+        // RAW formats - Nikon
+        "nef" => Some(MimeType::new("image", "x-nikon-nef")),
+        "nrw" => Some(MimeType::new("image", "x-nikon-nrw")),
+
+        // RAW formats - Sony
+        "arw" => Some(MimeType::new("image", "x-sony-arw")),
+        "srf" => Some(MimeType::new("image", "x-sony-srf")),
+        "sr2" => Some(MimeType::new("image", "x-sony-sr2")),
+
+        // RAW formats - Fujifilm
+        "raf" => Some(MimeType::new("image", "x-fuji-raf")),
+
+        // RAW formats - Olympus
+        "orf" => Some(MimeType::new("image", "x-olympus-orf")),
+
+        // RAW formats - Panasonic
+        "rw2" => Some(MimeType::new("image", "x-panasonic-rw2")),
+
+        // RAW formats - Adobe & Others
+        "dng" => Some(MimeType::new("image", "x-adobe-dng")),
+        "pef" => Some(MimeType::new("image", "x-pentax-pef")),
 
         // Videos
         "mp4" => Some(MimeType::new("video", "mp4")),
@@ -101,6 +126,49 @@ mod tests {
             from_path(&PathBuf::from("video.webm")).unwrap().to_string(),
             "video/webm"
         );
+    }
+
+    #[test]
+    fn test_raw_types() {
+        // Canon
+        assert_eq!(
+            from_path(&PathBuf::from("photo.cr2")).unwrap().to_string(),
+            "image/x-canon-cr2"
+        );
+        assert_eq!(
+            from_path(&PathBuf::from("photo.CR2")).unwrap().to_string(),
+            "image/x-canon-cr2"
+        );
+        assert_eq!(
+            from_path(&PathBuf::from("photo.cr3")).unwrap().to_string(),
+            "image/x-canon-cr3"
+        );
+
+        // Nikon
+        assert_eq!(
+            from_path(&PathBuf::from("photo.nef")).unwrap().to_string(),
+            "image/x-nikon-nef"
+        );
+        assert_eq!(
+            from_path(&PathBuf::from("photo.NEF")).unwrap().to_string(),
+            "image/x-nikon-nef"
+        );
+
+        // Sony
+        assert_eq!(
+            from_path(&PathBuf::from("photo.arw")).unwrap().to_string(),
+            "image/x-sony-arw"
+        );
+
+        // Adobe DNG
+        assert_eq!(
+            from_path(&PathBuf::from("photo.dng")).unwrap().to_string(),
+            "image/x-adobe-dng"
+        );
+
+        // Ensure all are image type
+        let raw_file = from_path(&PathBuf::from("photo.cr2")).unwrap();
+        assert_eq!(raw_file.type_(), "image");
     }
 
     #[test]

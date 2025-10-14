@@ -308,8 +308,6 @@ class PhotoViewer {
   async displayPhoto(photo) {
     this.controls.reset();
 
-    this.metadata.hideMetadata();
-
     // Hide current image/video immediately (no fade) and show viewer loading indicator
     if (this.elements.image) {
       this.elements.image.classList.remove('loaded');
@@ -514,15 +512,8 @@ class PhotoViewer {
   }
 
   toggleInfo() {
-    // On mobile (width <= 768px), toggle the sidebar
-    // On desktop, toggle the metadata details
-    const isMobile = window.innerWidth <= 768;
-
-    if (isMobile) {
-      this.toggleSidebar();
-    } else {
-      this.metadata.toggleMetadata();
-    }
+    // Toggle the sidebar on all devices
+    this.toggleSidebar();
   }
 
   showError(message) {

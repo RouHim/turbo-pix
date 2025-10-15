@@ -39,6 +39,13 @@ loading. Each night, TurboPix checks for new photos and updates the database acc
 
 ## Run the application
 
+> [!NOTE]  
+> On the first run, the application may take some time to scan and index your photos, especially if you have a large
+> collection.
+> Subsequent runs will be much faster as only new or modified photos are processed.
+> Also note that on the first run, the AI models for semantic search will be downloaded automatically into the data
+> directory (~580MB).
+
 ### Docker
 
 Docker Example:
@@ -171,10 +178,13 @@ TurboPix is built with Rust and uses the following libraries:
 ## Supported Formats
 
 ### Images
+
 - **Standard formats**: JPEG, PNG, GIF, WebP, BMP, TIFF
-- **RAW formats**: CR2, CR3 (Canon), NEF, NRW (Nikon), ARW, SRF, SR2 (Sony), RAF (Fujifilm), ORF (Olympus), RW2 (Panasonic), DNG (Adobe), PEF (Pentax)
+- **RAW formats**: CR2, CR3 (Canon), NEF, NRW (Nikon), ARW, SRF, SR2 (Sony), RAF (Fujifilm), ORF (Olympus), RW2 (
+  Panasonic), DNG (Adobe), PEF (Pentax)
 
 ### Videos
+
 - MP4, MOV, AVI, MKV, WebM, M4V
 
 ## Limitations

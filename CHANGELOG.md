@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/RouHim/turbo-pix/compare/1.3.2...1.3.3) (2025-10-15)
+
+
+### Bug Fixes
+
+* update paths to use production directory for binary builds ([a5e75b5](https://github.com/RouHim/turbo-pix/commit/a5e75b5a50ac1efc0725555222d4d44839b5bfbf))
+
 ## [1.3.2](https://github.com/RouHim/turbo-pix/compare/1.3.1...1.3.2) (2025-10-15)
 
 ## [1.3.1](https://github.com/RouHim/turbo-pix/compare/1.3.0...1.3.1) (2025-10-15)

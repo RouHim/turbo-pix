@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/RouHim/turbo-pix/compare/1.3.0...1.3.1) (2025-10-15)
+
+
+### Bug Fixes
+
+* use native architecture runners for ARM64 binary builds ([65ed209](https://github.com/RouHim/turbo-pix/commit/65ed20998837404487efe3ad693848bd3ab2bac2))
+
 # [1.3.0](https://github.com/RouHim/turbo-pix/compare/1.2.0...1.3.0) (2025-10-15)
 
 

@@ -4,14 +4,18 @@
   "description": "Fast photo indexer and viewer",
   "type": "module",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RouHim/turbo-pix.git"
+  },
   "scripts": {
-    "format": "prettier --write static/**/*.{js,css}",
-    "format:check": "prettier --check static/**/*.{js,css}",
+    "format": "prettier --write \"static/**/*.{js,css}\"",
+    "format:check": "prettier --check \"static/**/*.{js,css}\"",
     "lint": "npm run lint:js && npm run lint:css",
-    "lint:js": "eslint --no-warn-ignored static/**/*.js",
-    "lint:js:fix": "eslint --no-warn-ignored --fix static/**/*.js",
-    "lint:css": "stylelint static/**/*.css",
-    "lint:css:fix": "stylelint --fix static/**/*.css",
+    "lint:js": "eslint --no-warn-ignored \"static/**/*.js\"",
+    "lint:js:fix": "eslint --no-warn-ignored --fix \"static/**/*.js\"",
+    "lint:css": "stylelint \"static/**/*.css\"",
+    "lint:css:fix": "stylelint --fix \"static/**/*.css\"",
     "lint:fix": "npm run lint:js:fix && npm run lint:css:fix && npm run format",
     "prepare": "simple-git-hooks"
   },

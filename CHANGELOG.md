@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/RouHim/turbo-pix/compare/1.0.0...1.1.0) (2025-10-15)
+
+
+### Features
+
+* add multi-architecture support for container builds and update README for project clarity ([dd57858](https://github.com/RouHim/turbo-pix/commit/dd57858fdde9b8c5f39c17af09cb475f1450295f))
+
 # 1.0.0 (2025-10-15)
 
 

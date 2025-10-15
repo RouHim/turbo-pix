@@ -36,6 +36,14 @@
   z-index: 1;
 }
 
+.photo-card-image-container picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .photo-card-image {
   position: absolute;
   inset: 0;
@@ -447,7 +455,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   padding-right: var(--space-2);
 }
 
@@ -463,8 +471,6 @@
 }
 
 .photo-meta-full {
-  flex: 1;
-  overflow: auto hidden;
   margin-top: var(--space-2);
   padding-right: var(--space-2);
   display: block;

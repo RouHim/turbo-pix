@@ -389,20 +389,10 @@
   }
 }
 
-@media (height <= 600px) {
-  .photo-card-image {
-    height: 160px;
-  }
-}
-
 @media (width >= 1400px) {
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: var(--space-8);
-  }
-
-  .photo-card-image {
-    height: 240px;
   }
 }
 

@@ -69,8 +69,10 @@ impl FileScanner {
 
     fn is_supported_file(path: &Path) -> bool {
         let supported_extensions = [
-            "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "mp4", "mov", "avi", "mkv", "webm",
-            "m4v",
+            // Standard image formats
+            "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", // Video formats
+            "mp4", "mov", "avi", "mkv", "webm", "m4v", // RAW formats
+            "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "dng", "pef",
         ];
 
         path.extension()

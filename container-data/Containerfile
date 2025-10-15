@@ -55,7 +55,7 @@ RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     find /root/.cargo/registry/src -name "sqlite-vec.c" -exec sed -i '/^typedef u_int8_t uint8_t;$/d; /^typedef u_int16_t uint16_t;$/d; /^typedef u_int64_t uint64_t;$/d' {} \;
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
-    cargo build --release --target ${RUST_TARGET}
+    cargo build --profile production --target ${RUST_TARGET}
 
 # # # # # # # # # # # # # # # # # # # #
 # Run image

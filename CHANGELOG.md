@@ -1,3 +1,16 @@
+# [1.3.0](https://github.com/RouHim/turbo-pix/compare/1.2.0...1.3.0) (2025-10-15)
+
+
+### Bug Fixes
+
+* use native ARM64 runners for container builds ([e5f0d30](https://github.com/RouHim/turbo-pix/commit/e5f0d30435c767ffe1cc89bf3bcfab1c5e27ff90))
+* use platform-agnostic C types for ARM64 compatibility ([2ee82f4](https://github.com/RouHim/turbo-pix/commit/2ee82f4898040db6098ac05def210cc0b9e439a3))
+
+
+### Features
+
+* add ESC key to reset search field ([dc33435](https://github.com/RouHim/turbo-pix/commit/dc3343538d437dd054eb94e08bce00ee48810185))
+
 # [1.2.0](https://github.com/RouHim/turbo-pix/compare/1.1.0...1.2.0) (2025-10-15)
 
 

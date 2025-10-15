@@ -1,3 +1,15 @@
+# [1.2.0](https://github.com/RouHim/turbo-pix/compare/1.1.0...1.2.0) (2025-10-15)
+
+
+### Bug Fixes
+
+* resolve semantic-release configuration issues ([cbd9dbc](https://github.com/RouHim/turbo-pix/commit/cbd9dbc9ac1edfdfc63a2e83039188e4f463bdb7))
+
+
+### Features
+
+* add semantic-release configuration for automated versioning and changelog generation ([76df787](https://github.com/RouHim/turbo-pix/commit/76df787fad7e7ad205c00208aa0488bee861f887))
+
 # 1.0.0 (2025-10-15)
 
 

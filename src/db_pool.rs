@@ -19,9 +19,9 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
             *const (),
             unsafe extern "C" fn(
                 *mut rusqlite::ffi::sqlite3,
-                *mut *mut i8,
+                *mut *mut std::os::raw::c_char,
                 *const rusqlite::ffi::sqlite3_api_routines,
-            ) -> i32,
+            ) -> std::os::raw::c_int,
         >(sqlite3_vec_init as *const ())));
     }
 
@@ -123,9 +123,9 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
             *const (),
             unsafe extern "C" fn(
                 *mut rusqlite::ffi::sqlite3,
-                *mut *mut i8,
+                *mut *mut std::os::raw::c_char,
                 *const rusqlite::ffi::sqlite3_api_routines,
-            ) -> i32,
+            ) -> std::os::raw::c_int,
         >(sqlite3_vec_init as *const ())));
     }
 

@@ -33,7 +33,7 @@ class Search {
         }, 300)
       );
 
-      // Enter key search
+      // Enter key search, ESC key to reset
       utils.on(this.searchInput, 'keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -41,6 +41,10 @@ class Search {
           if (query) {
             this.performSearch(query, true);
           }
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          this.clearSearch();
+          this.hideSearchSuggestions();
         }
       });
 

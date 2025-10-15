@@ -203,6 +203,15 @@ class TurboPixApp {
             window.search.performSearch(searchInput.value);
           }
         });
+
+        utils.on(searchInput, 'keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            window.search.clearSearch();
+            const mainSearchInput = utils.$('#search-input');
+            if (mainSearchInput) mainSearchInput.value = '';
+          }
+        });
       }
     }
 

@@ -248,6 +248,11 @@ class PhotoViewer {
       document.body.style.overflow = 'hidden';
     }
 
+    // Ensure sidebar is hidden on open
+    if (this.elements.sidebar) {
+      this.elements.sidebar.classList.remove('show');
+    }
+
     // Load and display photo
     await this.displayPhoto(photo);
     this.updateNavigation();
@@ -266,6 +271,11 @@ class PhotoViewer {
     if (this.elements.viewer) {
       this.elements.viewer.classList.remove('active', 'fade-in');
       document.body.style.overflow = '';
+    }
+
+    // Hide sidebar when closing viewer
+    if (this.elements.sidebar) {
+      this.elements.sidebar.classList.remove('show');
     }
 
     // Stop any playing video

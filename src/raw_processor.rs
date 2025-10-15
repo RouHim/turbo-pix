@@ -262,59 +262,6 @@ fn simple_demosaic_16bit(
     Ok(rgb_data)
 }
 
-/// Simple nearest-neighbor demosaic algorithm (DEPRECATED - use simple_demosaic_16bit)
-/// This is a basic implementation that's fast but produces lower quality than advanced algorithms
-#[allow(clippy::needless_range_loop)]
-#[allow(dead_code)]
-fn simple_demosaic(
-    data: &[u16],
-    width: usize,
-    height: usize,
-    cfa: bayer::CFA,
-) -> Result<Vec<u8>, RawError> {
-    let mut rgb_data = vec![0u8; width * height * 3];
-
-    // Helper to get pixel value safely
-    let get_pixel = |x: usize, y: usize| -> u8 {
-        if x < width && y < height {
-            (data[y * width + x] >> 8) as u8
-        } else {
-            0
-        }
-    };
-
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y * width + x;
-            let pixel = get_pixel(x, y);
-
-            // Determine RGB values based on CFA pattern and position
-            // Using simple replication for missing channels (nearest neighbor)
-            let (r, g, b) = match cfa {
-                bayer::CFA::RGGB => match (y % 2, x % 2) {
-                    (0, 0) => (pixel, get_pixel(x + 1, y), get_pixel(x, y + 1)), // R pixel
-                    (0, 1) => (get_pixel(x.wrapping_sub(1), y), pixel, get_pixel(x, y + 1)), // G pixel (R row)
-                    (1, 0) => (get_pixel(x, y.wrapping_sub(1)), pixel, get_pixel(x + 1, y)), // G pixel (B row)
-                    (1, 1) => (
-                        get_pixel(x, y.wrapping_sub(1)),
-                        get_pixel(x.wrapping_sub(1), y),
-                        pixel,
-                    ), // B pixel
-                    _ => unreachable!(),
-                },
-                _ => (pixel, pixel, pixel), // Fallback for other CFA patterns
-            };
-
-            let out_idx = idx * 3;
-            rgb_data[out_idx] = r;
-            rgb_data[out_idx + 1] = g;
-            rgb_data[out_idx + 2] = b;
-        }
-    }
-
-    Ok(rgb_data)
-}
-
 /// Parse CFA pattern from rawloader format to bayer format
 fn parse_cfa_from_rawloader(cfa: &rawloader::CFA) -> Result<bayer::CFA, RawError> {
     // Try to get the pattern name from the CFA

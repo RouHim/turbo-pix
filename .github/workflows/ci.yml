@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # allow manual execution
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
 
     steps:
@@ -54,7 +54,7 @@ jobs:
 
   create-release:
     name: Create release
-    needs: test
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -148,7 +148,7 @@ jobs:
 
   build-container:
     runs-on: ${{ matrix.runner }}
-    needs: test
+    needs: check
     strategy:
       matrix:
         include:

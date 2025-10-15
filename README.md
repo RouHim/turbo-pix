@@ -35,6 +35,7 @@ loading. Each night, TurboPix checks for new photos and updates the database acc
 - **Favorites**: Mark photos to find them later
 - **Mobile Support**: Works on phones and tablets
 - **Self-Hosted Container Support**: Runs on your own computer or as a container, no cloud services
+- **RAW Support**: Supports various RAW image formats
 - **Speedy**: Written in Rust for performance
 
 ## Run the application
@@ -54,7 +55,6 @@ Docker Example:
 docker run -p 18473:18473 \
         -v /path/to/pictures:/photos:ro \
         -v ./data:/data \
-        -e TURBO_PIX_PHOTO_PATHS=/photos \
         rouhim/turbo-pix
 ```
 
@@ -65,13 +65,10 @@ services:
   turbo-pix:
     image: rouhim/turbo-pix
     volumes:
-      - /path/to/pictures:/photos:ro  # mount read only
+      - /path/to/pictures:/photos:ro  # could be mounted read only
       - ./data:/data
     ports:
       - "18473:18473"
-    environment:
-      TURBO_PIX_PHOTO_PATHS: /photos
-      RUST_LOG: info
 ```
 
 ### Native execution
@@ -140,41 +137,6 @@ Or with Docker:
 docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 ```
 
-## API Endpoints
-
-TurboPix provides a RESTful API for programmatic access:
-
-### Photo Management
-
-- `GET /api/photos` - List photos with pagination, sorting, and filtering
-    - Query params: `limit`, `offset`, `sort`, `order`, `q` (search), `year`, `month`
-- `GET /api/photos/{hash}` - Get specific photo details
-- `PUT /api/photos/{hash}` - Update photo (e.g., favorite status)
-- `DELETE /api/photos/{hash}` - Delete photo
-
-### Media Access
-
-- `GET /api/photos/{hash}/file` - Serve photo file with caching
-- `GET /api/photos/{hash}/thumbnail` - Serve optimized thumbnail
-    - Query params: `size` (small/medium/large), `format` (webp/jpeg)
-- `GET /api/photos/{hash}/video` - Serve video file with metadata
-
-### Search & Discovery
-
-- `GET /api/search` - Search photos by filename, camera, or metadata
-- `GET /api/search/semantic` - AI-powered semantic search
-- `GET /api/cameras` - List all camera makes and models
-- `GET /api/timeline` - Get photo timeline density data
-
-### System
-
-- `GET /health` - Health check endpoint
-- `GET /ready` - Readiness check with database validation
-
-## Architecture
-
-TurboPix is built with Rust and uses the following libraries:
-
 ## Supported Formats
 
 ### Images
@@ -190,7 +152,6 @@ TurboPix is built with Rust and uses the following libraries:
 ## Limitations
 
 - **HEIC Support**: Limited due to [image-rs issue #1375](https://github.com/image-rs/image/issues/1375)
-- **RAW Processing**: Basic nearest-neighbor demosaic (fast but lower quality than advanced algorithms)
 - **Live Photos**: iOS Live Photos are treated as separate image and video files
 
 ## Support
@@ -200,6 +161,6 @@ If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.
 # Disclaimer
 
 > [!NOTE]  
-> This project is primarily developed using AI-assisted coding (vibe coding), but all code is manually reviewed and
-> validated through multiple security gates including vulnerability scanning, linting, and automated testing to ensure
-> quality and security.
+> This project is primarily developed using AI-assisted coding (vibe coding), but all code is manually reviewed by me
+> and validated through multiple security gates including vulnerability scanning, linting, static code analysis, and
+> automated testing to ensure quality and security.

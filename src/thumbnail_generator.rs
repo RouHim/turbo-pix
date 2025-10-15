@@ -1,4 +1,4 @@
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{DynamicImage, ImageFormat};
 use log::{debug, warn};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -141,18 +141,7 @@ impl ThumbnailGenerator {
     fn resize_image(&self, img: DynamicImage, size: ThumbnailSize) -> DynamicImage {
         let target_size = size.to_pixels();
 
-        let (width, height) = img.dimensions();
-        let min_dimension = width.min(height);
-
-        let crop_x = (width - min_dimension) / 2;
-        let crop_y = (height - min_dimension) / 2;
-
-        img.crop_imm(crop_x, crop_y, min_dimension, min_dimension)
-            .resize_exact(
-                target_size,
-                target_size,
-                image::imageops::FilterType::Lanczos3,
-            )
+        img.thumbnail(target_size, target_size)
     }
 
     fn encode_image(&self, img: DynamicImage, format: ThumbnailFormat) -> CacheResult<Vec<u8>> {

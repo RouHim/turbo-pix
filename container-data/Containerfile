@@ -80,7 +80,7 @@ COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory
 # Use shell to evaluate the architecture-specific path
-COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/*/release/turbo-pix /turbo-pix
+COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/*/production/turbo-pix /turbo-pix
 
 # Copy ffmpeg and ffprobe static binaries
 COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffmpeg /ffmpeg

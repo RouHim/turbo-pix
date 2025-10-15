@@ -128,7 +128,7 @@ jobs:
 
       - name: Rename binary with target name
         run: |
-          cp target/${{ matrix.target }}/release/turbo-pix ${{ matrix.name }}
+          cp target/${{ matrix.target }}/production/turbo-pix ${{ matrix.name }}
 
       - name: Get latest tag
         id: get_tag

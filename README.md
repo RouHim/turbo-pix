@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-    <i>A self-hosted photo and video gallery with metadata extraction and search capabilities.</i>
+    <i>A straightforward photo and video viewer—fast, simple, and nothing else.</i>
 </p>
 
 ## Motivation
@@ -24,6 +24,15 @@ TurboPix scans your photo directories at startup, reads metadata and generates C
 your photos, and stores everything in a local database. You can then browse photos by date, search for specific cameras
 or filenames, and view detailed information about each photo. Thumbnails are generated on-the-fly and cached for faster
 loading. Each night, TurboPix checks for new photos and updates the database accordingly.
+
+## Differentiation
+
+You might ask how this differs to existing solutions like Immich, Lychee, PhotoPrism, Piwigo, or others.
+Here are some key differences:
+
+- **Simplicity**: TurboPix focuses on showing your photos and nothing else.
+- **Speed**: Written in Rust, TurboPix is optimized for performance and low resource usage.
+- **Read-Only**: It does not modify or move your existing photo files.
 
 ## Features
 

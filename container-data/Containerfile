@@ -3,19 +3,32 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 FROM alpine:latest AS ffmpeg-downloader
 
-# Download and extract static ffmpeg build
+ARG TARGETARCH
+
+# Download and extract static ffmpeg build for the target architecture
 RUN apk add --no-cache curl tar xz && \
-    curl -L -o ffmpeg-release.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        FFMPEG_ARCH="arm64"; \
+    else \
+        FFMPEG_ARCH="amd64"; \
+    fi && \
+    curl -L -o ffmpeg-release.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${FFMPEG_ARCH}-static.tar.xz && \
     tar xf ffmpeg-release.tar.xz && \
-    mv ffmpeg-*-amd64-static/ffmpeg /ffmpeg && \
-    mv ffmpeg-*-amd64-static/ffprobe /ffprobe && \
+    mv ffmpeg-*-${FFMPEG_ARCH}-static/ffmpeg /ffmpeg && \
+    mv ffmpeg-*-${FFMPEG_ARCH}-static/ffprobe /ffprobe && \
     chmod +x /ffmpeg /ffprobe && \
     rm -rf ffmpeg-* ffmpeg-release.tar.xz
 
 # # # # # # # # # # # # # # # # # # # #
 # Application Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
+ARG TARGETARCH
+# Map Docker TARGETARCH to Rust architecture naming
+# TARGETARCH values: amd64, arm64
+# Rust cross image names: x86_64-musl, aarch64-musl
+FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder-amd64
+FROM docker.io/messense/rust-musl-cross:aarch64-musl AS builder-arm64
+FROM builder-${TARGETARCH:-amd64} AS builder
 
 # Set working directory and create empty directory in one layer
 WORKDIR /app
@@ -27,17 +40,29 @@ COPY ../Cargo.lock ./
 COPY ../src ./src
 COPY ../static ./static
 
+# Determine the Rust target triple based on architecture
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        echo "aarch64-unknown-linux-musl" > /tmp/rust-target; \
+    else \
+        echo "x86_64-unknown-linux-musl" > /tmp/rust-target; \
+    fi
+
 # Build application with musl compatibility
 # Pre-fetch dependencies and patch sqlite-vec for musl (https://github.com/asg017/sqlite-vec/pull/199)
-RUN cargo fetch --target x86_64-unknown-linux-musl && \
+RUN RUST_TARGET=$(cat /tmp/rust-target) && \
+    cargo fetch --target ${RUST_TARGET} && \
     find /root/.cargo/registry/src -name "sqlite-vec.c" -exec sed -i '/^typedef u_int8_t uint8_t;$/d; /^typedef u_int16_t uint16_t;$/d; /^typedef u_int64_t uint64_t;$/d' {} \;
 
-RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN RUST_TARGET=$(cat /tmp/rust-target) && \
+    cargo build --release --target ${RUST_TARGET}
 
 # # # # # # # # # # # # # # # # # # # #
 # Run image
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 FROM scratch
+ARG TARGETARCH
+
 # Set environment variables in one layer
 ENV USER="1000" \
     TURBO_PIX_PHOTO_PATHS="/photos" \
@@ -54,7 +79,8 @@ COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir $TURBO_PIX_DATA_P
 COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 
 # Copy the built application directly from target directory
-COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/x86_64-unknown-linux-musl/release/turbo-pix /turbo-pix
+# Use shell to evaluate the architecture-specific path
+COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/*/release/turbo-pix /turbo-pix
 
 # Copy ffmpeg and ffprobe static binaries
 COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffmpeg /ffmpeg

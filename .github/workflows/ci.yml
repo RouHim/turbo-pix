@@ -166,19 +166,31 @@ jobs:
       - name: Login to Docker Hub
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build and tag container image
+      - name: Build amd64 image
         run: |
-          podman build -t turbo-pix:latest -f container-data/Containerfile .
-          podman tag turbo-pix:latest docker.io/rouhim/turbo-pix:latest
+          podman build \
+            --platform linux/amd64 \
+            --build-arg TARGETARCH=amd64 \
+            --manifest turbo-pix-manifest \
+            -f container-data/Containerfile .
 
-      - name: Download AI models in container
+      - name: Build arm64 image
+        run: |
+          podman build \
+            --platform linux/arm64 \
+            --build-arg TARGETARCH=arm64 \
+            --manifest turbo-pix-manifest \
+            -f container-data/Containerfile .
+
+      - name: Download AI models in container (amd64)
         run: |
           mkdir -p data
-          podman run --rm --user=0 -v $(pwd)/data:/data:z turbo-pix:latest --download-models
+          # Test with the native amd64 image
+          podman run --rm --user=0 -v $(pwd)/data:/data:z turbo-pix-manifest --download-models
 
-      - name: Test container startup and health
+      - name: Test container startup and health (amd64)
         run: |
-          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 -v $(pwd)/data:/data:z turbo-pix:latest
+          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 -v $(pwd)/data:/data:z turbo-pix-manifest
           sleep 5
           echo "=== Container logs after 5s ==="
           podman logs turbo-pix-test
@@ -193,5 +205,6 @@ jobs:
           podman stop turbo-pix-test
           podman rm turbo-pix-test
 
-      - name: Push to Docker Hub
-        run: podman push docker.io/rouhim/turbo-pix:latest
+      - name: Push multi-arch manifest as latest
+        run: |
+          podman manifest push turbo-pix-manifest docker.io/rouhim/turbo-pix:latest

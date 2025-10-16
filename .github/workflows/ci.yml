@@ -127,18 +127,32 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Configure C++ compiler for musl
+      - name: Configure C/C++ compilers for musl
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            # For aarch64, create wrapper that uses the cross-compiler
+            # For aarch64, create wrappers that use the cross-compilers
+            cat > /tmp/aarch64-linux-musl-gcc << 'EOF'
+          #!/bin/sh
+          exec aarch64-linux-gnu-gcc -static "$@"
+          EOF
+            chmod +x /tmp/aarch64-linux-musl-gcc
+
             cat > /tmp/aarch64-linux-musl-g++ << 'EOF'
           #!/bin/sh
           exec aarch64-linux-gnu-g++ -static "$@"
           EOF
             chmod +x /tmp/aarch64-linux-musl-g++
+
+            echo "CC_aarch64_unknown_linux_musl=/tmp/aarch64-linux-musl-gcc" >> $GITHUB_ENV
             echo "CXX_aarch64_unknown_linux_musl=/tmp/aarch64-linux-musl-g++" >> $GITHUB_ENV
           else
             # For x86_64, use native compiler with musl
+            cat > /tmp/musl-gcc << 'EOF'
+          #!/bin/sh
+          exec gcc -static -I/usr/include/$(uname -m)-linux-musl "$@"
+          EOF
+            chmod +x /tmp/musl-gcc
+
             cat > /tmp/musl-g++ << 'EOF'
           #!/bin/sh
           exec g++ -static -I/usr/include/$(uname -m)-linux-musl "$@"

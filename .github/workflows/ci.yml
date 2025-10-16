@@ -116,6 +116,41 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Configure C/C++ compilers for musl
+        run: |
+          # Both architectures need proper musl configuration
+          # Define __COSMOPOLITAN__ to prevent sqlite-vec from redefining uint types
+          ARCH=$(uname -m)
+
+          cat > /tmp/${ARCH}-linux-musl-gcc << 'EOF'
+          #!/bin/sh
+          exec musl-gcc -D__COSMOPOLITAN__ "$@"
+          EOF
+          chmod +x /tmp/${ARCH}-linux-musl-gcc
+
+          cat > /tmp/${ARCH}-linux-musl-g++ << 'EOF'
+          #!/bin/sh
+          exec musl-gcc -D__COSMOPOLITAN__ -x c++ -lstdc++ "$@"
+          EOF
+          chmod +x /tmp/${ARCH}-linux-musl-g++
+
+          # Create target-specific links
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            ln -sf /tmp/${ARCH}-linux-musl-gcc /tmp/aarch64-linux-musl-gcc
+            ln -sf /tmp/${ARCH}-linux-musl-g++ /tmp/aarch64-linux-musl-g++
+            echo "CC_aarch64_unknown_linux_musl=/tmp/aarch64-linux-musl-gcc" >> $GITHUB_ENV
+            echo "CXX_aarch64_unknown_linux_musl=/tmp/aarch64-linux-musl-g++" >> $GITHUB_ENV
+            echo "CFLAGS_aarch64_unknown_linux_musl=-D__COSMOPOLITAN__" >> $GITHUB_ENV
+          else
+            ln -sf /tmp/${ARCH}-linux-musl-gcc /tmp/x86_64-linux-musl-gcc
+            ln -sf /tmp/${ARCH}-linux-musl-g++ /tmp/x86_64-linux-musl-g++
+            echo "CC_x86_64_unknown_linux_musl=/tmp/x86_64-linux-musl-gcc" >> $GITHUB_ENV
+            echo "CXX_x86_64_unknown_linux_musl=/tmp/x86_64-linux-musl-g++" >> $GITHUB_ENV
+            echo "CFLAGS_x86_64_unknown_linux_musl=-D__COSMOPOLITAN__" >> $GITHUB_ENV
+          fi
+
+          echo "/tmp" >> $GITHUB_PATH
+
       - name: Build release binary
         run: cargo build --profile production --target ${{ matrix.target }}
 

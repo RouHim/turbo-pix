@@ -1,3 +1,10 @@
+## [1.5.6](https://github.com/RouHim/turbo-pix/compare/1.5.5...1.5.6) (2025-10-16)
+
+
+### Reverts
+
+* Revert "fix: use g++ with musl specs for C++ compilation" ([eb7ceb7](https://github.com/RouHim/turbo-pix/commit/eb7ceb74b0b4b09624dd574ff2407e60f8e7ef73))
+
 ## [1.5.5](https://github.com/RouHim/turbo-pix/compare/1.5.4...1.5.5) (2025-10-16)
 
 

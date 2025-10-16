@@ -990,6 +990,48 @@
   display: none;
 }
 
+/* Search Button Radar Pulse Animation */
+.search-btn {
+  position: relative;
+  overflow: visible;
+}
+
+.search-btn.searching::before,
+.search-btn.searching::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  border: 2px solid var(--primary-color);
+  opacity: 0;
+  pointer-events: none;
+  animation: radar-pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.search-btn.searching::after {
+  animation-delay: 0.5s;
+}
+
+@keyframes radar-pulse {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.8;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+
+  100% {
+    transform: translate(-50%, -50%) scale(2.5);
+    opacity: 0;
+  }
+}
+
 @media (width <= 768px) {
   .desktop-only {
     display: none;

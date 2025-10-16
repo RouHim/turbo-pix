@@ -100,6 +100,9 @@ class Search {
     // Update page title and view
     this.updateSearchState(query);
 
+    // Start radar pulse animation
+    this.setSearching(true);
+
     try {
       if (window.logger) {
         window.logger.info('Performing AI semantic search', {
@@ -131,6 +134,9 @@ class Search {
         console.error('Search error:', error);
       }
       utils.handleError(error, 'Search.performSearch');
+    } finally {
+      // Stop radar pulse animation
+      this.setSearching(false);
     }
   }
 
@@ -501,6 +507,20 @@ class Search {
 
   clear() {
     this.clearSearch();
+  }
+
+  /**
+   * Sets the searching state and updates UI
+   * @param {boolean} isSearching - Whether search is in progress
+   */
+  setSearching(isSearching) {
+    if (this.searchBtn) {
+      if (isSearching) {
+        this.searchBtn.classList.add('searching');
+      } else {
+        this.searchBtn.classList.remove('searching');
+      }
+    }
   }
 }
 

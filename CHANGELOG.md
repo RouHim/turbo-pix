@@ -1,3 +1,15 @@
+# [1.5.0](https://github.com/RouHim/turbo-pix/compare/1.4.0...1.5.0) (2025-10-16)
+
+
+### Bug Fixes
+
+* install C++ musl toolchain for esaxx-rs native dependency ([115154a](https://github.com/RouHim/turbo-pix/commit/115154a655d2a580caa796c0cc988f2eb958cee4))
+
+
+### Features
+
+* add radar pulse animation to search button ([2f600a4](https://github.com/RouHim/turbo-pix/commit/2f600a497be8741a6745f897e553218e6b3965a4))
+
 # [1.4.0](https://github.com/RouHim/turbo-pix/compare/1.3.3...1.4.0) (2025-10-16)
 
 

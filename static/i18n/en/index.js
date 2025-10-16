@@ -33,6 +33,11 @@ window.EN_TRANSLATIONS = {
     all_years: 'All Years',
     all_months: 'All Months',
     clear_timeline_filter: 'Clear timeline filter',
+    timeline_first: 'First',
+    timeline_prev: 'Previous Month',
+    timeline_next: 'Next Month',
+    timeline_last: 'Last (All Dates)',
+    photos_count: '{{count}} photos',
 
     // Photo viewer
     photo_title: 'Photo Title',

@@ -1,3 +1,10 @@
+## [1.5.2](https://github.com/RouHim/turbo-pix/compare/1.5.1...1.5.2) (2025-10-16)
+
+
+### Bug Fixes
+
+* add C compiler wrapper for aarch64 musl builds ([48d87c8](https://github.com/RouHim/turbo-pix/commit/48d87c8fded997fa5c2cdfddef2f34dd623fffc7))
+
 ## [1.5.1](https://github.com/RouHim/turbo-pix/compare/1.5.0...1.5.1) (2025-10-16)
 
 

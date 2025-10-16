@@ -116,7 +116,11 @@ jobs:
       - name: Install musl tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev g++
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            sudo apt-get install -y musl-tools musl-dev g++-aarch64-linux-gnu
+          else
+            sudo apt-get install -y musl-tools musl-dev g++
+          fi
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -125,11 +129,22 @@ jobs:
 
       - name: Configure C++ compiler for musl
         run: |
-          cat > /tmp/musl-g++ << 'EOF'
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            # For aarch64, create wrapper that uses the cross-compiler
+            cat > /tmp/aarch64-linux-musl-g++ << 'EOF'
+          #!/bin/sh
+          exec aarch64-linux-gnu-g++ -static "$@"
+          EOF
+            chmod +x /tmp/aarch64-linux-musl-g++
+            echo "CXX_aarch64_unknown_linux_musl=/tmp/aarch64-linux-musl-g++" >> $GITHUB_ENV
+          else
+            # For x86_64, use native compiler with musl
+            cat > /tmp/musl-g++ << 'EOF'
           #!/bin/sh
           exec g++ -static -I/usr/include/$(uname -m)-linux-musl "$@"
           EOF
-          chmod +x /tmp/musl-g++
+            chmod +x /tmp/musl-g++
+          fi
           echo "/tmp" >> $GITHUB_PATH
 
       - name: Build release binary

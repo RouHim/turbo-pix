@@ -1,3 +1,10 @@
+## [1.5.3](https://github.com/RouHim/turbo-pix/compare/1.5.2...1.5.3) (2025-10-16)
+
+
+### Bug Fixes
+
+* add __COSMOPOLITAN__ define to prevent type redefinition in sqlite-vec ([677445f](https://github.com/RouHim/turbo-pix/commit/677445f3bcdf577160adaa7db966a3a45a0e7cfa))
+
 ## [1.5.2](https://github.com/RouHim/turbo-pix/compare/1.5.1...1.5.2) (2025-10-16)
 
 

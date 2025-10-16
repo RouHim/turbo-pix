@@ -1,3 +1,10 @@
+## [1.5.5](https://github.com/RouHim/turbo-pix/compare/1.5.4...1.5.5) (2025-10-16)
+
+
+### Bug Fixes
+
+* use rust-musl-cross Docker images for cross-compilation ([f01eac6](https://github.com/RouHim/turbo-pix/commit/f01eac6a925eaffb0be213dcbcc1b94cc4bc1027))
+
 ## [1.5.4](https://github.com/RouHim/turbo-pix/compare/1.5.3...1.5.4) (2025-10-16)
 
 

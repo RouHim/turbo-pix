@@ -1,3 +1,11 @@
+## [1.5.4](https://github.com/RouHim/turbo-pix/compare/1.5.3...1.5.4) (2025-10-16)
+
+
+### Bug Fixes
+
+* use g++ with musl specs for C++ compilation ([e84a3bc](https://github.com/RouHim/turbo-pix/commit/e84a3bcc05b24a78fd28cbfa07dcd64880adadb6))
+* use musl-gcc wrapper for both architectures ([97b8df1](https://github.com/RouHim/turbo-pix/commit/97b8df1ce5d07818ec8a711a78bb8b253c5a9691))
+
 ## [1.5.3](https://github.com/RouHim/turbo-pix/compare/1.5.2...1.5.3) (2025-10-16)
 
 

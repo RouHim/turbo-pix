@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/RouHim/turbo-pix/compare/1.3.3...1.4.0) (2025-10-16)
+
+
+### Features
+
+* add debug logging for semantic search query timing ([0c33422](https://github.com/RouHim/turbo-pix/commit/0c3342228162a851e2a2f803e5ca63dafe2fd59c))
+
 ## [1.3.3](https://github.com/RouHim/turbo-pix/compare/1.3.2...1.3.3) (2025-10-15)
 
 

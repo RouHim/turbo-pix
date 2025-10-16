@@ -77,9 +77,11 @@ impl SemanticSearchEngine {
 
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, f32)>> {
+        let start_time = std::time::Instant::now();
         log::info!("Semantic search for: '{}'", query);
 
         // Encode text query to semantic vector
+        let encode_start = std::time::Instant::now();
         let text_semantic_vector = {
             let model_read = self
                 .model
@@ -87,6 +89,7 @@ impl SemanticSearchEngine {
                 .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
             encode_text(&model_read, &self.tokenizer, query, &self.device)?
         };
+        log::debug!("Text encoding took: {:?}", encode_start.elapsed());
 
         // Convert semantic vector to bytes for sqlite-vec
         let vector_floats: Vec<f32> = text_semantic_vector.flatten_all()?.to_vec1()?;
@@ -95,6 +98,7 @@ impl SemanticSearchEngine {
         // Use sqlite-vec's built-in KNN search
         // vec_distance_cosine returns distance (0 = identical, 2 = opposite)
         // Convert to similarity score (1 = identical, 0 = orthogonal, -1 = opposite)
+        let db_start = std::time::Instant::now();
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT ic.path, 1.0 - (vec_distance_cosine(isv.semantic_vector, ?) / 2.0) as similarity
@@ -117,6 +121,7 @@ impl SemanticSearchEngine {
             .filter(|(_, score)| *score >= MIN_SIMILARITY_SCORE)
             .map(|(path, score)| (path, score * 100.0))
             .collect();
+        log::debug!("Database query took: {:?}", db_start.elapsed());
 
         log::info!("Semantic search results for '{}':", query);
         for (path, score) in &results {
@@ -127,6 +132,7 @@ impl SemanticSearchEngine {
             results.len(),
             MIN_SIMILARITY_SCORE * 100.0
         );
+        log::debug!("Total search time: {:?}", start_time.elapsed());
 
         Ok(results)
     }

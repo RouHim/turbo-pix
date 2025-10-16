@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/RouHim/turbo-pix/compare/1.5.0...1.5.1) (2025-10-16)
+
+
+### Bug Fixes
+
+* install g++-aarch64-linux-gnu and configure CXX env for ARM64 musl builds ([3b8c2ad](https://github.com/RouHim/turbo-pix/commit/3b8c2ad1320ab345be1acbee7159efc23eb774c5))
+
 # [1.5.0](https://github.com/RouHim/turbo-pix/compare/1.4.0...1.5.0) (2025-10-16)
 
 

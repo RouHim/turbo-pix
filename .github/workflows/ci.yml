@@ -203,12 +203,17 @@ jobs:
     needs: build-container
 
     steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to Docker Hub
-        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create and push multi-arch manifest
         run: |
-          podman manifest create turbo-pix-manifest \
+          docker buildx imagetools create -t docker.io/rouhim/turbo-pix:latest \
             docker.io/rouhim/turbo-pix:amd64-latest \
             docker.io/rouhim/turbo-pix:arm64-latest
-          podman manifest push turbo-pix-manifest docker.io/rouhim/turbo-pix:latest

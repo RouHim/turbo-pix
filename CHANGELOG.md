@@ -1,3 +1,10 @@
+## [1.5.7](https://github.com/RouHim/turbo-pix/compare/1.5.6...1.5.7) (2025-10-17)
+
+
+### Bug Fixes
+
+* prevent symlink to self in CI workflow ([8e62e17](https://github.com/RouHim/turbo-pix/commit/8e62e177959ecffc91bb4e110672bed9f7cbf679))
+
 ## [1.5.6](https://github.com/RouHim/turbo-pix/compare/1.5.5...1.5.6) (2025-10-16)
 
 

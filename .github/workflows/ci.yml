@@ -129,6 +129,7 @@ jobs:
       - name: Get latest tag
         id: get_tag
         run: |
+          git config --global --add safe.directory /__w/turbo-pix/turbo-pix
           git fetch --tags
           TAG=$(git describe --tags --abbrev=0)
           echo "tag=$TAG" >> $GITHUB_OUTPUT

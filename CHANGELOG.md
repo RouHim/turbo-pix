@@ -1,3 +1,10 @@
+## [1.5.10](https://github.com/RouHim/turbo-pix/compare/1.5.9...1.5.10) (2025-10-17)
+
+
+### Bug Fixes
+
+* use docker buildx imagetools to avoid rate limit ([c319dee](https://github.com/RouHim/turbo-pix/commit/c319dee9a3e2945a3a58ed6b56267c478579e914))
+
 ## [1.5.9](https://github.com/RouHim/turbo-pix/compare/1.5.8...1.5.9) (2025-10-17)
 
 

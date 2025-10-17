@@ -129,9 +129,8 @@ jobs:
       - name: Get latest tag
         id: get_tag
         run: |
-          git config --global --add safe.directory /__w/turbo-pix/turbo-pix
-          git fetch --tags
-          TAG=$(git describe --tags --abbrev=0)
+          git ls-remote --tags https://github.com/${{ github.repository }} | grep -o 'refs/tags/[0-9]*\.[0-9]*\.[0-9]*$' | sort -V | tail -n1 | sed 's|refs/tags/||'
+          TAG=$(git ls-remote --tags https://github.com/${{ github.repository }} | grep -o 'refs/tags/[0-9]*\.[0-9]*\.[0-9]*$' | sort -V | tail -n1 | sed 's|refs/tags/||')
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Upload binary to release

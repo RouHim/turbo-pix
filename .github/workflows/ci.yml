@@ -117,6 +117,9 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
+        env:
+          CFLAGS: -D__COSMOPOLITAN__
+          CXXFLAGS: -D__COSMOPOLITAN__
         run: cargo build --profile production --target ${{ matrix.target }}
 
       - name: Rename binary with target name

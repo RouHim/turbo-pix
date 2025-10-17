@@ -1,3 +1,10 @@
+## [1.5.11](https://github.com/RouHim/turbo-pix/compare/1.5.10...1.5.11) (2025-10-17)
+
+
+### Performance Improvements
+
+* skip reprocessing unchanged photos during rescan ([085b465](https://github.com/RouHim/turbo-pix/commit/085b465c7c1832904aff6e5f030ce81c1a1d83cd))
+
 ## [1.5.10](https://github.com/RouHim/turbo-pix/compare/1.5.9...1.5.10) (2025-10-17)
 
 

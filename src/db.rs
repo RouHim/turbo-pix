@@ -355,6 +355,30 @@ impl Photo {
         }
     }
 
+    /// Check if a photo exists with matching path, size, and modification time
+    /// Returns the full Photo if unchanged, None if new/modified
+    pub fn find_unchanged_photo(
+        pool: &DbPool,
+        file_path: &str,
+        file_size: i64,
+        date_modified: DateTime<Utc>,
+    ) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM photos WHERE file_path = ? AND file_size = ? AND file_modified = ?",
+        )?;
+
+        match stmt.query_row(
+            params![file_path, file_size, date_modified.to_rfc3339()],
+            Photo::from_row,
+        ) {
+            Ok(photo) => Ok(Some(photo)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+
     pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
 

@@ -88,10 +88,62 @@ impl PhotoProcessor {
             }
         }
 
-        // Step 4: Process all files found on disk (parallel processing)
+        // Step 4: Process all files found on disk (with pre-check for unchanged files)
         let photos: Vec<ProcessedPhoto> = photo_files
             .par_iter()
-            .filter_map(|photo_file| self.process_file(photo_file))
+            .filter_map(|photo_file| {
+                let file_path = photo_file.path.to_string_lossy().to_string();
+
+                // Check if file is unchanged (same path, size, and modification time)
+                if let Some(modified) = photo_file.modified {
+                    if let Ok(Some(existing_photo)) = crate::db::Photo::find_unchanged_photo(
+                        db_pool,
+                        &file_path,
+                        photo_file.size as i64,
+                        modified,
+                    ) {
+                        log::debug!("Skipping unchanged file: {}", file_path);
+
+                        // Convert existing Photo to ProcessedPhoto
+                        return Some(ProcessedPhoto {
+                            file_path: existing_photo.file_path.clone(),
+                            filename: existing_photo.filename.clone(),
+                            file_size: existing_photo.file_size,
+                            mime_type: existing_photo.mime_type.clone(),
+                            taken_at: existing_photo.taken_at,
+                            date_modified: existing_photo.date_modified,
+                            camera_make: existing_photo.camera_make().map(String::from),
+                            camera_model: existing_photo.camera_model().map(String::from),
+                            lens_make: existing_photo.lens_make().map(String::from),
+                            lens_model: existing_photo.lens_model().map(String::from),
+                            iso: existing_photo.iso(),
+                            aperture: existing_photo.aperture(),
+                            shutter_speed: existing_photo.shutter_speed().map(String::from),
+                            focal_length: existing_photo.focal_length(),
+                            width: existing_photo.width,
+                            height: existing_photo.height,
+                            color_space: existing_photo.color_space().map(String::from),
+                            white_balance: existing_photo.white_balance().map(String::from),
+                            exposure_mode: existing_photo.exposure_mode().map(String::from),
+                            metering_mode: existing_photo.metering_mode().map(String::from),
+                            orientation: existing_photo.orientation,
+                            flash_used: existing_photo.flash_used(),
+                            latitude: existing_photo.latitude(),
+                            longitude: existing_photo.longitude(),
+                            hash_sha256: Some(existing_photo.hash_sha256.clone()),
+                            blurhash: existing_photo.blurhash.clone(),
+                            duration: existing_photo.duration,
+                            video_codec: existing_photo.video_codec().map(String::from),
+                            audio_codec: existing_photo.audio_codec().map(String::from),
+                            bitrate: existing_photo.bitrate(),
+                            frame_rate: existing_photo.frame_rate(),
+                        });
+                    }
+                }
+
+                // File is new or modified - run full processing
+                self.process_file(photo_file)
+            })
             .collect();
 
         Ok(photos)

@@ -1,3 +1,10 @@
+## [1.5.8](https://github.com/RouHim/turbo-pix/compare/1.5.7...1.5.8) (2025-10-17)
+
+
+### Bug Fixes
+
+* add CFLAGS for rust-musl-cross builds ([bf4a786](https://github.com/RouHim/turbo-pix/commit/bf4a78601c433c15707f8215d1367cbc6358c3db))
+
 ## [1.5.7](https://github.com/RouHim/turbo-pix/compare/1.5.6...1.5.7) (2025-10-17)
 
 

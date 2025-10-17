@@ -1,3 +1,10 @@
+## [1.5.9](https://github.com/RouHim/turbo-pix/compare/1.5.8...1.5.9) (2025-10-17)
+
+
+### Bug Fixes
+
+* add safe.directory config for git operations in Docker ([389b5bb](https://github.com/RouHim/turbo-pix/commit/389b5bb534ead6a7c11c0b4d2d999f1db33b03be))
+
 ## [1.5.8](https://github.com/RouHim/turbo-pix/compare/1.5.7...1.5.8) (2025-10-17)
 
 

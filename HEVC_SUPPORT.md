@@ -14,6 +14,7 @@ The video file `PXL_20251018_124956882.mp4` uses **HEVC (H.265) codec**, which h
 TurboPix now includes **intelligent HEVC handling** with client-side codec detection using the **Media Capabilities API**:
 
 ### Smart Codec Detection (Option 3)
+
 - **Client-Side Detection**: Uses Media Capabilities API to check browser HEVC support
 - **Conditional Transcoding**: Only transcodes when browser cannot play HEVC natively
 - **Zero Overhead on Safari/Edge**: Browsers with native HEVC support get original files
@@ -59,6 +60,7 @@ TurboPix now includes **intelligent HEVC handling** with client-side codec detec
 To enable HEVC transcoding, you need FFmpeg with HEVC support:
 
 **On Fedora/RHEL:**
+
 ```bash
 # Enable RPM Fusion repositories
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
@@ -69,6 +71,7 @@ sudo dnf swap ffmpeg-free ffmpeg --allowerasing
 ```
 
 **On Debian/Ubuntu:**
+
 ```bash
 sudo apt install ffmpeg
 ```
@@ -76,29 +79,33 @@ sudo apt install ffmpeg
 ### Verification
 
 Check if your FFmpeg supports HEVC:
+
 ```bash
 ffmpeg -decoders | grep hevc
 ffmpeg -encoders | grep 264
 ```
 
 You should see:
+
 - HEVC decoder (`hevc`, `hevc_cuvid`, `hevc_qsv`, or `hevc_vaapi`)
 - H.264 encoder (`libx264`, `h264_vaapi`, or `libopenh264`)
 
 ## Configuration
 
 Set the transcoding cache directory (optional):
+
 ```bash
 export TRANSCODE_CACHE_DIR=/path/to/cache
 ```
 
-Default: `/tmp/turbo-pix/transcoded/transcoded`
+Default: `/tmp/turbo-pix/transcoded/`
 
 ## How It Works
 
 ### Flow for HEVC Videos
 
 **On Safari/Edge (HEVC-capable):**
+
 ```
 1. User clicks video thumbnail
 2. Client detects HEVC support → Yes! ✓
@@ -108,6 +115,7 @@ Default: `/tmp/turbo-pix/transcoded/transcoded`
 ```
 
 **On Chrome/Firefox (No HEVC):**
+
 ```
 1. User clicks video thumbnail
 2. Client detects HEVC support → No ✗
@@ -141,11 +149,13 @@ const result = await navigator.mediaCapabilities.decodingInfo(config);
 ## Performance Notes
 
 **On HEVC-capable browsers (Safari, Edge with HW support):**
+
 - **Zero overhead**: Original file served directly
 - **Hardware decoding**: Maximum performance and battery efficiency
 - **No transcoding**: Server CPU not used
 
 **On non-HEVC browsers (Chrome, Firefox):**
+
 - **First playback**: 5-30 seconds for transcoding (one-time cost)
 - **Subsequent playback**: Instant (served from cache)
 - **Cache location**: `/tmp/turbo-pix/transcoded/` (configurable)
@@ -154,6 +164,7 @@ const result = await navigator.mediaCapabilities.decodingInfo(config);
 ## Testing
 
 Test video codec detection:
+
 ```bash
 ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 your_video.mp4
 ```

@@ -1,3 +1,16 @@
+# [1.7.0](https://github.com/RouHim/turbo-pix/compare/1.6.1...1.7.0) (2025-10-19)
+
+
+### Bug Fixes
+
+* add photos directory to .gitignore ([c1d48ba](https://github.com/RouHim/turbo-pix/commit/c1d48ba8b7b54b097e1e163d363fdf358637ccb1))
+* simplify cache directory check in get_transcoded_path function ([d387aaf](https://github.com/RouHim/turbo-pix/commit/d387aaf443c705f0ffbe6bea5d72191a6eb56e20))
+
+
+### Features
+
+* add HEVC video transcoding for browser compatibility ([#7](https://github.com/RouHim/turbo-pix/issues/7)) ([ee618e8](https://github.com/RouHim/turbo-pix/commit/ee618e8c8bfb4b6588b4f15253b5bfac8c819d6b))
+
 ## [1.6.1](https://github.com/RouHim/turbo-pix/compare/1.6.0...1.6.1) (2025-10-19)
 
 

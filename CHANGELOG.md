@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/RouHim/turbo-pix/compare/1.5.12...1.6.0) (2025-10-19)
+
+
+### Features
+
+* add animated SVG banner to README ([8cc24a1](https://github.com/RouHim/turbo-pix/commit/8cc24a1e0f9dc13b87e665f83c8c354b4e532e5b))
+
 ## [1.5.12](https://github.com/RouHim/turbo-pix/compare/1.5.11...1.5.12) (2025-10-19)
 
 ## [1.5.11](https://github.com/RouHim/turbo-pix/compare/1.5.10...1.5.11) (2025-10-17)

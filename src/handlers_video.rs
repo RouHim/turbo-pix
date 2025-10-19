@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use serde_json::json;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use warp::http::{HeaderMap, StatusCode};
 use warp::{reject, Rejection, Reply};
 
 use crate::db::{DbPool, Photo};
@@ -15,6 +18,7 @@ pub struct VideoQuery {
 pub async fn get_video_file(
     photo_hash: String,
     query: VideoQuery,
+    headers: HeaderMap,
     db_pool: DbPool,
 ) -> Result<Box<dyn Reply>, Rejection> {
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
@@ -54,21 +58,113 @@ pub async fn get_video_file(
         return Ok(Box::new(warp::reply::json(&video_metadata)));
     }
 
-    match std::fs::read(&photo.file_path) {
-        Ok(file_data) => {
-            let content_type = photo.mime_type.unwrap_or_else(|| {
-                mimetype_detector::from_path(Path::new(&photo.file_path))
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string())
-            });
+    // Get file metadata
+    let file_metadata = match std::fs::metadata(&photo.file_path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Err(reject::custom(NotFoundError)),
+    };
 
-            let reply = warp::reply::with_header(file_data, "content-type", content_type);
-            let reply =
-                warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
-            let reply = warp::reply::with_header(reply, "accept-ranges", "bytes");
+    let file_size = file_metadata.len();
+    let content_type = photo.mime_type.unwrap_or_else(|| {
+        mimetype_detector::from_path(Path::new(&photo.file_path))
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string())
+    });
 
-            Ok(Box::new(reply))
+    // Parse Range header
+    let range_header = headers
+        .get("range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_range_header);
+
+    match range_header {
+        Some((start, end)) => {
+            // Validate and adjust range
+            let start = start.min(file_size - 1);
+            let end = end.unwrap_or(file_size - 1).min(file_size - 1);
+
+            if start > end {
+                return Err(reject::custom(NotFoundError));
+            }
+
+            // Read the requested byte range
+            let mut file = match File::open(&photo.file_path) {
+                Ok(f) => f,
+                Err(_) => return Err(reject::custom(NotFoundError)),
+            };
+
+            if file.seek(SeekFrom::Start(start)).is_err() {
+                return Err(reject::custom(NotFoundError));
+            }
+
+            let bytes_to_read = (end - start + 1) as usize;
+            let mut buffer = vec![0u8; bytes_to_read];
+
+            match file.read_exact(&mut buffer) {
+                Ok(_) => {
+                    let response = warp::reply::with_status(buffer, StatusCode::PARTIAL_CONTENT);
+                    let response = warp::reply::with_header(response, "content-type", content_type);
+                    let response = warp::reply::with_header(response, "accept-ranges", "bytes");
+                    let response = warp::reply::with_header(
+                        response,
+                        "content-range",
+                        format!("bytes {}-{}/{}", start, end, file_size),
+                    );
+                    let response = warp::reply::with_header(
+                        response,
+                        "content-length",
+                        bytes_to_read.to_string(),
+                    );
+                    let response = warp::reply::with_header(
+                        response,
+                        "cache-control",
+                        "public, max-age=31536000",
+                    );
+
+                    Ok(Box::new(response))
+                }
+                Err(_) => Err(reject::custom(NotFoundError)),
+            }
         }
-        Err(_) => Err(reject::custom(NotFoundError)),
+        None => {
+            // No range requested, send entire file
+            match std::fs::read(&photo.file_path) {
+                Ok(file_data) => {
+                    let response =
+                        warp::reply::with_header(file_data, "content-type", content_type);
+                    let response = warp::reply::with_header(
+                        response,
+                        "cache-control",
+                        "public, max-age=31536000",
+                    );
+                    let response = warp::reply::with_header(response, "accept-ranges", "bytes");
+                    let response =
+                        warp::reply::with_header(response, "content-length", file_size.to_string());
+
+                    Ok(Box::new(response))
+                }
+                Err(_) => Err(reject::custom(NotFoundError)),
+            }
+        }
     }
+}
+
+/// Parse the Range header value (e.g., "bytes=0-1023")
+/// Returns (start, Option<end>)
+fn parse_range_header(value: &str) -> Option<(u64, Option<u64>)> {
+    let value = value.strip_prefix("bytes=")?;
+    let parts: Vec<&str> = value.split('-').collect();
+
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let start = parts[0].parse::<u64>().ok()?;
+    let end = if parts[1].is_empty() {
+        None
+    } else {
+        parts[1].parse::<u64>().ok()
+    };
+
+    Some((start, end))
 }

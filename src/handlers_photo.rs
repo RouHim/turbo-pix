@@ -330,6 +330,7 @@ pub fn build_photo_routes(
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::query::<VideoQuery>())
+        .and(warp::header::headers_cloned())
         .and(with_db(db_pool.clone()))
         .and_then(get_video_file);
 

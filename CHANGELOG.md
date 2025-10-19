@@ -1,3 +1,10 @@
+## [1.6.1](https://github.com/RouHim/turbo-pix/compare/1.6.0...1.6.1) (2025-10-19)
+
+
+### Bug Fixes
+
+* implement HTTP range request support for video streaming ([6e7e90f](https://github.com/RouHim/turbo-pix/commit/6e7e90f5a9a456f26c11ca08a63a968a9f18f4ef))
+
 # [1.6.0](https://github.com/RouHim/turbo-pix/compare/1.5.12...1.6.0) (2025-10-19)
 
 

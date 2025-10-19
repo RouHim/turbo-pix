@@ -11,18 +11,25 @@ fn get_ffprobe_path() -> String {
 }
 
 pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
-    let output = Command::new(get_ffprobe_path())
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            video_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+    let video_path = video_path.to_path_buf();
+    let ffprobe_path = get_ffprobe_path();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(ffprobe_path)
+            .args([
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                video_path.to_str().unwrap(),
+            ])
+            .output()
+    })
+    .await
+    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
+    .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -91,21 +98,30 @@ pub async fn extract_frame_at_time(
     time_seconds: f64,
     output_path: &Path,
 ) -> CacheResult<()> {
-    let output = Command::new(get_ffmpeg_path())
-        .args([
-            "-y", // Overwrite output file
-            "-i",
-            video_path.to_str().unwrap(),
-            "-ss",
-            &time_seconds.to_string(),
-            "-frames:v",
-            "1",
-            "-q:v",
-            "2", // High quality
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
+    let video_path = video_path.to_path_buf();
+    let output_path = output_path.to_path_buf();
+    let ffmpeg_path = get_ffmpeg_path();
+    let time_str = time_seconds.to_string();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(ffmpeg_path)
+            .args([
+                "-y", // Overwrite output file
+                "-i",
+                video_path.to_str().unwrap(),
+                "-ss",
+                &time_str,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2", // High quality
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+    })
+    .await
+    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
+    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -119,20 +135,27 @@ pub async fn extract_frame_at_time(
 
 /// Check if a video uses HEVC codec
 pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
-    let output = Command::new(get_ffprobe_path())
-        .args([
-            "-v",
-            "quiet",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=codec_name",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            video_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+    let video_path = video_path.to_path_buf();
+    let ffprobe_path = get_ffprobe_path();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(ffprobe_path)
+            .args([
+                "-v",
+                "quiet",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                video_path.to_str().unwrap(),
+            ])
+            .output()
+    })
+    .await
+    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
+    .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -158,26 +181,34 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
         })?;
     }
 
+    let input_path = input_path.to_path_buf();
+    let output_path = output_path.to_path_buf();
+    let ffmpeg_path = get_ffmpeg_path();
+
     // Use libopenh264 encoder (available on this system)
-    let output = Command::new(get_ffmpeg_path())
-        .args([
-            "-i",
-            input_path.to_str().unwrap(),
-            "-c:v",
-            "libopenh264", // Use H.264 codec
-            "-b:v",
-            "5M", // Video bitrate
-            "-c:a",
-            "aac", // Re-encode audio to AAC
-            "-b:a",
-            "192k", // Audio bitrate
-            "-movflags",
-            "+faststart", // Enable streaming-friendly format
-            "-y",         // Overwrite output file
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(ffmpeg_path)
+            .args([
+                "-i",
+                input_path.to_str().unwrap(),
+                "-c:v",
+                "libopenh264", // Use H.264 codec
+                "-b:v",
+                "5M", // Video bitrate
+                "-c:a",
+                "aac", // Re-encode audio to AAC
+                "-b:a",
+                "192k", // Audio bitrate
+                "-movflags",
+                "+faststart", // Enable streaming-friendly format
+                "-y",         // Overwrite output file
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+    })
+    .await
+    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
+    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -1,6 +1,6 @@
 # Rust build artifacts
 /target/
-data/models/
+data/
 flamegraph.svg
 perf.data*
 .playwright*

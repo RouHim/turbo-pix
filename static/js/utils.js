@@ -203,7 +203,14 @@ const handleError = (error, context = '') => {
 const getPhotoUrl = (photoHash) => `/api/photos/${photoHash}/file`;
 const getThumbnailUrl = (photo, size = 'medium') =>
   `/api/photos/${photo.hash_sha256}/thumbnail?size=${size}`;
-const getVideoUrl = (photoHash) => `/api/photos/${photoHash}/video`;
+const getVideoUrl = (photoHash, options = {}) => {
+  const params = new URLSearchParams();
+  if (options.transcode) {
+    params.set('transcode', 'true');
+  }
+  const queryString = params.toString();
+  return `/api/photos/${photoHash}/video${queryString ? `?${queryString}` : ''}`;
+};
 
 // Local storage helpers
 const storage = {
@@ -233,6 +240,108 @@ const storage = {
     } catch {
       return false;
     }
+  },
+};
+
+// Video codec detection
+const videoCodecSupport = {
+  _cache: {},
+
+  /**
+   * Check if browser supports a specific video codec using Media Capabilities API
+   * @param {string} codec - Codec string (e.g., 'hvc1.1.6.L93.B0' for HEVC, 'avc1.64001F' for H.264)
+   * @param {number} width - Video width
+   * @param {number} height - Video height
+   * @returns {Promise<boolean>}
+   */
+  async canPlayCodec(codec, width = 1920, height = 1080) {
+    const cacheKey = `${codec}-${width}x${height}`;
+
+    // Check cache first
+    if (this._cache[cacheKey] !== undefined) {
+      return this._cache[cacheKey];
+    }
+
+    // Check if Media Capabilities API is available
+    if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.decodingInfo) {
+      // Fallback to basic video element support check
+      const video = document.createElement('video');
+      const canPlay = video.canPlayType(`video/mp4; codecs="${codec}"`);
+      const supported = canPlay === 'probably' || canPlay === 'maybe';
+      this._cache[cacheKey] = supported;
+      return supported;
+    }
+
+    try {
+      const config = {
+        type: 'file',
+        video: {
+          contentType: `video/mp4; codecs="${codec}"`,
+          width,
+          height,
+          bitrate: 10000000, // 10 Mbps
+          framerate: 30,
+        },
+      };
+
+      const result = await navigator.mediaCapabilities.decodingInfo(config);
+      const supported = result.supported && result.smooth;
+      this._cache[cacheKey] = supported;
+
+      if (window.logger) {
+        window.logger.info('Codec support check', {
+          component: 'VideoCodecSupport',
+          codec,
+          width,
+          height,
+          supported,
+          smooth: result.smooth,
+          powerEfficient: result.powerEfficient,
+        });
+      }
+
+      return supported;
+    } catch (error) {
+      if (window.logger) {
+        window.logger.warn('Failed to check codec support', error, {
+          component: 'VideoCodecSupport',
+          codec,
+        });
+      }
+      // On error, assume not supported
+      this._cache[cacheKey] = false;
+      return false;
+    }
+  },
+
+  /**
+   * Check if browser supports HEVC (H.265) codec
+   * @param {number} width - Video width
+   * @param {number} height - Video height
+   * @returns {Promise<boolean>}
+   */
+  async supportsHEVC(width = 1920, height = 1080) {
+    // Try common HEVC codec strings
+    const hevcCodecs = [
+      'hvc1.1.6.L93.B0', // HEVC Main Profile, Level 3.1
+      'hvc1.1.6.L120.B0', // HEVC Main Profile, Level 4.0
+      'hev1.1.6.L93.B0', // Alternative HEVC format
+    ];
+
+    for (const codec of hevcCodecs) {
+      if (await this.canPlayCodec(codec, width, height)) {
+        return true;
+      }
+    }
+
+    return false;
+  },
+
+  /**
+   * Clear the codec support cache
+   */
+  clearCache() {
+    this._cache = {};
   },
 };
 
@@ -368,6 +477,7 @@ window.utils = {
   getThumbnailUrl,
   getVideoUrl,
   storage,
+  videoCodecSupport,
   SimpleState,
   touchHandler,
   performance: performanceUtils,

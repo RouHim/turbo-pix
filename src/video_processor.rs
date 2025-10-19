@@ -1,5 +1,5 @@
 use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn get_ffmpeg_path() -> String {
@@ -115,6 +115,86 @@ pub async fn extract_frame_at_time(
     }
 
     Ok(())
+}
+
+/// Check if a video uses HEVC codec
+pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
+    let output = Command::new(get_ffprobe_path())
+        .args([
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffprobe exited with status: {}",
+            output.status
+        )));
+    }
+
+    let codec = String::from_utf8(output.stdout)
+        .map_err(|e| CacheError::VideoProcessingError(format!("Invalid UTF-8 output: {}", e)))?
+        .trim()
+        .to_lowercase();
+
+    Ok(codec == "hevc" || codec == "h265")
+}
+
+/// Transcode HEVC video to H.264 for browser compatibility
+pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    // Create output directory if it doesn't exist
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            CacheError::VideoProcessingError(format!("Failed to create output directory: {}", e))
+        })?;
+    }
+
+    // Use libopenh264 encoder (available on this system)
+    let output = Command::new(get_ffmpeg_path())
+        .args([
+            "-i",
+            input_path.to_str().unwrap(),
+            "-c:v",
+            "libopenh264", // Use H.264 codec
+            "-b:v",
+            "5M", // Video bitrate
+            "-c:a",
+            "aac", // Re-encode audio to AAC
+            "-b:a",
+            "192k", // Audio bitrate
+            "-movflags",
+            "+faststart", // Enable streaming-friendly format
+            "-y",         // Overwrite output file
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffmpeg transcode exited with status {}: {}",
+            output.status, stderr
+        )));
+    }
+
+    Ok(())
+}
+
+/// Get the path for a transcoded video in the cache
+pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
+    cache_dir
+        .join("transcoded")
+        .join(format!("{}.mp4", original_hash))
 }
 
 #[cfg(test)]

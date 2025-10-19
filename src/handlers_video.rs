@@ -8,11 +8,13 @@ use warp::{reject, Rejection, Reply};
 
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
+use crate::video_processor::{get_transcoded_path, is_hevc_video, transcode_hevc_to_h264};
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
 pub struct VideoQuery {
     pub metadata: Option<String>,
+    pub transcode: Option<String>,
 }
 
 pub async fn get_video_file(
@@ -58,8 +60,59 @@ pub async fn get_video_file(
         return Ok(Box::new(warp::reply::json(&video_metadata)));
     }
 
+    // Check if client explicitly requested transcoding
+    let client_wants_transcode = query
+        .transcode
+        .as_ref()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    // Determine which file to serve (original or transcoded)
+    let video_path = Path::new(&photo.file_path);
+    let file_to_serve =
+        if client_wants_transcode && is_hevc_video(video_path).await.unwrap_or(false) {
+            log::info!(
+                "Client requested transcode for HEVC video: {}",
+                photo.filename
+            );
+
+            // Get cache directory from environment or use default
+            let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+                .unwrap_or_else(|_| "/tmp/turbo-pix/transcoded".to_string());
+            let cache_path = Path::new(&cache_dir);
+            let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
+
+            // Check if transcoded version exists
+            if !transcoded_path.exists() {
+                log::info!("Transcoding HEVC video to H.264: {}", photo.filename);
+                if let Err(e) = transcode_hevc_to_h264(video_path, &transcoded_path).await {
+                    log::error!("Failed to transcode video: {}", e);
+                    return Err(reject::custom(DatabaseError {
+                        message: "Failed to transcode video for playback".to_string(),
+                    }));
+                }
+                log::info!("Transcoding completed: {}", transcoded_path.display());
+            } else {
+                log::info!(
+                    "Using cached transcoded version: {}",
+                    transcoded_path.display()
+                );
+            }
+
+            transcoded_path
+        } else {
+            // Serve original video (client supports HEVC or video is not HEVC)
+            if client_wants_transcode {
+                log::info!(
+                    "Transcode requested but video is not HEVC, serving original: {}",
+                    photo.filename
+                );
+            }
+            video_path.to_path_buf()
+        };
+
     // Get file metadata
-    let file_metadata = match std::fs::metadata(&photo.file_path) {
+    let file_metadata = match std::fs::metadata(&file_to_serve) {
         Ok(metadata) => metadata,
         Err(_) => return Err(reject::custom(NotFoundError)),
     };
@@ -88,7 +141,7 @@ pub async fn get_video_file(
             }
 
             // Read the requested byte range
-            let mut file = match File::open(&photo.file_path) {
+            let mut file = match File::open(&file_to_serve) {
                 Ok(f) => f,
                 Err(_) => return Err(reject::custom(NotFoundError)),
             };
@@ -128,7 +181,7 @@ pub async fn get_video_file(
         }
         None => {
             // No range requested, send entire file
-            match std::fs::read(&photo.file_path) {
+            match std::fs::read(&file_to_serve) {
                 Ok(file_data) => {
                     let response =
                         warp::reply::with_header(file_data, "content-type", content_type);

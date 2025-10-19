@@ -400,26 +400,53 @@ class PhotoViewer {
   }
 
   async displayVideo(photo) {
-    const videoUrl = utils.getVideoUrl(photo.hash_sha256);
+    if (!this.elements.video || !this.elements.image) {
+      return;
+    }
 
-    if (this.elements.video && this.elements.image) {
-      // Force video reload by clearing src first to prevent browser caching issues
-      this.elements.video.src = '';
-      this.elements.video.load(); // Trigger reload
+    // Check if video codec is HEVC and if browser supports it
+    const videoCodec = photo.video_codec?.() || '';
+    const isHEVC = videoCodec.toLowerCase() === 'hevc' || videoCodec.toLowerCase() === 'h265';
+    let needsTranscode = false;
 
-      // Now set the new source
-      this.elements.video.src = videoUrl;
-      this.elements.video.style.display = 'block';
-      this.elements.video.classList.add('loaded');
-      this.elements.image.style.display = 'none';
+    if (isHEVC) {
+      // Check browser HEVC support using Media Capabilities API
+      const width = photo.width || 1920;
+      const height = photo.height || 1080;
+      const supportsHEVC = await utils.videoCodecSupport.supportsHEVC(width, height);
 
-      // Auto-play if user preference allows
-      const settings = api.getViewSettings();
-      if (settings.autoPlay) {
-        this.elements.video.play().catch(() => {
-          // Auto-play failed, user interaction required
+      if (window.logger) {
+        window.logger.info('HEVC video detected', {
+          component: 'PhotoViewer',
+          photoHash: photo.hash_sha256,
+          browserSupportsHEVC: supportsHEVC,
+          width,
+          height,
         });
       }
+
+      needsTranscode = !supportsHEVC;
+    }
+
+    // Get video URL with optional transcoding
+    const videoUrl = utils.getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
+
+    // Force video reload by clearing src first to prevent browser caching issues
+    this.elements.video.src = '';
+    this.elements.video.load(); // Trigger reload
+
+    // Now set the new source
+    this.elements.video.src = videoUrl;
+    this.elements.video.style.display = 'block';
+    this.elements.video.classList.add('loaded');
+    this.elements.image.style.display = 'none';
+
+    // Auto-play if user preference allows
+    const settings = api.getViewSettings();
+    if (settings.autoPlay) {
+      this.elements.video.play().catch(() => {
+        // Auto-play failed, user interaction required
+      });
     }
   }
 

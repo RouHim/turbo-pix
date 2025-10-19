@@ -192,9 +192,12 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
 
 /// Get the path for a transcoded video in the cache
 pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
-    cache_dir
-        .join("transcoded")
-        .join(format!("{}.mp4", original_hash))
+    let base = if cache_dir.file_name().map_or(false, |n| n == "transcoded") {
+        cache_dir.to_path_buf()
+    } else {
+        cache_dir.join("transcoded")
+    };
+    base.join(format!("{}.mp4", original_hash))
 }
 
 #[cfg(test)]

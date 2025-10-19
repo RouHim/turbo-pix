@@ -78,7 +78,7 @@ pub async fn get_video_file(
 
             // Get cache directory from environment or use default
             let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-                .unwrap_or_else(|_| "/tmp/turbo-pix/transcoded".to_string());
+                .unwrap_or_else(|_| "/tmp/turbo-pix".to_string());
             let cache_path = Path::new(&cache_dir);
             let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
 

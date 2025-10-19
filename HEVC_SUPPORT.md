@@ -82,7 +82,7 @@ ffmpeg -encoders | grep 264
 ```
 
 You should see:
-- HEVC decoder (`hevc` or `libdav1d`)
+- HEVC decoder (`hevc`, `hevc_cuvid`, `hevc_qsv`, or `hevc_vaapi`)
 - H.264 encoder (`libx264`, `h264_vaapi`, or `libopenh264`)
 
 ## Configuration

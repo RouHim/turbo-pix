@@ -92,7 +92,7 @@ Set the transcoding cache directory (optional):
 export TRANSCODE_CACHE_DIR=/path/to/cache
 ```
 
-Default: `/tmp/turbo-pix/transcoded`
+Default: `/tmp/turbo-pix/transcoded/transcoded`
 
 ## How It Works
 

@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/RouHim/turbo-pix/compare/1.7.0...1.8.0) (2025-10-20)
+
+
+### Features
+
+* add intelligent HEVC video support with browser-based transcoding ([#8](https://github.com/RouHim/turbo-pix/issues/8)) ([af18d5b](https://github.com/RouHim/turbo-pix/commit/af18d5b2f78717142b3b287b878d69d6ad635a86))
+
 # [1.7.0](https://github.com/RouHim/turbo-pix/compare/1.6.1...1.7.0) (2025-10-19)
 
 

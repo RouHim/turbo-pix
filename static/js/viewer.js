@@ -405,7 +405,8 @@ class PhotoViewer {
     }
 
     // Check if video codec is HEVC and if browser supports it
-    const videoCodec = photo.video_codec?.() || '';
+    // Access codec from metadata JSON structure
+    const videoCodec = photo.metadata?.video?.codec || '';
     const isHEVC = videoCodec.toLowerCase() === 'hevc' || videoCodec.toLowerCase() === 'h265';
     let needsTranscode = false;
 
@@ -419,6 +420,7 @@ class PhotoViewer {
         window.logger.info('HEVC video detected', {
           component: 'PhotoViewer',
           photoHash: photo.hash_sha256,
+          videoCodec,
           browserSupportsHEVC: supportsHEVC,
           width,
           height,
@@ -431,9 +433,74 @@ class PhotoViewer {
     // Get video URL with optional transcoding
     const videoUrl = utils.getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
 
+    // Check if transcoding failed by fetching headers with a minimal range request
+    let transcodingFailed = false;
+    if (needsTranscode) {
+      try {
+        const response = await fetch(videoUrl, {
+          method: 'GET',
+          headers: {
+            Range: 'bytes=0-0', // Request just 1 byte to check headers
+          },
+        });
+        const warningHeader = response.headers.get('X-Transcode-Warning');
+        if (warningHeader && warningHeader.trim() !== '') {
+          transcodingFailed = true;
+          if (window.logger) {
+            window.logger.info('HEVC transcoding failed on server', {
+              component: 'PhotoViewer',
+              photoHash: photo.hash_sha256,
+              warning: warningHeader,
+            });
+          }
+        }
+      } catch (error) {
+        if (window.logger) {
+          window.logger.warn('Failed to check transcoding status', error);
+        }
+      }
+    }
+
     // Force video reload by clearing src first to prevent browser caching issues
     this.elements.video.src = '';
     this.elements.video.load(); // Trigger reload
+
+    // Remove old error handlers to prevent duplicates
+    this.elements.video.onerror = null;
+
+    // Add error handler for playback failures
+    this.elements.video.onerror = () => {
+      if (window.logger) {
+        window.logger.error('Video playback failed', null, {
+          component: 'PhotoViewer',
+          photoHash: photo.hash_sha256,
+          videoCodec,
+          needsTranscode,
+          transcodingFailed,
+        });
+      }
+
+      // Show clear error message
+      if (transcodingFailed) {
+        // HEVC transcoding failed on server
+        const errorMessage = `⚠️ Video Cannot Play
+
+This video uses HEVC (H.265) encoding, which your browser doesn't support.
+
+The server attempted to convert it to a compatible format, but transcoding failed because ffmpeg with HEVC support is not installed on the server.
+
+Server Administrator: Install ffmpeg with HEVC decoding support to enable playback.`;
+
+        utils.showToast('Video Cannot Play', errorMessage, 'error', 12000);
+        this.showError(errorMessage);
+      } else {
+        // Generic playback error
+        const errorMessage =
+          'Failed to load video. The video file may be corrupted or in an unsupported format.';
+        utils.showToast('Playback Error', errorMessage, 'error', 6000);
+        this.showError(errorMessage);
+      }
+    };
 
     // Now set the new source
     this.elements.video.src = videoUrl;

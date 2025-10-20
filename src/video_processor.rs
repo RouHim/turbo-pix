@@ -185,20 +185,21 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
     let output_path = output_path.to_path_buf();
     let ffmpeg_path = get_ffmpeg_path();
 
-    // Use libopenh264 encoder (available on this system)
+    // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
+    // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
     let output = tokio::task::spawn_blocking(move || {
         Command::new(ffmpeg_path)
             .args([
+                "-hwaccel",
+                "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
                 "-i",
                 input_path.to_str().unwrap(),
                 "-c:v",
-                "libopenh264", // Use H.264 codec
+                "libopenh264", // Use H.264 encoder
                 "-b:v",
                 "5M", // Video bitrate
                 "-c:a",
-                "aac", // Re-encode audio to AAC
-                "-b:a",
-                "192k", // Audio bitrate
+                "copy", // Copy audio stream without re-encoding (faster)
                 "-movflags",
                 "+faststart", // Enable streaming-friendly format
                 "-y",         // Overwrite output file

@@ -69,47 +69,57 @@ pub async fn get_video_file(
 
     // Determine which file to serve (original or transcoded)
     let video_path = Path::new(&photo.file_path);
-    let file_to_serve =
-        if client_wants_transcode && is_hevc_video(video_path).await.unwrap_or(false) {
+    let (file_to_serve, transcoding_failed) = if client_wants_transcode
+        && is_hevc_video(video_path).await.unwrap_or(false)
+    {
+        log::info!(
+            "Client requested transcode for HEVC video: {}",
+            photo.filename
+        );
+
+        // Get cache directory from environment or use default
+        let cache_dir =
+            std::env::var("TRANSCODE_CACHE_DIR").unwrap_or_else(|_| "/tmp/turbo-pix".to_string());
+        let cache_path = Path::new(&cache_dir);
+        let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
+
+        // Check if transcoded version exists
+        if !transcoded_path.exists() {
+            log::info!("Transcoding HEVC video to H.264: {}", photo.filename);
+            match transcode_hevc_to_h264(video_path, &transcoded_path).await {
+                Ok(_) => {
+                    log::info!("Transcoding completed: {}", transcoded_path.display());
+                    (transcoded_path, false)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Transcoding failed for {}, falling back to original: {}",
+                        photo.filename,
+                        e
+                    );
+                    log::warn!(
+                            "To enable HEVC transcoding, install ffmpeg with HEVC support: sudo dnf swap ffmpeg --allowerasing ffmpeg-free"
+                        );
+                    (video_path.to_path_buf(), true)
+                }
+            }
+        } else {
             log::info!(
-                "Client requested transcode for HEVC video: {}",
+                "Using cached transcoded version: {}",
+                transcoded_path.display()
+            );
+            (transcoded_path, false)
+        }
+    } else {
+        // Serve original video (client supports HEVC or video is not HEVC)
+        if client_wants_transcode {
+            log::info!(
+                "Transcode requested but video is not HEVC, serving original: {}",
                 photo.filename
             );
-
-            // Get cache directory from environment or use default
-            let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-                .unwrap_or_else(|_| "/tmp/turbo-pix".to_string());
-            let cache_path = Path::new(&cache_dir);
-            let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
-
-            // Check if transcoded version exists
-            if !transcoded_path.exists() {
-                log::info!("Transcoding HEVC video to H.264: {}", photo.filename);
-                if let Err(e) = transcode_hevc_to_h264(video_path, &transcoded_path).await {
-                    log::error!("Failed to transcode video: {}", e);
-                    return Err(reject::custom(DatabaseError {
-                        message: "Failed to transcode video for playback".to_string(),
-                    }));
-                }
-                log::info!("Transcoding completed: {}", transcoded_path.display());
-            } else {
-                log::info!(
-                    "Using cached transcoded version: {}",
-                    transcoded_path.display()
-                );
-            }
-
-            transcoded_path
-        } else {
-            // Serve original video (client supports HEVC or video is not HEVC)
-            if client_wants_transcode {
-                log::info!(
-                    "Transcode requested but video is not HEVC, serving original: {}",
-                    photo.filename
-                );
-            }
-            video_path.to_path_buf()
-        };
+        }
+        (video_path.to_path_buf(), false)
+    };
 
     // Get file metadata
     let file_metadata = match std::fs::metadata(&file_to_serve) {
@@ -118,11 +128,20 @@ pub async fn get_video_file(
     };
 
     let file_size = file_metadata.len();
-    let content_type = photo.mime_type.unwrap_or_else(|| {
-        mimetype_detector::from_path(Path::new(&photo.file_path))
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| "application/octet-stream".to_string())
-    });
+
+    // Determine correct MIME type based on whether we're serving transcoded content
+    let content_type =
+        if client_wants_transcode && file_to_serve != video_path && !transcoding_failed {
+            // Serving transcoded H.264 video - always use video/mp4
+            "video/mp4".to_string()
+        } else {
+            // Serving original video - use stored/detected MIME type
+            photo.mime_type.unwrap_or_else(|| {
+                mimetype_detector::from_path(Path::new(&photo.file_path))
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string())
+            })
+        };
 
     // Parse Range header
     let range_header = headers
@@ -174,6 +193,15 @@ pub async fn get_video_file(
                         "public, max-age=31536000",
                     );
 
+                    // Add warning header if transcoding failed
+                    let warning_value = if transcoding_failed {
+                        "HEVC transcoding not available - serving original video"
+                    } else {
+                        ""
+                    };
+                    let response =
+                        warp::reply::with_header(response, "X-Transcode-Warning", warning_value);
+
                     Ok(Box::new(response))
                 }
                 Err(_) => Err(reject::custom(NotFoundError)),
@@ -193,6 +221,15 @@ pub async fn get_video_file(
                     let response = warp::reply::with_header(response, "accept-ranges", "bytes");
                     let response =
                         warp::reply::with_header(response, "content-length", file_size.to_string());
+
+                    // Add warning header if transcoding failed
+                    let warning_value = if transcoding_failed {
+                        "HEVC transcoding not available - serving original video"
+                    } else {
+                        ""
+                    };
+                    let response =
+                        warp::reply::with_header(response, "X-Transcode-Warning", warning_value);
 
                     Ok(Box::new(response))
                 }

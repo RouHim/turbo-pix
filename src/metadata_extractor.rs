@@ -309,45 +309,79 @@ impl MetadataExtractor {
     }
 
     fn extract_video_metadata(path: &Path, metadata: &mut PhotoMetadata) {
-        // Basic video metadata extraction
-        // Note: Video metadata extraction requires ffmpeg integration
-        // For now, we set basic defaults and detect video format
+        // Use ffprobe to extract actual video codec information
+        let ffprobe_path = std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string());
 
-        let mime_type = mimetype_detector::from_path(path);
-        if let Some(mime) = mime_type {
-            match mime.subtype() {
-                "mp4" => {
-                    metadata.video_codec = Some("h264".to_string()); // Common default
-                    metadata.audio_codec = Some("aac".to_string()); // Common default
-                }
-                "webm" => {
-                    metadata.video_codec = Some("vp8".to_string()); // Common for WebM
-                    metadata.audio_codec = Some("vorbis".to_string()); // Common for WebM
-                }
-                "avi" => {
-                    metadata.video_codec = Some("mpeg4".to_string()); // Common for AVI
-                    metadata.audio_codec = Some("mp3".to_string()); // Common for AVI
-                }
-                "mov" => {
-                    metadata.video_codec = Some("h264".to_string()); // Common for MOV
-                    metadata.audio_codec = Some("aac".to_string()); // Common for MOV
-                }
-                "mkv" => {
-                    metadata.video_codec = Some("h264".to_string()); // Common for MKV
-                    metadata.audio_codec = Some("aac".to_string()); // Common for MKV
-                }
-                _ => {
-                    metadata.video_codec = Some("unknown".to_string());
-                    metadata.audio_codec = Some("unknown".to_string());
+        match std::process::Command::new(&ffprobe_path)
+            .args([
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                path.to_str().unwrap(),
+            ])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                if let Ok(json_str) = String::from_utf8(output.stdout) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        // Extract duration from format section
+                        if let Some(duration_str) = parsed["format"]["duration"].as_str() {
+                            metadata.duration = duration_str.parse::<f64>().ok();
+                        }
+
+                        // Extract bitrate from format section
+                        if let Some(bitrate_str) = parsed["format"]["bit_rate"].as_str() {
+                            metadata.bitrate = bitrate_str.parse::<i32>().ok();
+                        }
+
+                        // Extract codec information from streams
+                        if let Some(streams) = parsed["streams"].as_array() {
+                            for stream in streams {
+                                let codec_type = stream["codec_type"].as_str().unwrap_or("");
+
+                                if codec_type == "video" {
+                                    metadata.video_codec =
+                                        stream["codec_name"].as_str().map(|s| s.to_string());
+
+                                    if let Some(width) = stream["width"].as_i64() {
+                                        metadata.width = Some(width as u32);
+                                    }
+                                    if let Some(height) = stream["height"].as_i64() {
+                                        metadata.height = Some(height as u32);
+                                    }
+
+                                    // Extract frame rate
+                                    if let Some(fps_str) = stream["r_frame_rate"].as_str() {
+                                        // Frame rate is in format "num/den" (e.g., "30000/1001")
+                                        if let Some((num, den)) = fps_str.split_once('/') {
+                                            if let (Ok(n), Ok(d)) =
+                                                (num.parse::<f64>(), den.parse::<f64>())
+                                            {
+                                                if d > 0.0 {
+                                                    metadata.frame_rate = Some(n / d);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if codec_type == "audio" {
+                                    metadata.audio_codec =
+                                        stream["codec_name"].as_str().map(|s| s.to_string());
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            _ => {
+                // Fallback to basic defaults if ffprobe fails
+                debug!("ffprobe failed for {}, using defaults", path.display());
+                metadata.video_codec = Some("unknown".to_string());
+                metadata.audio_codec = Some("unknown".to_string());
+            }
         }
-
-        // Set default values for video metadata
-        // These would be extracted from actual video files in a full implementation
-        metadata.duration = None; // Requires ffmpeg integration
-        metadata.bitrate = None; // Requires ffmpeg integration
-        metadata.frame_rate = None; // TODO: Extract actual frame rate
 
         // For videos, try to get date from file metadata
         // Prefer modification time over creation time as it's more reliable

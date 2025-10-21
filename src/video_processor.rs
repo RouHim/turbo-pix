@@ -195,9 +195,11 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
                 "-i",
                 input_path.to_str().unwrap(),
                 "-c:v",
-                "libopenh264", // Use H.264 encoder
-                "-b:v",
-                "5M", // Video bitrate
+                "libx264", // Use H.264 encoder (more widely available than libopenh264)
+                "-preset",
+                "fast", // Encoding speed preset (fast is good for real-time transcoding)
+                "-crf",
+                "23", // Constant Rate Factor (18-28, lower = better quality)
                 "-c:a",
                 "copy", // Copy audio stream without re-encoding (faster)
                 "-movflags",
@@ -213,8 +215,12 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        log::error!("FFmpeg transcoding failed!");
+        log::error!("FFmpeg stderr: {}", stderr);
+        log::error!("FFmpeg stdout: {}", stdout);
         return Err(CacheError::VideoProcessingError(format!(
-            "ffmpeg transcode exited with status {}: {}",
+            "ffmpeg transcode exited with status {}. stderr: {}",
             output.status, stderr
         )));
     }

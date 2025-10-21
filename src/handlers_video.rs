@@ -85,21 +85,28 @@ pub async fn get_video_file(
 
         // Check if transcoded version exists
         if !transcoded_path.exists() {
-            log::info!("Transcoding HEVC video to H.264: {}", photo.filename);
+            log::info!(
+                "Transcoding HEVC video to H.264: {} (hash: {})",
+                photo.filename,
+                &photo.hash_sha256[..12]
+            );
             match transcode_hevc_to_h264(video_path, &transcoded_path).await {
                 Ok(_) => {
-                    log::info!("Transcoding completed: {}", transcoded_path.display());
+                    log::info!(
+                        "Transcoding completed successfully: {} -> {}",
+                        photo.filename,
+                        transcoded_path.display()
+                    );
                     (transcoded_path, false)
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Transcoding failed for {}, falling back to original: {}",
-                        photo.filename,
-                        e
+                    log::error!("Transcoding FAILED for {}: {}", photo.filename, e);
+                    log::error!(
+                        "Falling back to original HEVC video. Client may not be able to play it."
                     );
-                    log::warn!(
-                            "To enable HEVC transcoding, install ffmpeg with HEVC support: sudo dnf swap ffmpeg --allowerasing ffmpeg-free"
-                        );
+                    log::error!(
+                        "To fix: Ensure ffmpeg has HEVC decoder and libx264 encoder. Check with: ffmpeg -decoders | grep hevc && ffmpeg -encoders | grep libx264"
+                    );
                     (video_path.to_path_buf(), true)
                 }
             }

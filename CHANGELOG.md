@@ -1,3 +1,10 @@
+## [1.8.1](https://github.com/RouHim/turbo-pix/compare/1.8.0...1.8.1) (2025-10-21)
+
+
+### Bug Fixes
+
+* resolve HEVC video transcoding with browser-compatible H.264 encoding ([1095ad3](https://github.com/RouHim/turbo-pix/commit/1095ad37720f17b47f059d5b51d91733300a348f))
+
 # [1.8.0](https://github.com/RouHim/turbo-pix/compare/1.7.0...1.8.0) (2025-10-20)
 
 

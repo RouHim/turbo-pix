@@ -1,8 +1,7 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use exif::{In, Reader, Tag, Value};
+use little_exif::exif_tag::ExifTag;
+use little_exif::metadata::Metadata;
 use log::debug;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 use crate::mimetype_detector;
@@ -78,14 +77,12 @@ impl MetadataExtractor {
 
         if is_video {
             Self::extract_video_metadata(path, &mut metadata);
-        } else if let Ok(file) = File::open(path) {
-            let mut reader = BufReader::new(file);
-
-            match Reader::new().read_from_container(&mut reader) {
-                Ok(exif_reader) => {
-                    Self::extract_basic_info(&exif_reader, &mut metadata, file_metadata);
-                    Self::extract_camera_info(&exif_reader, &mut metadata);
-                    Self::extract_gps_info(&exif_reader, &mut metadata);
+        } else {
+            match Metadata::new_from_path(path) {
+                Ok(exif_metadata) => {
+                    Self::extract_basic_info(&exif_metadata, &mut metadata, file_metadata);
+                    Self::extract_camera_info(&exif_metadata, &mut metadata);
+                    Self::extract_gps_info(&exif_metadata, &mut metadata);
                 }
                 Err(e) => {
                     debug!("Failed to read EXIF data for {}: {}", path.display(), e);
@@ -99,21 +96,21 @@ impl MetadataExtractor {
     }
 
     fn extract_basic_info(
-        reader: &exif::Exif,
+        exif: &Metadata,
         metadata: &mut PhotoMetadata,
         file_metadata: Option<&std::fs::Metadata>,
     ) {
         // Try multiple EXIF date tags in order of preference
-        // Using functional style to find the first valid date
-        metadata.taken_at = [Tag::DateTimeOriginal, Tag::DateTimeDigitized, Tag::DateTime]
-            .iter()
-            .filter_map(|tag| reader.get_field(*tag, In::PRIMARY))
-            .filter_map(|field| Self::parse_exif_datetime(&field.display_value().to_string()))
-            .next(); // Take the first valid date found
+        metadata.taken_at = Self::get_string_tag(exif, &ExifTag::DateTimeOriginal(String::new()))
+            .and_then(|s| Self::parse_exif_datetime(&s))
+            .or_else(|| {
+                Self::get_string_tag(exif, &ExifTag::ModifyDate(String::new()))
+                    .and_then(|s| Self::parse_exif_datetime(&s))
+            });
 
         // If no EXIF date found, try GPS date as fallback
         if metadata.taken_at.is_none() {
-            metadata.taken_at = Self::get_gps_date(reader);
+            metadata.taken_at = Self::get_gps_date(exif);
         }
 
         // If still no date found, try file modification/creation date as final fallback
@@ -121,61 +118,28 @@ impl MetadataExtractor {
             Self::apply_file_creation_fallback(metadata, file_metadata);
         }
 
-        if let Some(field) = reader.get_field(Tag::PixelXDimension, In::PRIMARY) {
-            if let Value::Long(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.width = Some(v[0]);
-                }
-            }
-        }
+        // ExifImageWidth/Height are the EXIF equivalents of PixelXDimension/PixelYDimension
+        metadata.width = Self::get_u32_tag(exif, &ExifTag::ExifImageWidth(vec![]))
+            .or_else(|| Self::get_u32_tag(exif, &ExifTag::ImageWidth(vec![])));
+        metadata.height = Self::get_u32_tag(exif, &ExifTag::ExifImageHeight(vec![]))
+            .or_else(|| Self::get_u32_tag(exif, &ExifTag::ImageHeight(vec![])));
 
-        if let Some(field) = reader.get_field(Tag::PixelYDimension, In::PRIMARY) {
-            if let Value::Long(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.height = Some(v[0]);
-                }
-            }
-        }
+        // Color and exposure settings (these are u16 enum values, convert to strings)
+        metadata.color_space =
+            Self::get_u16_tag(exif, &ExifTag::ColorSpace(vec![])).map(Self::color_space_to_string);
+        metadata.white_balance = Self::get_u16_tag(exif, &ExifTag::WhiteBalance(vec![]))
+            .map(Self::white_balance_to_string);
+        metadata.exposure_mode = Self::get_u16_tag(exif, &ExifTag::ExposureMode(vec![]))
+            .map(Self::exposure_mode_to_string);
+        metadata.metering_mode = Self::get_u16_tag(exif, &ExifTag::MeteringMode(vec![]))
+            .map(Self::metering_mode_to_string);
 
-        if let Some(field) = reader.get_field(Tag::ColorSpace, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.color_space = Some(value);
-            }
-        }
+        // Orientation
+        metadata.orientation =
+            Self::get_u16_tag(exif, &ExifTag::Orientation(vec![])).map(|v| v as i32);
 
-        if let Some(field) = reader.get_field(Tag::WhiteBalance, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.white_balance = Some(value);
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::ExposureMode, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.exposure_mode = Some(value);
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::MeteringMode, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.metering_mode = Some(value);
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::Orientation, In::PRIMARY) {
-            if let Value::Short(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.orientation = Some(v[0] as i32);
-                }
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::Flash, In::PRIMARY) {
-            metadata.flash_used = Some(!field.display_value().to_string().contains("No"));
-        }
+        // Flash
+        metadata.flash_used = Self::get_u16_tag(exif, &ExifTag::Flash(vec![])).map(|v| v != 0);
     }
 
     fn apply_file_creation_fallback(
@@ -194,116 +158,81 @@ impl MetadataExtractor {
         }
     }
 
-    fn extract_camera_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
-        if let Some(field) = reader.get_field(Tag::Make, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.camera_make = Some(value);
-            }
-        }
+    fn extract_camera_info(exif: &Metadata, metadata: &mut PhotoMetadata) {
+        metadata.camera_make = Self::get_string_tag(exif, &ExifTag::Make(String::new()));
+        metadata.camera_model = Self::get_string_tag(exif, &ExifTag::Model(String::new()));
+        metadata.lens_make = Self::get_string_tag(exif, &ExifTag::LensMake(String::new()));
+        metadata.lens_model = Self::get_string_tag(exif, &ExifTag::LensModel(String::new()));
 
-        if let Some(field) = reader.get_field(Tag::Model, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.camera_model = Some(value);
-            }
-        }
+        // ISO - try multiple tag variants for maximum compatibility:
+        // - ISOSpeed (tag 0x8827): EXIF 2.3+ standard, stored as u32
+        // - ISO (tag 0x8833): Legacy tag from older EXIF versions, stored as u16
+        // We try ISOSpeed first as it's the modern standard, then fall back to ISO
+        metadata.iso = Self::get_u32_tag(exif, &ExifTag::ISOSpeed(vec![]))
+            .map(|v| v as i32)
+            .or_else(|| Self::get_u16_tag(exif, &ExifTag::ISO(vec![])).map(|v| v as i32));
 
-        if let Some(field) = reader.get_field(Tag::LensMake, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.lens_make = Some(value);
-            }
-        }
+        // Aperture (F-number)
+        metadata.aperture = Self::get_rational_tag(exif, &ExifTag::FNumber(vec![]));
 
-        if let Some(field) = reader.get_field(Tag::LensModel, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.lens_model = Some(value);
-            }
-        }
+        // Exposure time (shutter speed)
+        metadata.shutter_speed =
+            Self::get_rational_tag(exif, &ExifTag::ExposureTime(vec![])).map(|v| {
+                if v >= 1.0 {
+                    format!("{:.1} s", v)
+                } else {
+                    format!("1/{:.0}", 1.0 / v)
+                }
+            });
 
-        if let Some(field) = reader.get_field(Tag::ISOSpeed, In::PRIMARY) {
-            if let Value::Short(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.iso = Some(v[0] as i32);
+        // Focal length
+        metadata.focal_length = Self::get_rational_tag(exif, &ExifTag::FocalLength(vec![]));
+    }
+
+    fn extract_gps_info(exif: &Metadata, metadata: &mut PhotoMetadata) {
+        let lat_values = Self::get_rational_array_tag(exif, &ExifTag::GPSLatitude(vec![]));
+        let lat_ref = Self::get_string_tag(exif, &ExifTag::GPSLatitudeRef(String::new()));
+        let lon_values = Self::get_rational_array_tag(exif, &ExifTag::GPSLongitude(vec![]));
+        let lon_ref = Self::get_string_tag(exif, &ExifTag::GPSLongitudeRef(String::new()));
+
+        if let (Some(lat_vals), Some(lat_r)) = (lat_values, lat_ref) {
+            // Validate GPS latitude components: degrees [0-90], minutes [0-60), seconds [0-60)
+            if lat_vals.len() >= 3
+                && lat_vals[0] <= 90.0
+                && lat_vals[1] < 60.0
+                && lat_vals[2] < 60.0
+            {
+                let lat = lat_vals[0] + lat_vals[1] / 60.0 + lat_vals[2] / 3600.0;
+                // Final validation: latitude must be in range [-90, 90]
+                if lat <= 90.0 {
+                    metadata.latitude = Some(if lat_r.contains('S') { -lat } else { lat });
+                } else {
+                    debug!("Invalid GPS latitude value: {}", lat);
                 }
             }
         }
 
-        if let Some(field) = reader.get_field(Tag::FNumber, In::PRIMARY) {
-            if let Value::Rational(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.aperture = Some(v[0].to_f64());
-                }
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::ExposureTime, In::PRIMARY) {
-            let value = Self::clean_exif_string(field.display_value().to_string());
-            if !value.is_empty() {
-                metadata.shutter_speed = Some(value);
-            }
-        }
-
-        if let Some(field) = reader.get_field(Tag::FocalLength, In::PRIMARY) {
-            if let Value::Rational(ref v) = field.value {
-                if !v.is_empty() {
-                    metadata.focal_length = Some(v[0].to_f64());
+        if let (Some(lon_vals), Some(lon_r)) = (lon_values, lon_ref) {
+            // Validate GPS longitude components: degrees [0-180], minutes [0-60), seconds [0-60)
+            if lon_vals.len() >= 3
+                && lon_vals[0] <= 180.0
+                && lon_vals[1] < 60.0
+                && lon_vals[2] < 60.0
+            {
+                let lon = lon_vals[0] + lon_vals[1] / 60.0 + lon_vals[2] / 3600.0;
+                // Final validation: longitude must be in range [-180, 180]
+                if lon <= 180.0 {
+                    metadata.longitude = Some(if lon_r.contains('W') { -lon } else { lon });
+                } else {
+                    debug!("Invalid GPS longitude value: {}", lon);
                 }
             }
         }
     }
 
-    fn extract_gps_info(reader: &exif::Exif, metadata: &mut PhotoMetadata) {
-        let mut has_gps = false;
-        let mut latitude: Option<f64> = None;
-        let mut longitude: Option<f64> = None;
-
-        if let Some(lat_field) = reader.get_field(Tag::GPSLatitude, In::PRIMARY) {
-            if let Some(lat_ref_field) = reader.get_field(Tag::GPSLatitudeRef, In::PRIMARY) {
-                if let (Value::Rational(lat_values), ref_value) =
-                    (&lat_field.value, lat_ref_field.display_value().to_string())
-                {
-                    if lat_values.len() == 3 {
-                        let lat = lat_values[0].to_f64()
-                            + lat_values[1].to_f64() / 60.0
-                            + lat_values[2].to_f64() / 3600.0;
-                        latitude = Some(if ref_value.contains('S') { -lat } else { lat });
-                        has_gps = true;
-                    }
-                }
-            }
-        }
-
-        if let Some(lon_field) = reader.get_field(Tag::GPSLongitude, In::PRIMARY) {
-            if let Some(lon_ref_field) = reader.get_field(Tag::GPSLongitudeRef, In::PRIMARY) {
-                if let (Value::Rational(lon_values), ref_value) =
-                    (&lon_field.value, lon_ref_field.display_value().to_string())
-                {
-                    if lon_values.len() == 3 {
-                        let lon = lon_values[0].to_f64()
-                            + lon_values[1].to_f64() / 60.0
-                            + lon_values[2].to_f64() / 3600.0;
-                        longitude = Some(if ref_value.contains('W') { -lon } else { lon });
-                        has_gps = true;
-                    }
-                }
-            }
-        }
-
-        if has_gps {
-            metadata.latitude = latitude;
-            metadata.longitude = longitude;
-        }
-    }
-
-    fn get_gps_date(reader: &exif::Exif) -> Option<DateTime<Utc>> {
-        reader
-            .get_field(Tag::GPSDateStamp, In::PRIMARY)
-            .and_then(|gps_date| {
-                NaiveDate::parse_from_str(&gps_date.display_value().to_string(), "%F").ok()
-            })
+    fn get_gps_date(exif: &Metadata) -> Option<DateTime<Utc>> {
+        Self::get_string_tag(exif, &ExifTag::GPSDateStamp(String::new()))
+            .and_then(|date_str| NaiveDate::parse_from_str(&date_str, "%F").ok())
             .and_then(|gps_date| gps_date.and_hms_opt(0, 0, 0))
             .map(|naive_dt| DateTime::from_naive_utc_and_offset(naive_dt, Utc))
     }
@@ -392,6 +321,146 @@ impl MetadataExtractor {
                 metadata.taken_at = Some(DateTime::from(created_time));
             }
         }
+    }
+
+    // Enum value to string conversion helpers
+    // These convert EXIF numeric enum values to human-readable strings
+    // Based on EXIF 2.3 specification
+
+    /// Convert ColorSpace enum value to string
+    /// 1 = sRGB, 2 = Adobe RGB, 65535 = Uncalibrated
+    fn color_space_to_string(value: u16) -> String {
+        match value {
+            1 => "sRGB".to_string(),
+            2 => "Adobe RGB".to_string(),
+            65535 => "Uncalibrated".to_string(),
+            _ => format!("Unknown ({})", value),
+        }
+    }
+
+    /// Convert WhiteBalance enum value to string
+    /// 0 = Auto, 1 = Manual
+    fn white_balance_to_string(value: u16) -> String {
+        match value {
+            0 => "Auto".to_string(),
+            1 => "Manual".to_string(),
+            _ => format!("Unknown ({})", value),
+        }
+    }
+
+    /// Convert ExposureMode enum value to string
+    /// 0 = Auto, 1 = Manual, 2 = Auto bracket
+    fn exposure_mode_to_string(value: u16) -> String {
+        match value {
+            0 => "Auto".to_string(),
+            1 => "Manual".to_string(),
+            2 => "Auto bracket".to_string(),
+            _ => format!("Unknown ({})", value),
+        }
+    }
+
+    /// Convert MeteringMode enum value to string
+    /// Values: 0=Unknown, 1=Average, 2=Center-weighted, 3=Spot, 4=Multi-spot,
+    ///         5=Multi-segment, 6=Partial, 255=Other
+    fn metering_mode_to_string(value: u16) -> String {
+        match value {
+            0 => "Unknown".to_string(),
+            1 => "Average".to_string(),
+            2 => "Center-weighted average".to_string(),
+            3 => "Spot".to_string(),
+            4 => "Multi-spot".to_string(),
+            5 => "Multi-segment".to_string(),
+            6 => "Partial".to_string(),
+            255 => "Other".to_string(),
+            _ => format!("Unknown ({})", value),
+        }
+    }
+
+    // Helper functions to extract tag values from little_exif Metadata
+    // These provide a clean abstraction over little_exif's iterator-based API
+    // Each function handles a specific data type and returns None for mismatches
+
+    /// Extract a string value from an EXIF tag
+    /// Cleans the value by removing null bytes, quotes, and trimming whitespace
+    fn get_string_tag(exif: &Metadata, tag_template: &ExifTag) -> Option<String> {
+        exif.get_tag(tag_template).next().and_then(|tag| match tag {
+            // Camera and lens metadata
+            ExifTag::Make(s)
+            | ExifTag::Model(s)
+            | ExifTag::LensMake(s)
+            | ExifTag::LensModel(s)
+            // Date/time tags
+            | ExifTag::DateTimeOriginal(s)
+            | ExifTag::ModifyDate(s)
+            // GPS reference tags
+            | ExifTag::GPSLatitudeRef(s)
+            | ExifTag::GPSLongitudeRef(s)
+            | ExifTag::GPSDateStamp(s) => {
+                let cleaned = Self::clean_exif_string(s.clone());
+                if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(cleaned)
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// Extract a u16 value from an EXIF tag
+    /// Used for small integer values and enum types
+    fn get_u16_tag(exif: &Metadata, tag_template: &ExifTag) -> Option<u16> {
+        exif.get_tag(tag_template).next().and_then(|tag| match tag {
+            ExifTag::Orientation(v)
+            | ExifTag::ISO(v)
+            | ExifTag::Flash(v)
+            | ExifTag::ColorSpace(v)
+            | ExifTag::WhiteBalance(v)
+            | ExifTag::ExposureMode(v)
+            | ExifTag::MeteringMode(v) => v.first().copied(),
+            _ => None,
+        })
+    }
+
+    /// Extract a u32 value from an EXIF tag
+    /// Used for image dimensions and larger integer values like ISOSpeed
+    fn get_u32_tag(exif: &Metadata, tag_template: &ExifTag) -> Option<u32> {
+        exif.get_tag(tag_template).next().and_then(|tag| match tag {
+            ExifTag::ExifImageWidth(v)
+            | ExifTag::ExifImageHeight(v)
+            | ExifTag::ImageWidth(v)
+            | ExifTag::ImageHeight(v)
+            | ExifTag::ISOSpeed(v) => v.first().copied(),
+            _ => None,
+        })
+    }
+
+    /// Extract a rational number (fraction) from an EXIF tag and convert to f64
+    /// Used for aperture, exposure time, focal length, etc.
+    /// Converts uR64 (unsigned rational 64-bit) to floating point via nominator/denominator
+    fn get_rational_tag(exif: &Metadata, tag_template: &ExifTag) -> Option<f64> {
+        use little_exif::rational::uR64;
+        exif.get_tag(tag_template).next().and_then(|tag| match tag {
+            ExifTag::FNumber(v) | ExifTag::ExposureTime(v) | ExifTag::FocalLength(v) => v
+                .first()
+                .map(|r: &uR64| r.nominator as f64 / r.denominator as f64),
+            _ => None,
+        })
+    }
+
+    /// Extract an array of rational numbers from an EXIF tag
+    /// Used for GPS coordinates (degrees, minutes, seconds)
+    /// Each rational is converted to f64 via nominator/denominator division
+    fn get_rational_array_tag(exif: &Metadata, tag_template: &ExifTag) -> Option<Vec<f64>> {
+        use little_exif::rational::uR64;
+        exif.get_tag(tag_template).next().and_then(|tag| match tag {
+            ExifTag::GPSLatitude(v) | ExifTag::GPSLongitude(v) => Some(
+                v.iter()
+                    .map(|r: &uR64| r.nominator as f64 / r.denominator as f64)
+                    .collect(),
+            ),
+            _ => None,
+        })
     }
 
     pub fn parse_exif_datetime(datetime_str: &str) -> Option<DateTime<Utc>> {

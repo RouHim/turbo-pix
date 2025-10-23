@@ -185,7 +185,12 @@
 
         <div class="viewer-sidebar">
           <div class="photo-info">
-            <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
+              <button id="metadata-edit-btn" class="btn-icon" title="Edit Metadata" style="display: none;">
+                <i data-feather="edit-2"></i>
+              </button>
+            </div>
 
             <div class="photo-meta">
               <div class="meta-item">
@@ -349,6 +354,35 @@
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
+    <!-- Metadata Edit Modal -->
+    <div id="metadata-edit-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="ui.metadata.edit_modal_title">Edit Photo Metadata</h2>
+          <button id="metadata-edit-close" class="close-button" aria-label="Close">&times;</button>
+        </div>
+        <form id="metadata-edit-form">
+          <div class="form-group">
+            <label for="edit-taken-at" data-i18n="ui.metadata.edit_date_label">Date Taken</label>
+            <input type="datetime-local" id="edit-taken-at" name="taken_at" />
+          </div>
+          <div class="form-group">
+            <label for="edit-latitude" data-i18n="ui.metadata.edit_latitude_label">Latitude</label>
+            <input type="number" id="edit-latitude" name="latitude" step="0.000001" min="-90" max="90" placeholder="-90 to 90" />
+          </div>
+          <div class="form-group">
+            <label for="edit-longitude" data-i18n="ui.metadata.edit_longitude_label">Longitude</label>
+            <input type="number" id="edit-longitude" name="longitude" step="0.000001" min="-180" max="180" placeholder="-180 to 180" />
+          </div>
+          <div id="metadata-edit-error" class="error-message" style="display: none;"></div>
+          <div class="modal-actions">
+            <button type="button" id="metadata-edit-cancel" class="btn-secondary" data-i18n="ui.metadata.edit_cancel">Cancel</button>
+            <button type="submit" id="metadata-edit-save" class="btn-primary" data-i18n="ui.metadata.edit_save">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="/js/feather.min.js"></script>
     <script src="/js/icons.js"></script>
     <script src="/js/constants.js"></script>
@@ -363,6 +397,7 @@
     <script src="/js/gestureManager.js"></script>
     <script src="/js/viewerControls.js"></script>
     <script src="/js/viewerMetadata.js"></script>
+    <script src="/js/viewerMetadataEdit.js"></script>
     <script src="/js/photoCard.js"></script>
     <script src="/js/infiniteScroll.js"></script>
     <script src="/js/photoGrid.js"></script>

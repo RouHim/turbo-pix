@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use image::DynamicImage;
 use serde::Deserialize;
 use serde_json::json;
@@ -6,6 +7,8 @@ use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::{DbPool, Photo, SearchQuery};
 use crate::handlers_video::{get_video_file, VideoQuery};
+use crate::metadata_extractor::MetadataExtractor;
+use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{with_db, DatabaseError, NotFoundError};
 
@@ -196,6 +199,13 @@ pub struct FavoriteRequest {
     pub is_favorite: bool,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct MetadataUpdateRequest {
+    pub taken_at: Option<String>, // ISO 8601 datetime string
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
 pub async fn toggle_favorite(
     photo_hash: String,
     favorite_req: FavoriteRequest,
@@ -224,6 +234,138 @@ pub async fn toggle_favorite(
         }
     }
 }
+
+pub async fn update_photo_metadata(
+    photo_hash: String,
+    metadata_req: MetadataUpdateRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    // Find the photo in database
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    // Parse taken_at if provided
+    let taken_at = if let Some(ref dt_str) = metadata_req.taken_at {
+        match dt_str.parse::<DateTime<Utc>>() {
+            Ok(dt) => Some(dt),
+            Err(e) => {
+                return Err(reject::custom(DatabaseError {
+                    message: format!("Invalid date format: {}", e),
+                }));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Validate that GPS coordinates are provided together
+    match (metadata_req.latitude, metadata_req.longitude) {
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(reject::custom(DatabaseError {
+                message: "Both latitude and longitude must be provided together".to_string(),
+            }));
+        }
+        _ => {}
+    }
+
+    // Get file path
+    let file_path = Path::new(&photo.file_path);
+
+    // Update EXIF in the file
+    if let Err(e) = metadata_writer::update_metadata(
+        file_path,
+        taken_at,
+        metadata_req.latitude,
+        metadata_req.longitude,
+    ) {
+        log::error!("Failed to update EXIF: {}", e);
+        return Err(reject::custom(DatabaseError {
+            message: format!("Failed to update EXIF: {}", e),
+        }));
+    }
+
+    // Re-extract metadata from the file to ensure consistency
+    let file_metadata = match std::fs::metadata(file_path) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            log::warn!("Could not read file metadata: {}", e);
+            None
+        }
+    };
+
+    let extracted = MetadataExtractor::extract_with_metadata(file_path, file_metadata.as_ref());
+
+    // Update photo in database with extracted metadata
+    let updated_photo = Photo {
+        hash_sha256: photo.hash_sha256.clone(),
+        file_path: photo.file_path.clone(),
+        filename: photo.filename.clone(),
+        file_size: photo.file_size,
+        mime_type: photo.mime_type.clone(),
+        taken_at: extracted.taken_at,
+        width: extracted.width.map(|w| w as i32),
+        height: extracted.height.map(|h| h as i32),
+        orientation: extracted.orientation,
+        duration: extracted.duration,
+        thumbnail_path: photo.thumbnail_path.clone(),
+        has_thumbnail: photo.has_thumbnail,
+        blurhash: photo.blurhash.clone(),
+        is_favorite: photo.is_favorite,
+        metadata: serde_json::to_value(json!({
+            "camera": {
+                "make": extracted.camera_make,
+                "model": extracted.camera_model,
+                "lens_make": extracted.lens_make,
+                "lens_model": extracted.lens_model,
+            },
+            "settings": {
+                "iso": extracted.iso,
+                "aperture": extracted.aperture,
+                "shutter_speed": extracted.shutter_speed,
+                "focal_length": extracted.focal_length,
+                "color_space": extracted.color_space,
+                "white_balance": extracted.white_balance,
+                "exposure_mode": extracted.exposure_mode,
+                "metering_mode": extracted.metering_mode,
+                "flash_used": extracted.flash_used,
+            },
+            "location": {
+                "latitude": extracted.latitude,
+                "longitude": extracted.longitude,
+            },
+            "video": {
+                "codec": extracted.video_codec,
+                "audio_codec": extracted.audio_codec,
+                "bitrate": extracted.bitrate,
+                "frame_rate": extracted.frame_rate,
+            }
+        }))
+        .unwrap_or(serde_json::Value::Null),
+        date_modified: photo.date_modified,
+        date_indexed: photo.date_indexed,
+        created_at: photo.created_at,
+        updated_at: chrono::Utc::now(),
+    };
+
+    match updated_photo.update(&db_pool) {
+        Ok(_) => Ok(warp::reply::json(&updated_photo)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
 pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_timeline_data(&db_pool) {
         Ok(timeline) => Ok(warp::reply::json(&timeline)),
@@ -439,8 +581,18 @@ pub fn build_photo_routes(
         .and(warp::path("exif"))
         .and(warp::path::end())
         .and(warp::get())
-        .and(with_db(db_pool))
+        .and(with_db(db_pool.clone()))
         .and_then(get_photo_exif);
+
+    let api_photo_metadata_update = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("metadata"))
+        .and(warp::path::end())
+        .and(warp::patch())
+        .and(warp::body::json::<MetadataUpdateRequest>())
+        .and(with_db(db_pool))
+        .and_then(update_photo_metadata);
 
     api_photos_list
         .or(api_photo_get)
@@ -449,4 +601,5 @@ pub fn build_photo_routes(
         .or(api_photo_favorite)
         .or(api_photo_timeline)
         .or(api_photo_exif)
+        .or(api_photo_metadata_update)
 }

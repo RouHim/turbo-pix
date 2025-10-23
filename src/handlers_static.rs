@@ -20,6 +20,7 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "js/api.js",
     "js/viewerControls.js",
     "js/viewerMetadata.js",
+    "js/viewerMetadataEdit.js",
     "js/photoCard.js",
     "js/infiniteScroll.js",
     "js/photoGrid.js",

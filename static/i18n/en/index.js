@@ -123,6 +123,20 @@ window.EN_TRANSLATIONS = {
       audio_codec: 'Audio Codec:',
       frame_rate: 'Frame Rate:',
       bitrate: 'Bitrate:',
+
+      // Metadata editing
+      edit_button: 'Edit Metadata',
+      edit_modal_title: 'Edit Photo Metadata',
+      edit_date_label: 'Date Taken',
+      edit_latitude_label: 'Latitude',
+      edit_longitude_label: 'Longitude',
+      edit_cancel: 'Cancel',
+      edit_save: 'Save',
+      edit_success: 'Metadata updated successfully',
+      edit_error: 'Failed to update metadata',
+      edit_validation_date: 'Invalid date format',
+      edit_validation_gps: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
+      edit_validation_gps_pair: 'Both latitude and longitude must be provided together',
     },
 
     // Search

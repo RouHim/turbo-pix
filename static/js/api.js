@@ -199,6 +199,14 @@ class TurboPixAPI {
     }
   }
 
+  // Metadata editing
+  async updatePhotoMetadata(photoHash, updates) {
+    return this.request(`/api/photos/${photoHash}/metadata`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
   isFavorite(photo) {
     // Check if photo has is_favorite field from backend
     if (typeof photo === 'object' && photo.is_favorite !== undefined) {

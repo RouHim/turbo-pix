@@ -1268,3 +1268,12 @@
   width: 20px;
   height: 20px;
 }
+
+.form-group-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-group-row .form-group {
+  flex: 1;
+}

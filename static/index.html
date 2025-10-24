@@ -15,7 +15,18 @@
     <div id="app">
       <header class="header">
         <div class="header-content">
-          <h1 class="logo"><a href="#" id="logo-link" style="text-decoration: none; color: inherit; display: flex; align-items: center;"><img src="/favicon.svg" alt="TurboPix logo" style="height: 2em; margin-right: 0.5em;" />TurboPix</a></h1>
+          <h1 class="logo">
+            <a
+              href="#"
+              id="logo-link"
+              style="text-decoration: none; color: inherit; display: flex; align-items: center"
+              ><img
+                src="/favicon.svg"
+                alt="TurboPix logo"
+                style="height: 2em; margin-right: 0.5em"
+              />TurboPix</a
+            >
+          </h1>
           <div class="header-actions">
             <div class="search-container">
               <input
@@ -68,7 +79,13 @@
         <div class="timeline-container">
           <!-- Desktop: Slider -->
           <div class="timeline-slider desktop-only">
-            <button class="timeline-reset" title="Clear timeline filter" data-i18n-title="ui.clear_timeline_filter">✕</button>
+            <button
+              class="timeline-reset"
+              title="Clear timeline filter"
+              data-i18n-title="ui.clear_timeline_filter"
+            >
+              ✕
+            </button>
             <div class="timeline-track">
               <canvas class="timeline-heatmap" width="800" height="40"></canvas>
               <input type="range" class="timeline-input" min="0" max="100" value="100" />
@@ -84,7 +101,13 @@
             <select class="timeline-month-select">
               <option value="" data-i18n="ui.all_months">All Months</option>
             </select>
-            <button class="timeline-reset" title="Clear timeline filter" data-i18n-title="ui.clear_timeline_filter">✕</button>
+            <button
+              class="timeline-reset"
+              title="Clear timeline filter"
+              data-i18n-title="ui.clear_timeline_filter"
+            >
+              ✕
+            </button>
           </div>
         </div>
 
@@ -185,9 +208,14 @@
 
         <div class="viewer-sidebar">
           <div class="photo-info">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center">
               <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
-              <button id="metadata-edit-btn" class="btn-icon" title="Edit Metadata" style="display: none;">
+              <button
+                id="metadata-edit-btn"
+                class="btn-icon"
+                title="Edit Metadata"
+                style="display: none"
+              >
                 <i data-feather="edit-2"></i>
               </button>
             </div>
@@ -213,7 +241,9 @@
 
             <div class="photo-meta-full">
               <div class="meta-section">
-                <h4 class="meta-section-title" data-i18n="ui.metadata.file_information">File Information</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.file_information">
+                  File Information
+                </h4>
                 <div class="meta-item">
                   <label data-i18n="ui.metadata.filename">Filename:</label>
                   <span id="meta-filename">-</span>
@@ -261,7 +291,9 @@
               </div>
 
               <div class="meta-section" id="settings-section">
-                <h4 class="meta-section-title" data-i18n="ui.metadata.camera_settings">Camera Settings</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.camera_settings">
+                  Camera Settings
+                </h4>
                 <div class="meta-item">
                   <label data-i18n="ui.metadata.iso">ISO:</label>
                   <span id="meta-iso">-</span>
@@ -305,7 +337,9 @@
               </div>
 
               <div class="meta-section" id="location-section">
-                <h4 class="meta-section-title" data-i18n="ui.metadata.location_section">Location</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.location_section">
+                  Location
+                </h4>
                 <div class="meta-item">
                   <label data-i18n="ui.metadata.gps">GPS:</label>
                   <span id="meta-gps">-</span>
@@ -317,7 +351,9 @@
               </div>
 
               <div class="meta-section" id="video-section" style="display: none">
-                <h4 class="meta-section-title" data-i18n="ui.metadata.video_section">Video Information</h4>
+                <h4 class="meta-section-title" data-i18n="ui.metadata.video_section">
+                  Video Information
+                </h4>
                 <div class="meta-item">
                   <label data-i18n="ui.metadata.duration">Duration:</label>
                   <span id="meta-duration">-</span>
@@ -355,7 +391,7 @@
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Metadata Edit Modal -->
-    <div id="metadata-edit-modal" class="modal" style="display: none;">
+    <div id="metadata-edit-modal" class="modal" style="display: none">
       <div class="modal-content">
         <div class="modal-header">
           <h2 data-i18n="ui.metadata.edit_modal_title">Edit Photo Metadata</h2>
@@ -366,18 +402,54 @@
             <label for="edit-taken-at" data-i18n="ui.metadata.edit_date_label">Date Taken</label>
             <input type="datetime-local" id="edit-taken-at" name="taken_at" />
           </div>
-          <div class="form-group">
-            <label for="edit-latitude" data-i18n="ui.metadata.edit_latitude_label">Latitude</label>
-            <input type="number" id="edit-latitude" name="latitude" step="0.000001" min="-90" max="90" placeholder="-90 to 90" />
+          <div class="form-group-row">
+            <div class="form-group">
+              <label for="edit-latitude" data-i18n="ui.metadata.edit_latitude_label"
+                >Latitude</label
+              >
+              <input
+                type="number"
+                id="edit-latitude"
+                name="latitude"
+                step="any"
+                min="-90"
+                max="90"
+                placeholder="-90 to 90"
+              />
+            </div>
+            <div class="form-group">
+              <label for="edit-longitude" data-i18n="ui.metadata.edit_longitude_label"
+                >Longitude</label
+              >
+              <input
+                type="number"
+                id="edit-longitude"
+                name="longitude"
+                step="any"
+                min="-180"
+                max="180"
+                placeholder="-180 to 180"
+              />
+            </div>
           </div>
-          <div class="form-group">
-            <label for="edit-longitude" data-i18n="ui.metadata.edit_longitude_label">Longitude</label>
-            <input type="number" id="edit-longitude" name="longitude" step="0.000001" min="-180" max="180" placeholder="-180 to 180" />
-          </div>
-          <div id="metadata-edit-error" class="error-message" style="display: none;"></div>
+          <div id="metadata-edit-error" class="error-message" style="display: none"></div>
           <div class="modal-actions">
-            <button type="button" id="metadata-edit-cancel" class="btn-secondary" data-i18n="ui.metadata.edit_cancel">Cancel</button>
-            <button type="submit" id="metadata-edit-save" class="btn-primary" data-i18n="ui.metadata.edit_save">Save</button>
+            <button
+              type="button"
+              id="metadata-edit-cancel"
+              class="btn-secondary"
+              data-i18n="ui.metadata.edit_cancel"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              id="metadata-edit-save"
+              class="btn-primary"
+              data-i18n="ui.metadata.edit_save"
+            >
+              Save
+            </button>
           </div>
         </form>
       </div>

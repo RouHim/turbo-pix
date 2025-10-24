@@ -122,11 +122,11 @@ class MetadataEditor {
       }
 
       // Update viewer's current photo and photos array
-      if (window.viewer) {
-        window.viewer.currentPhoto = updatedPhoto;
+      if (window.photoViewer) {
+        window.photoViewer.currentPhoto = updatedPhoto;
 
         // Update the photo in the photos array to keep it in sync
-        const photos = window.viewer.getPhotos();
+        const photos = window.photoViewer.photos;
         const index = photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
         if (index !== -1) {
           photos[index] = updatedPhoto;
@@ -134,8 +134,13 @@ class MetadataEditor {
       }
 
       // Refresh metadata display
-      if (window.viewer?.metadata) {
-        window.viewer.metadata.updatePhotoInfo(updatedPhoto);
+      if (window.photoViewer?.metadata) {
+        window.photoViewer.metadata.updatePhotoInfo(updatedPhoto);
+      }
+
+      // Update photo card in grid
+      if (window.photoGrid) {
+        window.photoGrid.updatePhotoCard(updatedPhoto);
       }
 
       // Show success toast

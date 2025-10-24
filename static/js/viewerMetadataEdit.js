@@ -38,9 +38,10 @@ class MetadataEditor {
 
   setPhoto(photo) {
     this.currentPhoto = photo;
-    // Show edit button when a photo is loaded
+    // Show edit button only for supported image file types
     if (this.editBtn && photo) {
-      this.editBtn.style.display = 'block';
+      const isSupported = photo.mime_type?.startsWith('image/');
+      this.editBtn.style.display = isSupported ? 'block' : 'none';
       // Update feather icons if needed
       window.feather?.replace();
     }
@@ -55,9 +56,6 @@ class MetadataEditor {
     // Show modal
     this.modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
-
-    // Apply i18n to modal (in case it wasn't translated yet)
-    window.i18nManager?.applyTranslations();
   }
 
   closeModal() {
@@ -119,10 +117,12 @@ class MetadataEditor {
 
       // Success - update the current photo and refresh UI
       this.currentPhoto = updatedPhoto;
-      window.appState.selectedPhoto = updatedPhoto;
+      if (window.appState) {
+        window.appState.selectedPhoto = updatedPhoto;
+      }
 
       // Refresh metadata display
-      if (window.viewer && window.viewer.metadata) {
+      if (window.viewer?.metadata) {
         window.viewer.metadata.updatePhotoInfo(updatedPhoto);
       }
 

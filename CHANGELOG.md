@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/RouHim/turbo-pix/compare/1.8.2...1.9.0) (2025-10-24)
+
+
+### Features
+
+* add photo metadata editing with EXIF write-back ([#9](https://github.com/RouHim/turbo-pix/issues/9)) ([5941475](https://github.com/RouHim/turbo-pix/commit/59414758b7c3963643c51f6f91cc7a75c2695c76))
+
 ## [1.8.2](https://github.com/RouHim/turbo-pix/compare/1.8.1...1.8.2) (2025-10-23)
 
 ## [1.8.1](https://github.com/RouHim/turbo-pix/compare/1.8.0...1.8.1) (2025-10-21)

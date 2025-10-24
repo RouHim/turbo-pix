@@ -121,6 +121,18 @@ class MetadataEditor {
         window.appState.selectedPhoto = updatedPhoto;
       }
 
+      // Update viewer's current photo and photos array
+      if (window.viewer) {
+        window.viewer.currentPhoto = updatedPhoto;
+
+        // Update the photo in the photos array to keep it in sync
+        const photos = window.viewer.getPhotos();
+        const index = photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
+        if (index !== -1) {
+          photos[index] = updatedPhoto;
+        }
+      }
+
       // Refresh metadata display
       if (window.viewer?.metadata) {
         window.viewer.metadata.updatePhotoInfo(updatedPhoto);
@@ -128,8 +140,10 @@ class MetadataEditor {
 
       // Show success toast
       utils.showToast(
+        'Success',
         window.i18nManager?.t('ui.metadata.edit_success') || 'Metadata updated successfully',
-        'success'
+        'success',
+        3000
       );
 
       this.closeModal();

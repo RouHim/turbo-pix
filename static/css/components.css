@@ -463,6 +463,10 @@
   padding-right: var(--space-3);
 }
 
+.photo-info > div:first-child {
+  margin-top: var(--space-12);
+}
+
 .photo-info::-webkit-scrollbar {
   width: 8px;
 }

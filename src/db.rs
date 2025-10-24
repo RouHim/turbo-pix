@@ -247,6 +247,51 @@ impl Photo {
         })
     }
 
+    /// Update photo fields from extracted metadata
+    /// Preserves existing fields that are not part of the extracted metadata
+    pub fn update_from_extracted(&mut self, extracted: crate::metadata_extractor::PhotoMetadata) {
+        // Update computational fields
+        self.taken_at = extracted.taken_at;
+        self.width = extracted.width.map(|w| w as i32);
+        self.height = extracted.height.map(|h| h as i32);
+        self.orientation = extracted.orientation;
+        self.duration = extracted.duration;
+
+        // Build metadata JSON from extracted fields
+        self.metadata = json!({
+            "camera": {
+                "make": extracted.camera_make,
+                "model": extracted.camera_model,
+                "lens_make": extracted.lens_make,
+                "lens_model": extracted.lens_model,
+            },
+            "settings": {
+                "iso": extracted.iso,
+                "aperture": extracted.aperture,
+                "shutter_speed": extracted.shutter_speed,
+                "focal_length": extracted.focal_length,
+                "color_space": extracted.color_space,
+                "white_balance": extracted.white_balance,
+                "exposure_mode": extracted.exposure_mode,
+                "metering_mode": extracted.metering_mode,
+                "flash_used": extracted.flash_used,
+            },
+            "location": {
+                "latitude": extracted.latitude,
+                "longitude": extracted.longitude,
+            },
+            "video": {
+                "codec": extracted.video_codec,
+                "audio_codec": extracted.audio_codec,
+                "bitrate": extracted.bitrate,
+                "frame_rate": extracted.frame_rate,
+            }
+        });
+
+        // Update timestamp
+        self.updated_at = Utc::now();
+    }
+
     pub fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         conn.execute(

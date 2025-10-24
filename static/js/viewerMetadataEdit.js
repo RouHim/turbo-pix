@@ -42,9 +42,7 @@ class MetadataEditor {
     if (this.editBtn && photo) {
       this.editBtn.style.display = 'block';
       // Update feather icons if needed
-      if (window.feather) {
-        feather.replace();
-      }
+      window.feather?.replace();
     }
   }
 
@@ -59,9 +57,7 @@ class MetadataEditor {
     document.body.style.overflow = 'hidden';
 
     // Apply i18n to modal (in case it wasn't translated yet)
-    if (window.i18nManager) {
-      window.i18nManager.applyTranslations();
-    }
+    window.i18nManager?.applyTranslations();
   }
 
   closeModal() {
@@ -139,10 +135,22 @@ class MetadataEditor {
       this.closeModal();
     } catch (error) {
       console.error('Failed to update metadata:', error);
-      const errorMessage =
-        error.message ||
-        window.i18nManager?.t('ui.metadata.edit_error') ||
-        'Failed to update metadata';
+
+      // Try to extract a meaningful error message
+      let errorMessage =
+        window.i18nManager?.t('ui.metadata.edit_error') || 'Failed to update metadata';
+
+      if (error.message) {
+        // API errors come as "HTTP 500: error details"
+        // Try to extract the meaningful part after the status code
+        const match = error.message.match(/HTTP \d+: (.+)/);
+        if (match && match[1]) {
+          errorMessage = match[1];
+        } else {
+          errorMessage = error.message;
+        }
+      }
+
       this.showError(errorMessage);
     } finally {
       this.setSaveButtonLoading(false);

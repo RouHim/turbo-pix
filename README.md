@@ -32,7 +32,7 @@ Here are some key differences:
 
 - **Simplicity**: TurboPix focuses on showing your photos and nothing else.
 - **Speed**: Written in Rust, TurboPix is optimized for performance and low resource usage.
-- **Read-Only**: It does not modify or move your existing photo files.
+- **Read-Only**: It does not reorder or move your existing photo files.
 
 ## Features
 

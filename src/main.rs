@@ -13,6 +13,7 @@ mod handlers_thumbnail;
 mod handlers_video;
 mod indexer;
 mod metadata_extractor;
+mod metadata_writer;
 mod mimetype_detector;
 mod photo_processor;
 pub mod raw_processor;

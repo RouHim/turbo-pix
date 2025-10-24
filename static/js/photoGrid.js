@@ -312,6 +312,20 @@ class PhotoGrid {
       return card && card.classList.contains('selected');
     });
   }
+
+  updatePhotoCard(updatedPhoto) {
+    const index = this.photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
+    if (index !== -1) {
+      this.photos[index] = updatedPhoto;
+
+      const oldCard = this.container.querySelector(`[data-photo-id="${updatedPhoto.hash_sha256}"]`);
+      if (oldCard) {
+        const photoCard = new PhotoCard(updatedPhoto, this);
+        const newCard = photoCard.create();
+        oldCard.replaceWith(newCard);
+      }
+    }
+  }
 }
 
 // Make PhotoGrid available globally

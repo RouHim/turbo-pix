@@ -1,11 +1,15 @@
+use std::path::Path;
+
+use chrono::{DateTime, Utc};
 use image::DynamicImage;
 use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
 use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::{DbPool, Photo, SearchQuery};
 use crate::handlers_video::{get_video_file, VideoQuery};
+use crate::metadata_extractor::MetadataExtractor;
+use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{with_db, DatabaseError, NotFoundError};
 
@@ -196,6 +200,13 @@ pub struct FavoriteRequest {
     pub is_favorite: bool,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct MetadataUpdateRequest {
+    pub taken_at: Option<String>, // ISO 8601 datetime string
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
 pub async fn toggle_favorite(
     photo_hash: String,
     favorite_req: FavoriteRequest,
@@ -224,6 +235,80 @@ pub async fn toggle_favorite(
         }
     }
 }
+
+pub async fn update_photo_metadata(
+    photo_hash: String,
+    metadata_req: MetadataUpdateRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    // Find the photo in database
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    // Parse taken_at if provided
+    let taken_at = if let Some(ref dt_str) = metadata_req.taken_at {
+        match dt_str.parse::<DateTime<Utc>>() {
+            Ok(dt) => Some(dt),
+            Err(e) => {
+                return Err(reject::custom(DatabaseError {
+                    message: format!("Invalid date format: {}", e),
+                }));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Get file path
+    let file_path = Path::new(&photo.file_path);
+
+    // Update EXIF in the file
+    if let Err(e) = metadata_writer::update_metadata(
+        file_path,
+        taken_at,
+        metadata_req.latitude,
+        metadata_req.longitude,
+    ) {
+        log::error!("Failed to update EXIF: {}", e);
+        return Err(reject::custom(DatabaseError {
+            message: format!("Failed to update EXIF: {}", e),
+        }));
+    }
+
+    // Re-extract metadata from the file to ensure consistency
+    let file_metadata = match std::fs::metadata(file_path) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            log::warn!("Could not read file metadata: {}", e);
+            None
+        }
+    };
+
+    let extracted = MetadataExtractor::extract_with_metadata(file_path, file_metadata.as_ref());
+
+    // Update photo with extracted metadata
+    let mut updated_photo = photo;
+    updated_photo.update_from_extracted(extracted);
+
+    match updated_photo.update(&db_pool) {
+        Ok(_) => Ok(warp::reply::json(&updated_photo)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
 pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::get_timeline_data(&db_pool) {
         Ok(timeline) => Ok(warp::reply::json(&timeline)),
@@ -439,8 +524,18 @@ pub fn build_photo_routes(
         .and(warp::path("exif"))
         .and(warp::path::end())
         .and(warp::get())
-        .and(with_db(db_pool))
+        .and(with_db(db_pool.clone()))
         .and_then(get_photo_exif);
+
+    let api_photo_metadata_update = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("metadata"))
+        .and(warp::path::end())
+        .and(warp::patch())
+        .and(warp::body::json::<MetadataUpdateRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(update_photo_metadata);
 
     api_photos_list
         .or(api_photo_get)
@@ -449,4 +544,151 @@ pub fn build_photo_routes(
         .or(api_photo_favorite)
         .or(api_photo_timeline)
         .or(api_photo_exif)
+        .or(api_photo_metadata_update)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::create_in_memory_pool;
+    use chrono::{Datelike, TimeZone};
+    use std::fs;
+    use tempfile::TempDir;
+
+    async fn setup_test_photo(
+        db_pool: &DbPool,
+        temp_dir: &TempDir,
+    ) -> (String, std::path::PathBuf) {
+        // Copy test image to temp directory
+        let test_image = Path::new("test-data/sample_with_exif.jpg");
+        let temp_image = temp_dir.path().join("test.jpg");
+        fs::copy(test_image, &temp_image).expect("Failed to copy test image");
+
+        // Create a test photo in the database
+        let photo = Photo {
+            hash_sha256: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                .to_string(),
+            file_path: temp_image.to_str().unwrap().to_string(),
+            filename: "test.jpg".to_string(),
+            file_size: 12345,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap()),
+            width: Some(800),
+            height: Some(600),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            metadata: json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        photo.create(db_pool).expect("Failed to create test photo");
+
+        (photo.hash_sha256.clone(), temp_image)
+    }
+
+    #[tokio::test]
+    async fn test_update_photo_metadata_endpoint() {
+        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+
+        // Create the update request
+        let update_req = MetadataUpdateRequest {
+            taken_at: Some("2024-03-15T14:30:00Z".to_string()),
+            latitude: Some(40.7128),
+            longitude: Some(-74.0060),
+        };
+
+        // Call the handler
+        let result = update_photo_metadata(photo_hash.clone(), update_req, db_pool.clone()).await;
+
+        // Verify the result is ok
+        assert!(result.is_ok(), "Handler should succeed");
+
+        // Verify the photo was updated in the database
+        let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
+            .expect("Failed to query database")
+            .expect("Photo should exist");
+
+        // Verify the date was updated
+        assert!(updated_photo.taken_at.is_some());
+        let taken_at = updated_photo.taken_at.unwrap();
+        assert_eq!(taken_at.year(), 2024);
+        assert_eq!(taken_at.month(), 3);
+        assert_eq!(taken_at.day(), 15);
+
+        // Verify GPS coordinates were updated
+        assert_eq!(
+            updated_photo
+                .metadata
+                .get("location")
+                .and_then(|l| l.get("latitude"))
+                .and_then(|v| v.as_f64()),
+            Some(40.7128)
+        );
+        assert_eq!(
+            updated_photo
+                .metadata
+                .get("location")
+                .and_then(|l| l.get("longitude"))
+                .and_then(|v| v.as_f64()),
+            Some(-74.0060)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_photo_metadata_invalid_coordinates() {
+        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+
+        // Create request with invalid latitude
+        let update_req = MetadataUpdateRequest {
+            taken_at: None,
+            latitude: Some(91.0), // Invalid: out of range
+            longitude: Some(0.0),
+        };
+
+        // Call the handler
+        let result = update_photo_metadata(photo_hash, update_req, db_pool).await;
+
+        // Verify the result is an error
+        assert!(
+            result.is_err(),
+            "Handler should fail with invalid coordinates"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_photo_metadata_missing_longitude() {
+        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+
+        // Create request with only latitude (should fail)
+        let update_req = MetadataUpdateRequest {
+            taken_at: None,
+            latitude: Some(40.0),
+            longitude: None,
+        };
+
+        // Call the handler
+        let result = update_photo_metadata(photo_hash, update_req, db_pool).await;
+
+        // Verify the result is an error
+        assert!(
+            result.is_err(),
+            "Handler should fail when GPS coordinates are not paired"
+        );
+    }
 }

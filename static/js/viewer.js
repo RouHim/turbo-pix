@@ -533,6 +533,11 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
     this.metadata.updatePhotoInfo(this.currentPhoto);
     this.metadata.updateFavoriteButton(this.currentPhoto);
+
+    // Update metadata editor with current photo
+    if (window.metadataEditor) {
+      window.metadataEditor.setPhoto(this.currentPhoto);
+    }
   }
 
   preloadAdjacentPhotos() {

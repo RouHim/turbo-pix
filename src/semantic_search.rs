@@ -206,8 +206,8 @@ impl SemanticSearchEngine {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir = std::env::temp_dir()
-            .join(format!("turbopix_{}_{}", std::process::id(), unique_id));
+        let temp_dir =
+            std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id));
         std::fs::create_dir_all(&temp_dir)?;
 
         // Step 1: Extract all frames in parallel

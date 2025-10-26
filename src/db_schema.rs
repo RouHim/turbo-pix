@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS photos (
 
 // Bridge table that maps file paths to semantic vector IDs.
 // SQLite's vec0 extension only supports vectors and implicit rowids,
-// so this table maintains the path-to-rowid mapping for the image_semantic_vectors table.
+// so this table maintains the path-to-rowid mapping for the media_semantic_vectors table.
 pub const SEMANTIC_VECTOR_PATH_MAPPING_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS semantic_vector_path_mapping (
     id INTEGER PRIMARY KEY,
@@ -44,8 +44,19 @@ CREATE TABLE IF NOT EXISTS semantic_vector_path_mapping (
 )
 "#;
 
-pub const IMAGE_SEMANTIC_VECTORS_TABLE: &str =
-    "CREATE VIRTUAL TABLE IF NOT EXISTS image_semantic_vectors USING vec0(semantic_vector float[512])";
+pub const MEDIA_SEMANTIC_VECTORS_TABLE: &str =
+    "CREATE VIRTUAL TABLE IF NOT EXISTS media_semantic_vectors USING vec0(semantic_vector float[512])";
+
+// Metadata table for video semantic vector computation
+pub const VIDEO_SEMANTIC_METADATA_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS video_semantic_metadata (
+    path TEXT PRIMARY KEY,
+    num_frames_sampled INTEGER NOT NULL,
+    frame_times TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+"#;
 
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
@@ -53,8 +64,9 @@ pub const SCHEMA_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at);",
     "CREATE INDEX IF NOT EXISTS idx_photos_mime_type ON photos(mime_type);",
     "CREATE INDEX IF NOT EXISTS idx_photos_is_favorite ON photos(is_favorite);",
-    IMAGE_SEMANTIC_VECTORS_TABLE,
+    MEDIA_SEMANTIC_VECTORS_TABLE,
     SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
+    VIDEO_SEMANTIC_METADATA_TABLE,
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

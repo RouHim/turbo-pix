@@ -51,6 +51,10 @@ const CLIP_STD: [f32; 3] = [0.26862954, 0.261_302_6, 0.275_777_1];
 // Normalized to 0-100 scale for user display (multiply by 100)
 const MIN_SIMILARITY_SCORE: f32 = 0.615;
 
+// Video frame sampling configuration
+const VIDEO_FRAME_COUNT: usize = 5;
+const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
+
 /// Semantic search engine for image search
 pub struct SemanticSearchEngine {
     model: Arc<RwLock<clip::ClipModel>>,
@@ -101,10 +105,10 @@ impl SemanticSearchEngine {
         let db_start = std::time::Instant::now();
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT ic.path, 1.0 - (vec_distance_cosine(isv.semantic_vector, ?) / 2.0) as similarity
-             FROM image_semantic_vectors isv
-             JOIN semantic_vector_path_mapping ic ON isv.rowid = ic.id
-             ORDER BY vec_distance_cosine(isv.semantic_vector, ?)
+            "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity
+             FROM media_semantic_vectors msv
+             JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
+             ORDER BY vec_distance_cosine(msv.semantic_vector, ?)
              LIMIT ?",
         )?;
 
@@ -162,6 +166,131 @@ impl SemanticSearchEngine {
         drop(model_read);
 
         store_semantic_vector(&conn, image_path, &semantic_vector)?;
+
+        Ok(())
+    }
+
+    /// Computes and caches semantic vector for a video by sampling frames
+    pub async fn compute_video_semantic_vector(&self, video_path: &str) -> Result<()> {
+        use crate::video_processor::{extract_frame_at_time, extract_video_metadata};
+
+        // Check if semantic vector already exists to avoid recomputation
+        let conn = self.pool.get()?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+                [video_path],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if exists {
+            log::debug!("Semantic vector already cached for video: {}", video_path);
+            return Ok(());
+        }
+
+        log::info!("Computing semantic vector for video: {}", video_path);
+        let start_time = std::time::Instant::now();
+
+        // Extract video metadata
+        let metadata = extract_video_metadata(Path::new(video_path)).await?;
+        let frame_times = calculate_frame_positions(metadata.duration);
+
+        log::debug!(
+            "Sampling {} frames at positions: {:?}",
+            frame_times.len(),
+            frame_times
+        );
+
+        // Extract and encode frames with controlled parallelism
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir()
+            .join(format!("turbopix_{}_{}", std::process::id(), unique_id));
+        std::fs::create_dir_all(&temp_dir)?;
+
+        // Step 1: Extract all frames in parallel
+        let mut extraction_tasks = tokio::task::JoinSet::new();
+        for (idx, &frame_time) in frame_times.iter().enumerate() {
+            let video_path_clone = video_path.to_string();
+            let temp_frame_path = temp_dir.join(format!("frame_{}.jpg", idx));
+
+            extraction_tasks.spawn(async move {
+                extract_frame_at_time(Path::new(&video_path_clone), frame_time, &temp_frame_path)
+                    .await?;
+                Ok::<_, anyhow::Error>((idx, temp_frame_path))
+            });
+        }
+
+        // Wait for all frame extractions to complete
+        let mut extracted_frames = Vec::with_capacity(VIDEO_FRAME_COUNT);
+        while let Some(result) = extraction_tasks.join_next().await {
+            match result {
+                Ok(Ok((idx, path))) => extracted_frames.push((idx, path)),
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(anyhow::anyhow!("Frame extraction task failed: {}", e)),
+            }
+        }
+
+        // Sort by index to maintain frame order
+        extracted_frames.sort_by_key(|(idx, _)| *idx);
+
+        // Step 2: Encode frames to embeddings (sequential due to RwLock model access)
+        let mut frame_embeddings = Vec::with_capacity(VIDEO_FRAME_COUNT);
+        for (_, temp_frame_path) in &extracted_frames {
+            let model_read = self
+                .model
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+            let embedding =
+                encode_image(&model_read, temp_frame_path.to_str().unwrap(), &self.device)?;
+            drop(model_read);
+
+            frame_embeddings.push(embedding);
+        }
+
+        // Step 3: Cleanup temp files
+        for (_, temp_frame_path) in &extracted_frames {
+            if let Err(e) = std::fs::remove_file(temp_frame_path) {
+                log::warn!(
+                    "Failed to cleanup temp frame {}: {}",
+                    temp_frame_path.display(),
+                    e
+                );
+            }
+        }
+
+        // Cleanup temp directory
+        if let Err(e) = std::fs::remove_dir(&temp_dir) {
+            log::warn!(
+                "Failed to cleanup temp directory {}: {}",
+                temp_dir.display(),
+                e
+            );
+        }
+
+        // Average pool all frame embeddings
+        let video_embedding = average_pool_embeddings(&frame_embeddings, &self.device)?;
+        let normalized_embedding = normalize_vector(&video_embedding)?;
+
+        // Store embedding
+        store_semantic_vector(&conn, video_path, &normalized_embedding)?;
+
+        // Store metadata
+        store_video_metadata(
+            &conn,
+            video_path,
+            VIDEO_FRAME_COUNT,
+            &frame_times,
+            MODEL_VERSION,
+        )?;
+
+        log::info!(
+            "Video semantic vector computed in {:?}: {}",
+            start_time.elapsed(),
+            video_path
+        );
 
         Ok(())
     }
@@ -325,8 +454,49 @@ fn store_semantic_vector(db: &Connection, path: &str, semantic_vector: &Tensor) 
     )?;
 
     db.execute(
-        "INSERT OR REPLACE INTO image_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
+        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
         rusqlite::params![id, vector_floats.as_slice().as_bytes()],
+    )?;
+
+    Ok(())
+}
+
+/// Calculate frame sampling positions for video (5 frames evenly distributed, excluding endpoints)
+fn calculate_frame_positions(duration: f64) -> Vec<f64> {
+    (1..=VIDEO_FRAME_COUNT)
+        .map(|i| duration * (i as f64) / (VIDEO_FRAME_COUNT as f64 + 1.0))
+        .collect()
+}
+
+/// Average pool multiple embeddings into a single embedding
+fn average_pool_embeddings(embeddings: &[Tensor], _device: &Device) -> Result<Tensor> {
+    if embeddings.is_empty() {
+        return Err(anyhow::anyhow!("Cannot average pool empty embeddings"));
+    }
+
+    // Stack embeddings: [N, 512] where N is number of frames
+    let stacked = Tensor::stack(embeddings, 0)?;
+
+    // Compute mean across dimension 0: [512]
+    let averaged = stacked.mean(0)?;
+
+    Ok(averaged)
+}
+
+/// Store video semantic metadata
+fn store_video_metadata(
+    db: &Connection,
+    path: &str,
+    num_frames: usize,
+    frame_times: &[f64],
+    model_version: &str,
+) -> Result<()> {
+    let frame_times_json = serde_json::to_string(frame_times)?;
+
+    db.execute(
+        "INSERT OR REPLACE INTO video_semantic_metadata (path, num_frames_sampled, frame_times, model_version)
+         VALUES (?, ?, ?, ?)",
+        rusqlite::params![path, num_frames as i64, frame_times_json, model_version],
     )?;
 
     Ok(())
@@ -488,5 +658,150 @@ mod tests {
         }
 
         println!("All {} results meet minimum threshold", results.len());
+    }
+
+    #[test]
+    fn test_calculate_frame_positions() {
+        // Test 30s video
+        let positions = calculate_frame_positions(30.0);
+        assert_eq!(positions.len(), 5, "Should generate 5 frame positions");
+        assert_eq!(positions, vec![5.0, 10.0, 15.0, 20.0, 25.0]);
+
+        // Test 60s video
+        let positions = calculate_frame_positions(60.0);
+        assert_eq!(positions.len(), 5);
+        assert_eq!(positions, vec![10.0, 20.0, 30.0, 40.0, 50.0]);
+
+        // Test short video (6s)
+        let positions = calculate_frame_positions(6.0);
+        assert_eq!(positions.len(), 5);
+        assert_eq!(positions, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_average_pool_embeddings() {
+        use candle_core::Device;
+
+        let device = Device::Cpu;
+
+        // Create 3 mock embeddings of 512 dimensions
+        let emb1 = Tensor::ones((512,), candle_core::DType::F32, &device).unwrap();
+        let emb2 = Tensor::ones((512,), candle_core::DType::F32, &device)
+            .unwrap()
+            .affine(2.0, 0.0)
+            .unwrap();
+        let emb3 = Tensor::ones((512,), candle_core::DType::F32, &device)
+            .unwrap()
+            .affine(3.0, 0.0)
+            .unwrap();
+
+        let embeddings = vec![emb1, emb2, emb3];
+        let averaged = average_pool_embeddings(&embeddings, &device).unwrap();
+
+        // Average should be (1 + 2 + 3) / 3 = 2.0
+        let avg_vals: Vec<f32> = averaged.flatten_all().unwrap().to_vec1().unwrap();
+        assert_eq!(avg_vals.len(), 512);
+        for val in avg_vals {
+            assert!((val - 2.0).abs() < 0.001, "Average should be 2.0");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_embedding_computation() {
+        let video_filename = "test_video.mp4";
+        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data")
+            .join(video_filename);
+
+        if !video_path.exists() {
+            eprintln!(
+                "Skipping video embedding test: {} not found",
+                video_filename
+            );
+            return;
+        }
+
+        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+            eprintln!("Skipping video embedding test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+
+        let db_pool = create_test_db_pool().unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+
+        let video_path_str = video_path.to_string_lossy().to_string();
+        let result = engine.compute_video_semantic_vector(&video_path_str).await;
+
+        assert!(
+            result.is_ok(),
+            "Video embedding computation should succeed: {:?}",
+            result.err()
+        );
+
+        // Verify embedding was stored
+        let conn = db_pool.get().unwrap();
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+                [&video_path_str],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(exists, "Video embedding should be stored in database");
+
+        // Verify metadata was stored
+        let metadata_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM video_semantic_metadata WHERE path = ?)",
+                [&video_path_str],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(
+            metadata_exists,
+            "Video metadata should be stored in database"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_video_search_integration() {
+        let video_filename = "test_video.mp4";
+        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data")
+            .join(video_filename);
+
+        if !video_path.exists() {
+            eprintln!("Skipping video search test: {} not found", video_filename);
+            return;
+        }
+
+        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+            eprintln!("Skipping video search test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+
+        let db_pool = create_test_db_pool().unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+
+        // Index image and video
+        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
+        let video_path_str = video_path.to_string_lossy().to_string();
+        engine
+            .compute_video_semantic_vector(&video_path_str)
+            .await
+            .unwrap();
+
+        // Search should return both images and videos
+        let results = engine.search("cat", 10).unwrap();
+
+        assert!(!results.is_empty(), "Search should return results");
+        println!("Mixed search results:");
+        for (path, score) in &results {
+            println!("  {}: {:.1}", path, score);
+        }
     }
 }

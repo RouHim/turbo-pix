@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use log::error;
-use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -89,10 +88,21 @@ impl PhotoProcessor {
         }
 
         // Step 4: Process all files found on disk (with pre-check for unchanged files)
-        let photos: Vec<ProcessedPhoto> = photo_files
-            .par_iter()
-            .filter_map(|photo_file| {
+        // Process with controlled concurrency (max 10 concurrent tasks)
+        const MAX_CONCURRENT_TASKS: usize = 10;
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut photos = Vec::new();
+        let mut photo_files_iter = photo_files.into_iter();
+
+        loop {
+            // Fill up to MAX_CONCURRENT_TASKS
+            while tasks.len() < MAX_CONCURRENT_TASKS {
+                let Some(photo_file) = photo_files_iter.next() else {
+                    break;
+                };
+
                 let file_path = photo_file.path.to_string_lossy().to_string();
+                let semantic_search = self.semantic_search.clone();
 
                 // Check if file is unchanged (same path, size, and modification time)
                 if let Some(modified) = photo_file.modified {
@@ -104,52 +114,72 @@ impl PhotoProcessor {
                     ) {
                         log::debug!("Skipping unchanged file: {}", file_path);
 
-                        // Convert existing Photo to ProcessedPhoto
-                        return Some(ProcessedPhoto {
-                            file_path: existing_photo.file_path.clone(),
-                            filename: existing_photo.filename.clone(),
-                            file_size: existing_photo.file_size,
-                            mime_type: existing_photo.mime_type.clone(),
-                            taken_at: existing_photo.taken_at,
-                            date_modified: existing_photo.date_modified,
-                            camera_make: existing_photo.camera_make().map(String::from),
-                            camera_model: existing_photo.camera_model().map(String::from),
-                            lens_make: existing_photo.lens_make().map(String::from),
-                            lens_model: existing_photo.lens_model().map(String::from),
-                            iso: existing_photo.iso(),
-                            aperture: existing_photo.aperture(),
-                            shutter_speed: existing_photo.shutter_speed().map(String::from),
-                            focal_length: existing_photo.focal_length(),
-                            width: existing_photo.width,
-                            height: existing_photo.height,
-                            color_space: existing_photo.color_space().map(String::from),
-                            white_balance: existing_photo.white_balance().map(String::from),
-                            exposure_mode: existing_photo.exposure_mode().map(String::from),
-                            metering_mode: existing_photo.metering_mode().map(String::from),
-                            orientation: existing_photo.orientation,
-                            flash_used: existing_photo.flash_used(),
-                            latitude: existing_photo.latitude(),
-                            longitude: existing_photo.longitude(),
-                            hash_sha256: Some(existing_photo.hash_sha256.clone()),
-                            blurhash: existing_photo.blurhash.clone(),
-                            duration: existing_photo.duration,
-                            video_codec: existing_photo.video_codec().map(String::from),
-                            audio_codec: existing_photo.audio_codec().map(String::from),
-                            bitrate: existing_photo.bitrate(),
-                            frame_rate: existing_photo.frame_rate(),
+                        // Convert existing Photo to ProcessedPhoto - no async needed
+                        tasks.spawn(async move {
+                            Some(ProcessedPhoto {
+                                file_path: existing_photo.file_path.clone(),
+                                filename: existing_photo.filename.clone(),
+                                file_size: existing_photo.file_size,
+                                mime_type: existing_photo.mime_type.clone(),
+                                taken_at: existing_photo.taken_at,
+                                date_modified: existing_photo.date_modified,
+                                camera_make: existing_photo.camera_make().map(String::from),
+                                camera_model: existing_photo.camera_model().map(String::from),
+                                lens_make: existing_photo.lens_make().map(String::from),
+                                lens_model: existing_photo.lens_model().map(String::from),
+                                iso: existing_photo.iso(),
+                                aperture: existing_photo.aperture(),
+                                shutter_speed: existing_photo.shutter_speed().map(String::from),
+                                focal_length: existing_photo.focal_length(),
+                                width: existing_photo.width,
+                                height: existing_photo.height,
+                                color_space: existing_photo.color_space().map(String::from),
+                                white_balance: existing_photo.white_balance().map(String::from),
+                                exposure_mode: existing_photo.exposure_mode().map(String::from),
+                                metering_mode: existing_photo.metering_mode().map(String::from),
+                                orientation: existing_photo.orientation,
+                                flash_used: existing_photo.flash_used(),
+                                latitude: existing_photo.latitude(),
+                                longitude: existing_photo.longitude(),
+                                hash_sha256: Some(existing_photo.hash_sha256.clone()),
+                                blurhash: existing_photo.blurhash.clone(),
+                                duration: existing_photo.duration,
+                                video_codec: existing_photo.video_codec().map(String::from),
+                                audio_codec: existing_photo.audio_codec().map(String::from),
+                                bitrate: existing_photo.bitrate(),
+                                frame_rate: existing_photo.frame_rate(),
+                            })
                         });
+                        continue;
                     }
                 }
 
-                // File is new or modified - run full processing
-                self.process_file(photo_file)
-            })
-            .collect();
+                // File is new or modified - spawn async processing task
+                tasks.spawn(async move {
+                    // Need to recreate processor context in the task
+                    let processor = PhotoProcessor {
+                        scanner: FileScanner::new(Vec::new()), // Empty scanner, not used
+                        semantic_search,
+                    };
+                    processor.process_file(&photo_file).await
+                });
+            }
+
+            // If no tasks are running and no more files, we're done
+            if tasks.is_empty() {
+                break;
+            }
+
+            // Wait for at least one task to complete
+            if let Some(Ok(Some(photo))) = tasks.join_next().await {
+                photos.push(photo);
+            }
+        }
 
         Ok(photos)
     }
 
-    pub fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
+    pub async fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
         log::info!("Processing file: {}", photo_file.path.display());
 
         let path = &photo_file.path;
@@ -160,11 +190,32 @@ impl PhotoProcessor {
         let hash_sha256 = self.calculate_file_hash(path).ok();
         let blurhash = self.generate_blurhash(path);
 
-        if let Err(e) = self.semantic_search.compute_semantic_vector(&file_path) {
-            error!(
-                "Failed to generate semantic vector for {}: {}",
-                file_path, e
-            );
+        // Compute semantic vector (async for videos, sync for images)
+        let is_video = mime_type
+            .as_ref()
+            .map(|m| m.starts_with("video/"))
+            .unwrap_or(false);
+
+        if is_video {
+            // Video processing is async - await completion
+            if let Err(e) = self
+                .semantic_search
+                .compute_video_semantic_vector(&file_path)
+                .await
+            {
+                error!(
+                    "Failed to generate video semantic vector for {}: {}",
+                    file_path, e
+                );
+            }
+        } else {
+            // Image processing is synchronous
+            if let Err(e) = self.semantic_search.compute_semantic_vector(&file_path) {
+                error!(
+                    "Failed to generate semantic vector for {}: {}",
+                    file_path, e
+                );
+            }
         }
 
         Some(ProcessedPhoto {

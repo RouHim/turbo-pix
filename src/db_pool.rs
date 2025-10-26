@@ -55,8 +55,9 @@ pub fn delete_orphaned_photos(
             .collect::<Result<Vec<String>, _>>()?;
 
         conn.execute("DELETE FROM photos", [])?;
-        conn.execute("DELETE FROM image_semantic_vectors", [])?;
+        conn.execute("DELETE FROM media_semantic_vectors", [])?;
         conn.execute("DELETE FROM semantic_vector_path_mapping", [])?;
+        conn.execute("DELETE FROM video_semantic_metadata", [])?;
         info!("Deleted all photos and semantic vectors from database (no files found)");
         return Ok(deleted_paths);
     }
@@ -95,8 +96,14 @@ pub fn delete_orphaned_photos(
     );
     let deleted_vectors = conn.execute(&vector_cache_sql, params.as_slice())?;
 
+    let metadata_sql = format!(
+        "DELETE FROM video_semantic_metadata WHERE path NOT IN ({})",
+        placeholders
+    );
+    conn.execute(&metadata_sql, params.as_slice())?;
+
     conn.execute(
-        "DELETE FROM image_semantic_vectors WHERE rowid NOT IN (SELECT id FROM semantic_vector_path_mapping)",
+        "DELETE FROM media_semantic_vectors WHERE rowid NOT IN (SELECT id FROM semantic_vector_path_mapping)",
         [],
     )?;
 
@@ -167,12 +174,12 @@ mod tests {
         // Create dummy feature vectors
         let dummy_feature_vector = vec![0.0f32; 512];
         conn.execute(
-            "INSERT INTO image_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)",
+            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)",
             [dummy_feature_vector.as_slice().as_bytes()],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO image_semantic_vectors (rowid, semantic_vector) VALUES (2, ?)",
+            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (2, ?)",
             [dummy_feature_vector.as_slice().as_bytes()],
         )
         .unwrap();
@@ -188,7 +195,7 @@ mod tests {
         assert_eq!(cache_count, 2);
 
         let feature_vector_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM image_semantic_vectors", [], |row| {
+            .query_row("SELECT COUNT(*) FROM media_semantic_vectors", [], |row| {
                 row.get(0)
             })
             .unwrap();
@@ -212,7 +219,7 @@ mod tests {
         assert_eq!(cache_count, 1, "Should have 1 cached feature vector");
 
         let feature_vector_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM image_semantic_vectors", [], |row| {
+            .query_row("SELECT COUNT(*) FROM media_semantic_vectors", [], |row| {
                 row.get(0)
             })
             .unwrap();
@@ -241,7 +248,7 @@ mod tests {
 
         let dummy_feature_vector = vec![0.0f32; 512];
         conn.execute(
-            "INSERT INTO image_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)",
+            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)",
             [dummy_feature_vector.as_slice().as_bytes()],
         )
         .unwrap();
@@ -263,7 +270,7 @@ mod tests {
         assert_eq!(cache_count, 0);
 
         let feature_vector_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM image_semantic_vectors", [], |row| {
+            .query_row("SELECT COUNT(*) FROM media_semantic_vectors", [], |row| {
                 row.get(0)
             })
             .unwrap();

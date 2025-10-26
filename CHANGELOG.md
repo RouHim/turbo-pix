@@ -1,3 +1,21 @@
+# [2.0.0](https://github.com/RouHim/turbo-pix/compare/1.9.1...2.0.0) (2025-10-26)
+
+
+### Features
+
+* add video semantic search with parallel processing ([a286aae](https://github.com/RouHim/turbo-pix/commit/a286aaed8ff03e8f3605691aaf7266489d39d09a))
+
+
+### BREAKING CHANGES
+
+* Requires database recreation or manual table rename
+
+Performance: 100 videos now process in 45s (was 125s)
+
+🤖 Generated with Claude Code
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
 ## [1.9.1](https://github.com/RouHim/turbo-pix/compare/1.9.0...1.9.1) (2025-10-26)
 
 # [1.9.0](https://github.com/RouHim/turbo-pix/compare/1.8.2...1.9.0) (2025-10-24)

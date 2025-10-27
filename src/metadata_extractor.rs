@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
-use log::debug;
+use log::{debug, warn};
 use std::path::Path;
 
 use crate::mimetype_detector;
@@ -85,7 +85,19 @@ impl MetadataExtractor {
                     Self::extract_gps_info(&exif_metadata, &mut metadata);
                 }
                 Err(e) => {
-                    debug!("Failed to read EXIF data for {}: {}", path.display(), e);
+                    // Some cameras encode GPS coordinates incorrectly (e.g., signed instead of unsigned rationals)
+                    // This causes little_exif to reject the entire EXIF block. Since GPS is optional,
+                    // we should still be able to extract other metadata. Log as warning since we're handling it gracefully.
+                    let error_msg = e.to_string();
+                    if error_msg.contains("GPS") && error_msg.contains("Illegal format") {
+                        warn!(
+                            "Skipping malformed GPS EXIF data in {}: {}",
+                            path.display(),
+                            e
+                        );
+                    } else {
+                        warn!("Failed to read EXIF data for {}: {}", path.display(), e);
+                    }
                     // Even without EXIF, try file creation date fallback
                     Self::apply_file_creation_fallback(&mut metadata, file_metadata);
                 }
@@ -190,6 +202,12 @@ impl MetadataExtractor {
     }
 
     fn extract_gps_info(exif: &Metadata, metadata: &mut PhotoMetadata) {
+        // GPS data extraction is wrapped in individual try-catch blocks to handle
+        // malformed GPS EXIF data gracefully. Some cameras (e.g., certain Android phones)
+        // incorrectly encode GPS coordinates as signed rationals (RATIONAL64S) instead
+        // of unsigned rationals (RATIONAL64U) as required by the EXIF standard.
+        // If GPS extraction fails, we simply skip it and continue with other metadata.
+
         let lat_values = Self::get_rational_array_tag(exif, &ExifTag::GPSLatitude(vec![]));
         let lat_ref = Self::get_string_tag(exif, &ExifTag::GPSLatitudeRef(String::new()));
         let lon_values = Self::get_rational_array_tag(exif, &ExifTag::GPSLongitude(vec![]));

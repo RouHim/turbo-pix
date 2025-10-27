@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/RouHim/turbo-pix/compare/2.0.0...2.0.1) (2025-10-27)
+
+
+### Bug Fixes
+
+* improve EXIF error handling for malformed GPS data ([38b9fc1](https://github.com/RouHim/turbo-pix/commit/38b9fc11455ab8327fb7275764f4c539a4794326))
+
 # [2.0.0](https://github.com/RouHim/turbo-pix/compare/1.9.1...2.0.0) (2025-10-26)
 
 

@@ -60,6 +60,10 @@ impl PhotoProcessor {
         }
     }
 
+    /// Phase 1: Fast metadata scan without semantic vector computation
+    ///
+    /// Scans all files, extracts metadata, and cleans up orphaned database entries.
+    /// Semantic vectors are computed separately in Phase 2 via `batch_compute_semantic_vectors`.
     pub async fn full_rescan_and_cleanup(
         &self,
         db_pool: &DbPool,
@@ -161,7 +165,7 @@ impl PhotoProcessor {
                         scanner: FileScanner::new(Vec::new()), // Empty scanner, not used
                         semantic_search,
                     };
-                    processor.process_file(&photo_file).await
+                    processor.process_file_metadata_only(&photo_file).await
                 });
             }
 
@@ -179,7 +183,14 @@ impl PhotoProcessor {
         Ok(photos)
     }
 
-    pub async fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
+    /// Phase 1: Extract metadata without computing semantic vectors
+    ///
+    /// Processes file metadata (EXIF, dimensions, etc.) but skips semantic vector computation.
+    /// Semantic vectors are computed separately in Phase 2.
+    pub async fn process_file_metadata_only(
+        &self,
+        photo_file: &PhotoFile,
+    ) -> Option<ProcessedPhoto> {
         log::info!("Processing file: {}", photo_file.path.display());
 
         let path = &photo_file.path;
@@ -190,33 +201,7 @@ impl PhotoProcessor {
         let hash_sha256 = self.calculate_file_hash(path).ok();
         let blurhash = self.generate_blurhash(path);
 
-        // Compute semantic vector (async for videos, sync for images)
-        let is_video = mime_type
-            .as_ref()
-            .map(|m| m.starts_with("video/"))
-            .unwrap_or(false);
-
-        if is_video {
-            // Video processing is async - await completion
-            if let Err(e) = self
-                .semantic_search
-                .compute_video_semantic_vector(&file_path)
-                .await
-            {
-                error!(
-                    "Failed to generate video semantic vector for {}: {}",
-                    file_path, e
-                );
-            }
-        } else {
-            // Image processing is synchronous
-            if let Err(e) = self.semantic_search.compute_semantic_vector(&file_path) {
-                error!(
-                    "Failed to generate semantic vector for {}: {}",
-                    file_path, e
-                );
-            }
-        }
+        // Semantic vectors are skipped in Phase 1 and computed in Phase 2
 
         Some(ProcessedPhoto {
             file_path: file_path.clone(),
@@ -301,5 +286,98 @@ impl PhotoProcessor {
         );
         let hash = dct_result.into_blurhash();
         Some(hash)
+    }
+
+    /// Phase 2: Batch compute semantic vectors for all photos in database
+    ///
+    /// This is called after Phase 1 (fast metadata scan) completes.
+    /// Computes semantic vectors in batches to minimize database lock contention.
+    /// Uses mime type detection for accurate video/image classification.
+    pub async fn batch_compute_semantic_vectors(
+        &self,
+        db_pool: &DbPool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use log::info;
+
+        info!("Phase 2: Starting batch semantic vector computation");
+
+        // Get all photo paths from database
+        let photo_paths = crate::db::get_photo_paths_for_indexing(db_pool)?;
+        let total_count = photo_paths.len();
+
+        if total_count == 0 {
+            info!("No photos found in database for semantic vector computation");
+            return Ok(());
+        }
+
+        info!("Computing semantic vectors for {} photos", total_count);
+
+        // Batch size for semantic vector computation (100 photos per batch)
+        // Smaller batches allow for better progress tracking and error isolation
+        const SEMANTIC_BATCH_SIZE: usize = 100;
+
+        let mut processed_count = 0;
+        let mut error_count = 0;
+
+        for (batch_idx, batch_paths) in photo_paths.chunks(SEMANTIC_BATCH_SIZE).enumerate() {
+            // Process each batch with controlled concurrency
+            let mut batch_tasks = tokio::task::JoinSet::new();
+
+            for path in batch_paths {
+                let path = path.clone();
+                let semantic_search = self.semantic_search.clone();
+
+                batch_tasks.spawn(async move {
+                    // Use mime type detection for accurate classification
+                    let path_buf = std::path::PathBuf::from(&path);
+                    let is_video = mimetype_detector::from_path(&path_buf)
+                        .map(|m| m.type_() == "video")
+                        .unwrap_or(false);
+
+                    if is_video {
+                        semantic_search
+                            .compute_video_semantic_vector(&path)
+                            .await
+                            .map(|_| path.clone())
+                    } else {
+                        semantic_search
+                            .compute_semantic_vector(&path)
+                            .map(|_| path.clone())
+                    }
+                });
+            }
+
+            // Wait for all tasks in this batch to complete
+            while let Some(result) = batch_tasks.join_next().await {
+                match result {
+                    Ok(Ok(_)) => processed_count += 1,
+                    Ok(Err(e)) => {
+                        error!("Failed to compute semantic vector: {}", e);
+                        error_count += 1;
+                    }
+                    Err(e) => {
+                        error!("Task panicked: {}", e);
+                        error_count += 1;
+                    }
+                }
+            }
+
+            // Progress logging every 5 batches (500 photos)
+            if (batch_idx + 1) % 5 == 0 {
+                info!(
+                    "Semantic vector progress: {}/{} photos ({:.1}%)",
+                    processed_count,
+                    total_count,
+                    (processed_count as f64 / total_count as f64) * 100.0
+                );
+            }
+        }
+
+        info!(
+            "Phase 2 completed: {} semantic vectors computed, {} errors",
+            processed_count, error_count
+        );
+
+        Ok(())
     }
 }

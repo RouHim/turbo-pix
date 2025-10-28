@@ -3,6 +3,7 @@
 ## Project Context
 
 Development/personal project - breaking changes acceptable, database can be recreated!
+This means, no legacy support, no migration scripts, no backward compatibility.
 
 ## Development Commands
 

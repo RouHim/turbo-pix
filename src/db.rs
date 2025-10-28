@@ -299,6 +299,8 @@ impl Photo {
     }
 
     /// Create or update photo (convenience wrapper that gets connection from pool)
+    /// Use `batch_write_photos` in production for better performance
+    #[cfg(test)]
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         self.create_or_update_with_connection(&conn)
@@ -473,22 +475,42 @@ impl Photo {
     }
 
     /// Create or update photo using an existing connection (for batch operations)
+    ///
+    /// Checks for existing photos by both hash and file_path to handle cases where:
+    /// - Hash matches: update the existing record
+    /// - File path matches but hash differs: delete old record and insert new one
+    /// - Neither matches: insert new record
     pub fn create_or_update_with_connection(
         &self,
         conn: &rusqlite::Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let existing = conn.query_row(
+        // Check if photo exists by hash
+        let existing_by_hash = conn.query_row(
             "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
             [&self.hash_sha256],
             |row| row.get::<_, String>(0),
         );
 
-        if existing.is_ok() {
-            self.update_with_connection(conn)
-        } else {
-            self.create_with_connection(conn)?;
-            Ok(())
+        if existing_by_hash.is_ok() {
+            // Photo exists with same hash - update it
+            return self.update_with_connection(conn);
         }
+
+        // Check if photo exists by file_path (hash might have changed)
+        let existing_by_path = conn.query_row(
+            "SELECT hash_sha256 FROM photos WHERE file_path = ?",
+            [&self.file_path],
+            |row| row.get::<_, String>(0),
+        );
+
+        if let Ok(old_hash) = existing_by_path {
+            // File exists but hash changed - delete old record and insert new
+            conn.execute("DELETE FROM photos WHERE hash_sha256 = ?", [&old_hash])?;
+        }
+
+        // Insert new record
+        self.create_with_connection(conn)?;
+        Ok(())
     }
 
     pub fn search_photos(
@@ -766,14 +788,22 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     crate::db_pool::create_in_memory_pool()
 }
 
-#[cfg(test)]
-pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+/// Get all photo file paths from the database (used for semantic indexing in Phase 2)
+pub fn get_photo_paths_for_indexing(
+    pool: &DbPool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare("SELECT file_path FROM photos ORDER BY file_path")?;
     let paths = stmt
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<String>, _>>()?;
     Ok(paths)
+}
+
+// Legacy alias for test compatibility
+#[cfg(test)]
+pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    get_photo_paths_for_indexing(pool)
 }
 
 #[cfg(test)]

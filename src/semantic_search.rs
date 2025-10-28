@@ -78,6 +78,44 @@ impl SemanticSearchEngine {
         })
     }
 
+    /// Retry helper for database operations with exponential backoff
+    /// Handles "database is locked" errors during high concurrent write load
+    fn retry_on_db_locked<F, T>(&self, operation: F, operation_name: &str) -> Result<T>
+    where
+        F: Fn() -> Result<T>,
+    {
+        const MAX_RETRIES: u32 = 5;
+        const BASE_DELAY_MS: u64 = 100;
+
+        for attempt in 0..MAX_RETRIES {
+            match operation() {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("database is locked") && attempt < MAX_RETRIES - 1 {
+                        let delay_ms = BASE_DELAY_MS * 2_u64.pow(attempt);
+                        log::warn!(
+                            "Database locked during {} (attempt {}/{}), retrying in {}ms",
+                            operation_name,
+                            attempt + 1,
+                            MAX_RETRIES,
+                            delay_ms
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed after {} retries: {}",
+            MAX_RETRIES,
+            operation_name
+        ))
+    }
+
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, f32)>> {
         let start_time = std::time::Instant::now();
@@ -142,13 +180,10 @@ impl SemanticSearchEngine {
 
     /// Computes and caches semantic vector for a single image
     pub fn compute_semantic_vector(&self, image_path: &str) -> Result<()> {
-        let mut conn = self.pool.get()?;
-
-        // Use IMMEDIATE transaction to prevent race conditions when checking and inserting
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        // Check if semantic vector already exists to avoid recomputation
-        let exists: bool = tx
+        // OPTIMIZATION: Check existence BEFORE acquiring transaction lock
+        // WAL mode allows concurrent reads without blocking writers
+        let conn = self.pool.get()?;
+        let exists: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
                 [image_path],
@@ -158,10 +193,11 @@ impl SemanticSearchEngine {
 
         if exists {
             log::debug!("Semantic vector already cached for: {}", image_path);
-            tx.commit()?;
             return Ok(());
         }
+        drop(conn);
 
+        // OPTIMIZATION: Compute expensive vector BEFORE acquiring write lock
         let model_read = self
             .model
             .read()
@@ -169,10 +205,40 @@ impl SemanticSearchEngine {
         let semantic_vector = encode_image(&model_read, image_path, &self.device)?;
         drop(model_read);
 
-        store_semantic_vector_tx(&tx, image_path, &semantic_vector)?;
+        // OPTIMIZATION: Retry database write with exponential backoff
+        let pool = &self.pool;
+        let path = image_path;
+        self.retry_on_db_locked(
+            || {
+                // OPTIMIZATION: Only hold IMMEDIATE transaction for minimal write operation
+                // Use IMMEDIATE to prevent race condition where multiple tasks compute same vector
+                let mut conn = pool.get()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        tx.commit()?;
-        Ok(())
+                // Double-check existence after expensive computation (race condition prevention)
+                let still_missing: bool = tx
+                    .query_row(
+                        "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+                        [path],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(true);
+
+                if still_missing {
+                    store_semantic_vector_tx(&tx, path, &semantic_vector)?;
+                } else {
+                    log::debug!(
+                        "Semantic vector was computed by another task for: {}",
+                        path
+                    );
+                }
+
+                tx.commit()?;
+                Ok(())
+            },
+            "semantic vector storage",
+        )
     }
 
     /// Computes and caches semantic vector for a video by sampling frames
@@ -281,35 +347,45 @@ impl SemanticSearchEngine {
         let normalized_embedding = normalize_vector(&video_embedding)?;
 
         // Store embedding and metadata in a transaction (after all async work is done)
-        let mut conn = self.pool.get()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Retry with exponential backoff for database locked errors
+        let pool = &self.pool;
+        let path = video_path;
+        self.retry_on_db_locked(
+            || {
+                let mut conn = pool.get()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        // Double-check it wasn't inserted by another concurrent task
-        let exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                [video_path],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
+                // Double-check it wasn't inserted by another concurrent task
+                let exists: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+                        [path],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
 
-        if !exists {
-            store_semantic_vector_tx(&tx, video_path, &normalized_embedding)?;
-            store_video_metadata_tx(
-                &tx,
-                video_path,
-                VIDEO_FRAME_COUNT,
-                &frame_times,
-                MODEL_VERSION,
-            )?;
-        } else {
-            log::debug!(
-                "Video semantic vector was cached by another task during computation: {}",
-                video_path
-            );
-        }
+                if !exists {
+                    store_semantic_vector_tx(&tx, path, &normalized_embedding)?;
+                    store_video_metadata_tx(
+                        &tx,
+                        path,
+                        VIDEO_FRAME_COUNT,
+                        &frame_times,
+                        MODEL_VERSION,
+                    )?;
+                } else {
+                    log::debug!(
+                        "Video semantic vector was cached by another task during computation: {}",
+                        path
+                    );
+                }
 
-        tx.commit()?;
+                tx.commit()?;
+                Ok(())
+            },
+            "video semantic vector storage",
+        )?;
 
         log::info!(
             "Video semantic vector computed in {:?}: {}",

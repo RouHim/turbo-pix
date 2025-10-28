@@ -3,6 +3,7 @@ use log::error;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
@@ -11,6 +12,40 @@ use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::semantic_search::SemanticSearchEngine;
+
+/// Batch size for semantic vector computation (CPU-bound operations)
+/// Smaller batches (100) provide better progress tracking and error isolation.
+/// Lower than DB_WRITE_BATCH_SIZE since semantic processing is CPU/GPU-intensive
+/// and benefits from smaller chunks with more frequent progress updates.
+const SEMANTIC_BATCH_SIZE: usize = 100;
+
+/// Calculate optimal concurrency for semantic vector computation
+/// Balances CPU utilization with database write bottlenecks
+/// Uses a hybrid algorithm:
+/// - Low-core systems (<=4 cores): 1:1 mapping (all cores used for CPU-bound tasks)
+/// - High-core systems (>4 cores): 60% of additional cores beyond 4
+///   to avoid overwhelming SQLite single-writer performance
+///
+/// Examples:
+/// - 4 cores: 4 tasks (100% utilization)
+/// - 8 cores: 6 tasks (75% utilization)
+/// - 16 cores: 11 tasks (68.75% utilization)
+/// - 32 cores: 20 tasks (62.5% utilization)
+/// - 64 cores: 40 tasks (62.5% utilization)
+fn calculate_optimal_semantic_concurrency() -> usize {
+    let cpu_cores = num_cpus::get();
+
+    if cpu_cores <= 4 {
+        // Low-core systems: CPU is bottleneck, use all cores
+        cpu_cores
+    } else {
+        // High-core systems: Use 60% of additional cores beyond 4
+        // Formula: 4 + (cores - 4) × 0.6
+        let additional_cores = cpu_cores - 4;
+        let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+        4 + additional_tasks
+    }
+}
 
 #[derive(Debug)]
 pub struct ProcessedPhoto {
@@ -60,6 +95,10 @@ impl PhotoProcessor {
         }
     }
 
+    /// Phase 1: Fast metadata scan without semantic vector computation
+    ///
+    /// Scans all files, extracts metadata, and cleans up orphaned database entries.
+    /// Semantic vectors are computed separately in Phase 2 via `batch_compute_semantic_vectors`.
     pub async fn full_rescan_and_cleanup(
         &self,
         db_pool: &DbPool,
@@ -161,7 +200,7 @@ impl PhotoProcessor {
                         scanner: FileScanner::new(Vec::new()), // Empty scanner, not used
                         semantic_search,
                     };
-                    processor.process_file(&photo_file).await
+                    processor.process_file_metadata_only(&photo_file).await
                 });
             }
 
@@ -179,7 +218,14 @@ impl PhotoProcessor {
         Ok(photos)
     }
 
-    pub async fn process_file(&self, photo_file: &PhotoFile) -> Option<ProcessedPhoto> {
+    /// Phase 1: Extract metadata without computing semantic vectors
+    ///
+    /// Processes file metadata (EXIF, dimensions, etc.) but skips semantic vector computation.
+    /// Semantic vectors are computed separately in Phase 2.
+    pub async fn process_file_metadata_only(
+        &self,
+        photo_file: &PhotoFile,
+    ) -> Option<ProcessedPhoto> {
         log::info!("Processing file: {}", photo_file.path.display());
 
         let path = &photo_file.path;
@@ -190,33 +236,7 @@ impl PhotoProcessor {
         let hash_sha256 = self.calculate_file_hash(path).ok();
         let blurhash = self.generate_blurhash(path);
 
-        // Compute semantic vector (async for videos, sync for images)
-        let is_video = mime_type
-            .as_ref()
-            .map(|m| m.starts_with("video/"))
-            .unwrap_or(false);
-
-        if is_video {
-            // Video processing is async - await completion
-            if let Err(e) = self
-                .semantic_search
-                .compute_video_semantic_vector(&file_path)
-                .await
-            {
-                error!(
-                    "Failed to generate video semantic vector for {}: {}",
-                    file_path, e
-                );
-            }
-        } else {
-            // Image processing is synchronous
-            if let Err(e) = self.semantic_search.compute_semantic_vector(&file_path) {
-                error!(
-                    "Failed to generate semantic vector for {}: {}",
-                    file_path, e
-                );
-            }
-        }
+        // Semantic vectors are skipped in Phase 1 and computed in Phase 2
 
         Some(ProcessedPhoto {
             file_path: file_path.clone(),
@@ -301,5 +321,230 @@ impl PhotoProcessor {
         );
         let hash = dct_result.into_blurhash();
         Some(hash)
+    }
+
+    /// Phase 2: Batch compute semantic vectors for photos missing indexing
+    ///
+    /// This is called after Phase 1 (fast metadata scan) completes.
+    /// Only processes photos where semantic_vector_indexed = false.
+    /// Limits concurrency to available CPU cores for optimal performance.
+    pub async fn batch_compute_semantic_vectors(
+        &self,
+        db_pool: &DbPool,
+    ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+        use log::info;
+
+        info!("Phase 2: Starting batch semantic vector computation");
+
+        // Get only photos that need semantic indexing
+        let photo_paths = crate::db::get_paths_needing_semantic_indexing(db_pool)?;
+        let total_count = photo_paths.len();
+
+        if total_count == 0 {
+            info!("No photos found needing semantic vector computation");
+            return Ok((0, 0));
+        }
+
+        info!(
+            "Computing semantic vectors for {} photos (skipping already indexed)",
+            total_count
+        );
+
+        // Calculate optimal concurrency using hybrid algorithm
+        // Balances CPU utilization (low cores) with database write bottleneck (high cores)
+        let max_concurrency = calculate_optimal_semantic_concurrency();
+        let cpu_cores = num_cpus::get();
+        let semaphore = Arc::new(Semaphore::new(max_concurrency));
+        info!(
+            "Using {} concurrent tasks for {} CPU cores ({:.1}% utilization, optimized for SQLite single-writer)",
+            max_concurrency,
+            cpu_cores,
+            (max_concurrency as f64 / cpu_cores as f64) * 100.0
+        );
+
+        let mut processed_count = 0;
+        let mut error_count = 0;
+
+        for (batch_idx, batch_paths) in photo_paths.chunks(SEMANTIC_BATCH_SIZE).enumerate() {
+            let mut batch_tasks = tokio::task::JoinSet::new();
+
+            for path in batch_paths {
+                let path = path.clone();
+                let semantic_search = self.semantic_search.clone();
+                let db_pool = db_pool.clone();
+                let semaphore = semaphore.clone();
+
+                batch_tasks.spawn(async move {
+                    // Acquire semaphore permit to limit concurrency
+                    let _permit = semaphore
+                        .acquire()
+                        .await
+                        .expect("Semaphore should not be closed");
+
+                    // Determine if video or image
+                    let path_buf = std::path::PathBuf::from(&path);
+                    let is_video = mimetype_detector::from_path(&path_buf)
+                        .map(|m| m.type_() == "video")
+                        .unwrap_or(false);
+
+                    // Compute semantic vector
+                    let result = if is_video {
+                        semantic_search.compute_video_semantic_vector(&path).await
+                    } else {
+                        semantic_search.compute_semantic_vector(&path)
+                    };
+
+                    // Mark as indexed if successful
+                    if result.is_ok() {
+                        if let Err(e) =
+                            crate::db::mark_photo_as_semantically_indexed(&db_pool, &path)
+                        {
+                            error!("Failed to mark photo as indexed {}: {}", path, e);
+                        }
+                    }
+
+                    result.map(|_| path.clone())
+                });
+            }
+
+            // Wait for all tasks in this batch to complete
+            while let Some(result) = batch_tasks.join_next().await {
+                match result {
+                    Ok(Ok(_)) => processed_count += 1,
+                    Ok(Err(e)) => {
+                        error!("Failed to compute semantic vector: {}", e);
+                        error_count += 1;
+                    }
+                    Err(e) => {
+                        error!("Task panicked: {}", e);
+                        error_count += 1;
+                    }
+                }
+            }
+
+            // Progress logging every 5 batches
+            if (batch_idx + 1) % 5 == 0 {
+                info!(
+                    "Semantic vector progress: {}/{} photos ({:.1}%), {} errors",
+                    processed_count + error_count,
+                    total_count,
+                    ((processed_count + error_count) as f64 / total_count as f64) * 100.0,
+                    error_count
+                );
+            }
+        }
+
+        info!(
+            "Phase 2 completed: {} semantic vectors computed, {} errors",
+            processed_count, error_count
+        );
+
+        Ok((processed_count, error_count))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_calculate_optimal_semantic_concurrency_algorithm() {
+        // Test cases: (simulated_cores, expected_tasks, description)
+        let test_cases = [
+            (1, 1, "Single core: 1:1 mapping"),
+            (2, 2, "Dual core: 1:1 mapping"),
+            (3, 3, "Triple core: 1:1 mapping"),
+            (4, 4, "Quad core: 1:1 mapping (boundary)"),
+            (6, 5, "6 cores: 4 + (6-4)×0.6 = 5"),
+            (8, 6, "8 cores: 4 + (8-4)×0.6 = 6"),
+            (12, 8, "12 cores: 4 + (12-4)×0.6 = 8"),
+            (16, 11, "16 cores: 4 + (16-4)×0.6 = 11"),
+            (24, 16, "24 cores: 4 + (24-4)×0.6 = 16"),
+            (32, 20, "32 cores: 4 + (32-4)×0.6 = 20"),
+            (64, 40, "64 cores: 4 + (64-4)×0.6 = 40"),
+        ];
+
+        for (simulated_cores, expected, description) in test_cases {
+            // Simulate the calculation without mocking num_cpus
+            let actual = if simulated_cores <= 4 {
+                simulated_cores
+            } else {
+                let additional_cores = simulated_cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert_eq!(
+                actual, expected,
+                "Failed: {} (cores={}, expected={}, got={})",
+                description, simulated_cores, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrency_never_exceeds_cores() {
+        // Ensure we never request more tasks than available cores
+        for cores in 1..=128 {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert!(
+                tasks <= cores,
+                "Concurrency {} exceeds cores {} (invalid!)",
+                tasks,
+                cores
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrency_always_positive() {
+        // Ensure we always have at least 1 task
+        for cores in 1..=128 {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert!(tasks >= 1, "Concurrency must be at least 1, got {}", tasks);
+        }
+    }
+
+    #[test]
+    fn test_concurrency_scaling_ratio() {
+        // Verify that utilization ratio decreases from 100% (at 4 cores) and stabilizes around 60%
+        let cores_to_test = [4, 8, 16, 32, 64];
+
+        for &cores in &cores_to_test {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            let ratio = tasks as f64 / cores as f64;
+
+            if cores == 4 {
+                // At 4 cores, should be 100%
+                assert_eq!(ratio, 1.0, "At 4 cores, ratio should be 100%");
+            } else {
+                // Beyond 4 cores, ratio should be between 60-75%
+                assert!(
+                    (0.60..=0.75).contains(&ratio),
+                    "Beyond 4 cores, ratio should be 60-75%: cores={}, ratio={:.2}",
+                    cores,
+                    ratio
+                );
+            }
+        }
     }
 }

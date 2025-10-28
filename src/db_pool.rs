@@ -60,6 +60,7 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     {
         let conn = pool.get()?;
         // Configure SQLite for optimal performance with large datasets
+        // - busy_timeout: 30s wait for locks (handles concurrent semantic indexing)
         // - cache_size: 128MB cache (default: ~2MB)
         // - mmap_size: 512MB memory-mapped I/O for faster reads
         // - wal_autocheckpoint: Checkpoint every 10k pages (less frequent checkpoints)
@@ -68,7 +69,7 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA temp_store = MEMORY;
-             PRAGMA busy_timeout = 5000;
+             PRAGMA busy_timeout = 30000;
              PRAGMA cache_size = -128000;
              PRAGMA mmap_size = 536870912;
              PRAGMA wal_autocheckpoint = 10000;

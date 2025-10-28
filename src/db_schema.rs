@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS photos (
     has_thumbnail BOOLEAN DEFAULT FALSE,
     blurhash TEXT,
     is_favorite BOOLEAN DEFAULT FALSE,
+    semantic_vector_indexed BOOLEAN DEFAULT FALSE,
 
     -- Metadata (JSON blob for all EXIF/camera/location/video metadata)
     metadata TEXT NOT NULL DEFAULT '{}',

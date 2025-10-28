@@ -29,6 +29,7 @@ pub struct Photo {
     pub has_thumbnail: Option<bool>,
     pub blurhash: Option<String>,
     pub is_favorite: Option<bool>,
+    pub semantic_vector_indexed: Option<bool>,
 
     // === METADATA (JSON blob) ===
     /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
@@ -185,24 +186,25 @@ impl Photo {
             has_thumbnail: row.get(11)?,
             blurhash: row.get(12)?,
             is_favorite: row.get(13)?,
+            semantic_vector_indexed: row.get(14)?,
             metadata: row
-                .get::<_, String>(14)?
+                .get::<_, String>(15)?
                 .parse()
                 .unwrap_or_else(|_| json!({})),
-            date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(15)?)
+            date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(16)?)
                 .unwrap()
                 .with_timezone(&Utc),
             date_indexed: row
-                .get::<_, Option<String>>(16)?
+                .get::<_, Option<String>>(17)?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             created_at: {
-                let datetime_str = row.get::<_, String>(17)?;
+                let datetime_str = row.get::<_, String>(18)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                17,
+                                18,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -212,7 +214,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                17,
+                                18,
                                 "created_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -221,12 +223,12 @@ impl Photo {
                 }
             },
             updated_at: {
-                let datetime_str = row.get::<_, String>(18)?;
+                let datetime_str = row.get::<_, String>(19)?;
                 if datetime_str.contains('T') {
                     DateTime::parse_from_rfc3339(&datetime_str)
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                18,
+                                19,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -236,7 +238,7 @@ impl Photo {
                     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
                         .map_err(|_| {
                             rusqlite::Error::InvalidColumnType(
-                                18,
+                                19,
                                 "updated_at".to_string(),
                                 rusqlite::types::Type::Text,
                             )
@@ -299,6 +301,8 @@ impl Photo {
     }
 
     /// Create or update photo (convenience wrapper that gets connection from pool)
+    /// Use `batch_write_photos` in production for better performance
+    #[cfg(test)]
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         self.create_or_update_with_connection(&conn)
@@ -385,6 +389,7 @@ impl Photo {
     }
 
     /// Create photo using an existing connection (for batch operations within a transaction)
+    #[cfg(test)]
     pub fn create_with_connection(
         &self,
         conn: &rusqlite::Connection,
@@ -394,11 +399,11 @@ impl Photo {
             INSERT INTO photos (
                 hash_sha256, file_path, filename, file_size, mime_type,
                 taken_at, width, height, orientation, duration,
-                thumbnail_path, has_thumbnail, blurhash, is_favorite,
+                thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
                 metadata,
                 file_modified, date_indexed, created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
             )
             "#,
             params![
@@ -416,6 +421,7 @@ impl Photo {
                 self.has_thumbnail,
                 self.blurhash,
                 self.is_favorite.unwrap_or(false),
+                self.semantic_vector_indexed.unwrap_or(false),
                 self.metadata.to_string(),
                 self.date_modified.to_rfc3339(),
                 self.date_indexed.map(|dt| dt.to_rfc3339()),
@@ -444,7 +450,7 @@ impl Photo {
             UPDATE photos SET
                 file_path = ?, filename = ?, file_size = ?, mime_type = ?,
                 taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
-                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?,
+                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?,
                 metadata = ?,
                 file_modified = ?, updated_at = ?
             WHERE hash_sha256 = ?
@@ -463,6 +469,7 @@ impl Photo {
                 self.has_thumbnail,
                 self.blurhash,
                 self.is_favorite.unwrap_or(false),
+                self.semantic_vector_indexed.unwrap_or(false),
                 self.metadata.to_string(),
                 self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
@@ -473,22 +480,102 @@ impl Photo {
     }
 
     /// Create or update photo using an existing connection (for batch operations)
+    ///
+    /// # Transaction Requirement
+    ///
+    /// **IMPORTANT**: This method MUST be called within an active database transaction.
+    /// The operation consists of two separate SQL statements (DELETE + UPSERT) that must
+    /// execute atomically to prevent race conditions when the same file_path is processed
+    /// concurrently or a file's hash changes between operations.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Deletes any existing photo with the same `file_path` but different `hash_sha256`
+    ///    (handles the case where a file was modified and its hash changed)
+    /// 2. Uses UPSERT to insert if new, or update if `hash_sha256` already exists
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure this is called within a transaction (e.g., via
+    /// `transaction_with_behavior(TransactionBehavior::Immediate)`). The `batch_write_photos`
+    /// function in `scheduler.rs` demonstrates correct usage.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    /// for photo in photos {
+    ///     photo.create_or_update_with_connection(&tx)?;
+    /// }
+    /// tx.commit()?;
+    /// ```
     pub fn create_or_update_with_connection(
         &self,
         conn: &rusqlite::Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let existing = conn.query_row(
-            "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
-            [&self.hash_sha256],
-            |row| row.get::<_, String>(0),
-        );
+        // First, delete any existing photo with same file_path but different hash
+        // This handles the case where a file was modified (hash changed)
+        conn.execute(
+            "DELETE FROM photos WHERE file_path = ? AND hash_sha256 != ?",
+            [&self.file_path, &self.hash_sha256],
+        )?;
 
-        if existing.is_ok() {
-            self.update_with_connection(conn)
-        } else {
-            self.create_with_connection(conn)?;
-            Ok(())
-        }
+        // Then use UPSERT to insert or update by hash
+        conn.execute(
+            r#"
+            INSERT INTO photos (
+                hash_sha256, file_path, filename, file_size, mime_type,
+                taken_at, width, height, orientation, duration,
+                thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
+                metadata,
+                file_modified, date_indexed, created_at, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+            )
+            ON CONFLICT(hash_sha256) DO UPDATE SET
+                file_path = excluded.file_path,
+                filename = excluded.filename,
+                file_size = excluded.file_size,
+                mime_type = excluded.mime_type,
+                taken_at = excluded.taken_at,
+                width = excluded.width,
+                height = excluded.height,
+                orientation = excluded.orientation,
+                duration = excluded.duration,
+                thumbnail_path = excluded.thumbnail_path,
+                has_thumbnail = excluded.has_thumbnail,
+                blurhash = excluded.blurhash,
+                is_favorite = COALESCE(photos.is_favorite, excluded.is_favorite),
+                semantic_vector_indexed = excluded.semantic_vector_indexed,
+                metadata = excluded.metadata,
+                file_modified = excluded.file_modified,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                self.hash_sha256,
+                self.file_path,
+                self.filename,
+                self.file_size,
+                self.mime_type,
+                self.taken_at.map(|dt| dt.to_rfc3339()),
+                self.width,
+                self.height,
+                self.orientation,
+                self.duration,
+                self.thumbnail_path,
+                self.has_thumbnail,
+                self.blurhash,
+                self.is_favorite.unwrap_or(false),
+                self.semantic_vector_indexed.unwrap_or(false),
+                self.metadata.to_string(),
+                self.date_modified.to_rfc3339(),
+                self.date_indexed.map(|dt| dt.to_rfc3339()),
+                Utc::now().to_rfc3339(),
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+
+        Ok(())
     }
 
     pub fn search_photos(
@@ -744,6 +831,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             has_thumbnail: Some(false),
             blurhash: processed.blurhash,
             is_favorite: None,
+            semantic_vector_indexed: Some(false), // Phase 1 only indexes metadata
             metadata: json!(metadata),
             date_modified: processed.date_modified,
             date_indexed: Some(Utc::now()),
@@ -766,6 +854,7 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     crate::db_pool::create_in_memory_pool()
 }
 
+/// Get all photo file paths from the database
 #[cfg(test)]
 pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
@@ -774,6 +863,33 @@ pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::er
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<String>, _>>()?;
     Ok(paths)
+}
+
+/// Get file paths of photos that need semantic vector indexing (Phase 2)
+pub fn get_paths_needing_semantic_indexing(
+    pool: &DbPool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT file_path FROM photos WHERE semantic_vector_indexed = 0 OR semantic_vector_indexed IS NULL ORDER BY file_path"
+    )?;
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(paths)
+}
+
+/// Mark a photo as semantically indexed
+pub fn mark_photo_as_semantically_indexed(
+    pool: &DbPool,
+    file_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = pool.get()?;
+    conn.execute(
+        "UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?",
+        [file_path],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -796,6 +912,7 @@ mod tests {
             has_thumbnail: Some(false),
             blurhash: None,
             is_favorite: None,
+            semantic_vector_indexed: Some(false),
             metadata: json!({}), // Empty metadata for tests
             date_modified: Utc::now(),
             date_indexed: Some(Utc::now()),

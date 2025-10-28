@@ -9,12 +9,23 @@ use crate::db_schema::initialize_schema;
 pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
 
 // Pool sizing configuration
-// Formula: (MAX_CONCURRENT_PHOTO_TASKS * 2) + API_REQUEST_BUFFER
+// Formula: (max_concurrent_photo_tasks() * 2) + API_REQUEST_BUFFER
 // - *2 multiplier: Each task may need multiple connections during processing
 // - API buffer: Reserve connections for concurrent API requests
-pub const MAX_CONCURRENT_PHOTO_TASKS: usize = 10;
 const API_REQUEST_BUFFER: usize = 10;
-const DB_POOL_SIZE: usize = (MAX_CONCURRENT_PHOTO_TASKS * 2) + API_REQUEST_BUFFER;
+
+/// Returns optimal number of concurrent photo processing tasks based on CPU cores
+/// Formula: num_cores (for CPU-bound CLIP inference)
+pub fn max_concurrent_photo_tasks() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4) // Fallback to 4 if detection fails
+}
+
+/// Calculate optimal database connection pool size
+fn db_pool_size() -> usize {
+    (max_concurrent_photo_tasks() * 2) + API_REQUEST_BUFFER
+}
 
 pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
     if let Some(parent) = std::path::Path::new(database_path).parent() {
@@ -34,18 +45,34 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     }
 
     let manager = SqliteConnectionManager::file(database_path);
+    let pool_size = db_pool_size();
+    info!(
+        "Creating database pool: {} connections ({} concurrent tasks, {} API buffer)",
+        pool_size,
+        max_concurrent_photo_tasks(),
+        API_REQUEST_BUFFER
+    );
     let pool = Pool::builder()
-        .max_size(DB_POOL_SIZE as u32)
+        .max_size(pool_size as u32)
         .connection_timeout(std::time::Duration::from_secs(30))
         .build(manager)?;
 
     {
         let conn = pool.get()?;
+        // Configure SQLite for optimal performance with large datasets
+        // - cache_size: 128MB cache (default: ~2MB)
+        // - mmap_size: 512MB memory-mapped I/O for faster reads
+        // - wal_autocheckpoint: Checkpoint every 10k pages (less frequent checkpoints)
+        // - analysis_limit: Faster ANALYZE queries
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA temp_store = MEMORY;
-             PRAGMA busy_timeout = 5000;",
+             PRAGMA busy_timeout = 5000;
+             PRAGMA cache_size = -128000;
+             PRAGMA mmap_size = 536870912;
+             PRAGMA wal_autocheckpoint = 10000;
+             PRAGMA analysis_limit = 1000;",
         )?;
         initialize_schema(&conn)?;
     }
@@ -149,7 +176,7 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
 
     let manager = SqliteConnectionManager::memory();
     let pool = Pool::builder()
-        .max_size(DB_POOL_SIZE as u32)
+        .max_size(db_pool_size() as u32)
         .connection_timeout(std::time::Duration::from_secs(30))
         .build(manager)?;
 

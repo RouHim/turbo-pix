@@ -69,20 +69,85 @@ impl PhotoScheduler {
                     Ok(processed_photos) => {
                         let mut indexed_count = 0;
                         let mut error_count = 0;
+                        let total_count = processed_photos.len();
 
-                        for processed_photo in processed_photos {
-                            let photo: crate::db::Photo = processed_photo.into();
-                            match photo.create_or_update(&db_pool) {
-                                Ok(_) => indexed_count += 1,
-                                Err(e) => {
-                                    error!("Failed to save photo to database: {}", e);
-                                    error_count += 1;
+                        // Convert ProcessedPhoto to Photo first
+                        let photos: Vec<crate::db::Photo> =
+                            processed_photos.into_iter().map(|p| p.into()).collect();
+
+                        // Batch writes for better performance (1000 photos per transaction)
+                        const BATCH_SIZE: usize = 1000;
+
+                        for (batch_idx, batch) in photos.chunks(BATCH_SIZE).enumerate() {
+                            match db_pool.get() {
+                                Ok(conn) => {
+                                    // Begin transaction for this batch
+                                    if let Err(e) = conn.execute("BEGIN IMMEDIATE", []) {
+                                        error!("Failed to begin transaction: {}", e);
+                                        error_count += batch.len();
+                                        continue;
+                                    }
+
+                                    let mut batch_success = 0;
+                                    let mut batch_errors = 0;
+
+                                    for photo in batch {
+                                        match photo.create_or_update_with_connection(&conn) {
+                                            Ok(_) => batch_success += 1,
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to save photo {}: {}",
+                                                    photo.file_path, e
+                                                );
+                                                batch_errors += 1;
+                                            }
+                                        }
+                                    }
+
+                                    // Commit transaction
+                                    if batch_errors == 0 {
+                                        if let Err(e) = conn.execute("COMMIT", []) {
+                                            error!("Failed to commit batch: {}", e);
+                                            error_count += batch.len();
+                                        } else {
+                                            indexed_count += batch_success;
+                                            info!(
+                                                "Batch {}/{} committed: {} photos saved",
+                                                batch_idx + 1,
+                                                total_count.div_ceil(BATCH_SIZE),
+                                                batch_success
+                                            );
+                                        }
+                                    } else {
+                                        // Rollback on any error in batch
+                                        let _ = conn.execute("ROLLBACK", []);
+                                        error!(
+                                            "Batch {} rolled back due to {} errors",
+                                            batch_idx + 1,
+                                            batch_errors
+                                        );
+                                        error_count += batch.len();
+                                    }
                                 }
+                                Err(e) => {
+                                    error!("Failed to get database connection: {}", e);
+                                    error_count += batch.len();
+                                }
+                            }
+
+                            // Progress logging every 5 batches (5000 photos)
+                            if (batch_idx + 1) % 5 == 0 {
+                                info!(
+                                    "Progress: {}/{} photos processed ({:.1}%)",
+                                    indexed_count,
+                                    total_count,
+                                    (indexed_count as f64 / total_count as f64) * 100.0
+                                );
                             }
                         }
 
                         info!(
-                            "Scheduled rescan completed: {} photos processed, {} errors",
+                            "Scheduled rescan completed: {} photos indexed, {} errors",
                             indexed_count, error_count
                         );
                     }

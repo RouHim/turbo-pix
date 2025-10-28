@@ -292,56 +292,16 @@ impl Photo {
         self.updated_at = Utc::now();
     }
 
+    /// Update photo (convenience wrapper that gets connection from pool)
     pub fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
-        conn.execute(
-            r#"
-            UPDATE photos SET
-                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
-                taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
-                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?,
-                metadata = ?,
-                file_modified = ?, updated_at = ?
-            WHERE hash_sha256 = ?
-            "#,
-            params![
-                self.file_path,
-                self.filename,
-                self.file_size,
-                self.mime_type,
-                self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.width,
-                self.height,
-                self.orientation,
-                self.duration,
-                self.thumbnail_path,
-                self.has_thumbnail,
-                self.blurhash,
-                self.is_favorite.unwrap_or(false),
-                self.metadata.to_string(),
-                self.date_modified.to_rfc3339(),
-                Utc::now().to_rfc3339(),
-                self.hash_sha256,
-            ],
-        )?;
-        Ok(())
+        self.update_with_connection(&conn)
     }
 
+    /// Create or update photo (convenience wrapper that gets connection from pool)
     pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
-
-        let existing = conn.query_row(
-            "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
-            [&self.hash_sha256],
-            |row| row.get::<_, String>(0),
-        );
-
-        if existing.is_ok() {
-            self.update(pool)
-        } else {
-            self.create(pool)?;
-            Ok(())
-        }
+        self.create_or_update_with_connection(&conn)
     }
 
     pub fn list_with_pagination(
@@ -424,9 +384,11 @@ impl Photo {
         }
     }
 
-    pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
+    /// Create photo using an existing connection (for batch operations within a transaction)
+    pub fn create_with_connection(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         conn.execute(
             r#"
             INSERT INTO photos (
@@ -463,6 +425,70 @@ impl Photo {
         )?;
 
         Ok(())
+    }
+
+    /// Create photo (test helper - use create_with_connection for production)
+    #[cfg(test)]
+    pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+        self.create_with_connection(&conn)
+    }
+
+    /// Update photo using an existing connection (for batch operations within a transaction)
+    pub fn update_with_connection(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        conn.execute(
+            r#"
+            UPDATE photos SET
+                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
+                taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
+                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?,
+                metadata = ?,
+                file_modified = ?, updated_at = ?
+            WHERE hash_sha256 = ?
+            "#,
+            params![
+                self.file_path,
+                self.filename,
+                self.file_size,
+                self.mime_type,
+                self.taken_at.map(|dt| dt.to_rfc3339()),
+                self.width,
+                self.height,
+                self.orientation,
+                self.duration,
+                self.thumbnail_path,
+                self.has_thumbnail,
+                self.blurhash,
+                self.is_favorite.unwrap_or(false),
+                self.metadata.to_string(),
+                self.date_modified.to_rfc3339(),
+                Utc::now().to_rfc3339(),
+                self.hash_sha256,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Create or update photo using an existing connection (for batch operations)
+    pub fn create_or_update_with_connection(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let existing = conn.query_row(
+            "SELECT hash_sha256 FROM photos WHERE hash_sha256 = ?",
+            [&self.hash_sha256],
+            |row| row.get::<_, String>(0),
+        );
+
+        if existing.is_ok() {
+            self.update_with_connection(conn)
+        } else {
+            self.create_with_connection(conn)?;
+            Ok(())
+        }
     }
 
     pub fn search_photos(

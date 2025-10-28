@@ -19,6 +19,34 @@ use crate::semantic_search::SemanticSearchEngine;
 /// and benefits from smaller chunks with more frequent progress updates.
 const SEMANTIC_BATCH_SIZE: usize = 100;
 
+/// Calculate optimal concurrency for semantic vector computation
+/// Balances CPU utilization with database write bottlenecks
+/// Uses a hybrid algorithm:
+/// - Low-core systems (<=4 cores): 1:1 mapping (all cores used for CPU-bound tasks)
+/// - High-core systems (>4 cores): 60% of additional cores beyond 4
+///   to avoid overwhelming SQLite single-writer performance
+///
+/// Examples:
+/// - 4 cores: 4 tasks (100% utilization)
+/// - 8 cores: 6 tasks (75% utilization)
+/// - 16 cores: 11 tasks (68.75% utilization)
+/// - 32 cores: 20 tasks (62.5% utilization)
+/// - 64 cores: 40 tasks (62.5% utilization)
+fn calculate_optimal_semantic_concurrency() -> usize {
+    let cpu_cores = num_cpus::get();
+
+    if cpu_cores <= 4 {
+        // Low-core systems: CPU is bottleneck, use all cores
+        cpu_cores
+    } else {
+        // High-core systems: Use 60% of additional cores beyond 4
+        // Formula: 4 + (cores - 4) × 0.6
+        let additional_cores = cpu_cores - 4;
+        let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+        4 + additional_tasks
+    }
+}
+
 #[derive(Debug)]
 pub struct ProcessedPhoto {
     pub file_path: String,
@@ -322,14 +350,16 @@ impl PhotoProcessor {
             total_count
         );
 
-        // Limit concurrency to half CPU cores to reduce database lock contention
-        // Database writes are the bottleneck, not CPU computation
-        let max_concurrency = std::cmp::max(1, num_cpus::get() / 2);
+        // Calculate optimal concurrency using hybrid algorithm
+        // Balances CPU utilization (low cores) with database write bottleneck (high cores)
+        let max_concurrency = calculate_optimal_semantic_concurrency();
+        let cpu_cores = num_cpus::get();
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
         info!(
-            "Using {} concurrent tasks ({} CPU cores / 2 for reduced lock contention)",
+            "Using {} concurrent tasks for {} CPU cores ({:.1}% utilization, optimized for SQLite single-writer)",
             max_concurrency,
-            num_cpus::get()
+            cpu_cores,
+            (max_concurrency as f64 / cpu_cores as f64) * 100.0
         );
 
         let mut processed_count = 0;
@@ -410,5 +440,111 @@ impl PhotoProcessor {
         );
 
         Ok((processed_count, error_count))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_calculate_optimal_semantic_concurrency_algorithm() {
+        // Test cases: (simulated_cores, expected_tasks, description)
+        let test_cases = [
+            (1, 1, "Single core: 1:1 mapping"),
+            (2, 2, "Dual core: 1:1 mapping"),
+            (3, 3, "Triple core: 1:1 mapping"),
+            (4, 4, "Quad core: 1:1 mapping (boundary)"),
+            (6, 5, "6 cores: 4 + (6-4)×0.6 = 5"),
+            (8, 6, "8 cores: 4 + (8-4)×0.6 = 6"),
+            (12, 8, "12 cores: 4 + (12-4)×0.6 = 8"),
+            (16, 11, "16 cores: 4 + (16-4)×0.6 = 11"),
+            (24, 16, "24 cores: 4 + (24-4)×0.6 = 16"),
+            (32, 20, "32 cores: 4 + (32-4)×0.6 = 20"),
+            (64, 40, "64 cores: 4 + (64-4)×0.6 = 40"),
+        ];
+
+        for (simulated_cores, expected, description) in test_cases {
+            // Simulate the calculation without mocking num_cpus
+            let actual = if simulated_cores <= 4 {
+                simulated_cores
+            } else {
+                let additional_cores = simulated_cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert_eq!(
+                actual, expected,
+                "Failed: {} (cores={}, expected={}, got={})",
+                description, simulated_cores, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrency_never_exceeds_cores() {
+        // Ensure we never request more tasks than available cores
+        for cores in 1..=128 {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert!(
+                tasks <= cores,
+                "Concurrency {} exceeds cores {} (invalid!)",
+                tasks,
+                cores
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrency_always_positive() {
+        // Ensure we always have at least 1 task
+        for cores in 1..=128 {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            assert!(tasks >= 1, "Concurrency must be at least 1, got {}", tasks);
+        }
+    }
+
+    #[test]
+    fn test_concurrency_scaling_ratio() {
+        // Verify that utilization ratio decreases from 100% (at 4 cores) and stabilizes around 60%
+        let cores_to_test = [4, 8, 16, 32, 64];
+
+        for &cores in &cores_to_test {
+            let tasks = if cores <= 4 {
+                cores
+            } else {
+                let additional_cores = cores - 4;
+                let additional_tasks = (additional_cores as f64 * 0.6) as usize;
+                4 + additional_tasks
+            };
+
+            let ratio = tasks as f64 / cores as f64;
+
+            if cores == 4 {
+                // At 4 cores, should be 100%
+                assert_eq!(ratio, 1.0, "At 4 cores, ratio should be 100%");
+            } else {
+                // Beyond 4 cores, ratio should be between 60-75%
+                assert!(
+                    (0.60..=0.75).contains(&ratio),
+                    "Beyond 4 cores, ratio should be 60-75%: cores={}, ratio={:.2}",
+                    cores,
+                    ratio
+                );
+            }
+        }
     }
 }

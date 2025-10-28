@@ -367,7 +367,13 @@ impl SemanticSearchEngine {
 
                 if !exists {
                     store_semantic_vector_tx(&tx, path, &normalized_embedding)?;
-                    store_video_metadata_tx(&tx, path, VIDEO_FRAME_COUNT, &frame_times, MODEL_VERSION)?;
+                    store_video_metadata_tx(
+                        &tx,
+                        path,
+                        VIDEO_FRAME_COUNT,
+                        &frame_times,
+                        MODEL_VERSION,
+                    )?;
                 } else {
                     log::debug!(
                         "Video semantic vector was cached by another task during computation: {}",

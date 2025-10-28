@@ -481,8 +481,34 @@ impl Photo {
 
     /// Create or update photo using an existing connection (for batch operations)
     ///
-    /// Uses UPSERT for atomic operation - inserts if new, updates if hash exists.
-    /// If file_path exists with different hash, the old entry is replaced atomically.
+    /// # Transaction Requirement
+    ///
+    /// **IMPORTANT**: This method MUST be called within an active database transaction.
+    /// The operation consists of two separate SQL statements (DELETE + UPSERT) that must
+    /// execute atomically to prevent race conditions when the same file_path is processed
+    /// concurrently or a file's hash changes between operations.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Deletes any existing photo with the same `file_path` but different `hash_sha256`
+    ///    (handles the case where a file was modified and its hash changed)
+    /// 2. Uses UPSERT to insert if new, or update if `hash_sha256` already exists
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure this is called within a transaction (e.g., via
+    /// `transaction_with_behavior(TransactionBehavior::Immediate)`). The `batch_write_photos`
+    /// function in `scheduler.rs` demonstrates correct usage.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    /// for photo in photos {
+    ///     photo.create_or_update_with_connection(&tx)?;
+    /// }
+    /// tx.commit()?;
+    /// ```
     pub fn create_or_update_with_connection(
         &self,
         conn: &rusqlite::Connection,

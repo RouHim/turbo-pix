@@ -13,8 +13,10 @@ use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::semantic_search::SemanticSearchEngine;
 
-/// Batch size for semantic vector computation
-/// Smaller batches provide better progress tracking and error isolation
+/// Batch size for semantic vector computation (CPU-bound operations)
+/// Smaller batches (100) provide better progress tracking and error isolation.
+/// Lower than DB_WRITE_BATCH_SIZE since semantic processing is CPU/GPU-intensive
+/// and benefits from smaller chunks with more frequent progress updates.
 const SEMANTIC_BATCH_SIZE: usize = 100;
 
 #[derive(Debug)]
@@ -339,7 +341,10 @@ impl PhotoProcessor {
 
                 batch_tasks.spawn(async move {
                     // Acquire semaphore permit to limit concurrency
-                    let _permit = semaphore.acquire().await.unwrap();
+                    let _permit = semaphore
+                        .acquire()
+                        .await
+                        .expect("Semaphore should not be closed");
 
                     // Determine if video or image
                     let path_buf = std::path::PathBuf::from(&path);

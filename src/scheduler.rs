@@ -11,8 +11,10 @@ use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
 
-/// Batch size for database writes (photos per transaction)
-/// Smaller batches reduce lock duration and allow concurrent operations
+/// Batch size for database writes (I/O-bound operations)
+/// Larger batches (250) reduce transaction overhead and improve throughput.
+/// Higher than SEMANTIC_BATCH_SIZE since database writes are I/O-bound
+/// and benefit from larger transactions to amortize COMMIT costs.
 const DB_WRITE_BATCH_SIZE: usize = 250;
 
 #[derive(Clone)]
@@ -596,7 +598,13 @@ mod tests {
         // Should complete - returns (success_count, error_count)
         assert!(result.is_ok());
         let (success, errors) = result.unwrap();
-        assert!(success + errors <= 3); // Should process all 3 photos
+        assert_eq!(
+            success + errors,
+            3,
+            "Should process exactly 3 photos, got {} successes and {} errors",
+            success,
+            errors
+        );
     }
 
     #[tokio::test]

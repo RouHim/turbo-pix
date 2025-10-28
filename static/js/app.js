@@ -66,6 +66,10 @@ class TurboPixApp {
     if (logoLink) {
       utils.on(logoLink, 'click', (e) => {
         e.preventDefault();
+        // Clear search when navigating to all photos
+        if (window.search) {
+          window.search.clearSearch();
+        }
         this.switchView('all');
         this.closeMobileSidebar();
       });
@@ -76,6 +80,10 @@ class TurboPixApp {
       utils.on(item, 'click', () => {
         const view = item.dataset.view;
         if (view) {
+          // Clear search when navigating to all photos
+          if (view === 'all' && window.search) {
+            window.search.clearSearch();
+          }
           this.switchView(view);
           // Close mobile sidebar after selection
           this.closeMobileSidebar();

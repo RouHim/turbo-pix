@@ -1,3 +1,10 @@
+## [2.0.4](https://github.com/RouHim/turbo-pix/compare/2.0.3...2.0.4) (2025-10-28)
+
+
+### Performance Improvements
+
+* implement two-phase indexing for optimized large imports ([#10](https://github.com/RouHim/turbo-pix/issues/10)) ([993f4df](https://github.com/RouHim/turbo-pix/commit/993f4df9eb0dbcf0d881fb7130cc605754810e6f)), closes [hi#core](https://github.com/hi/issues/core) [hi#core](https://github.com/hi/issues/core)
+
 ## [2.0.3](https://github.com/RouHim/turbo-pix/compare/2.0.2...2.0.3) (2025-10-28)
 
 

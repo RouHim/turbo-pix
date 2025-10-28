@@ -322,10 +322,15 @@ impl PhotoProcessor {
             total_count
         );
 
-        // Limit concurrency to available CPU cores
-        let max_concurrency = num_cpus::get();
+        // Limit concurrency to half CPU cores to reduce database lock contention
+        // Database writes are the bottleneck, not CPU computation
+        let max_concurrency = std::cmp::max(1, num_cpus::get() / 2);
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
-        info!("Using {} concurrent tasks (CPU cores)", max_concurrency);
+        info!(
+            "Using {} concurrent tasks ({} CPU cores / 2 for reduced lock contention)",
+            max_concurrency,
+            num_cpus::get()
+        );
 
         let mut processed_count = 0;
         let mut error_count = 0;

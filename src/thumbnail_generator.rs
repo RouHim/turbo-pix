@@ -433,6 +433,7 @@ mod tests {
             has_thumbnail: Some(false),
             blurhash: None,
             is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
             metadata: serde_json::json!({
                 "camera": {
                     "make": "Test Camera",

@@ -3,6 +3,7 @@ use log::error;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
@@ -11,6 +12,10 @@ use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::semantic_search::SemanticSearchEngine;
+
+/// Batch size for semantic vector computation
+/// Smaller batches provide better progress tracking and error isolation
+const SEMANTIC_BATCH_SIZE: usize = 100;
 
 #[derive(Debug)]
 pub struct ProcessedPhoto {
@@ -288,62 +293,77 @@ impl PhotoProcessor {
         Some(hash)
     }
 
-    /// Phase 2: Batch compute semantic vectors for all photos in database
+    /// Phase 2: Batch compute semantic vectors for photos missing indexing
     ///
     /// This is called after Phase 1 (fast metadata scan) completes.
-    /// Computes semantic vectors in batches to minimize database lock contention.
-    /// Uses mime type detection for accurate video/image classification.
+    /// Only processes photos where semantic_vector_indexed = false.
+    /// Limits concurrency to available CPU cores for optimal performance.
     pub async fn batch_compute_semantic_vectors(
         &self,
         db_pool: &DbPool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
         use log::info;
 
         info!("Phase 2: Starting batch semantic vector computation");
 
-        // Get all photo paths from database
-        let photo_paths = crate::db::get_photo_paths_for_indexing(db_pool)?;
+        // Get only photos that need semantic indexing
+        let photo_paths = crate::db::get_paths_needing_semantic_indexing(db_pool)?;
         let total_count = photo_paths.len();
 
         if total_count == 0 {
-            info!("No photos found in database for semantic vector computation");
-            return Ok(());
+            info!("No photos found needing semantic vector computation");
+            return Ok((0, 0));
         }
 
-        info!("Computing semantic vectors for {} photos", total_count);
+        info!(
+            "Computing semantic vectors for {} photos (skipping already indexed)",
+            total_count
+        );
 
-        // Batch size for semantic vector computation (100 photos per batch)
-        // Smaller batches allow for better progress tracking and error isolation
-        const SEMANTIC_BATCH_SIZE: usize = 100;
+        // Limit concurrency to available CPU cores
+        let max_concurrency = num_cpus::get();
+        let semaphore = Arc::new(Semaphore::new(max_concurrency));
+        info!("Using {} concurrent tasks (CPU cores)", max_concurrency);
 
         let mut processed_count = 0;
         let mut error_count = 0;
 
         for (batch_idx, batch_paths) in photo_paths.chunks(SEMANTIC_BATCH_SIZE).enumerate() {
-            // Process each batch with controlled concurrency
             let mut batch_tasks = tokio::task::JoinSet::new();
 
             for path in batch_paths {
                 let path = path.clone();
                 let semantic_search = self.semantic_search.clone();
+                let db_pool = db_pool.clone();
+                let semaphore = semaphore.clone();
 
                 batch_tasks.spawn(async move {
-                    // Use mime type detection for accurate classification
+                    // Acquire semaphore permit to limit concurrency
+                    let _permit = semaphore.acquire().await.unwrap();
+
+                    // Determine if video or image
                     let path_buf = std::path::PathBuf::from(&path);
                     let is_video = mimetype_detector::from_path(&path_buf)
                         .map(|m| m.type_() == "video")
                         .unwrap_or(false);
 
-                    if is_video {
-                        semantic_search
-                            .compute_video_semantic_vector(&path)
-                            .await
-                            .map(|_| path.clone())
+                    // Compute semantic vector
+                    let result = if is_video {
+                        semantic_search.compute_video_semantic_vector(&path).await
                     } else {
-                        semantic_search
-                            .compute_semantic_vector(&path)
-                            .map(|_| path.clone())
+                        semantic_search.compute_semantic_vector(&path)
+                    };
+
+                    // Mark as indexed if successful
+                    if result.is_ok() {
+                        if let Err(e) =
+                            crate::db::mark_photo_as_semantically_indexed(&db_pool, &path)
+                        {
+                            error!("Failed to mark photo as indexed {}: {}", path, e);
+                        }
                     }
+
+                    result.map(|_| path.clone())
                 });
             }
 
@@ -362,13 +382,14 @@ impl PhotoProcessor {
                 }
             }
 
-            // Progress logging every 5 batches (500 photos)
+            // Progress logging every 5 batches
             if (batch_idx + 1) % 5 == 0 {
                 info!(
-                    "Semantic vector progress: {}/{} photos ({:.1}%)",
-                    processed_count,
+                    "Semantic vector progress: {}/{} photos ({:.1}%), {} errors",
+                    processed_count + error_count,
                     total_count,
-                    (processed_count as f64 / total_count as f64) * 100.0
+                    ((processed_count + error_count) as f64 / total_count as f64) * 100.0,
+                    error_count
                 );
             }
         }
@@ -378,6 +399,6 @@ impl PhotoProcessor {
             processed_count, error_count
         );
 
-        Ok(())
+        Ok((processed_count, error_count))
     }
 }

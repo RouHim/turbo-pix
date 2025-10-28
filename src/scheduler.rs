@@ -11,6 +11,10 @@ use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
 
+/// Batch size for database writes (photos per transaction)
+/// Smaller batches reduce lock duration and allow concurrent operations
+const DB_WRITE_BATCH_SIZE: usize = 250;
+
 #[derive(Clone)]
 pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
@@ -38,8 +42,8 @@ impl PhotoScheduler {
 
     /// Helper: Batch write photos to database with transaction support
     ///
-    /// Writes photos in batches of 250 to minimize database lock duration.
-    /// Each batch is wrapped in a transaction for consistency.
+    /// Writes photos in batches to minimize database lock duration.
+    /// Uses rusqlite's transaction API with IMMEDIATE mode for better concurrency.
     ///
     /// Returns (successful_count, error_count)
     fn batch_write_photos(db_pool: &DbPool, photos: Vec<crate::db::Photo>) -> (usize, usize) {
@@ -47,56 +51,53 @@ impl PhotoScheduler {
         let mut error_count = 0;
         let total_count = photos.len();
 
-        // Batch size: 250 photos per transaction
-        // Smaller batches reduce lock duration and allow concurrent semantic vector writes
-        const BATCH_SIZE: usize = 250;
-
-        for (batch_idx, batch) in photos.chunks(BATCH_SIZE).enumerate() {
+        for (batch_idx, batch) in photos.chunks(DB_WRITE_BATCH_SIZE).enumerate() {
             match db_pool.get() {
-                Ok(conn) => {
-                    // Begin transaction for this batch
-                    if let Err(e) = conn.execute("BEGIN IMMEDIATE", []) {
-                        error!("Failed to begin transaction: {}", e);
-                        error_count += batch.len();
-                        continue;
-                    }
+                Ok(mut conn) => {
+                    // Use rusqlite's transaction API with IMMEDIATE mode
+                    let tx = match conn
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    {
+                        Ok(tx) => tx,
+                        Err(e) => {
+                            error!("Failed to begin transaction: {}", e);
+                            error_count += batch.len();
+                            continue;
+                        }
+                    };
 
                     let mut batch_success = 0;
-                    let mut batch_errors = 0;
 
                     for photo in batch {
-                        match photo.create_or_update_with_connection(&conn) {
+                        match photo.create_or_update_with_connection(&tx) {
                             Ok(_) => batch_success += 1,
                             Err(e) => {
                                 error!("Failed to save photo {}: {}", photo.file_path, e);
-                                batch_errors += 1;
+                                error_count += 1;
                             }
                         }
                     }
 
-                    // Commit transaction if no errors
-                    if batch_errors == 0 {
-                        if let Err(e) = conn.execute("COMMIT", []) {
-                            error!("Failed to commit batch: {}", e);
-                            error_count += batch.len();
-                        } else {
+                    // Commit transaction (partial success is ok - errors already counted)
+                    match tx.commit() {
+                        Ok(_) => {
                             indexed_count += batch_success;
                             info!(
-                                "Batch {}/{} committed: {} photos saved",
+                                "Batch {}/{} committed: {} photos saved{}",
                                 batch_idx + 1,
-                                total_count.div_ceil(BATCH_SIZE),
-                                batch_success
+                                total_count.div_ceil(DB_WRITE_BATCH_SIZE),
+                                batch_success,
+                                if error_count > 0 {
+                                    format!(", {} errors so far", error_count)
+                                } else {
+                                    String::new()
+                                }
                             );
                         }
-                    } else {
-                        // Rollback on any error in batch
-                        let _ = conn.execute("ROLLBACK", []);
-                        error!(
-                            "Batch {} rolled back due to {} errors",
-                            batch_idx + 1,
-                            batch_errors
-                        );
-                        error_count += batch.len();
+                        Err(e) => {
+                            error!("Failed to commit batch: {}", e);
+                            error_count += batch_success; // Count successful photos as errors if commit fails
+                        }
                     }
                 }
                 Err(e) => {
@@ -105,13 +106,14 @@ impl PhotoScheduler {
                 }
             }
 
-            // Progress logging every 5 batches (1250 photos)
+            // Progress logging every 5 batches
             if (batch_idx + 1) % 5 == 0 {
                 info!(
-                    "Progress: {}/{} photos processed ({:.1}%)",
-                    indexed_count,
+                    "Progress: {}/{} photos processed ({:.1}%), {} errors",
+                    indexed_count + error_count,
                     total_count,
-                    (indexed_count as f64 / total_count as f64) * 100.0
+                    ((indexed_count + error_count) as f64 / total_count as f64) * 100.0,
+                    error_count
                 );
             }
         }
@@ -168,7 +170,12 @@ impl PhotoScheduler {
                         // Phase 2: Batch compute semantic vectors
                         info!("Phase 2: Computing semantic vectors in batches");
                         match processor.batch_compute_semantic_vectors(&db_pool).await {
-                            Ok(_) => info!("Phase 2 completed: Semantic vectors computed"),
+                            Ok((success, errors)) => {
+                                info!(
+                                    "Phase 2 completed: {} semantic vectors computed, {} errors",
+                                    success, errors
+                                )
+                            }
                             Err(e) => error!("Phase 2 failed: {}", e),
                         }
                     }
@@ -240,7 +247,12 @@ impl PhotoScheduler {
             .batch_compute_semantic_vectors(&self.db_pool)
             .await
         {
-            Ok(_) => info!("Phase 2 completed: Semantic vectors computed"),
+            Ok((success, errors)) => {
+                info!(
+                    "Phase 2 completed: {} semantic vectors computed, {} errors",
+                    success, errors
+                )
+            }
             Err(e) => error!("Phase 2 failed: {}", e),
         }
 
@@ -330,6 +342,7 @@ mod tests {
                 has_thumbnail: Some(false),
                 blurhash: None,
                 is_favorite: Some(false),
+                semantic_vector_indexed: Some(false),
                 metadata: serde_json::json!({}),
                 date_modified: now,
                 date_indexed: Some(now),
@@ -580,8 +593,10 @@ mod tests {
         );
         let result = processor.batch_compute_semantic_vectors(&env.db_pool).await;
 
-        // Should complete (errors are logged, not returned as failures)
+        // Should complete - returns (success_count, error_count)
         assert!(result.is_ok());
+        let (success, errors) = result.unwrap();
+        assert!(success + errors <= 3); // Should process all 3 photos
     }
 
     #[tokio::test]

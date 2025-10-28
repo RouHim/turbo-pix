@@ -1,9 +1,10 @@
 use clokwerk::{Job, Scheduler, TimeUnits};
-use log::{error, info};
+use log::{error, info, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
@@ -16,6 +17,7 @@ pub struct PhotoScheduler {
     db_pool: DbPool,
     cache_manager: CacheManager,
     semantic_search: Arc<SemanticSearchEngine>,
+    rescan_lock: Arc<Mutex<()>>,
 }
 
 impl PhotoScheduler {
@@ -30,6 +32,7 @@ impl PhotoScheduler {
             db_pool,
             cache_manager,
             semantic_search,
+            rescan_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -40,13 +43,23 @@ impl PhotoScheduler {
         let db_pool = self.db_pool.clone();
         let cache_manager = self.cache_manager.clone();
         let semantic_search = self.semantic_search.clone();
+        let rescan_lock = self.rescan_lock.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
-            info!("Starting scheduled photo rescan and cleanup");
-
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
+                // Try to acquire lock - if another rescan is running, skip this one
+                let lock = match rescan_lock.try_lock() {
+                    Ok(lock) => lock,
+                    Err(_) => {
+                        warn!("Skipping scheduled rescan - another rescan is already in progress");
+                        return;
+                    }
+                };
+
+                info!("Starting scheduled photo rescan and cleanup");
+
                 let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
 
                 match processor
@@ -75,6 +88,8 @@ impl PhotoScheduler {
                     }
                     Err(e) => error!("Scheduled rescan failed: {}", e),
                 }
+
+                drop(lock);
             });
         });
 
@@ -102,6 +117,15 @@ impl PhotoScheduler {
     }
 
     pub async fn run_startup_rescan(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Try to acquire lock - if another rescan is running, skip this one
+        let lock = match self.rescan_lock.try_lock() {
+            Ok(lock) => lock,
+            Err(_) => {
+                warn!("Skipping startup rescan - another rescan is already in progress");
+                return Ok(());
+            }
+        };
+
         info!("Starting startup photo rescan and cleanup");
 
         let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
@@ -131,6 +155,7 @@ impl PhotoScheduler {
             indexed_count, error_count
         );
 
+        drop(lock);
         Ok(())
     }
 }

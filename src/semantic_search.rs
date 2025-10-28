@@ -26,7 +26,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::Connection;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
@@ -143,9 +142,13 @@ impl SemanticSearchEngine {
 
     /// Computes and caches semantic vector for a single image
     pub fn compute_semantic_vector(&self, image_path: &str) -> Result<()> {
+        let mut conn = self.pool.get()?;
+
+        // Use IMMEDIATE transaction to prevent race conditions when checking and inserting
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
         // Check if semantic vector already exists to avoid recomputation
-        let conn = self.pool.get()?;
-        let exists: bool = conn
+        let exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
                 [image_path],
@@ -155,6 +158,7 @@ impl SemanticSearchEngine {
 
         if exists {
             log::debug!("Semantic vector already cached for: {}", image_path);
+            tx.commit()?;
             return Ok(());
         }
 
@@ -165,8 +169,9 @@ impl SemanticSearchEngine {
         let semantic_vector = encode_image(&model_read, image_path, &self.device)?;
         drop(model_read);
 
-        store_semantic_vector(&conn, image_path, &semantic_vector)?;
+        store_semantic_vector_tx(&tx, image_path, &semantic_vector)?;
 
+        tx.commit()?;
         Ok(())
     }
 
@@ -174,7 +179,7 @@ impl SemanticSearchEngine {
     pub async fn compute_video_semantic_vector(&self, video_path: &str) -> Result<()> {
         use crate::video_processor::{extract_frame_at_time, extract_video_metadata};
 
-        // Check if semantic vector already exists to avoid recomputation
+        // Quick check without holding a transaction (to avoid holding lock across async)
         let conn = self.pool.get()?;
         let exists: bool = conn
             .query_row(
@@ -188,6 +193,7 @@ impl SemanticSearchEngine {
             log::debug!("Semantic vector already cached for video: {}", video_path);
             return Ok(());
         }
+        drop(conn); // Release connection before async work
 
         log::info!("Computing semantic vector for video: {}", video_path);
         let start_time = std::time::Instant::now();
@@ -274,17 +280,36 @@ impl SemanticSearchEngine {
         let video_embedding = average_pool_embeddings(&frame_embeddings, &self.device)?;
         let normalized_embedding = normalize_vector(&video_embedding)?;
 
-        // Store embedding
-        store_semantic_vector(&conn, video_path, &normalized_embedding)?;
+        // Store embedding and metadata in a transaction (after all async work is done)
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        // Store metadata
-        store_video_metadata(
-            &conn,
-            video_path,
-            VIDEO_FRAME_COUNT,
-            &frame_times,
-            MODEL_VERSION,
-        )?;
+        // Double-check it wasn't inserted by another concurrent task
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+                [video_path],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !exists {
+            store_semantic_vector_tx(&tx, video_path, &normalized_embedding)?;
+            store_video_metadata_tx(
+                &tx,
+                video_path,
+                VIDEO_FRAME_COUNT,
+                &frame_times,
+                MODEL_VERSION,
+            )?;
+        } else {
+            log::debug!(
+                "Video semantic vector was cached by another task during computation: {}",
+                video_path
+            );
+        }
+
+        tx.commit()?;
 
         log::info!(
             "Video semantic vector computed in {:?}: {}",
@@ -441,11 +466,15 @@ fn normalize_vector(vector: &Tensor) -> Result<Tensor> {
     Ok(vector.broadcast_div(&norm)?)
 }
 
-/// Stores a computed image semantic vector in the database cache
-fn store_semantic_vector(db: &Connection, path: &str, semantic_vector: &Tensor) -> Result<()> {
+/// Stores a computed image semantic vector in the database cache within a transaction
+fn store_semantic_vector_tx(
+    tx: &rusqlite::Transaction,
+    path: &str,
+    semantic_vector: &Tensor,
+) -> Result<()> {
     let vector_floats: Vec<f32> = semantic_vector.flatten_all()?.to_vec1()?;
 
-    let id: i64 = db.query_row(
+    let id: i64 = tx.query_row(
         "INSERT INTO semantic_vector_path_mapping (path) VALUES (?)
          ON CONFLICT(path) DO UPDATE SET path=path
          RETURNING id",
@@ -453,7 +482,7 @@ fn store_semantic_vector(db: &Connection, path: &str, semantic_vector: &Tensor) 
         |row| row.get(0),
     )?;
 
-    db.execute(
+    tx.execute(
         "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
         rusqlite::params![id, vector_floats.as_slice().as_bytes()],
     )?;
@@ -483,9 +512,9 @@ fn average_pool_embeddings(embeddings: &[Tensor], _device: &Device) -> Result<Te
     Ok(averaged)
 }
 
-/// Store video semantic metadata
-fn store_video_metadata(
-    db: &Connection,
+/// Stores video semantic computation metadata within a transaction
+fn store_video_metadata_tx(
+    tx: &rusqlite::Transaction,
     path: &str,
     num_frames: usize,
     frame_times: &[f64],
@@ -493,7 +522,7 @@ fn store_video_metadata(
 ) -> Result<()> {
     let frame_times_json = serde_json::to_string(frame_times)?;
 
-    db.execute(
+    tx.execute(
         "INSERT OR REPLACE INTO video_semantic_metadata (path, num_frames_sampled, frame_times, model_version)
          VALUES (?, ?, ?, ?)",
         rusqlite::params![path, num_frames as i64, frame_times_json, model_version],

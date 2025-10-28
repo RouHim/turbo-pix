@@ -88,8 +88,8 @@ impl PhotoProcessor {
         }
 
         // Step 4: Process all files found on disk (with pre-check for unchanged files)
-        // Process with controlled concurrency (max 10 concurrent tasks)
-        const MAX_CONCURRENT_TASKS: usize = 10;
+        // Process with controlled concurrency
+        const MAX_CONCURRENT_TASKS: usize = crate::db_pool::MAX_CONCURRENT_PHOTO_TASKS;
         let mut tasks = tokio::task::JoinSet::new();
         let mut photos = Vec::new();
         let mut photo_files_iter = photo_files.into_iter();

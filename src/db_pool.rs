@@ -8,6 +8,14 @@ use crate::db_schema::initialize_schema;
 
 pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
 
+// Pool sizing configuration
+// Formula: (MAX_CONCURRENT_PHOTO_TASKS * 2) + API_REQUEST_BUFFER
+// - *2 multiplier: Each task may need multiple connections during processing
+// - API buffer: Reserve connections for concurrent API requests
+pub const MAX_CONCURRENT_PHOTO_TASKS: usize = 10;
+const API_REQUEST_BUFFER: usize = 10;
+const DB_POOL_SIZE: usize = (MAX_CONCURRENT_PHOTO_TASKS * 2) + API_REQUEST_BUFFER;
+
 pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
     if let Some(parent) = std::path::Path::new(database_path).parent() {
         std::fs::create_dir_all(parent)?;
@@ -26,7 +34,10 @@ pub fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error:
     }
 
     let manager = SqliteConnectionManager::file(database_path);
-    let pool = Pool::new(manager)?;
+    let pool = Pool::builder()
+        .max_size(DB_POOL_SIZE as u32)
+        .connection_timeout(std::time::Duration::from_secs(30))
+        .build(manager)?;
 
     {
         let conn = pool.get()?;
@@ -137,7 +148,10 @@ pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     }
 
     let manager = SqliteConnectionManager::memory();
-    let pool = Pool::new(manager)?;
+    let pool = Pool::builder()
+        .max_size(DB_POOL_SIZE as u32)
+        .connection_timeout(std::time::Duration::from_secs(30))
+        .build(manager)?;
 
     // Initialize schema on a connection from the pool
     {

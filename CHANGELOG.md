@@ -1,3 +1,10 @@
+## [2.0.2](https://github.com/RouHim/turbo-pix/compare/2.0.1...2.0.2) (2025-10-28)
+
+
+### Bug Fixes
+
+* prevent concurrent rescan collisions and semantic vector race conditions ([5d8e24e](https://github.com/RouHim/turbo-pix/commit/5d8e24ea596f2ef9fa8a4e7f0946e174c768b4ba))
+
 ## [2.0.1](https://github.com/RouHim/turbo-pix/compare/2.0.0...2.0.1) (2025-10-27)
 
 

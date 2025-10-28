@@ -1,3 +1,10 @@
+## [2.0.3](https://github.com/RouHim/turbo-pix/compare/2.0.2...2.0.3) (2025-10-28)
+
+
+### Performance Improvements
+
+* optimize database writes and scaling for large imports ([acd5444](https://github.com/RouHim/turbo-pix/commit/acd5444b769984cf3c98775047509fd1c1bbdaf2))
+
 ## [2.0.2](https://github.com/RouHim/turbo-pix/compare/2.0.1...2.0.2) (2025-10-28)
 
 

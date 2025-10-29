@@ -2,8 +2,11 @@
 
 ## Project Context
 
-Development/personal project - breaking changes acceptable, database can be recreated!
+Breaking changes are allowed, this application is not in production yet!
+Breaking changes are allowed, this application is not in production yet!
+Breaking changes are allowed, this application is not in production yet!
 This means, no legacy support, no migration scripts, no backward compatibility.
+Development/personal project - breaking changes acceptable, database and cache can be recreated!
 
 ## Development Commands
 
@@ -45,7 +48,6 @@ This means, no legacy support, no migration scripts, no backward compatibility.
 - E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
 - when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
 - **Avoid:** Hardcoded paths and fallback logic mask bugs
-
 
 ## Testing
 

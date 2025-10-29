@@ -1,3 +1,10 @@
+## [2.0.5](https://github.com/RouHim/turbo-pix/compare/2.0.4...2.0.5) (2025-10-29)
+
+
+### Performance Improvements
+
+* optimize video frame extraction with batch ffmpeg processing ([2f39062](https://github.com/RouHim/turbo-pix/commit/2f39062eeeae57ae43a51a2c90f8f4e749004b74))
+
 ## [2.0.4](https://github.com/RouHim/turbo-pix/compare/2.0.3...2.0.4) (2025-10-28)
 
 

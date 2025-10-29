@@ -107,14 +107,14 @@ pub async fn extract_frame_at_time(
         Command::new(ffmpeg_path)
             .args([
                 "-y", // Overwrite output file
+                "-ss",
+                &time_str, // Fast seeking: place BEFORE -i for input-level seek
                 "-i",
                 video_path.to_str().unwrap(),
-                "-ss",
-                &time_str,
                 "-frames:v",
                 "1",
                 "-q:v",
-                "2", // High quality
+                "5", // Lower quality (sufficient for semantic encoding, faster)
                 output_path.to_str().unwrap(),
             ])
             .output()
@@ -131,6 +131,88 @@ pub async fn extract_frame_at_time(
     }
 
     Ok(())
+}
+
+/// Extract multiple frames from a video at specified times in a single ffmpeg call
+/// This is significantly faster than calling extract_frame_at_time multiple times
+pub async fn extract_frames_batch(
+    video_path: &Path,
+    frame_times: &[f64],
+    output_dir: &Path,
+) -> CacheResult<Vec<PathBuf>> {
+    if frame_times.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    std::fs::create_dir_all(output_dir)?;
+
+    let video_path = video_path.to_path_buf();
+    let output_dir_path = output_dir.to_path_buf();
+    let output_dir_clone = output_dir_path.clone();
+    let ffmpeg_path = get_ffmpeg_path();
+    let frame_times = frame_times.to_vec();
+    let frame_count = frame_times.len();
+
+    let output = tokio::task::spawn_blocking(move || {
+        // Build filter_complex for extracting frames at specific times
+        // select='eq(t,10)+eq(t,20)+eq(t,30)' selects frames at 10s, 20s, 30s
+        let select_expr = frame_times
+            .iter()
+            .map(|t| format!("eq(t\\,{:.2})", t))
+            .collect::<Vec<_>>()
+            .join("+");
+
+        let filter_complex = format!(
+            "[0:v]select='{}',split={}{}",
+            select_expr,
+            frame_times.len(),
+            (0..frame_times.len())
+                .map(|i| format!("[f{}]", i))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+
+        // Build output arguments: -map [f0] out0.jpg -map [f1] out1.jpg ...
+        let mut args = vec![
+            "-y".to_string(),
+            "-i".to_string(),
+            video_path.to_str().unwrap().to_string(),
+            "-filter_complex".to_string(),
+            filter_complex,
+        ];
+
+        for i in 0..frame_times.len() {
+            args.push("-map".to_string());
+            args.push(format!("[f{}]", i));
+            args.push("-q:v".to_string());
+            args.push("5".to_string()); // Lower quality for semantic encoding
+            args.push(
+                output_dir_path
+                    .join(format!("frame_{}.jpg", i))
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+
+        Command::new(ffmpeg_path).args(&args).output()
+    })
+    .await
+    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
+    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg batch failed: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffmpeg batch extraction failed: {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    // Return paths to extracted frames
+    Ok((0..frame_count)
+        .map(|i| output_dir_clone.join(format!("frame_{}.jpg", i)))
+        .collect())
 }
 
 /// Check if a video uses HEVC codec

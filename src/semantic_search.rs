@@ -243,7 +243,7 @@ impl SemanticSearchEngine {
 
     /// Computes and caches semantic vector for a video by sampling frames
     pub async fn compute_video_semantic_vector(&self, video_path: &str) -> Result<()> {
-        use crate::video_processor::{extract_frame_at_time, extract_video_metadata};
+        use crate::video_processor::{extract_frames_batch, extract_video_metadata};
 
         // Quick check without holding a transaction (to avoid holding lock across async)
         let conn = self.pool.get()?;
@@ -274,43 +274,26 @@ impl SemanticSearchEngine {
             frame_times
         );
 
-        // Extract and encode frames with controlled parallelism
+        // Create temp directory for frame extraction
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let temp_dir =
             std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id));
-        std::fs::create_dir_all(&temp_dir)?;
 
-        // Step 1: Extract all frames in parallel
-        let mut extraction_tasks = tokio::task::JoinSet::new();
-        for (idx, &frame_time) in frame_times.iter().enumerate() {
-            let video_path_clone = video_path.to_string();
-            let temp_frame_path = temp_dir.join(format!("frame_{}.jpg", idx));
-
-            extraction_tasks.spawn(async move {
-                extract_frame_at_time(Path::new(&video_path_clone), frame_time, &temp_frame_path)
-                    .await?;
-                Ok::<_, anyhow::Error>((idx, temp_frame_path))
-            });
-        }
-
-        // Wait for all frame extractions to complete
-        let mut extracted_frames = Vec::with_capacity(VIDEO_FRAME_COUNT);
-        while let Some(result) = extraction_tasks.join_next().await {
-            match result {
-                Ok(Ok((idx, path))) => extracted_frames.push((idx, path)),
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(anyhow::anyhow!("Frame extraction task failed: {}", e)),
-            }
-        }
-
-        // Sort by index to maintain frame order
-        extracted_frames.sort_by_key(|(idx, _)| *idx);
+        // Step 1: Extract all frames in a single ffmpeg call (MUCH faster than parallel tasks)
+        let extraction_start = std::time::Instant::now();
+        let extracted_frames =
+            extract_frames_batch(Path::new(video_path), &frame_times, &temp_dir).await?;
+        log::debug!(
+            "Extracted {} frames in {:?}",
+            extracted_frames.len(),
+            extraction_start.elapsed()
+        );
 
         // Step 2: Encode frames to embeddings (sequential due to RwLock model access)
         let mut frame_embeddings = Vec::with_capacity(VIDEO_FRAME_COUNT);
-        for (_, temp_frame_path) in &extracted_frames {
+        for temp_frame_path in &extracted_frames {
             let model_read = self
                 .model
                 .read()
@@ -323,7 +306,7 @@ impl SemanticSearchEngine {
         }
 
         // Step 3: Cleanup temp files
-        for (_, temp_frame_path) in &extracted_frames {
+        for temp_frame_path in &extracted_frames {
             if let Err(e) = std::fs::remove_file(temp_frame_path) {
                 log::warn!(
                     "Failed to cleanup temp frame {}: {}",

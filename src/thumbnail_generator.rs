@@ -130,9 +130,9 @@ impl ThumbnailGenerator {
             Some(2) => img.fliph(),
             Some(3) => img.rotate180(),
             Some(4) => img.flipv(),
-            Some(5) => img.fliph().rotate90(),
+            Some(5) => img.fliph().rotate270(), // Transpose: flip horizontal, then rotate 90 CCW (270 CW)
             Some(6) => img.rotate90(),
-            Some(7) => img.fliph().rotate270(),
+            Some(7) => img.fliph().rotate90(), // Transverse: flip horizontal, then rotate 90 CW
             Some(8) => img.rotate270(),
             _ => img, // 1 or None = no transformation needed
         }
@@ -877,5 +877,165 @@ mod tests {
 
         // Verify content is different (WebP and JPEG produce different bytes)
         assert_ne!(webp_data, jpeg_data, "WebP and JPEG data should differ");
+    }
+
+    /// Create a test image with distinct quadrants to verify orientation transformations
+    /// Layout: top-left=Red, top-right=Green, bottom-left=Blue, bottom-right=White
+    fn create_oriented_test_image(path: &std::path::Path) -> std::io::Result<()> {
+        use image::{ImageBuffer, Rgb};
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let width = 20u32;
+        let height = 20u32;
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+            // Create quadrants with distinct colors
+            if x < width / 2 && y < height / 2 {
+                Rgb([255, 0, 0]) // Top-left: Red
+            } else if x >= width / 2 && y < height / 2 {
+                Rgb([0, 255, 0]) // Top-right: Green
+            } else if x < width / 2 && y >= height / 2 {
+                Rgb([0, 0, 255]) // Bottom-left: Blue
+            } else {
+                Rgb([255, 255, 255]) // Bottom-right: White
+            }
+        });
+
+        img.save(path).map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_orientation_values() {
+        use image::{GenericImageView, ImageBuffer, Rgb};
+
+        // GIVEN: A thumbnail generator instance
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("cache");
+        let config = Config {
+            port: TEST_PORT,
+            photo_paths: vec![],
+            data_path: temp_dir.path().to_string_lossy().to_string(),
+            db_path: temp_dir
+                .path()
+                .join("database/turbo-pix.db")
+                .to_string_lossy()
+                .to_string(),
+            cache: CacheConfig {
+                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
+                max_cache_size_mb: 1024,
+            },
+        };
+        let db_pool = create_in_memory_pool().unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        // Create a 4x4 test image with distinct corner pixels for verification
+        // Original layout (orientation 1):
+        //   R G    Red(255,0,0) at top-left (0,0)
+        //   B W    Green(0,255,0) at top-right (3,0)
+        //          Blue(0,0,255) at bottom-left (0,3)
+        //          White(255,255,255) at bottom-right (3,3)
+        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(4, 4);
+        img.put_pixel(0, 0, Rgb([255, 0, 0])); // Red at top-left
+        img.put_pixel(3, 0, Rgb([0, 255, 0])); // Green at top-right
+        img.put_pixel(0, 3, Rgb([0, 0, 255])); // Blue at bottom-left
+        img.put_pixel(3, 3, Rgb([255, 255, 255])); // White at bottom-right
+        let original = DynamicImage::ImageRgb8(img);
+
+        // Test orientation 1 (normal) - no transformation
+        let result = generator.apply_orientation(original.clone(), Some(1));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 1: top-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 1: top-right should be Green"
+        );
+
+        // Test orientation 6 (rotate 90 CW)
+        // After rotate90(): R moves to top-right, G moves to bottom-right
+        let result = generator.apply_orientation(original.clone(), Some(6));
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 6: top-right should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 6: bottom-right should be Green"
+        );
+
+        // Test orientation 8 (rotate 270 CW / 90 CCW)
+        // After rotate270(): R moves to bottom-left, G moves to top-left
+        let result = generator.apply_orientation(original.clone(), Some(8));
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 8: bottom-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 8: top-left should be Green"
+        );
+
+        // Test orientation 5 (transpose = flip horizontal + rotate 270 CW / 90 CCW)
+        // According to EXIF spec: Row 0 is visual left, Column 0 is visual top
+        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
+        // Step 2 - rotate270(): (x,y) → (y, width-1-x) where width=4
+        //   Red(3,0) → (0,0), Green(0,0) → (0,3), Blue(3,3) → (3,0), White(0,3) → (3,3)
+        let result = generator.apply_orientation(original.clone(), Some(5));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 5: top-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 0, 255, 255]),
+            "Orientation 5: top-right should be Blue"
+        );
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 5: bottom-left should be Green"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([255, 255, 255, 255]),
+            "Orientation 5: bottom-right should be White"
+        );
+
+        // Test orientation 7 (transverse = flip horizontal + rotate 90 CW)
+        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
+        // Step 2 - rotate90(): (x,y) → (height-1-y, x) where height=4
+        //   Red(3,0) → (3,3), Green(0,0) → (3,0), Blue(3,3) → (0,3), White(0,3) → (0,0)
+        let result = generator.apply_orientation(original.clone(), Some(7));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 255, 255, 255]),
+            "Orientation 7: top-left should be White"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 7: top-right should be Green"
+        );
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([0, 0, 255, 255]),
+            "Orientation 7: bottom-left should be Blue"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 7: bottom-right should be Red"
+        );
     }
 }

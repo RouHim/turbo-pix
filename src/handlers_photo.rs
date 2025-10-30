@@ -94,9 +94,9 @@ fn apply_orientation(img: DynamicImage, orientation: Option<i32>) -> DynamicImag
         Some(2) => img.fliph(),
         Some(3) => img.rotate180(),
         Some(4) => img.flipv(),
-        Some(5) => img.fliph().rotate90(),
+        Some(5) => img.fliph().rotate270(), // Transpose: flip horizontal, then rotate 90 CCW (270 CW)
         Some(6) => img.rotate90(),
-        Some(7) => img.fliph().rotate270(),
+        Some(7) => img.fliph().rotate90(), // Transverse: flip horizontal, then rotate 90 CW
         Some(8) => img.rotate270(),
         _ => img, // 1 or None = no transformation needed
     }

@@ -399,7 +399,7 @@ class PhotoViewer {
     }
   }
 
-  async displayVideo(photo) {
+  async displayVideo(photo, forceTranscode = false) {
     if (!this.elements.video || !this.elements.image) {
       return;
     }
@@ -408,9 +408,9 @@ class PhotoViewer {
     // Access codec from metadata JSON structure
     const videoCodec = photo.metadata?.video?.codec || '';
     const isHEVC = videoCodec.toLowerCase() === 'hevc' || videoCodec.toLowerCase() === 'h265';
-    let needsTranscode = false;
+    let needsTranscode = forceTranscode;
 
-    if (isHEVC) {
+    if (isHEVC && !forceTranscode) {
       // Check browser HEVC support using Media Capabilities API
       const width = photo.width || 1920;
       const height = photo.height || 1080;
@@ -469,7 +469,7 @@ class PhotoViewer {
     this.elements.video.onerror = null;
 
     // Add error handler for playback failures
-    this.elements.video.onerror = () => {
+    this.elements.video.onerror = async () => {
       if (window.logger) {
         window.logger.error('Video playback failed', null, {
           component: 'PhotoViewer',
@@ -477,7 +477,29 @@ class PhotoViewer {
           videoCodec,
           needsTranscode,
           transcodingFailed,
+          forceTranscode,
         });
+      }
+
+      // If HEVC playback failed and we haven't tried transcoding yet, retry with transcoding
+      if (isHEVC && !needsTranscode && !forceTranscode) {
+        if (window.logger) {
+          window.logger.info('HEVC native playback failed, retrying with transcoding', {
+            component: 'PhotoViewer',
+            photoHash: photo.hash_sha256,
+          });
+        }
+
+        utils.showToast(
+          'Retrying',
+          'Native HEVC playback failed, attempting transcoded version...',
+          'info',
+          3000
+        );
+
+        // Retry with forced transcoding
+        await this.displayVideo(photo, true);
+        return;
       }
 
       // Show clear error message

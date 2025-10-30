@@ -265,10 +265,21 @@ const videoCodecSupport = {
     // Check if Media Capabilities API is available
     if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.decodingInfo) {
       // Fallback to basic video element support check
+      // IMPORTANT: Only trust 'probably', not 'maybe' - browsers often return 'maybe' for codecs they can't actually decode
       const video = document.createElement('video');
       const canPlay = video.canPlayType(`video/mp4; codecs="${codec}"`);
-      const supported = canPlay === 'probably' || canPlay === 'maybe';
+      const supported = canPlay === 'probably';
       this._cache[cacheKey] = supported;
+
+      if (window.logger) {
+        window.logger.info('Codec support fallback check', {
+          component: 'VideoCodecSupport',
+          codec,
+          canPlay,
+          supported,
+        });
+      }
+
       return supported;
     }
 

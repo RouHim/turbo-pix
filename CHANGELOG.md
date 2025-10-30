@@ -1,3 +1,10 @@
+## [2.0.7](https://github.com/RouHim/turbo-pix/compare/2.0.6...2.0.7) (2025-10-30)
+
+
+### Bug Fixes
+
+* improve HEVC video playback detection and error recovery ([38d0b3e](https://github.com/RouHim/turbo-pix/commit/38d0b3e3232ba7853a207342f6677d55ae4355a5))
+
 ## [2.0.6](https://github.com/RouHim/turbo-pix/compare/2.0.5...2.0.6) (2025-10-30)
 
 

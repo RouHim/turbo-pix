@@ -38,17 +38,76 @@ class MetadataEditor {
 
   setPhoto(photo) {
     this.currentPhoto = photo;
-    // Show edit button only for supported image file types
+    // Show edit button only for supported image file types (JPEG and PNG only)
     if (this.editBtn && photo) {
-      const isSupported = photo.mime_type?.startsWith('image/');
-      this.editBtn.style.display = isSupported ? 'block' : 'none';
+      const isSupported = this.isFormatSupported(photo);
+
+      if (isSupported) {
+        this.editBtn.style.display = 'block';
+        this.editBtn.style.opacity = '1';
+        this.editBtn.style.cursor = 'pointer';
+        this.editBtn.disabled = false;
+        this.editBtn.title = '';
+      } else {
+        // Grey out the button and show tooltip for unsupported formats
+        this.editBtn.style.display = 'block';
+        this.editBtn.style.opacity = '0.4';
+        this.editBtn.style.cursor = 'not-allowed';
+        this.editBtn.disabled = true;
+
+        const formatName = this.getFormatName(photo);
+        this.editBtn.title =
+          window.i18nManager?.t('ui.metadata.edit_unsupported_format', { format: formatName }) ||
+          `Editing ${formatName} files is not supported. Only JPEG and PNG formats are supported for metadata editing.`;
+      }
+
       // Update feather icons if needed
       window.feather?.replace();
     }
   }
 
+  isFormatSupported(photo) {
+    if (!photo.mime_type) return false;
+
+    // Only JPEG and PNG are supported for EXIF writing
+    const supportedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+
+    return supportedMimeTypes.includes(photo.mime_type.toLowerCase());
+  }
+
+  getFormatName(photo) {
+    if (!photo.mime_type) return 'this';
+
+    const mimeType = photo.mime_type.toLowerCase();
+
+    // Map common formats to readable names
+    const formatMap = {
+      'image/x-canon-cr2': 'RAW (CR2)',
+      'image/x-canon-cr3': 'RAW (CR3)',
+      'image/x-nikon-nef': 'RAW (NEF)',
+      'image/x-sony-arw': 'RAW (ARW)',
+      'image/x-adobe-dng': 'RAW (DNG)',
+      'image/x-olympus-orf': 'RAW (ORF)',
+      'image/x-panasonic-rw2': 'RAW (RW2)',
+      'image/webp': 'WebP',
+      'image/heic': 'HEIC',
+      'image/heif': 'HEIF',
+      'image/avif': 'AVIF',
+      'video/mp4': 'video',
+      'video/quicktime': 'video',
+      'video/x-msvideo': 'video',
+    };
+
+    return formatMap[mimeType] || mimeType.replace('image/', '').toUpperCase();
+  }
+
   openModal() {
     if (!this.currentPhoto || !this.modal) return;
+
+    // Don't open modal for unsupported formats
+    if (!this.isFormatSupported(this.currentPhoto)) {
+      return;
+    }
 
     // Pre-fill form with current values
     this.populateForm();

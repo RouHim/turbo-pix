@@ -123,6 +123,23 @@ window.DE_TRANSLATIONS = {
       audio_codec: 'Audio-Codec:',
       frame_rate: 'Bildrate:',
       bitrate: 'Bitrate:',
+
+      // Metadata editing
+      edit_button: 'Metadaten bearbeiten',
+      edit_modal_title: 'Foto-Metadaten bearbeiten',
+      edit_date_label: 'Aufnahmedatum',
+      edit_latitude_label: 'Breitengrad',
+      edit_longitude_label: 'Längengrad',
+      edit_cancel: 'Abbrechen',
+      edit_save: 'Speichern',
+      edit_success: 'Metadaten erfolgreich aktualisiert',
+      edit_error: 'Metadaten konnten nicht aktualisiert werden',
+      edit_validation_date: 'Ungültiges Datumsformat',
+      edit_validation_gps:
+        'GPS-Koordinaten müssen zwischen -90/90 (Breitengrad) und -180/180 (Längengrad) liegen',
+      edit_validation_gps_pair: 'Breitengrad und Längengrad müssen zusammen angegeben werden',
+      edit_unsupported_format:
+        'Die Bearbeitung von {{format}}-Dateien wird nicht unterstützt. Nur JPEG- und PNG-Formate werden für die Metadatenbearbeitung unterstützt.',
     },
 
     // Search

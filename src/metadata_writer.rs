@@ -4,10 +4,14 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use exif::{Field, In, Rational, Tag, Value};
 use img_parts::jpeg::Jpeg;
+use img_parts::png::Png;
 use img_parts::{Bytes, ImageEXIF};
 
 /// Updates EXIF metadata in an image file
 /// Only updates the specified fields, preserves all other EXIF data and image content
+///
+/// Supported formats: JPEG (.jpg, .jpeg), PNG (.png)
+/// Unsupported formats: WebP, RAW (CR2, CR3, NEF, ARW, DNG)
 pub fn update_metadata(
     file_path: &Path,
     taken_at: Option<DateTime<Utc>>,
@@ -43,6 +47,40 @@ pub fn update_metadata(
         }
         _ => {}
     }
+
+    // Determine format from file extension
+    let extension = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .ok_or_else(|| "File has no extension".to_string())?;
+
+    let format = match extension.as_str() {
+        "jpg" | "jpeg" => "jpeg",
+        "png" => "png",
+        "cr2" | "cr3" | "nef" | "arw" | "dng" | "orf" | "rw2" => {
+            return Err(format!(
+                "RAW format '.{}' is not supported for EXIF writing. \
+                Only JPEG and PNG are supported. \
+                Convert to JPEG/PNG first or use specialized RAW editing tools.",
+                extension
+            ));
+        }
+        "webp" | "heic" | "heif" | "avif" => {
+            return Err(format!(
+                "Format '.{}' is not currently supported for EXIF writing. \
+                Only JPEG and PNG are supported. Convert to JPEG/PNG first.",
+                extension
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "Unsupported file extension '.{}' for EXIF writing. \
+                Only JPEG (.jpg, .jpeg) and PNG (.png) are supported.",
+                extension
+            ));
+        }
+    };
 
     // Read existing EXIF data
     let file = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
@@ -175,20 +213,45 @@ pub fn update_metadata(
         .write(&mut exif_buffer, false)
         .map_err(|e| format!("Failed to generate EXIF data: {}", e))?;
 
-    // Read the original JPEG file to preserve image data
-    let jpeg_bytes =
-        std::fs::read(file_path).map_err(|e| format!("Failed to read JPEG file: {}", e))?;
+    let exif_bytes = Bytes::from(exif_buffer.into_inner());
 
-    let mut jpeg =
-        Jpeg::from_bytes(jpeg_bytes.into()).map_err(|e| format!("Failed to parse JPEG: {}", e))?;
+    // Handle different image formats based on detected format
+    match format {
+        "jpeg" => {
+            let image_bytes =
+                std::fs::read(file_path).map_err(|e| format!("Failed to read JPEG: {}", e))?;
 
-    // Set the new EXIF data (this replaces the APP1 segment while preserving image data)
-    jpeg.set_exif(Some(Bytes::from(exif_buffer.into_inner())));
+            let mut jpeg = Jpeg::from_bytes(image_bytes.into())
+                .map_err(|e| format!("Failed to parse JPEG: {}", e))?;
 
-    // Write the complete JPEG back to file
-    let output_bytes = jpeg.encoder().bytes();
-    std::fs::write(file_path, output_bytes)
-        .map_err(|e| format!("Failed to write JPEG file: {}", e))?;
+            // Set the new EXIF data (replaces APP1 segment while preserving image data)
+            jpeg.set_exif(Some(exif_bytes));
+
+            // Write the complete JPEG back to file
+            let output_bytes = jpeg.encoder().bytes();
+            std::fs::write(file_path, output_bytes)
+                .map_err(|e| format!("Failed to write JPEG: {}", e))?;
+        }
+        "png" => {
+            let image_bytes =
+                std::fs::read(file_path).map_err(|e| format!("Failed to read PNG: {}", e))?;
+
+            let mut png = Png::from_bytes(image_bytes.into())
+                .map_err(|e| format!("Failed to parse PNG: {}", e))?;
+
+            // Set the new EXIF data
+            png.set_exif(Some(exif_bytes));
+
+            // Write the complete PNG back to file
+            let output_bytes = png.encoder().bytes();
+            std::fs::write(file_path, output_bytes)
+                .map_err(|e| format!("Failed to write PNG: {}", e))?;
+        }
+        _ => {
+            // This should never happen due to earlier validation
+            return Err(format!("Unsupported format: {}", format));
+        }
+    }
 
     Ok(())
 }
@@ -770,5 +833,62 @@ mod tests {
         // THEN: Image integrity
         assert!(is_valid_jpeg(&image_path));
         assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_reject_raw_formats() {
+        // GIVEN: RAW format file (CR2)
+        let path = Path::new("test-data/IMG_9899.CR2");
+        if !path.exists() {
+            return;
+        }
+
+        // WHEN: Attempt to write EXIF to RAW file
+        let new_date = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let result = update_metadata(path, Some(new_date), Some(40.0), Some(-74.0));
+
+        // THEN: Should fail with clear error message
+        assert!(result.is_err(), "Should reject RAW formats");
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("RAW format") || error.contains("not supported"),
+            "Error should mention RAW format, got: {}",
+            error
+        );
+        assert!(
+            error.contains("JPEG") || error.contains("PNG"),
+            "Error should suggest alternatives, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_format_detection() {
+        // GIVEN: Various test files
+        let test_cases = vec![
+            ("test-data/sample_with_exif.jpg", true, "JPEG"),
+            ("test-data/IMG_9899.CR2", false, "RAW"),
+        ];
+
+        for (file_path, should_succeed, format) in test_cases {
+            let path = Path::new(file_path);
+            if !path.exists() {
+                continue;
+            }
+
+            // WHEN: Attempt to write EXIF
+            let new_date = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+            let result = update_metadata(path, Some(new_date), None, None);
+
+            // THEN: Check expected result
+            assert_eq!(
+                result.is_ok(),
+                should_succeed,
+                "Format {} should {} be supported: {:?}",
+                format,
+                if should_succeed { "" } else { "not" },
+                result
+            );
+        }
     }
 }

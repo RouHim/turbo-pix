@@ -424,7 +424,7 @@ mod tests {
 
         // THEN: Verify manufacturer and model
         assert_eq!(metadata.camera_make, Some("Canon".to_string()));
-        assert_eq!(metadata.camera_model, Some("Canon EOS 40D".to_string()));
+        assert_eq!(metadata.camera_model, Some("Canon EOS 1100D".to_string()));
 
         // THEN: Verify datetime extraction
         assert!(

@@ -322,9 +322,7 @@ pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 }
 
 pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    use little_exif::metadata::Metadata;
     use std::collections::BTreeMap;
-    use std::path::Path;
 
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
         Ok(Some(photo)) => photo,
@@ -337,8 +335,22 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         }
     };
 
-    let exif_metadata = match Metadata::new_from_path(Path::new(&photo.file_path)) {
-        Ok(m) => m,
+    let file = match std::fs::File::open(&photo.file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("Failed to open {}: {}", photo.file_path, e);
+            return Ok(warp::reply::json(&json!({
+                "error": "Failed to open file",
+                "message": format!("{}", e)
+            })));
+        }
+    };
+
+    let mut bufreader = std::io::BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+
+    let exif_metadata = match exifreader.read_from_container(&mut bufreader) {
+        Ok(e) => e,
         Err(e) => {
             log::error!("Failed to read EXIF from {}: {}", photo.file_path, e);
             return Ok(warp::reply::json(&json!({
@@ -350,22 +362,18 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
 
     let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
-    // Iterate through all IFDs and their tags
-    for ifd in exif_metadata.get_ifds() {
-        for tag in ifd.get_tags() {
-            let tag_hex = tag.as_u16();
-            // Use discriminant-based tag name extraction for robustness
-            let tag_name = get_exif_tag_name(tag);
-            let value = format!("{:?}", tag);
+    // Iterate through all fields
+    for field in exif_metadata.fields() {
+        let tag_name = format!("{}", field.tag);
+        let value = field.display_value().to_string();
 
-            exif_data.insert(
-                format!("0x{:04X}_{}", tag_hex, tag_name),
-                json!({
-                    "value": value,
-                    "tag": tag_name
-                }),
-            );
-        }
+        exif_data.insert(
+            format!("0x{:04X}_{}", field.tag.number(), tag_name),
+            json!({
+                "value": value,
+                "tag": tag_name
+            }),
+        );
     }
 
     Ok(warp::reply::json(&json!({
@@ -373,92 +381,6 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         "filename": photo.filename,
         "exif": exif_data
     })))
-}
-
-/// Extract tag name from ExifTag enum variant
-/// More robust than string parsing of Debug output
-fn get_exif_tag_name(tag: &little_exif::exif_tag::ExifTag) -> String {
-    use little_exif::exif_tag::ExifTag;
-
-    match tag {
-        ExifTag::Make(_) => "Make",
-        ExifTag::Model(_) => "Model",
-        ExifTag::Orientation(_) => "Orientation",
-        ExifTag::XResolution(_) => "XResolution",
-        ExifTag::YResolution(_) => "YResolution",
-        ExifTag::ResolutionUnit(_) => "ResolutionUnit",
-        ExifTag::Software(_) => "Software",
-        ExifTag::ModifyDate(_) => "ModifyDate",
-        ExifTag::Artist(_) => "Artist",
-        ExifTag::YCbCrPositioning(_) => "YCbCrPositioning",
-        ExifTag::Copyright(_) => "Copyright",
-        ExifTag::ExifOffset(_) => "ExifOffset",
-        ExifTag::ExposureTime(_) => "ExposureTime",
-        ExifTag::FNumber(_) => "FNumber",
-        ExifTag::ExposureProgram(_) => "ExposureProgram",
-        ExifTag::ISO(_) => "ISO",
-        ExifTag::SensitivityType(_) => "SensitivityType",
-        ExifTag::ExifVersion(_) => "ExifVersion",
-        ExifTag::DateTimeOriginal(_) => "DateTimeOriginal",
-        ExifTag::CreateDate(_) => "CreateDate",
-        ExifTag::OffsetTime(_) => "OffsetTime",
-        ExifTag::OffsetTimeOriginal(_) => "OffsetTimeOriginal",
-        ExifTag::OffsetTimeDigitized(_) => "OffsetTimeDigitized",
-        ExifTag::ShutterSpeedValue(_) => "ShutterSpeedValue",
-        ExifTag::ApertureValue(_) => "ApertureValue",
-        ExifTag::BrightnessValue(_) => "BrightnessValue",
-        ExifTag::ExposureCompensation(_) => "ExposureCompensation",
-        ExifTag::MaxApertureValue(_) => "MaxApertureValue",
-        ExifTag::MeteringMode(_) => "MeteringMode",
-        ExifTag::LightSource(_) => "LightSource",
-        ExifTag::Flash(_) => "Flash",
-        ExifTag::FocalLength(_) => "FocalLength",
-        ExifTag::SubjectArea(_) => "SubjectArea",
-        ExifTag::SubSecTime(_) => "SubSecTime",
-        ExifTag::SubSecTimeOriginal(_) => "SubSecTimeOriginal",
-        ExifTag::SubSecTimeDigitized(_) => "SubSecTimeDigitized",
-        ExifTag::ColorSpace(_) => "ColorSpace",
-        ExifTag::ExifImageWidth(_) => "ExifImageWidth",
-        ExifTag::ExifImageHeight(_) => "ExifImageHeight",
-        ExifTag::SensingMethod(_) => "SensingMethod",
-        ExifTag::SceneType(_) => "SceneType",
-        ExifTag::ExposureMode(_) => "ExposureMode",
-        ExifTag::WhiteBalance(_) => "WhiteBalance",
-        ExifTag::FocalLengthIn35mmFormat(_) => "FocalLengthIn35mmFormat",
-        ExifTag::SceneCaptureType(_) => "SceneCaptureType",
-        ExifTag::LensInfo(_) => "LensInfo",
-        ExifTag::LensMake(_) => "LensMake",
-        ExifTag::LensModel(_) => "LensModel",
-        ExifTag::GPSLatitudeRef(_) => "GPSLatitudeRef",
-        ExifTag::GPSLatitude(_) => "GPSLatitude",
-        ExifTag::GPSLongitudeRef(_) => "GPSLongitudeRef",
-        ExifTag::GPSLongitude(_) => "GPSLongitude",
-        ExifTag::GPSAltitudeRef(_) => "GPSAltitudeRef",
-        ExifTag::GPSAltitude(_) => "GPSAltitude",
-        ExifTag::GPSSpeedRef(_) => "GPSSpeedRef",
-        ExifTag::GPSSpeed(_) => "GPSSpeed",
-        ExifTag::GPSImgDirectionRef(_) => "GPSImgDirectionRef",
-        ExifTag::GPSImgDirection(_) => "GPSImgDirection",
-        ExifTag::GPSDestBearingRef(_) => "GPSDestBearingRef",
-        ExifTag::GPSDestBearing(_) => "GPSDestBearing",
-        ExifTag::GPSDateStamp(_) => "GPSDateStamp",
-        ExifTag::GPSHPositioningError(_) => "GPSHPositioningError",
-        ExifTag::ImageWidth(_) => "ImageWidth",
-        ExifTag::ImageHeight(_) => "ImageHeight",
-        ExifTag::BitsPerSample(_) => "BitsPerSample",
-        ExifTag::Compression(_) => "Compression",
-        ExifTag::PhotometricInterpretation(_) => "PhotometricInterpretation",
-        ExifTag::ImageDescription(_) => "ImageDescription",
-        ExifTag::StripOffsets(..) => "StripOffsets",
-        ExifTag::SamplesPerPixel(_) => "SamplesPerPixel",
-        ExifTag::RowsPerStrip(_) => "RowsPerStrip",
-        ExifTag::StripByteCounts(..) => "StripByteCounts",
-        ExifTag::PlanarConfiguration(_) => "PlanarConfiguration",
-        ExifTag::ISOSpeed(_) => "ISOSpeed",
-        ExifTag::GPSTimeStamp(_) => "GPSTimeStamp",
-        _ => "Unknown",
-    }
-    .to_string()
 }
 
 pub fn build_photo_routes(

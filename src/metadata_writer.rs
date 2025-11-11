@@ -1,11 +1,13 @@
-use chrono::{DateTime, Utc};
-use little_exif::exif_tag::ExifTag;
-use little_exif::metadata::Metadata;
-use little_exif::rational::uR64;
+use std::io::Cursor;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+use exif::{Field, In, Rational, Tag, Value};
+use img_parts::jpeg::Jpeg;
+use img_parts::{Bytes, ImageEXIF};
+
 /// Updates EXIF metadata in an image file
-/// Only updates the specified fields, preserves all other EXIF data
+/// Only updates the specified fields, preserves all other EXIF data and image content
 pub fn update_metadata(
     file_path: &Path,
     taken_at: Option<DateTime<Utc>>,
@@ -42,46 +44,56 @@ pub fn update_metadata(
         _ => {}
     }
 
-    // Read existing metadata from file
-    let mut metadata = Metadata::new_from_path(file_path)
+    // Read existing EXIF data
+    let file = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut bufreader = std::io::BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+
+    let exif = exifreader
+        .read_from_container(&mut bufreader)
         .map_err(|e| format!("Failed to read EXIF from file: {}", e))?;
 
-    // Update taken_at if provided
-    if let Some(dt) = taken_at {
-        let datetime_str = dt.format("%Y:%m:%d %H:%M:%S").to_string();
-        metadata.set_tag(ExifTag::DateTimeOriginal(datetime_str));
+    // Collect all fields we want to keep (excluding ones we're updating)
+    let mut new_fields: Vec<Field> = Vec::new();
+
+    // Copy existing fields, excluding ones we're updating
+    for field in exif.fields() {
+        let should_keep = match field.tag {
+            Tag::DateTimeOriginal if taken_at.is_some() => false,
+            Tag::GPSLatitudeRef | Tag::GPSLatitude | Tag::GPSLongitudeRef | Tag::GPSLongitude
+                if latitude.is_some() && longitude.is_some() =>
+            {
+                false
+            }
+            _ => true,
+        };
+
+        if should_keep {
+            new_fields.push(Field {
+                tag: field.tag,
+                ifd_num: field.ifd_num,
+                value: field.value.clone(),
+            });
+        }
     }
 
-    // Update GPS coordinates if provided
-    if let (Some(lat), Some(lng)) = (latitude, longitude) {
-        // Set latitude reference (N or S)
-        let lat_ref = if lat >= 0.0 { "N" } else { "S" };
-        metadata.set_tag(ExifTag::GPSLatitudeRef(lat_ref.to_string()));
+    // Add updated taken_at if provided
+    if let Some(dt) = taken_at {
+        let datetime_str = dt.format("%Y:%m:%d %H:%M:%S").to_string();
+        new_fields.push(Field {
+            tag: Tag::DateTimeOriginal,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![datetime_str.as_bytes().to_vec()]),
+        });
+    }
 
+    // Add updated GPS coordinates if provided
+    if let (Some(lat), Some(lng)) = (latitude, longitude) {
         // Convert latitude to degrees, minutes, seconds
         let lat_abs = lat.abs();
         let lat_deg = lat_abs.floor();
         let lat_min = ((lat_abs - lat_deg) * 60.0).floor();
         let lat_sec = ((lat_abs - lat_deg) * 60.0 - lat_min) * 60.0;
-
-        metadata.set_tag(ExifTag::GPSLatitude(vec![
-            uR64 {
-                nominator: lat_deg as u32,
-                denominator: 1,
-            },
-            uR64 {
-                nominator: lat_min as u32,
-                denominator: 1,
-            },
-            uR64 {
-                nominator: (lat_sec * 1000.0) as u32,
-                denominator: 1000,
-            },
-        ]));
-
-        // Set longitude reference (E or W)
-        let lng_ref = if lng >= 0.0 { "E" } else { "W" };
-        metadata.set_tag(ExifTag::GPSLongitudeRef(lng_ref.to_string()));
 
         // Convert longitude to degrees, minutes, seconds
         let lng_abs = lng.abs();
@@ -89,26 +101,94 @@ pub fn update_metadata(
         let lng_min = ((lng_abs - lng_deg) * 60.0).floor();
         let lng_sec = ((lng_abs - lng_deg) * 60.0 - lng_min) * 60.0;
 
-        metadata.set_tag(ExifTag::GPSLongitude(vec![
-            uR64 {
-                nominator: lng_deg as u32,
-                denominator: 1,
-            },
-            uR64 {
-                nominator: lng_min as u32,
-                denominator: 1,
-            },
-            uR64 {
-                nominator: (lng_sec * 1000.0) as u32,
-                denominator: 1000,
-            },
-        ]));
+        // Create GPS fields
+        new_fields.push(Field {
+            tag: Tag::GPSLatitudeRef,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![if lat >= 0.0 {
+                b"N".to_vec()
+            } else {
+                b"S".to_vec()
+            }]),
+        });
+
+        new_fields.push(Field {
+            tag: Tag::GPSLatitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![
+                Rational {
+                    num: lat_deg as u32,
+                    denom: 1,
+                },
+                Rational {
+                    num: lat_min as u32,
+                    denom: 1,
+                },
+                Rational {
+                    num: (lat_sec * 1000.0) as u32,
+                    denom: 1000,
+                },
+            ]),
+        });
+
+        new_fields.push(Field {
+            tag: Tag::GPSLongitudeRef,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![if lng >= 0.0 {
+                b"E".to_vec()
+            } else {
+                b"W".to_vec()
+            }]),
+        });
+
+        new_fields.push(Field {
+            tag: Tag::GPSLongitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![
+                Rational {
+                    num: lng_deg as u32,
+                    denom: 1,
+                },
+                Rational {
+                    num: lng_min as u32,
+                    denom: 1,
+                },
+                Rational {
+                    num: (lng_sec * 1000.0) as u32,
+                    denom: 1000,
+                },
+            ]),
+        });
     }
 
-    // Write updated metadata back to file
-    metadata
-        .write_to_file(file_path)
-        .map_err(|e| format!("Failed to write EXIF to file: {}", e))?;
+    // Generate new EXIF data using kamadak-exif Writer
+    let mut exif_buffer = Cursor::new(Vec::new());
+    let mut writer = exif::experimental::Writer::new();
+
+    // Push all fields into the writer
+    for field in &new_fields {
+        writer.push_field(field);
+    }
+
+    // Write EXIF as TIFF to buffer (false = big-endian, standard EXIF format)
+    writer
+        .write(&mut exif_buffer, false)
+        .map_err(|e| format!("Failed to generate EXIF data: {}", e))?;
+
+    // Read the original JPEG file to preserve image data
+    let jpeg_bytes =
+        std::fs::read(file_path).map_err(|e| format!("Failed to read JPEG file: {}", e))?;
+
+    let mut jpeg =
+        Jpeg::from_bytes(jpeg_bytes.into()).map_err(|e| format!("Failed to parse JPEG: {}", e))?;
+
+    // Set the new EXIF data (this replaces the APP1 segment while preserving image data)
+    jpeg.set_exif(Some(Bytes::from(exif_buffer.into_inner())));
+
+    // Write the complete JPEG back to file
+    let output_bytes = jpeg.encoder().bytes();
+    std::fs::write(file_path, output_bytes)
+        .map_err(|e| format!("Failed to write JPEG file: {}", e))?;
 
     Ok(())
 }
@@ -117,6 +197,7 @@ pub fn update_metadata(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use image::GenericImageView;
     use std::fs;
     use tempfile::TempDir;
 
@@ -130,6 +211,24 @@ mod tests {
         temp_image
     }
 
+    fn read_exif(path: &Path) -> exif::Exif {
+        let file = std::fs::File::open(path).unwrap();
+        let mut bufreader = std::io::BufReader::new(&file);
+        let exifreader = exif::Reader::new();
+        exifreader.read_from_container(&mut bufreader).unwrap()
+    }
+
+    fn is_valid_jpeg(path: &Path) -> bool {
+        // Check JPEG magic bytes
+        let bytes = std::fs::read(path).unwrap();
+        bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8
+    }
+
+    fn can_decode_image(path: &Path) -> bool {
+        // Try to decode the image with the image crate
+        image::open(path).is_ok()
+    }
+
     #[test]
     fn test_update_taken_at() {
         let temp_dir = TempDir::new().unwrap();
@@ -140,15 +239,30 @@ mod tests {
 
         assert!(result.is_ok(), "Failed to update taken_at: {:?}", result);
 
-        // Verify the date was written
-        let metadata = Metadata::new_from_path(&image_path).unwrap();
-        let date_tag = metadata
-            .get_tag(&ExifTag::DateTimeOriginal(String::new()))
-            .next();
+        // Verify the file is still a valid JPEG
+        assert!(
+            is_valid_jpeg(&image_path),
+            "File is no longer a valid JPEG!"
+        );
+        assert!(
+            can_decode_image(&image_path),
+            "Cannot decode image after metadata update!"
+        );
 
-        assert!(date_tag.is_some(), "DateTimeOriginal tag not found");
-        if let Some(ExifTag::DateTimeOriginal(s)) = date_tag {
-            assert_eq!(s, "2024:03:15 14:30:00", "DateTimeOriginal value incorrect");
+        // Verify the date was written
+        let exif = read_exif(&image_path);
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+
+        assert!(date_field.is_some(), "DateTimeOriginal tag not found");
+        if let Some(field) = date_field {
+            let value_str = field.display_value().to_string();
+            // kamadak-exif may display dates with dashes or colons, both are valid
+            assert!(
+                value_str.contains("2024-03-15 14:30:00")
+                    || value_str.contains("2024:03:15 14:30:00"),
+                "DateTimeOriginal value incorrect: {}",
+                value_str
+            );
         }
     }
 
@@ -161,24 +275,32 @@ mod tests {
 
         assert!(result.is_ok(), "Failed to update GPS: {:?}", result);
 
-        // Verify GPS tags were written
-        let metadata = Metadata::new_from_path(&image_path).unwrap();
+        // Verify the file is still a valid JPEG
+        assert!(
+            is_valid_jpeg(&image_path),
+            "File is no longer a valid JPEG!"
+        );
+        assert!(
+            can_decode_image(&image_path),
+            "Cannot decode image after metadata update!"
+        );
 
-        let lat_ref = metadata
-            .get_tag(&ExifTag::GPSLatitudeRef(String::new()))
-            .next();
-        let lng_ref = metadata
-            .get_tag(&ExifTag::GPSLongitudeRef(String::new()))
-            .next();
+        // Verify GPS tags were written
+        let exif = read_exif(&image_path);
+
+        let lat_ref = exif.get_field(Tag::GPSLatitudeRef, In::PRIMARY);
+        let lng_ref = exif.get_field(Tag::GPSLongitudeRef, In::PRIMARY);
 
         assert!(lat_ref.is_some(), "GPSLatitudeRef tag not found");
         assert!(lng_ref.is_some(), "GPSLongitudeRef tag not found");
 
-        if let Some(ExifTag::GPSLatitudeRef(s)) = lat_ref {
-            assert_eq!(s, "N", "GPSLatitudeRef should be N");
+        if let Some(field) = lat_ref {
+            let value_str = field.display_value().to_string();
+            assert!(value_str.contains('N'), "GPSLatitudeRef should be N");
         }
-        if let Some(ExifTag::GPSLongitudeRef(s)) = lng_ref {
-            assert_eq!(s, "W", "GPSLongitudeRef should be W");
+        if let Some(field) = lng_ref {
+            let value_str = field.display_value().to_string();
+            assert!(value_str.contains('W'), "GPSLongitudeRef should be W");
         }
     }
 
@@ -191,6 +313,16 @@ mod tests {
         let result = update_metadata(&image_path, Some(new_date), Some(51.5074), Some(-0.1278));
 
         assert!(result.is_ok(), "Failed to update both fields: {:?}", result);
+
+        // Verify the file is still a valid JPEG
+        assert!(
+            is_valid_jpeg(&image_path),
+            "File is no longer a valid JPEG!"
+        );
+        assert!(
+            can_decode_image(&image_path),
+            "Cannot decode image after metadata update!"
+        );
     }
 
     #[test]
@@ -242,20 +374,401 @@ mod tests {
         let result = update_metadata(&image_path, None, Some(-33.8688), Some(-151.2093));
         assert!(result.is_ok());
 
-        let metadata = Metadata::new_from_path(&image_path).unwrap();
+        // Verify the file is still a valid JPEG
+        assert!(
+            is_valid_jpeg(&image_path),
+            "File is no longer a valid JPEG!"
+        );
 
-        let lat_ref = metadata
-            .get_tag(&ExifTag::GPSLatitudeRef(String::new()))
-            .next();
-        let lng_ref = metadata
-            .get_tag(&ExifTag::GPSLongitudeRef(String::new()))
-            .next();
+        let exif = read_exif(&image_path);
 
-        if let Some(ExifTag::GPSLatitudeRef(s)) = lat_ref {
-            assert_eq!(s, "S", "Should set S for negative latitude");
+        let lat_ref = exif.get_field(Tag::GPSLatitudeRef, In::PRIMARY);
+        let lng_ref = exif.get_field(Tag::GPSLongitudeRef, In::PRIMARY);
+
+        if let Some(field) = lat_ref {
+            let value_str = field.display_value().to_string();
+            assert!(
+                value_str.contains('S'),
+                "Should set S for negative latitude"
+            );
         }
-        if let Some(ExifTag::GPSLongitudeRef(s)) = lng_ref {
-            assert_eq!(s, "W", "Should set W for negative longitude");
+        if let Some(field) = lng_ref {
+            let value_str = field.display_value().to_string();
+            assert!(
+                value_str.contains('W'),
+                "Should set W for negative longitude"
+            );
         }
+    }
+
+    #[test]
+    fn test_preserves_image_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // Get original image data
+        let original_size = std::fs::metadata(&image_path).unwrap().len();
+        let original_image = image::open(&image_path).unwrap();
+        let (orig_width, orig_height) = original_image.dimensions();
+
+        // Update metadata
+        let new_date = Utc.with_ymd_and_hms(2024, 6, 1, 10, 0, 0).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), Some(40.0), Some(-75.0));
+        assert!(result.is_ok());
+
+        // Verify image can still be decoded
+        let updated_image = image::open(&image_path).unwrap();
+        let (new_width, new_height) = updated_image.dimensions();
+
+        // Dimensions must be identical
+        assert_eq!(
+            orig_width, new_width,
+            "Image width changed after metadata update"
+        );
+        assert_eq!(
+            orig_height, new_height,
+            "Image height changed after metadata update"
+        );
+
+        // File size should be reasonable (JPEG segment changes can vary size slightly)
+        let new_size = std::fs::metadata(&image_path).unwrap().len();
+        let size_ratio = new_size as f64 / original_size as f64;
+        assert!(
+            (0.5..=1.5).contains(&size_ratio),
+            "File size changed unreasonably: {} -> {} (ratio: {})",
+            original_size,
+            new_size,
+            size_ratio
+        );
+    }
+
+    #[test]
+    fn test_pixel_perfect_preservation() {
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // Load original image and capture ALL pixel data
+        let original_image = image::open(&image_path).unwrap();
+        let original_pixels: Vec<u8> = original_image.to_rgb8().into_raw();
+        let (orig_width, orig_height) = original_image.dimensions();
+
+        // Update metadata
+        let new_date = Utc.with_ymd_and_hms(2024, 12, 25, 15, 30, 45).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), Some(51.5074), Some(-0.1278));
+        assert!(result.is_ok(), "Metadata update failed: {:?}", result);
+
+        // Load updated image and capture ALL pixel data
+        let updated_image = image::open(&image_path).unwrap();
+        let updated_pixels: Vec<u8> = updated_image.to_rgb8().into_raw();
+        let (new_width, new_height) = updated_image.dimensions();
+
+        // Verify dimensions haven't changed
+        assert_eq!(
+            orig_width, new_width,
+            "Image width changed after metadata update"
+        );
+        assert_eq!(
+            orig_height, new_height,
+            "Image height changed after metadata update"
+        );
+
+        // CRITICAL: Verify every single pixel is IDENTICAL
+        assert_eq!(
+            original_pixels.len(),
+            updated_pixels.len(),
+            "Pixel buffer size changed"
+        );
+
+        // Compare pixel-by-pixel
+        let mut differences = 0;
+        for (i, (orig, updated)) in original_pixels
+            .iter()
+            .zip(updated_pixels.iter())
+            .enumerate()
+        {
+            if orig != updated {
+                differences += 1;
+                if differences <= 10 {
+                    // Log first 10 differences for debugging
+                    eprintln!("Pixel difference at index {}: {} -> {}", i, orig, updated);
+                }
+            }
+        }
+
+        assert_eq!(
+            differences, 0,
+            "Found {} pixel differences! Image data was modified during metadata update. \
+             This means JPEG was re-encoded, which is LOSSY and unacceptable.",
+            differences
+        );
+    }
+
+    #[test]
+    fn test_write_to_image_without_exif() {
+        // GIVEN: Image with no EXIF data (car.jpg)
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = Path::new("test-data/car.jpg");
+        if !source_path.exists() {
+            return;
+        }
+
+        let image_path = temp_dir.path().join("test_no_exif.jpg");
+        std::fs::copy(source_path, &image_path).unwrap();
+
+        // WHEN: Write EXIF metadata to file without EXIF
+        let new_date = Utc.with_ymd_and_hms(2024, 11, 11, 10, 30, 0).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), Some(48.8566), Some(2.3522));
+
+        // THEN: Should succeed
+        assert!(
+            result.is_ok(),
+            "Should be able to add EXIF to file without it: {:?}",
+            result
+        );
+
+        // THEN: Verify written data can be read back
+        let exif = read_exif(&image_path);
+
+        // Check datetime
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some(), "DateTimeOriginal should be written");
+
+        // Check GPS
+        let lat_field = exif.get_field(Tag::GPSLatitude, In::PRIMARY);
+        let lon_field = exif.get_field(Tag::GPSLongitude, In::PRIMARY);
+        assert!(lat_field.is_some(), "GPS Latitude should be written");
+        assert!(lon_field.is_some(), "GPS Longitude should be written");
+
+        // THEN: Image should still be valid
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_write_to_exif_without_datetime_gps() {
+        // GIVEN: Image with EXIF (sample_with_exif.jpg) - we'll test updating it
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = Path::new("test-data/sample_with_exif.jpg");
+        if !source_path.exists() {
+            return;
+        }
+
+        let image_path = temp_dir.path().join("test_partial_exif.jpg");
+        std::fs::copy(source_path, &image_path).unwrap();
+
+        // WHEN: Update datetime and GPS (file already has EXIF with camera info)
+        let new_date = Utc.with_ymd_and_hms(2025, 1, 15, 14, 22, 30).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), Some(-33.8688), Some(151.2093));
+
+        // THEN: Should succeed
+        assert!(
+            result.is_ok(),
+            "Should update datetime/GPS in existing EXIF: {:?}",
+            result
+        );
+
+        // THEN: Read back and verify
+        let exif = read_exif(&image_path);
+
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some(), "DateTime should be updated in EXIF");
+
+        let lat_field = exif.get_field(Tag::GPSLatitude, In::PRIMARY);
+        assert!(lat_field.is_some(), "GPS should be added/updated in EXIF");
+
+        // THEN: Camera info should be preserved
+        let make_field = exif.get_field(Tag::Make, In::PRIMARY);
+        assert!(make_field.is_some(), "Camera make should be preserved");
+
+        // THEN: Image integrity
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_read_write_cycle_with_complete_exif() {
+        // GIVEN: Image with complete EXIF data (Canon EOS 40D)
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = Path::new("test-data/sample_with_exif.jpg");
+        if !source_path.exists() {
+            return;
+        }
+
+        let image_path = temp_dir.path().join("test_complete.jpg");
+        std::fs::copy(source_path, &image_path).unwrap();
+
+        // WHEN: Read original EXIF
+        let original_exif = read_exif(&image_path);
+        let orig_make = original_exif.get_field(Tag::Make, In::PRIMARY);
+        let _orig_model = original_exif.get_field(Tag::Model, In::PRIMARY);
+
+        // WHEN: Update datetime and GPS
+        let new_date = Utc.with_ymd_and_hms(2026, 6, 20, 8, 45, 12).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), Some(51.5074), Some(-0.1278));
+        assert!(result.is_ok());
+
+        // THEN: Read back and verify updates applied
+        let updated_exif = read_exif(&image_path);
+
+        let date_field = updated_exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some(), "DateTime should be updated");
+
+        let lat_field = updated_exif.get_field(Tag::GPSLatitude, In::PRIMARY);
+        let lon_field = updated_exif.get_field(Tag::GPSLongitude, In::PRIMARY);
+        assert!(lat_field.is_some(), "GPS Latitude should be updated");
+        assert!(lon_field.is_some(), "GPS Longitude should be updated");
+
+        // THEN: Other EXIF fields should be preserved
+        let updated_make = updated_exif.get_field(Tag::Make, In::PRIMARY);
+        let updated_model = updated_exif.get_field(Tag::Model, In::PRIMARY);
+        assert!(updated_make.is_some(), "Camera make should be preserved");
+        assert!(updated_model.is_some(), "Camera model should be preserved");
+
+        if let (Some(orig), Some(updated)) = (orig_make, updated_make) {
+            assert_eq!(
+                orig.display_value().to_string(),
+                updated.display_value().to_string(),
+                "Camera make should be unchanged"
+            );
+        }
+
+        // THEN: Image integrity
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_partial_update_datetime_only() {
+        // GIVEN: Image with EXIF
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // WHEN: Update only datetime (no GPS)
+        let new_date = Utc.with_ymd_and_hms(2027, 3, 10, 16, 20, 0).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), None, None);
+
+        // THEN: Should succeed
+        assert!(result.is_ok(), "Should update datetime without GPS");
+
+        // THEN: Datetime updated, GPS should not exist
+        let exif = read_exif(&image_path);
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some(), "DateTime should be written");
+
+        // THEN: Image integrity
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_partial_update_gps_only() {
+        // GIVEN: Image with EXIF
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // WHEN: Update only GPS (no datetime)
+        let result = update_metadata(&image_path, None, Some(35.6762), Some(139.6503));
+
+        // THEN: Should succeed
+        assert!(result.is_ok(), "Should update GPS without datetime");
+
+        // THEN: GPS updated
+        let exif = read_exif(&image_path);
+        let lat_field = exif.get_field(Tag::GPSLatitude, In::PRIMARY);
+        let lon_field = exif.get_field(Tag::GPSLongitude, In::PRIMARY);
+        assert!(lat_field.is_some(), "GPS should be written");
+        assert!(lon_field.is_some(), "GPS should be written");
+
+        // THEN: Image integrity
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
+    }
+
+    #[test]
+    fn test_multiple_write_cycles() {
+        // GIVEN: Image with EXIF
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // Capture original pixels
+        let original_image = image::open(&image_path).unwrap();
+        let original_pixels: Vec<u8> = original_image.to_rgb8().into_raw();
+
+        // WHEN: Perform multiple update cycles
+        for i in 0..3 {
+            let new_date = Utc.with_ymd_and_hms(2024 + i, 1, 1, 12, 0, 0).unwrap();
+            let result = update_metadata(
+                &image_path,
+                Some(new_date),
+                Some(40.0 + i as f64),
+                Some(-74.0),
+            );
+            assert!(result.is_ok(), "Update cycle {} should succeed", i);
+        }
+
+        // THEN: Final datetime should reflect last update
+        let exif = read_exif(&image_path);
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some());
+
+        // THEN: Pixels should still be IDENTICAL after multiple writes
+        let final_image = image::open(&image_path).unwrap();
+        let final_pixels: Vec<u8> = final_image.to_rgb8().into_raw();
+
+        assert_eq!(
+            original_pixels.len(),
+            final_pixels.len(),
+            "Pixel buffer size changed after multiple writes"
+        );
+
+        let differences: usize = original_pixels
+            .iter()
+            .zip(final_pixels.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+
+        assert_eq!(
+            differences, 0,
+            "Found {} pixel differences after {} write cycles! Image was re-encoded.",
+            differences, 3
+        );
+    }
+
+    #[test]
+    fn test_overwrite_existing_datetime_gps() {
+        // GIVEN: Image with EXIF containing datetime and GPS
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = Path::new("test-data/sample_with_exif.jpg");
+        if !source_path.exists() {
+            return;
+        }
+
+        let image_path = temp_dir.path().join("test_overwrite.jpg");
+        std::fs::copy(source_path, &image_path).unwrap();
+
+        // WHEN: Write initial metadata
+        let date1 = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+        update_metadata(&image_path, Some(date1), Some(10.0), Some(20.0)).unwrap();
+
+        // WHEN: Overwrite with new metadata
+        let date2 = Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap();
+        let result = update_metadata(&image_path, Some(date2), Some(50.0), Some(-100.0));
+        assert!(result.is_ok(), "Should overwrite existing metadata");
+
+        // THEN: Should contain the NEW values
+        let exif = read_exif(&image_path);
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some());
+
+        let date_str = date_field.unwrap().display_value().to_string();
+        assert!(
+            date_str.contains("2024-12-31") || date_str.contains("2024:12:31"),
+            "Should contain new date, got: {}",
+            date_str
+        );
+
+        // THEN: Image integrity
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
     }
 }

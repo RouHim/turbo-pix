@@ -879,34 +879,6 @@ mod tests {
         assert_ne!(webp_data, jpeg_data, "WebP and JPEG data should differ");
     }
 
-    /// Create a test image with distinct quadrants to verify orientation transformations
-    /// Layout: top-left=Red, top-right=Green, bottom-left=Blue, bottom-right=White
-    fn create_oriented_test_image(path: &std::path::Path) -> std::io::Result<()> {
-        use image::{ImageBuffer, Rgb};
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let width = 20u32;
-        let height = 20u32;
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
-            // Create quadrants with distinct colors
-            if x < width / 2 && y < height / 2 {
-                Rgb([255, 0, 0]) // Top-left: Red
-            } else if x >= width / 2 && y < height / 2 {
-                Rgb([0, 255, 0]) // Top-right: Green
-            } else if x < width / 2 && y >= height / 2 {
-                Rgb([0, 0, 255]) // Bottom-left: Blue
-            } else {
-                Rgb([255, 255, 255]) // Bottom-right: White
-            }
-        });
-
-        img.save(path).map_err(std::io::Error::other)?;
-        Ok(())
-    }
-
     #[test]
     fn test_apply_orientation_values() {
         use image::{GenericImageView, ImageBuffer, Rgb};

@@ -43,6 +43,9 @@ jobs:
       - name: Run frontend linters
         run: npm run lint
 
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Download AI models
         run: cargo run -- --download-models
 

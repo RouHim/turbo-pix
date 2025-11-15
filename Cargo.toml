@@ -20,7 +20,8 @@ clokwerk = "0.4"
 
 # Image processing & MIME
 image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "hdr", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
-little_exif = "0.6"
+kamadak-exif = "0.6"
+img-parts = "0.4" # For JPEG/PNG segment manipulation when writing EXIF
 fast-blurhash = "1.0"
 rawloader = "0.37"
 bayer = "0.1"

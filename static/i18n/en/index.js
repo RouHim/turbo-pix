@@ -137,6 +137,8 @@ window.EN_TRANSLATIONS = {
       edit_validation_date: 'Invalid date format',
       edit_validation_gps: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
       edit_validation_gps_pair: 'Both latitude and longitude must be provided together',
+      edit_unsupported_format:
+        'Editing {{format}} files is not supported. Only JPEG and PNG formats are supported for metadata editing.',
     },
 
     // Search

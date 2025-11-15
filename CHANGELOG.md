@@ -1,3 +1,19 @@
+## [2.0.8](https://github.com/RouHim/turbo-pix/compare/2.0.7...2.0.8) (2025-11-08)
+
+## [2.0.7](https://github.com/RouHim/turbo-pix/compare/2.0.6...2.0.7) (2025-10-30)
+
+
+### Bug Fixes
+
+* improve HEVC video playback detection and error recovery ([38d0b3e](https://github.com/RouHim/turbo-pix/commit/38d0b3e3232ba7853a207342f6677d55ae4355a5))
+
+## [2.0.6](https://github.com/RouHim/turbo-pix/compare/2.0.5...2.0.6) (2025-10-30)
+
+
+### Bug Fixes
+
+* correct EXIF orientation handling for orientations 5 and 7 ([4e15ff2](https://github.com/RouHim/turbo-pix/commit/4e15ff277f88dd2a78c995d27b5692730900069b))
+
 ## [2.0.5](https://github.com/RouHim/turbo-pix/compare/2.0.4...2.0.5) (2025-10-29)
 
 

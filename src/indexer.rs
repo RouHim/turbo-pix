@@ -68,10 +68,10 @@ mod tests {
             // This verifies our enhanced extraction is working
             if metadata.taken_at.is_some() {
                 let taken_at = metadata.taken_at.unwrap();
-                // Sample file has date 2008-05-30T15:56:01Z
-                assert_eq!(taken_at.year(), 2008);
-                assert_eq!(taken_at.month(), 5);
-                assert_eq!(taken_at.day(), 30);
+                // Sample file (Canon EOS 1100D) has date 2024-01-01
+                assert_eq!(taken_at.year(), 2024);
+                assert_eq!(taken_at.month(), 1);
+                assert_eq!(taken_at.day(), 1);
             }
         }
     }
@@ -118,12 +118,12 @@ mod tests {
             let metadata =
                 MetadataExtractor::extract_with_metadata(sample_path, Some(&file_metadata));
 
-            // Should use EXIF date (2008-05-30), not file creation time
+            // Should use EXIF date (2024-01-01), not file creation time
             assert!(metadata.taken_at.is_some());
             let taken_at = metadata.taken_at.unwrap();
-            assert_eq!(taken_at.year(), 2008);
-            assert_eq!(taken_at.month(), 5);
-            assert_eq!(taken_at.day(), 30);
+            assert_eq!(taken_at.year(), 2024);
+            assert_eq!(taken_at.month(), 1);
+            assert_eq!(taken_at.day(), 1);
         }
     }
 

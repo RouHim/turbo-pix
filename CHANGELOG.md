@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/RouHim/turbo-pix/compare/2.0.8...2.1.0) (2025-11-15)
+
+
+### Features
+
+* add format detection and UI support for EXIF editing limitations ([fbeeb1a](https://github.com/RouHim/turbo-pix/commit/fbeeb1a80724b6c1e7335de686a3b02a4991c380))
+
 ## [2.0.8](https://github.com/RouHim/turbo-pix/compare/2.0.7...2.0.8) (2025-11-08)
 
 ## [2.0.7](https://github.com/RouHim/turbo-pix/compare/2.0.6...2.0.7) (2025-10-30)

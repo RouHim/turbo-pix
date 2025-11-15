@@ -412,6 +412,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_ffprobe_is_installed() {
+        // GIVEN: System environment
+        let ffprobe_path = std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string());
+
+        // WHEN: Check if ffprobe is available
+        let result = std::process::Command::new(&ffprobe_path)
+            .arg("-version")
+            .output();
+
+        // THEN: Should be installed and executable
+        assert!(
+            result.is_ok(),
+            "ffprobe not found. Please install ffmpeg/ffprobe. \
+             On Ubuntu/Debian: sudo apt-get install ffmpeg \
+             On macOS: brew install ffmpeg \
+             Or set FFPROBE_PATH environment variable to the ffprobe binary location."
+        );
+
+        let output = result.unwrap();
+        assert!(
+            output.status.success(),
+            "ffprobe command failed. Please ensure ffmpeg is properly installed."
+        );
+    }
+
+    #[test]
     fn test_extract_canon_exif() {
         // GIVEN: Canon EOS 40D image with complete EXIF data
         let path = Path::new("test-data/sample_with_exif.jpg");

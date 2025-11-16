@@ -332,6 +332,20 @@ const videoCodecSupport = {
    * @returns {Promise<boolean>}
    */
   async supportsHEVC(width = 1920, height = 1080) {
+    // Firefox has extremely poor and unreliable HEVC support across all platforms
+    // Even when Media Capabilities API reports support, playback often fails
+    // Always transcode HEVC for Firefox to ensure reliable playback
+    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    if (isFirefox) {
+      if (window.logger) {
+        window.logger.info('Firefox detected - forcing HEVC transcoding', {
+          component: 'VideoCodecSupport',
+          userAgent: navigator.userAgent,
+        });
+      }
+      return false;
+    }
+
     // Try common HEVC codec strings
     const hevcCodecs = [
       'hvc1.1.6.L93.B0', // HEVC Main Profile, Level 3.1

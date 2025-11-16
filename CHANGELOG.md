@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/RouHim/turbo-pix/compare/2.1.0...2.1.1) (2025-11-16)
+
+
+### Bug Fixes
+
+* force HEVC transcoding for Firefox to prevent playback failures ([400aec4](https://github.com/RouHim/turbo-pix/commit/400aec4ec04ea59f795cdb7f8ebb9533a8535ec4))
+
 # [2.1.0](https://github.com/RouHim/turbo-pix/compare/2.0.8...2.1.0) (2025-11-15)
 
 

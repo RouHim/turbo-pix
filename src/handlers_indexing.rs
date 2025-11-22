@@ -1,0 +1,73 @@
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::sync::atomic::Ordering;
+use warp::Filter;
+
+use crate::scheduler::IndexingStatus;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IndexingStatusResponse {
+    pub is_indexing: bool,
+    pub phase: String,
+    pub photos_total: u64,
+    pub photos_processed: u64,
+    pub photos_semantic_indexed: u64,
+    pub started_at: Option<String>,
+    pub progress_percent: f64,
+}
+
+pub async fn get_indexing_status(status: IndexingStatus) -> Result<impl warp::Reply, Infallible> {
+    let is_indexing = status.is_indexing.load(Ordering::SeqCst);
+    let phase = status.current_phase.lock().await.clone();
+    let photos_total = status.photos_total.load(Ordering::SeqCst);
+    let photos_processed = status.photos_processed.load(Ordering::SeqCst);
+    let photos_semantic_indexed = status.photos_semantic_indexed.load(Ordering::SeqCst);
+    let started_at = status.started_at.lock().await.map(|dt| dt.to_rfc3339());
+
+    // Calculate progress percentage
+    let progress_percent = if photos_total > 0 {
+        match phase.as_str() {
+            "metadata" => (photos_processed as f64 / photos_total as f64) * 100.0,
+            "semantic_vectors" => {
+                // Phase 1 is 50%, Phase 2 is the other 50%
+                let phase1_progress = 50.0;
+                let phase2_progress = if photos_total > 0 {
+                    (photos_semantic_indexed as f64 / photos_total as f64) * 50.0
+                } else {
+                    0.0
+                };
+                phase1_progress + phase2_progress
+            }
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
+
+    let response = IndexingStatusResponse {
+        is_indexing,
+        phase,
+        photos_total,
+        photos_processed,
+        photos_semantic_indexed,
+        started_at,
+        progress_percent,
+    };
+
+    Ok(warp::reply::json(&response))
+}
+
+fn with_indexing_status(
+    status: IndexingStatus,
+) -> impl Filter<Extract = (IndexingStatus,), Error = Infallible> + Clone {
+    warp::any().map(move || status.clone())
+}
+
+pub fn build_indexing_routes(
+    status: IndexingStatus,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("api" / "indexing" / "status")
+        .and(warp::get())
+        .and(with_indexing_status(status))
+        .and_then(get_indexing_status)
+}

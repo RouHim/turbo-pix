@@ -36,8 +36,18 @@ class TurboPixApp {
     this.setupViewControls();
     this.setupResponsiveLayout();
     this.initTheme();
+    this.initIndexingStatus();
     this.loadInitialData();
     this.startPerformanceMonitoring();
+  }
+
+  initIndexingStatus() {
+    if (window.indexingStatus) {
+      window.indexingStatus.init();
+      if (window.logger) {
+        window.logger.info('Indexing status manager initialized');
+      }
+    }
   }
 
   async initializeI18n() {

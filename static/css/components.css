@@ -1277,3 +1277,86 @@
 .form-group-row .form-group {
   flex: 1;
 }
+
+/* Indexing Banner */
+.indexing-banner {
+  position: fixed;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+  color: white;
+  padding: 12px 20px;
+  box-shadow: var(--shadow-medium);
+  z-index: 900;
+  animation: slide-down 0.3s ease-out;
+}
+
+@keyframes slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.indexing-banner-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.indexing-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  opacity: 0.9;
+}
+
+.indexing-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#indexing-message {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#indexing-progress {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.indexing-progress-bar {
+  flex-shrink: 0;
+  width: 200px;
+  height: 6px;
+  background: rgb(255 255 255 / 20%);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.indexing-progress-fill {
+  height: 100%;
+  background: rgb(255 255 255 / 90%);
+  border-radius: 3px;
+  transition: width 0.3s ease-out;
+}
+
+/* Adjust main content when banner is visible */
+body:has(#indexing-banner[style*='display: block']) .sidebar {
+  top: calc(var(--header-height) + 50px);
+}
+
+body:has(#indexing-banner[style*='display: block']) .main-content {
+  margin-top: 50px;
+}

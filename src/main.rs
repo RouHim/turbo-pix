@@ -6,6 +6,7 @@ mod db_schema;
 mod db_types;
 mod file_scanner;
 mod handlers_health;
+mod handlers_indexing;
 mod handlers_photo;
 mod handlers_search;
 mod handlers_static;
@@ -33,6 +34,7 @@ use warp::Filter;
 
 use cache_manager::CacheManager;
 use handlers_health::build_health_routes;
+use handlers_indexing::build_indexing_routes;
 use handlers_photo::build_photo_routes;
 use handlers_search::build_search_routes;
 use handlers_static::build_static_routes;
@@ -80,6 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =
         initialize_services(&config)?;
 
+    // Extract indexing status before moving photo_scheduler
+    let indexing_status = photo_scheduler.status.clone();
+
     // Start background tasks
     start_background_tasks(photo_scheduler);
 
@@ -87,12 +92,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search);
+    let indexing_routes = build_indexing_routes(indexing_status);
     let static_routes = build_static_routes();
 
     let routes = health_routes
         .or(photo_routes)
         .or(thumbnail_routes)
         .or(search_routes)
+        .or(indexing_routes)
         .or(static_routes)
         .with(cors())
         .with(warp::log("turbo_pix"))

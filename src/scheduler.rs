@@ -1,6 +1,7 @@
 use clokwerk::{Job, Scheduler, TimeUnits};
 use log::{error, info, warn};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -17,6 +18,47 @@ use crate::semantic_search::SemanticSearchEngine;
 /// and benefit from larger transactions to amortize COMMIT costs.
 const DB_WRITE_BATCH_SIZE: usize = 250;
 
+/// Indexing status shared across threads
+#[derive(Clone)]
+pub struct IndexingStatus {
+    pub is_indexing: Arc<AtomicBool>,
+    pub current_phase: Arc<Mutex<String>>,
+    pub photos_total: Arc<AtomicU64>,
+    pub photos_processed: Arc<AtomicU64>,
+    pub photos_semantic_indexed: Arc<AtomicU64>,
+    pub started_at: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
+}
+
+impl IndexingStatus {
+    pub fn new() -> Self {
+        Self {
+            is_indexing: Arc::new(AtomicBool::new(false)),
+            current_phase: Arc::new(Mutex::new(String::from("idle"))),
+            photos_total: Arc::new(AtomicU64::new(0)),
+            photos_processed: Arc::new(AtomicU64::new(0)),
+            photos_semantic_indexed: Arc::new(AtomicU64::new(0)),
+            started_at: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn start_indexing(&self) {
+        self.is_indexing.store(true, Ordering::SeqCst);
+        *self.started_at.lock().await = Some(chrono::Utc::now());
+        self.photos_total.store(0, Ordering::SeqCst);
+        self.photos_processed.store(0, Ordering::SeqCst);
+        self.photos_semantic_indexed.store(0, Ordering::SeqCst);
+    }
+
+    pub async fn stop_indexing(&self) {
+        self.is_indexing.store(false, Ordering::SeqCst);
+        *self.current_phase.lock().await = String::from("idle");
+    }
+
+    pub async fn set_phase(&self, phase: &str) {
+        *self.current_phase.lock().await = String::from(phase);
+    }
+}
+
 #[derive(Clone)]
 pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
@@ -24,6 +66,7 @@ pub struct PhotoScheduler {
     cache_manager: CacheManager,
     semantic_search: Arc<SemanticSearchEngine>,
     rescan_lock: Arc<Mutex<()>>,
+    pub status: IndexingStatus,
 }
 
 impl PhotoScheduler {
@@ -39,6 +82,7 @@ impl PhotoScheduler {
             cache_manager,
             semantic_search,
             rescan_lock: Arc::new(Mutex::new(())),
+            status: IndexingStatus::new(),
         }
     }
 
@@ -48,10 +92,19 @@ impl PhotoScheduler {
     /// Uses rusqlite's transaction API with IMMEDIATE mode for better concurrency.
     ///
     /// Returns (successful_count, error_count)
-    fn batch_write_photos(db_pool: &DbPool, photos: Vec<crate::db::Photo>) -> (usize, usize) {
+    fn batch_write_photos(
+        db_pool: &DbPool,
+        photos: Vec<crate::db::Photo>,
+        status: &IndexingStatus,
+    ) -> (usize, usize) {
         let mut indexed_count = 0;
         let mut error_count = 0;
         let total_count = photos.len();
+
+        // Update total count
+        status
+            .photos_total
+            .store(total_count as u64, Ordering::SeqCst);
 
         for (batch_idx, batch) in photos.chunks(DB_WRITE_BATCH_SIZE).enumerate() {
             match db_pool.get() {
@@ -84,6 +137,10 @@ impl PhotoScheduler {
                     match tx.commit() {
                         Ok(_) => {
                             indexed_count += batch_success;
+                            // Update progress counter
+                            status
+                                .photos_processed
+                                .store(indexed_count as u64, Ordering::SeqCst);
                             info!(
                                 "Batch {}/{} committed: {} photos saved{}",
                                 batch_idx + 1,
@@ -131,6 +188,7 @@ impl PhotoScheduler {
         let cache_manager = self.cache_manager.clone();
         let semantic_search = self.semantic_search.clone();
         let rescan_lock = self.rescan_lock.clone();
+        let status = self.status.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -147,6 +205,10 @@ impl PhotoScheduler {
 
                 info!("Starting scheduled photo rescan and cleanup (two-phase indexing)");
 
+                // Mark indexing as started
+                status.start_indexing().await;
+                status.set_phase("metadata").await;
+
                 let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
 
                 // Phase 1: Fast metadata-only scan (skip semantic vectors)
@@ -162,7 +224,7 @@ impl PhotoScheduler {
 
                         // Batch write photos to database
                         let (indexed_count, error_count) =
-                            Self::batch_write_photos(&db_pool, photos);
+                            Self::batch_write_photos(&db_pool, photos, &status);
 
                         info!(
                             "Phase 1 completed: {} photos indexed, {} errors",
@@ -171,8 +233,12 @@ impl PhotoScheduler {
 
                         // Phase 2: Batch compute semantic vectors
                         info!("Phase 2: Computing semantic vectors in batches");
+                        status.set_phase("semantic_vectors").await;
                         match processor.batch_compute_semantic_vectors(&db_pool).await {
                             Ok((success, errors)) => {
+                                status
+                                    .photos_semantic_indexed
+                                    .store(success as u64, Ordering::SeqCst);
                                 info!(
                                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                                     success, errors
@@ -184,6 +250,8 @@ impl PhotoScheduler {
                     Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
                 }
 
+                // Mark indexing as completed
+                status.stop_indexing().await;
                 drop(lock);
             });
         });
@@ -223,6 +291,10 @@ impl PhotoScheduler {
 
         info!("Starting startup photo rescan and cleanup (two-phase indexing)");
 
+        // Mark indexing as started
+        self.status.start_indexing().await;
+        self.status.set_phase("metadata").await;
+
         let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
 
         // Phase 1: Fast metadata-only scan (skip semantic vectors)
@@ -236,7 +308,8 @@ impl PhotoScheduler {
             processed_photos.into_iter().map(|p| p.into()).collect();
 
         // Batch write photos to database (same as scheduled rescan)
-        let (indexed_count, error_count) = Self::batch_write_photos(&self.db_pool, photos);
+        let (indexed_count, error_count) =
+            Self::batch_write_photos(&self.db_pool, photos, &self.status);
 
         info!(
             "Phase 1 completed: {} photos indexed, {} errors",
@@ -245,11 +318,15 @@ impl PhotoScheduler {
 
         // Phase 2: Batch compute semantic vectors
         info!("Phase 2: Computing semantic vectors in batches");
+        self.status.set_phase("semantic_vectors").await;
         match processor
             .batch_compute_semantic_vectors(&self.db_pool)
             .await
         {
             Ok((success, errors)) => {
+                self.status
+                    .photos_semantic_indexed
+                    .store(success as u64, Ordering::SeqCst);
                 info!(
                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                     success, errors
@@ -263,6 +340,8 @@ impl PhotoScheduler {
             indexed_count, error_count
         );
 
+        // Mark indexing as completed
+        self.status.stop_indexing().await;
         drop(lock);
         Ok(())
     }

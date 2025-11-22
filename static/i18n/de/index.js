@@ -156,6 +156,11 @@ window.DE_TRANSLATIONS = {
     photos_from_year: 'Fotos aus {{year}}',
     raw_files_only: 'Nur RAW-Dateien',
     photos_with_gps: 'Fotos mit GPS',
+
+    // Indexing
+    indexing_photos: 'Fotos werden indexiert...',
+    indexing_metadata: 'Metadaten werden indexiert...',
+    indexing_semantic: 'Semantische Vektoren werden berechnet...',
   },
 
   errors: {

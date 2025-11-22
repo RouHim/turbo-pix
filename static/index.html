@@ -50,6 +50,20 @@
         </div>
       </header>
 
+      <!-- Indexing Progress Banner -->
+      <div id="indexing-banner" class="indexing-banner" style="display: none">
+        <div class="indexing-banner-content">
+          <i data-feather="camera" class="indexing-icon"></i>
+          <div class="indexing-text">
+            <span id="indexing-message" data-i18n="ui.indexing_photos">Indexing photos...</span>
+            <span id="indexing-progress"></span>
+          </div>
+          <div class="indexing-progress-bar">
+            <div id="indexing-progress-fill" class="indexing-progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
       <nav class="sidebar">
         <div class="sidebar-content">
           <button class="nav-item active" data-view="all" data-i18n="ui.all_photos">
@@ -484,6 +498,7 @@
     <script src="/i18n/en/index.js"></script>
     <script src="/i18n/de/index.js"></script>
     <script src="/js/api.js"></script>
+    <script src="/js/indexingStatus.js"></script>
     <script src="/js/gestureRecognizers.js"></script>
     <script src="/js/gestureManager.js"></script>
     <script src="/js/viewerControls.js"></script>

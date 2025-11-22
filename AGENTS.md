@@ -65,4 +65,4 @@ Development/personal project - breaking changes acceptable, database and cache c
 **UI state desync:** Update both: `appState.value = x; domElement.value = x;`
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
-
+- Do not use emojis , use feather icons instead

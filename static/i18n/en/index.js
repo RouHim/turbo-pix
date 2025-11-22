@@ -160,6 +160,11 @@ window.EN_TRANSLATIONS = {
     photos_from_year: 'Photos from {{year}}',
     raw_files_only: 'RAW files only',
     photos_with_gps: 'Photos with GPS',
+
+    // Indexing
+    indexing_photos: 'Indexing photos...',
+    indexing_metadata: 'Indexing metadata...',
+    indexing_semantic: 'Computing semantic vectors...',
   },
 
   errors: {

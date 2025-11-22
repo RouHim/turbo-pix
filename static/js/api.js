@@ -136,6 +136,11 @@ class TurboPixAPI {
     return this.request('/health');
   }
 
+  // Indexing status
+  async getIndexingStatus() {
+    return this.request('/api/indexing/status');
+  }
+
   // Collections and cameras features removed
 
   // Batch operations

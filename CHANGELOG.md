@@ -1,3 +1,11 @@
+# [2.2.0](https://github.com/RouHim/turbo-pix/compare/2.1.3...2.2.0) (2025-11-22)
+
+
+### Features
+
+* add image rotation and deletion with EXIF-aware processing ([2b64afe](https://github.com/RouHim/turbo-pix/commit/2b64afeae3e398778cf1801828942de9b0e4efdb))
+* improve photo viewer UX with RAW support and delete navigation ([734a217](https://github.com/RouHim/turbo-pix/commit/734a217620d9f89bc29dbb5547b7c662e0253169))
+
 ## [2.1.3](https://github.com/RouHim/turbo-pix/compare/2.1.2...2.1.3) (2025-11-21)
 
 ## [2.1.2](https://github.com/RouHim/turbo-pix/compare/2.1.1...2.1.2) (2025-11-19)

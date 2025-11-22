@@ -62,6 +62,11 @@ window.EN_TRANSLATIONS = {
     add_to_favorites: 'Add to Favorites',
     remove_from_favorites: 'Remove from Favorites',
     toggle_theme: 'Toggle theme',
+    rotate_left: 'Rotate Left 90°',
+    rotate_right: 'Rotate Right 90°',
+    flip_horizontal: 'Flip Horizontal',
+    flip_vertical: 'Flip Vertical',
+    delete_photo: 'Delete Photo',
 
     // Values
     unknown: 'Unknown',
@@ -175,6 +180,17 @@ window.EN_TRANSLATIONS = {
     downloadStarted: 'Photo download started',
     sharedSuccessfully: 'Photo shared successfully',
     sharingCancelled: 'Sharing cancelled or not supported',
+    photoRotated: 'Photo rotated successfully',
+    photoFlipped: 'Photo flipped successfully',
+    rotationFailed: 'Failed to rotate photo',
+    flipFailed: 'Failed to flip photo',
+    photoDeleted: 'Photo deleted successfully',
+    deletionFailed: 'Failed to delete photo',
+    confirmDeleteTitle: 'Delete Photo',
+    confirmDeleteMessage:
+      'Are you sure you want to permanently delete this photo? This action cannot be undone.',
+    confirmDeleteButton: 'Delete',
+    confirmCancelButton: 'Cancel',
 
     // Toast titles
     added: 'Added',
@@ -182,6 +198,9 @@ window.EN_TRANSLATIONS = {
     download: 'Download',
     shared: 'Shared',
     share: 'Share',
+    rotated: 'Rotated',
+    flipped: 'Flipped',
+    deleted: 'Deleted',
     error: 'Error',
     connection: 'Connection',
   },

@@ -33,6 +33,9 @@ class PhotoViewer {
       zoomOut: utils.$('.zoom-out'),
       zoomFit: utils.$('.zoom-fit'),
       fullscreenBtn: utils.$('.fullscreen-btn'),
+      rotateLeftBtn: utils.$('.rotate-left-btn'),
+      rotateRightBtn: utils.$('.rotate-right-btn'),
+      deletePhotoBtn: utils.$('.delete-photo-btn'),
     };
 
     this.controls = new ViewerControls(this, this.elements);
@@ -75,6 +78,18 @@ class PhotoViewer {
 
     if (this.elements.metadataBtn) {
       utils.on(this.elements.metadataBtn, 'click', () => this.toggleInfo());
+    }
+
+    if (this.elements.rotateLeftBtn) {
+      utils.on(this.elements.rotateLeftBtn, 'click', () => this.rotatePhoto(270));
+    }
+
+    if (this.elements.rotateRightBtn) {
+      utils.on(this.elements.rotateRightBtn, 'click', () => this.rotatePhoto(90));
+    }
+
+    if (this.elements.deletePhotoBtn) {
+      utils.on(this.elements.deletePhotoBtn, 'click', () => this.deletePhoto());
     }
 
     if (this.elements.content) {
@@ -560,6 +575,21 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     if (window.metadataEditor) {
       window.metadataEditor.setPhoto(this.currentPhoto);
     }
+
+    // Disable rotation buttons for RAW files (read-only format)
+    const isRaw = this.isRawFile(this.currentPhoto.filename);
+    if (this.elements.rotateLeftBtn) {
+      this.elements.rotateLeftBtn.disabled = isRaw;
+      this.elements.rotateLeftBtn.style.opacity = isRaw ? '0.5' : '1';
+      this.elements.rotateLeftBtn.style.cursor = isRaw ? 'not-allowed' : 'pointer';
+      this.elements.rotateLeftBtn.title = isRaw ? 'RAW files cannot be rotated' : 'Rotate Left';
+    }
+    if (this.elements.rotateRightBtn) {
+      this.elements.rotateRightBtn.disabled = isRaw;
+      this.elements.rotateRightBtn.style.opacity = isRaw ? '0.5' : '1';
+      this.elements.rotateRightBtn.style.cursor = isRaw ? 'not-allowed' : 'pointer';
+      this.elements.rotateRightBtn.title = isRaw ? 'RAW files cannot be rotated' : 'Rotate Right';
+    }
   }
 
   preloadAdjacentPhotos() {
@@ -647,6 +677,130 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     this.toggleSidebar();
   }
 
+  async rotatePhoto(angle) {
+    if (!this.currentPhoto) return;
+
+    // Block rotation for RAW files (read-only format)
+    if (this.isRawFile(this.currentPhoto.filename)) {
+      utils.showToast(
+        'Cannot Rotate',
+        'RAW files cannot be rotated. RAW files are read-only camera sensor data.',
+        'error',
+        4000
+      );
+      return;
+    }
+
+    try {
+      // Show loading indicator
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.style.display = 'flex';
+      }
+
+      const updatedPhoto = await window.api.rotatePhoto(this.currentPhoto.hash_sha256, angle);
+
+      // Update current photo with new data
+      this.currentPhoto = updatedPhoto;
+
+      // Update photo in the photos array
+      if (this.photos && this.currentIndex !== -1) {
+        this.photos[this.currentIndex] = updatedPhoto;
+      }
+
+      // Reload the image with new hash (force cache bust)
+      const timestamp = new Date().getTime();
+      const newImageUrl = `${utils.getPhotoUrl(updatedPhoto.hash_sha256)}?t=${timestamp}`;
+
+      if (this.elements.image) {
+        this.elements.image.src = newImageUrl;
+      }
+
+      // Update metadata display
+      this.metadata.updatePhotoInfo(updatedPhoto);
+
+      // Hide loading indicator when image loads
+      if (this.elements.image) {
+        this.elements.image.onload = () => {
+          if (this.elements.viewerLoading) {
+            this.elements.viewerLoading.style.display = 'none';
+          }
+        };
+      }
+
+      // Trigger photo grid update if available
+      if (window.updatePhotoInGrid) {
+        window.updatePhotoInGrid(updatedPhoto);
+      }
+    } catch (error) {
+      console.error('Failed to rotate photo:', error);
+
+      // Extract meaningful error message
+      const errorMessage = error.message || 'Failed to rotate photo';
+      utils.showToast('Error', errorMessage, 'error', 5000);
+
+      // Hide loading indicator on error
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.style.display = 'none';
+      }
+    }
+  }
+
+  async deletePhoto() {
+    if (!this.currentPhoto) return;
+
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      'Are you sure you want to permanently delete this photo? This action cannot be undone.'
+    );
+
+    if (!confirmed) return;
+
+    const photoHash = this.currentPhoto.hash_sha256;
+
+    try {
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.style.display = 'flex';
+      }
+
+      await window.api.deletePhoto(photoHash);
+
+      utils.showToast('Deleted', 'Photo deleted successfully', 'success', 2000);
+
+      // Remove from grid
+      if (window.removePhotoFromGrid) {
+        window.removePhotoFromGrid(photoHash);
+      }
+
+      // Remove from photos array
+      this.photos = this.photos.filter((p) => p.hash_sha256 !== photoHash);
+
+      // Close viewer or show next photo
+      if (this.photos.length > 0) {
+        // Adjust currentIndex if we deleted the last photo
+        if (this.currentIndex >= this.photos.length) {
+          this.currentIndex = this.photos.length - 1;
+        }
+
+        // Show the photo at the current index (next photo, or previous if was last)
+        await this.showPhotoAtIndex(this.currentIndex);
+      } else {
+        // No photos left, close the viewer
+        this.close();
+      }
+
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('Failed to delete photo:', error);
+      utils.showToast('Error', 'Failed to delete photo', 'error', 3000);
+
+      if (this.elements.viewerLoading) {
+        this.elements.viewerLoading.style.display = 'none';
+      }
+    }
+  }
+
   showError(message) {
     if (this.elements.image) {
       this.elements.image.style.display = 'none';
@@ -662,6 +816,12 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     if (!filename) return false;
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
     return window.APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
+  }
+
+  isRawFile(filename) {
+    if (!filename) return false;
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+    return window.APP_CONSTANTS.RAW_EXTENSIONS.includes(ext);
   }
 
   // Public API

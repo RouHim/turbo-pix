@@ -207,6 +207,20 @@ class TurboPixAPI {
     });
   }
 
+  // Image editing
+  async rotatePhoto(photoHash, angle) {
+    return this.request(`/api/photos/${photoHash}/rotate`, {
+      method: 'POST',
+      body: JSON.stringify({ angle }),
+    });
+  }
+
+  async deletePhoto(photoHash) {
+    return this.request(`/api/photos/${photoHash}`, {
+      method: 'DELETE',
+    });
+  }
+
   isFavorite(photo) {
     // Check if photo has is_favorite field from backend
     if (typeof photo === 'object' && photo.is_favorite !== undefined) {

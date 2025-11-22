@@ -82,38 +82,42 @@ pub fn update_metadata(
         }
     };
 
-    // Read existing EXIF data
+    // Read existing EXIF data (or create empty if none exists)
     let file = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mut bufreader = std::io::BufReader::new(&file);
     let exifreader = exif::Reader::new();
 
-    let exif = exifreader
-        .read_from_container(&mut bufreader)
-        .map_err(|e| format!("Failed to read EXIF from file: {}", e))?;
+    let exif_result = exifreader.read_from_container(&mut bufreader);
 
     // Collect all fields we want to keep (excluding ones we're updating)
     let mut new_fields: Vec<Field> = Vec::new();
 
-    // Copy existing fields, excluding ones we're updating
-    for field in exif.fields() {
-        let should_keep = match field.tag {
-            Tag::DateTimeOriginal if taken_at.is_some() => false,
-            Tag::GPSLatitudeRef | Tag::GPSLatitude | Tag::GPSLongitudeRef | Tag::GPSLongitude
-                if latitude.is_some() && longitude.is_some() =>
-            {
-                false
-            }
-            _ => true,
-        };
+    // Copy existing fields if EXIF data exists, excluding ones we're updating
+    if let Ok(exif) = exif_result {
+        for field in exif.fields() {
+            let should_keep = match field.tag {
+                Tag::DateTimeOriginal if taken_at.is_some() => false,
+                Tag::GPSLatitudeRef
+                | Tag::GPSLatitude
+                | Tag::GPSLongitudeRef
+                | Tag::GPSLongitude
+                    if latitude.is_some() && longitude.is_some() =>
+                {
+                    false
+                }
+                _ => true,
+            };
 
-        if should_keep {
-            new_fields.push(Field {
-                tag: field.tag,
-                ifd_num: field.ifd_num,
-                value: field.value.clone(),
-            });
+            if should_keep {
+                new_fields.push(Field {
+                    tag: field.tag,
+                    ifd_num: field.ifd_num,
+                    value: field.value.clone(),
+                });
+            }
         }
     }
+    // If no EXIF exists, we'll just create new fields below
 
     // Add updated taken_at if provided
     if let Some(dt) = taken_at {
@@ -890,5 +894,46 @@ mod tests {
                 result
             );
         }
+    }
+
+    #[test]
+    fn test_png_without_exif() {
+        // GIVEN: Create a simple PNG file without EXIF data
+        let temp_dir = TempDir::new().unwrap();
+        let png_path = temp_dir.path().join("test.png");
+
+        // Create a simple 1x1 PNG using the image crate
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([255u8, 0u8, 0u8]));
+        img.save(&png_path).unwrap();
+
+        // WHEN: Add EXIF metadata to PNG without EXIF
+        let new_date = Utc.with_ymd_and_hms(2024, 11, 22, 12, 30, 0).unwrap();
+        let result = update_metadata(&png_path, Some(new_date), Some(40.7128), Some(-74.0060));
+
+        // THEN: Should succeed
+        assert!(
+            result.is_ok(),
+            "Should add EXIF to PNG without EXIF: {:?}",
+            result
+        );
+
+        // THEN: Verify EXIF was written
+        let file = std::fs::File::open(&png_path).unwrap();
+        let mut bufreader = std::io::BufReader::new(&file);
+        let exifreader = exif::Reader::new();
+        let exif = exifreader.read_from_container(&mut bufreader).unwrap();
+
+        // Check datetime
+        let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
+        assert!(date_field.is_some(), "DateTimeOriginal should be written");
+
+        // Check GPS
+        let lat_field = exif.get_field(Tag::GPSLatitude, In::PRIMARY);
+        let lon_field = exif.get_field(Tag::GPSLongitude, In::PRIMARY);
+        assert!(lat_field.is_some(), "GPS Latitude should be written");
+        assert!(lon_field.is_some(), "GPS Longitude should be written");
+
+        // THEN: PNG should still be valid
+        assert!(image::open(&png_path).is_ok(), "PNG should still be valid");
     }
 }

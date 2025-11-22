@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/RouHim/turbo-pix/compare/2.2.0...2.3.0) (2025-11-22)
+
+
+### Features
+
+* add indexing status API and progress UI ([8983009](https://github.com/RouHim/turbo-pix/commit/89830095b32b3f94dad8f82b6493e8003c28c7bc))
+
 # [2.2.0](https://github.com/RouHim/turbo-pix/compare/2.1.3...2.2.0) (2025-11-22)
 
 

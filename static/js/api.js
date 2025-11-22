@@ -121,12 +121,14 @@ class TurboPixAPI {
    * Performs semantic search using AI/ML embeddings
    * @param {string} query - Natural language search query
    * @param {number} limit - Maximum number of results
+   * @param {number} offset - Number of results to skip (for pagination)
    * @returns {Promise<Object>} Search results with photo hashes and scores
    */
-  async semanticSearch(query, limit = 50) {
+  async semanticSearch(query, limit = 50, offset = 0) {
     const searchParams = new URLSearchParams();
     searchParams.set('q', query);
     searchParams.set('limit', limit);
+    searchParams.set('offset', offset);
     const endpoint = `/api/search/semantic?${searchParams.toString()}`;
     return this.request(endpoint);
   }

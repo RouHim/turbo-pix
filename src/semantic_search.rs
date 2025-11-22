@@ -117,9 +117,14 @@ impl SemanticSearchEngine {
     }
 
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, f32)>> {
+    pub fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>> {
         let start_time = std::time::Instant::now();
-        log::info!("Semantic search for: '{}'", query);
+        log::info!(
+            "Semantic search for: '{}' (limit: {}, offset: {})",
+            query,
+            limit,
+            offset
+        );
 
         // Encode text query to semantic vector
         let encode_start = std::time::Instant::now();
@@ -146,12 +151,12 @@ impl SemanticSearchEngine {
              FROM media_semantic_vectors msv
              JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
              ORDER BY vec_distance_cosine(msv.semantic_vector, ?)
-             LIMIT ?",
+             LIMIT ? OFFSET ?",
         )?;
 
         let results: Vec<(String, f32)> = stmt
             .query_map(
-                rusqlite::params![&vector_bytes, &vector_bytes, limit as i64],
+                rusqlite::params![&vector_bytes, &vector_bytes, limit as i64, offset as i64],
                 |row| {
                     let path: String = row.get(0)?;
                     let score: f32 = row.get(1)?;
@@ -620,7 +625,7 @@ mod tests {
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
 
         // Search for cat - should return cat.jpg first
-        let results = engine.search("cat", 10).unwrap();
+        let results = engine.search("cat", 10, 0).unwrap();
 
         assert!(!results.is_empty(), "Search should return results");
         assert!(
@@ -648,7 +653,7 @@ mod tests {
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
 
-        let results = engine.search("car", 10).unwrap();
+        let results = engine.search("car", 10, 0).unwrap();
 
         assert!(!results.is_empty(), "Search should return results");
         assert!(
@@ -691,7 +696,7 @@ mod tests {
         let queries = ["cat", "kitten", "feline"];
 
         for query in &queries {
-            let results = engine.search(query, 10).unwrap();
+            let results = engine.search(query, 10, 0).unwrap();
             assert!(
                 !results.is_empty(),
                 "Query '{}' should return results",
@@ -718,7 +723,7 @@ mod tests {
         let db_pool = create_test_db_pool().unwrap();
         let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
 
-        let results = engine.search("cat", 10).unwrap();
+        let results = engine.search("cat", 10, 0).unwrap();
 
         assert!(
             results.is_empty(),
@@ -734,7 +739,7 @@ mod tests {
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
 
-        let results = engine.search("cat", 10).unwrap();
+        let results = engine.search("cat", 10, 0).unwrap();
 
         for (path, score) in &results {
             assert!(
@@ -884,7 +889,7 @@ mod tests {
             .unwrap();
 
         // Search should return both images and videos
-        let results = engine.search("cat", 10).unwrap();
+        let results = engine.search("cat", 10, 0).unwrap();
 
         assert!(!results.is_empty(), "Search should return results");
         println!("Mixed search results:");

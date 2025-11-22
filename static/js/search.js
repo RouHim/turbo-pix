@@ -151,48 +151,9 @@ class Search {
       });
     }
 
-    try {
-      const result = await api.semanticSearch(cleanQuery, 50);
-
-      if (window.photoGrid) {
-        // Convert semantic search results to photo hashes
-        const photoHashes = result.results.map((r) => r.hash);
-
-        // Load full photo data for these hashes
-        const photosData = await Promise.all(
-          photoHashes.map(async (hash) => {
-            try {
-              return await api.getPhoto(hash);
-            } catch (e) {
-              console.warn(`Failed to load photo ${hash}:`, e);
-              return null;
-            }
-          })
-        );
-
-        const photos = photosData.filter((p) => p !== null);
-
-        // Display results
-        window.photoGrid.displayPhotos(photos);
-        window.photoGrid.totalPhotos = photos.length;
-        window.photoGrid.hasMore = false;
-
-        if (window.logger) {
-          window.logger.info('Semantic search completed', {
-            component: 'Search',
-            query: cleanQuery,
-            resultsCount: photos.length,
-          });
-        }
-      }
-    } catch (error) {
-      if (window.logger) {
-        window.logger.error('Semantic search error', error, {
-          component: 'Search',
-          query: cleanQuery,
-        });
-      }
-      throw error;
+    if (window.photoGrid) {
+      // Use PhotoGrid's semantic search mode for pagination support
+      await window.photoGrid.loadSemanticSearch(cleanQuery);
     }
   }
 
@@ -202,6 +163,9 @@ class Search {
     this.updateSearchState('');
 
     if (window.photoGrid) {
+      // Disable semantic search mode and load regular photos
+      window.photoGrid.semanticSearchMode = false;
+      window.photoGrid.semanticSearchQuery = null;
       window.photoGrid.search('');
     }
 

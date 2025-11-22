@@ -19,6 +19,8 @@ class PhotoGrid {
     this.currentFilters = {};
     this.loadingStartTime = null;
     this.abortController = null;
+    this.semanticSearchMode = false;
+    this.semanticSearchQuery = null;
 
     this.init();
   }
@@ -74,28 +76,79 @@ class PhotoGrid {
         this.clearGrid();
       }
 
-      const params = {
-        page: this.currentPage,
-        limit: this.options.batchSize,
-        query: this.currentQuery,
-        ...this.currentFilters,
-      };
+      let photos = [];
 
-      utils.performance.mark('photos-load-start');
-      const response = await api.getPhotos(params, { signal });
-      utils.performance.mark('photos-load-end');
-      utils.performance.measure('photos-load', 'photos-load-start', 'photos-load-end');
+      // Handle semantic search mode differently
+      if (this.semanticSearchMode && this.semanticSearchQuery) {
+        const offset = (this.currentPage - 1) * this.options.batchSize;
 
-      if (response.photos && response.photos.length > 0) {
-        this.photos.push(...response.photos);
-        this.renderPhotos(response.photos);
+        utils.performance.mark('semantic-search-start');
+        const result = await api.semanticSearch(
+          this.semanticSearchQuery,
+          this.options.batchSize,
+          offset
+        );
+        utils.performance.mark('semantic-search-end');
+        utils.performance.measure(
+          'semantic-search',
+          'semantic-search-start',
+          'semantic-search-end'
+        );
+
+        if (result.results && result.results.length > 0) {
+          // Convert semantic search results to photo hashes
+          const photoHashes = result.results.map((r) => r.hash);
+
+          // Load full photo data for these hashes
+          const photosData = await Promise.all(
+            photoHashes.map(async (hash) => {
+              try {
+                return await api.getPhoto(hash);
+              } catch (e) {
+                console.warn(`Failed to load photo ${hash}:`, e);
+                return null;
+              }
+            })
+          );
+
+          photos = photosData.filter((p) => p !== null);
+
+          if (window.logger) {
+            window.logger.info('Semantic search results loaded', {
+              component: 'PhotoGrid',
+              photosCount: photos.length,
+              offset,
+              query: this.semanticSearchQuery,
+            });
+          }
+        }
+      } else {
+        // Regular photo loading
+        const params = {
+          page: this.currentPage,
+          limit: this.options.batchSize,
+          query: this.currentQuery,
+          ...this.currentFilters,
+        };
+
+        utils.performance.mark('photos-load-start');
+        const response = await api.getPhotos(params, { signal });
+        utils.performance.mark('photos-load-end');
+        utils.performance.measure('photos-load', 'photos-load-start', 'photos-load-end');
+
+        photos = response.photos || [];
+      }
+
+      if (photos.length > 0) {
+        this.photos.push(...photos);
+        this.renderPhotos(photos);
         this.currentPage++;
-        this.hasMore = response.photos.length === this.options.batchSize;
+        this.hasMore = photos.length === this.options.batchSize;
 
         if (window.logger) {
           window.logger.info('Photos loaded successfully', {
             component: 'PhotoGrid',
-            photosCount: response.photos.length,
+            photosCount: photos.length,
             totalPhotos: this.photos.length,
             page: this.currentPage - 1,
             hasMore: this.hasMore,
@@ -156,6 +209,20 @@ class PhotoGrid {
   async loadMore() {
     if (!this.hasMore || this.loading) return;
     await this.loadPhotos(this.currentQuery, this.currentFilters, false);
+  }
+
+  /**
+   * Loads semantic search results with pagination support
+   * @param {string} query - Semantic search query
+   * @returns {Promise<void>}
+   */
+  async loadSemanticSearch(query) {
+    // Enable semantic search mode
+    this.semanticSearchMode = true;
+    this.semanticSearchQuery = query;
+
+    // Use regular loadPhotos with reset=true to start fresh
+    await this.loadPhotos(null, {}, true);
   }
 
   renderPhotos(photos) {
@@ -292,10 +359,16 @@ class PhotoGrid {
   }
 
   search(query) {
+    // Disable semantic search mode when doing regular search
+    this.semanticSearchMode = false;
+    this.semanticSearchQuery = null;
     this.loadPhotos(query, this.currentFilters, true);
   }
 
   filter(filters) {
+    // Disable semantic search mode when applying filters
+    this.semanticSearchMode = false;
+    this.semanticSearchQuery = null;
     this.loadPhotos(this.currentQuery, filters, true);
   }
 

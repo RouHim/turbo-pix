@@ -11,10 +11,16 @@ pub struct SemanticSearchQuery {
     pub q: String,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    #[serde(default = "default_offset")]
+    pub offset: usize,
 }
 
 fn default_limit() -> usize {
     50
+}
+
+fn default_offset() -> usize {
+    0
 }
 
 #[derive(Debug, Serialize)]
@@ -36,15 +42,22 @@ pub async fn semantic_search(
     db_pool: DbPool,
     semantic_search: Arc<SemanticSearchEngine>,
 ) -> Result<impl Reply, Rejection> {
-    log::info!("Semantic search query: '{}'", query.q);
+    log::info!(
+        "Semantic search query: '{}' (limit: {}, offset: {})",
+        query.q,
+        query.limit,
+        query.offset
+    );
 
     // Perform semantic search
-    let results = semantic_search.search(&query.q, query.limit).map_err(|e| {
-        log::error!("Semantic search error: {}", e);
-        reject::custom(DatabaseError {
-            message: format!("Semantic search error: {}", e),
-        })
-    })?;
+    let results = semantic_search
+        .search(&query.q, query.limit, query.offset)
+        .map_err(|e| {
+            log::error!("Semantic search error: {}", e);
+            reject::custom(DatabaseError {
+                message: format!("Semantic search error: {}", e),
+            })
+        })?;
 
     // Convert file paths to hashes by looking up in database
     // Use a single query with IN clause to avoid N+1 problem

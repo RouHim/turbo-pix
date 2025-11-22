@@ -1,3 +1,10 @@
+## [2.3.1](https://github.com/RouHim/turbo-pix/compare/2.3.0...2.3.1) (2025-11-22)
+
+
+### Bug Fixes
+
+* allow metadata updates on images without existing EXIF data ([a256e2e](https://github.com/RouHim/turbo-pix/commit/a256e2ec495c59cf4126b31cb94df59a22208be2))
+
 # [2.3.0](https://github.com/RouHim/turbo-pix/compare/2.2.0...2.3.0) (2025-11-22)
 
 

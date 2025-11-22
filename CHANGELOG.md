@@ -1,3 +1,10 @@
+# [2.4.0](https://github.com/RouHim/turbo-pix/compare/2.3.1...2.4.0) (2025-11-22)
+
+
+### Features
+
+* add infinite scrolling/pagination to semantic search ([0366852](https://github.com/RouHim/turbo-pix/commit/0366852e75a6bdbbf103f1de1d32619fb4da441c))
+
 ## [2.3.1](https://github.com/RouHim/turbo-pix/compare/2.3.0...2.3.1) (2025-11-22)
 
 

@@ -11,6 +11,7 @@ mod handlers_search;
 mod handlers_static;
 mod handlers_thumbnail;
 mod handlers_video;
+mod image_editor;
 mod indexer;
 mod metadata_extractor;
 mod metadata_writer;
@@ -76,14 +77,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize services
-    let (db_pool, thumbnail_generator, photo_scheduler, semantic_search) =
+    let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =
         initialize_services(&config)?;
 
     // Start background tasks
     start_background_tasks(photo_scheduler);
 
     let health_routes = build_health_routes(db_pool.clone());
-    let photo_routes = build_photo_routes(db_pool.clone());
+    let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search);
     let static_routes = build_static_routes();
@@ -128,6 +129,7 @@ type InitServicesResult = (
     ThumbnailGenerator,
     PhotoScheduler,
     Arc<SemanticSearchEngine>,
+    CacheManager,
 );
 
 fn initialize_services(
@@ -156,7 +158,7 @@ fn initialize_services(
     let photo_scheduler = PhotoScheduler::new(
         photo_paths,
         db_pool.clone(),
-        cache_manager,
+        cache_manager.clone(),
         semantic_search.clone(),
     );
     let _scheduler_handle = photo_scheduler.start();
@@ -167,6 +169,7 @@ fn initialize_services(
         thumbnail_generator,
         photo_scheduler,
         semantic_search,
+        cache_manager,
     ))
 }
 

@@ -1,3 +1,4 @@
+use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
 use crate::semantic_search::SemanticSearchEngine;
 use crate::thumbnail_generator::ThumbnailGenerator;
@@ -48,6 +49,12 @@ pub fn with_semantic_search(
     warp::any().map(move || semantic_search.clone())
 }
 
+pub fn with_cache(
+    cache_manager: CacheManager,
+) -> impl Filter<Extract = (CacheManager,), Error = Infallible> + Clone {
+    warp::any().map(move || cache_manager.clone())
+}
+
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
     let message;
@@ -96,5 +103,5 @@ pub fn cors() -> warp::cors::Builder {
     warp::cors()
         .allow_any_origin()
         .allow_headers(vec!["content-type", "authorization"])
-        .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+        .allow_methods(vec!["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 }

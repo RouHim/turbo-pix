@@ -187,10 +187,10 @@ impl Photo {
             blurhash: row.get(12)?,
             is_favorite: row.get(13)?,
             semantic_vector_indexed: row.get(14)?,
-            metadata: row
-                .get::<_, String>(15)?
-                .parse()
-                .unwrap_or_else(|_| json!({})),
+            metadata: row.get::<_, String>(15)?.parse().unwrap_or_else(|e| {
+                log::warn!("Failed to parse metadata JSON for photo: {}", e);
+                json!({})
+            }),
             date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(16)?)
                 .unwrap()
                 .with_timezone(&Utc),
@@ -474,6 +474,49 @@ impl Photo {
                 self.date_modified.to_rfc3339(),
                 Utc::now().to_rfc3339(),
                 self.hash_sha256,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Update photo using old hash in WHERE clause (for operations that change the hash)
+    pub fn update_with_old_hash(
+        &self,
+        pool: &DbPool,
+        old_hash: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = pool.get()?;
+        conn.execute(
+            r#"
+            UPDATE photos SET
+                hash_sha256 = ?,
+                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
+                taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
+                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?,
+                metadata = ?,
+                file_modified = ?, updated_at = ?
+            WHERE hash_sha256 = ?
+            "#,
+            params![
+                self.hash_sha256,
+                self.file_path,
+                self.filename,
+                self.file_size,
+                self.mime_type,
+                self.taken_at.map(|dt| dt.to_rfc3339()),
+                self.width,
+                self.height,
+                self.orientation,
+                self.duration,
+                self.thumbnail_path,
+                self.has_thumbnail,
+                self.blurhash,
+                self.is_favorite.unwrap_or(false),
+                self.semantic_vector_indexed.unwrap_or(false),
+                self.metadata.to_string(),
+                self.date_modified.to_rfc3339(),
+                Utc::now().to_rfc3339(),
+                old_hash,
             ],
         )?;
         Ok(())

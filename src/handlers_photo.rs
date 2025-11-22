@@ -6,12 +6,14 @@ use serde::Deserialize;
 use serde_json::json;
 use warp::{reject, Filter, Rejection, Reply};
 
+use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo, SearchQuery};
 use crate::handlers_video::{get_video_file, VideoQuery};
+use crate::image_editor::{self, RotationAngle};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::metadata_writer;
 use crate::mimetype_detector;
-use crate::warp_helpers::{with_db, DatabaseError, NotFoundError};
+use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
@@ -383,8 +385,89 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
     })))
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct RotateRequest {
+    pub angle: i32, // 90, 180, or 270
+}
+
+pub async fn rotate_photo(
+    photo_hash: String,
+    rotate_req: RotateRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    // Find photo
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    // Parse angle
+    let angle = match rotate_req.angle {
+        90 => RotationAngle::Rotate90,
+        180 => RotationAngle::Rotate180,
+        270 => RotationAngle::Rotate270,
+        _ => {
+            return Err(reject::custom(DatabaseError {
+                message: format!(
+                    "Invalid rotation angle: {}. Must be 90, 180, or 270",
+                    rotate_req.angle
+                ),
+            }));
+        }
+    };
+
+    // Rotate image
+    match image_editor::rotate_image(&photo, angle, &db_pool) {
+        Ok(updated_photo) => Ok(warp::reply::json(&updated_photo)),
+        Err(e) => {
+            log::error!("Failed to rotate image: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Failed to rotate image: {}", e),
+            }))
+        }
+    }
+}
+
+pub async fn delete_photo(
+    photo_hash: String,
+    db_pool: DbPool,
+    cache_manager: CacheManager,
+) -> Result<impl Reply, Rejection> {
+    // Find photo
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    // Delete photo
+    match image_editor::delete_photo(&photo, &db_pool, &cache_manager) {
+        Ok(()) => Ok(warp::reply::json(
+            &json!({"success": true, "message": "Photo deleted successfully"}),
+        )),
+        Err(e) => {
+            log::error!("Failed to delete photo: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Failed to delete photo: {}", e),
+            }))
+        }
+    }
+}
+
 pub fn build_photo_routes(
     db_pool: DbPool,
+    cache_manager: CacheManager,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let api_photos_list = warp::path("api")
         .and(warp::path("photos"))
@@ -459,6 +542,25 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(update_photo_metadata);
 
+    let api_photo_rotate = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("rotate"))
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::json::<RotateRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(rotate_photo);
+
+    let api_photo_delete = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::delete())
+        .and(with_db(db_pool.clone()))
+        .and(with_cache(cache_manager.clone()))
+        .and_then(delete_photo);
+
     api_photos_list
         .or(api_photo_get)
         .or(api_photo_file)
@@ -467,6 +569,8 @@ pub fn build_photo_routes(
         .or(api_photo_timeline)
         .or(api_photo_exif)
         .or(api_photo_metadata_update)
+        .or(api_photo_rotate)
+        .or(api_photo_delete)
 }
 
 #[cfg(test)]

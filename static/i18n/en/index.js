@@ -7,6 +7,8 @@ window.EN_TRANSLATIONS = {
     all_photos: 'All media',
     favorites: 'Favorites',
     videos: 'Videos',
+    collages: 'Collages',
+    pending_collages: 'Pending Collages',
     favorite_photos: 'Favorite Photos',
     load_more: 'Load More',
     loading: 'Loading...',
@@ -67,6 +69,10 @@ window.EN_TRANSLATIONS = {
     flip_horizontal: 'Flip Horizontal',
     flip_vertical: 'Flip Vertical',
     delete_photo: 'Delete Photo',
+    accept_collage: 'Accept',
+    reject_collage: 'Reject',
+    generate_collages: 'Generate Collages',
+    generating_collages: 'Generating...',
 
     // Values
     unknown: 'Unknown',
@@ -165,6 +171,12 @@ window.EN_TRANSLATIONS = {
     indexing_photos: 'Indexing photos...',
     indexing_metadata: 'Indexing metadata...',
     indexing_semantic: 'Computing semantic vectors...',
+    indexing_collages: 'Generating collages...',
+
+    // Collages
+    no_pending_collages: 'No pending collages',
+    collage_date: 'Date:',
+    collage_photos: '{{count}} photos',
   },
 
   errors: {
@@ -196,6 +208,12 @@ window.EN_TRANSLATIONS = {
       'Are you sure you want to permanently delete this photo? This action cannot be undone.',
     confirmDeleteButton: 'Delete',
     confirmCancelButton: 'Cancel',
+    collageAccepted: 'Collage accepted. Will appear in All Photos after next scan.',
+    collageRejected: 'Collage rejected and deleted',
+    collageAcceptFailed: 'Failed to accept collage',
+    collageRejectFailed: 'Failed to reject collage',
+    collagesGenerated: '{{count}} collage(s) generated successfully',
+    collageGenerateFailed: 'Failed to generate collages',
 
     // Toast titles
     added: 'Added',

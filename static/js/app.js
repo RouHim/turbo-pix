@@ -331,6 +331,17 @@ class TurboPixApp {
           // This would need backend support for file type filtering
           await window.photoGrid.loadPhotos('type:video', filters, true);
           break;
+
+        case 'collages':
+          // Clear photo grid and load collages
+          if (window.photoGrid) {
+            window.photoGrid.clearGrid();
+          }
+          if (window.collagesView) {
+            window.collagesView.initialize(window.photoGrid.container);
+            await window.collagesView.loadPendingCollages();
+          }
+          break;
       }
     } catch (error) {
       // Only show error if this is still the current request
@@ -379,6 +390,7 @@ class TurboPixApp {
         all: 'all_photos',
         favorites: 'favorites',
         videos: 'videos',
+        collages: 'pending_collages',
       };
 
       const i18nKey = titleKeys[view] || 'all_photos';

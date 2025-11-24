@@ -59,6 +59,19 @@ CREATE TABLE IF NOT EXISTS video_semantic_metadata (
 )
 "#;
 
+pub const COLLAGES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS collages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE,
+    file_path TEXT NOT NULL,
+    thumbnail_path TEXT,
+    photo_count INTEGER NOT NULL,
+    photo_hashes TEXT NOT NULL,
+    accepted_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+"#;
+
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
@@ -68,6 +81,9 @@ pub const SCHEMA_SQL: &[&str] = &[
     MEDIA_SEMANTIC_VECTORS_TABLE,
     SEMANTIC_VECTOR_PATH_MAPPING_TABLE,
     VIDEO_SEMANTIC_METADATA_TABLE,
+    COLLAGES_TABLE,
+    "CREATE INDEX IF NOT EXISTS idx_collages_date ON collages(date);",
+    "CREATE INDEX IF NOT EXISTS idx_collages_accepted_at ON collages(accepted_at);",
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

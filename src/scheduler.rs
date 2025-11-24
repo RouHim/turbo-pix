@@ -8,9 +8,11 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::cache_manager::CacheManager;
+use crate::collage_generator;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
+use crate::thumbnail_generator::ThumbnailGenerator;
 
 /// Batch size for database writes (I/O-bound operations)
 /// Larger batches (250) reduce transaction overhead and improve throughput.
@@ -65,6 +67,8 @@ pub struct PhotoScheduler {
     db_pool: DbPool,
     cache_manager: CacheManager,
     semantic_search: Arc<SemanticSearchEngine>,
+    _thumbnail_generator: ThumbnailGenerator,
+    data_path: PathBuf,
     rescan_lock: Arc<Mutex<()>>,
     pub status: IndexingStatus,
 }
@@ -75,12 +79,16 @@ impl PhotoScheduler {
         db_pool: DbPool,
         cache_manager: CacheManager,
         semantic_search: Arc<SemanticSearchEngine>,
+        thumbnail_generator: ThumbnailGenerator,
+        data_path: PathBuf,
     ) -> Self {
         Self {
             photo_paths,
             db_pool,
             cache_manager,
             semantic_search,
+            _thumbnail_generator: thumbnail_generator,
+            data_path,
             rescan_lock: Arc::new(Mutex::new(())),
             status: IndexingStatus::new(),
         }
@@ -187,6 +195,7 @@ impl PhotoScheduler {
         let db_pool = self.db_pool.clone();
         let cache_manager = self.cache_manager.clone();
         let semantic_search = self.semantic_search.clone();
+        let data_path = self.data_path.clone();
         let rescan_lock = self.rescan_lock.clone();
         let status = self.status.clone();
 
@@ -245,6 +254,14 @@ impl PhotoScheduler {
                                 )
                             }
                             Err(e) => error!("Phase 2 failed: {}", e),
+                        }
+
+                        // Phase 3: Generate collages
+                        info!("Phase 3: Generating collages");
+                        status.set_phase("collages").await;
+                        match collage_generator::generate_collages(&db_pool, &data_path).await {
+                            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
+                            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
                         }
                     }
                     Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
@@ -335,8 +352,16 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 2 failed: {}", e),
         }
 
+        // Phase 3: Generate collages
+        info!("Phase 3: Generating collages");
+        self.status.set_phase("collages").await;
+        match collage_generator::generate_collages(&self.db_pool, &self.data_path).await {
+            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
+            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
+        }
+
         info!(
-            "Startup rescan completed (two-phase): {} photos indexed, {} errors",
+            "Startup rescan completed (three-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
 
@@ -375,11 +400,35 @@ mod tests {
                 Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
+            let data_path = temp_dir.path().to_path_buf();
+
+            // Create a test thumbnail generator
+            let thumbnail_generator = ThumbnailGenerator::new(
+                &crate::config::Config {
+                    port: 18473,
+                    photo_paths: vec![],
+                    data_path: data_path.to_string_lossy().to_string(),
+                    db_path: ":memory:".to_string(),
+                    cache: crate::config::CacheConfig {
+                        thumbnail_cache_path: temp_dir
+                            .path()
+                            .join("thumbnails")
+                            .to_string_lossy()
+                            .to_string(),
+                        max_cache_size_mb: 100,
+                    },
+                },
+                db_pool.clone(),
+            )
+            .unwrap();
+
             let scheduler = PhotoScheduler::new(
                 photo_paths,
                 db_pool.clone(),
                 cache_manager.clone(),
                 semantic_search,
+                thumbnail_generator,
+                data_path,
             );
 
             Self {
@@ -616,10 +665,37 @@ mod tests {
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
         let semantic_search =
             Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+        let data_path = temp_dir.path().to_path_buf();
+
+        let thumbnail_generator = ThumbnailGenerator::new(
+            &crate::config::Config {
+                port: 18473,
+                photo_paths: vec![],
+                data_path: data_path.to_string_lossy().to_string(),
+                db_path: ":memory:".to_string(),
+                cache: crate::config::CacheConfig {
+                    thumbnail_cache_path: temp_dir
+                        .path()
+                        .join("thumbnails")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_cache_size_mb: 100,
+                },
+            },
+            db_pool.clone(),
+        )
+        .unwrap();
 
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];
-        let scheduler = PhotoScheduler::new(invalid_paths, db_pool, cache_manager, semantic_search);
+        let scheduler = PhotoScheduler::new(
+            invalid_paths,
+            db_pool,
+            cache_manager,
+            semantic_search,
+            thumbnail_generator,
+            data_path,
+        );
 
         // Should handle errors gracefully
         let result = scheduler.run_startup_rescan().await;

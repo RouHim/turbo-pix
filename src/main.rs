@@ -1,10 +1,12 @@
 mod cache_manager;
+mod collage_generator;
 mod config;
 mod db;
 mod db_pool;
 mod db_schema;
 mod db_types;
 mod file_scanner;
+mod handlers_collage;
 mod handlers_health;
 mod handlers_indexing;
 mod handlers_photo;
@@ -33,6 +35,7 @@ use std::path::PathBuf;
 use warp::Filter;
 
 use cache_manager::CacheManager;
+use handlers_collage::build_collage_routes;
 use handlers_health::build_health_routes;
 use handlers_indexing::build_indexing_routes;
 use handlers_photo::build_photo_routes;
@@ -93,6 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search);
     let indexing_routes = build_indexing_routes(indexing_status);
+    let collage_routes = build_collage_routes(db_pool.clone(), config.data_path.clone().into());
     let static_routes = build_static_routes();
 
     let routes = health_routes
@@ -100,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(thumbnail_routes)
         .or(search_routes)
         .or(indexing_routes)
+        .or(collage_routes)
         .or(static_routes)
         .with(cors())
         .with(warp::log("turbo_pix"))
@@ -162,11 +167,14 @@ fn initialize_services(
 
     // Initialize and start photo scheduler
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
+    let data_path = PathBuf::from(&config.data_path);
     let photo_scheduler = PhotoScheduler::new(
         photo_paths,
         db_pool.clone(),
         cache_manager.clone(),
         semantic_search.clone(),
+        thumbnail_generator.clone(),
+        data_path,
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

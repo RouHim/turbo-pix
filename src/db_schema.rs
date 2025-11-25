@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS video_semantic_metadata (
 pub const COLLAGES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS collages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
+    date TEXT NOT NULL,
     file_path TEXT NOT NULL,
     thumbnail_path TEXT,
     photo_count INTEGER NOT NULL,

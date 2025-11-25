@@ -1,7 +1,6 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{error, info};
-use rand::seq::SliceRandom;
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -87,16 +86,6 @@ impl Collage {
     }
 
     /// Check if collage exists for date
-    pub fn exists_for_date(pool: &DbPool, date: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM collages WHERE date = ? AND accepted_at IS NULL",
-            [date],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
     /// Insert new collage
     pub fn insert(
         pool: &DbPool,
@@ -153,9 +142,10 @@ struct PhotoCluster {
     photos: Vec<Photo>,
 }
 
+const MAX_PHOTOS_PER_COLLAGE: usize = 4;
+
 /// Collage layout configuration
 struct CollageLayout {
-    _grid_rows: usize,
     grid_cols: usize,
     photo_count: usize,
     cell_width: u32,
@@ -165,23 +155,22 @@ struct CollageLayout {
 impl CollageLayout {
     /// Calculate optimal grid layout for photo count
     fn calculate(photo_count: usize) -> Self {
-        let (grid_rows, grid_cols) = match photo_count {
-            10..=12 => (3, 4),
-            13..=16 => (4, 4),
-            17..=20 => (4, 5),
-            _ => (4, 4), // Default to 4x4
-        };
+        let clamped = photo_count.clamp(1, MAX_PHOTOS_PER_COLLAGE);
 
-        let actual_count = grid_rows * grid_cols;
+        // Max 2x2 grid to keep each tile large and readable
+        let (grid_rows, grid_cols) = match clamped {
+            1 => (1, 1),
+            2 => (1, 2),
+            _ => (2, 2),
+        };
 
         // 4K resolution (3840x2160) divided by grid
         let cell_width = 3840 / grid_cols as u32;
         let cell_height = 2160 / grid_rows as u32;
 
         CollageLayout {
-            _grid_rows: grid_rows,
             grid_cols,
-            photo_count: actual_count,
+            photo_count: clamped,
             cell_width,
             cell_height,
         }
@@ -213,11 +202,6 @@ fn find_photo_clusters(pool: &DbPool) -> Result<Vec<PhotoCluster>, Box<dyn std::
     let mut clusters = Vec::new();
 
     for date_str in dates {
-        // Check if collage already exists for this date
-        if Collage::exists_for_date(pool, &date_str)? {
-            continue;
-        }
-
         // Parse date
         let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
 
@@ -284,6 +268,44 @@ fn create_collage_image(
     Ok(canvas)
 }
 
+fn chunk_photos<'a>(photos: &'a [Photo]) -> Vec<Vec<&'a Photo>> {
+    if photos.is_empty() {
+        return Vec::new();
+    }
+
+    // Always aim for two collages, or three when more than 12 photos are present.
+    let target_collages = if photos.len() > 12 { 3 } else { 2 };
+    let max_slots = target_collages * MAX_PHOTOS_PER_COLLAGE;
+
+    // Distribute photos round-robin while respecting per-collage cap (4).
+    let mut buckets: Vec<Vec<&Photo>> = vec![Vec::new(); target_collages];
+    let mut filled = 0;
+
+    for (idx, photo) in photos.iter().enumerate() {
+        if filled >= max_slots {
+            break;
+        }
+
+        let mut bucket_idx = idx % target_collages;
+        let mut attempts = 0;
+        while buckets[bucket_idx].len() >= MAX_PHOTOS_PER_COLLAGE && attempts < target_collages {
+            bucket_idx = (bucket_idx + 1) % target_collages;
+            attempts += 1;
+        }
+
+        if buckets[bucket_idx].len() < MAX_PHOTOS_PER_COLLAGE {
+            buckets[bucket_idx].push(photo);
+            filled += 1;
+        }
+    }
+
+    // Only keep fully populated collages to avoid empty tiles.
+    buckets
+        .into_iter()
+        .filter(|b| b.len() == MAX_PHOTOS_PER_COLLAGE)
+        .collect()
+}
+
 /// Generate collages for all detected clusters
 pub async fn generate_collages(
     pool: &DbPool,
@@ -303,68 +325,79 @@ pub async fn generate_collages(
 
     for cluster in clusters {
         let date_str = cluster.date.format("%Y-%m-%d").to_string();
+        let chunks = chunk_photos(&cluster.photos);
+
+        if chunks.is_empty() {
+            info!(
+                "No photos found for {}; skipping collage generation",
+                date_str
+            );
+            continue;
+        }
+
         info!(
-            "Generating collage for {} ({} photos)",
+            "Generating {} collages for {} ({} photos total)",
+            chunks.len(),
             date_str,
             cluster.photos.len()
         );
 
-        // Calculate layout
-        let layout = CollageLayout::calculate(cluster.photos.len());
+        for (collage_idx, chunk) in chunks.iter().enumerate() {
+            // Calculate layout for the current chunk (max 2x2)
+            let layout = CollageLayout::calculate(chunk.len());
 
-        // Randomly select photos
-        let mut selected_photos: Vec<&Photo> = cluster.photos.iter().collect();
-        selected_photos.shuffle(&mut rand::rng());
-        let selected_photos: Vec<&Photo> = selected_photos
-            .into_iter()
-            .take(layout.photo_count)
-            .collect();
+            // Create collage image
+            let collage_img = match create_collage_image(chunk, &layout) {
+                Ok(img) => img,
+                Err(e) => {
+                    error!(
+                        "Failed to create collage {} for {}: {}",
+                        collage_idx + 1,
+                        date_str,
+                        e
+                    );
+                    continue;
+                }
+            };
 
-        // Create collage image
-        let collage_img = match create_collage_image(&selected_photos, &layout) {
-            Ok(img) => img,
-            Err(e) => {
-                error!("Failed to create collage for {}: {}", date_str, e);
+            // Save collage
+            let filename = format!("collage_{}_{}.jpg", date_str, collage_idx + 1);
+            let file_path = staging_dir.join(&filename);
+            let img = DynamicImage::ImageRgba8(collage_img);
+
+            if let Err(e) = img.save_with_format(&file_path, image::ImageFormat::Jpeg) {
+                error!("Failed to save collage to {:?}: {}", file_path, e);
                 continue;
             }
-        };
 
-        // Save collage
-        let filename = format!("collage_{}.jpg", date_str);
-        let file_path = staging_dir.join(&filename);
-        let img = DynamicImage::ImageRgba8(collage_img);
+            // For now, skip thumbnail generation for collages
+            // Thumbnails can be generated on-demand later if needed
+            let thumbnail_path: Option<String> = None;
 
-        if let Err(e) = img.save_with_format(&file_path, image::ImageFormat::Jpeg) {
-            error!("Failed to save collage to {:?}: {}", file_path, e);
-            continue;
-        }
+            // Save to database
+            let photo_hashes: Vec<String> = chunk.iter().map(|p| p.hash_sha256.clone()).collect();
 
-        // For now, skip thumbnail generation for collages
-        // Thumbnails can be generated on-demand later if needed
-        let thumbnail_path: Option<String> = None;
-
-        // Save to database
-        let photo_hashes: Vec<String> = selected_photos
-            .iter()
-            .map(|p| p.hash_sha256.clone())
-            .collect();
-
-        match Collage::insert(
-            pool,
-            &date_str,
-            &file_path.to_string_lossy(),
-            thumbnail_path.as_deref(),
-            selected_photos.len() as i32,
-            &photo_hashes,
-        ) {
-            Ok(_) => {
-                info!("Successfully created collage for {}", date_str);
-                generated_count += 1;
-            }
-            Err(e) => {
-                error!("Failed to insert collage into database: {}", e);
-                // Clean up file
-                let _ = std::fs::remove_file(&file_path);
+            match Collage::insert(
+                pool,
+                &date_str,
+                &file_path.to_string_lossy(),
+                thumbnail_path.as_deref(),
+                chunk.len() as i32,
+                &photo_hashes,
+            ) {
+                Ok(_) => {
+                    info!(
+                        "Successfully created collage {} for {}",
+                        collage_idx + 1,
+                        date_str
+                    );
+                    generated_count += 1;
+                }
+                Err(e) => {
+                    error!("Failed to insert collage into database: {}", e);
+                    // Clean up file
+                    let _ = std::fs::remove_file(&file_path);
+                }
             }
         }
     }

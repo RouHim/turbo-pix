@@ -2,6 +2,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{error, info};
 use rusqlite::{params, Row};
+use rusttype::{point, Font, Scale};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -143,10 +144,18 @@ struct PhotoCluster {
 }
 
 const MAX_PHOTOS_PER_COLLAGE: usize = 4;
+const COLLAGE_WIDTH: u32 = 3840;
+const COLLAGE_HEIGHT: u32 = 2160;
+const COLLAGE_PADDING: u32 = 140;
+const COLLAGE_HEADER_HEIGHT: u32 = 320;
+const COLLAGE_GUTTER: u32 = 32;
+const FRAME_THICKNESS: u32 = 8;
+const SHADOW_MARGIN: u32 = 18;
 
 /// Collage layout configuration
 struct CollageLayout {
     grid_cols: usize,
+    grid_rows: usize,
     photo_count: usize,
     cell_width: u32,
     cell_height: u32,
@@ -164,15 +173,232 @@ impl CollageLayout {
             _ => (2, 2),
         };
 
-        // 4K resolution (3840x2160) divided by grid
-        let cell_width = 3840 / grid_cols as u32;
-        let cell_height = 2160 / grid_rows as u32;
+        // Use padded content area to leave room for header and framing.
+        let content_width = COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2);
+        let content_height =
+            COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING * 2);
+
+        let total_gutter_x = COLLAGE_GUTTER * (grid_cols as u32).saturating_sub(1);
+        let total_gutter_y = COLLAGE_GUTTER * (grid_rows as u32).saturating_sub(1);
+
+        let cell_width = (content_width.saturating_sub(total_gutter_x)) / grid_cols as u32;
+        let cell_height = (content_height.saturating_sub(total_gutter_y)) / grid_rows as u32;
 
         CollageLayout {
             grid_cols,
+            grid_rows,
             photo_count: clamped,
             cell_width,
             cell_height,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Rect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Rect {
+    fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn max_x(&self) -> u32 {
+        self.x.saturating_add(self.width)
+    }
+
+    fn max_y(&self) -> u32 {
+        self.y.saturating_add(self.height)
+    }
+}
+
+fn lerp_channel(start: u8, end: u8, t: f32) -> u8 {
+    (start as f32 + (end as f32 - start as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+fn paint_vertical_gradient(canvas: &mut RgbaImage, top: [u8; 4], bottom: [u8; 4]) {
+    let height = canvas.height().max(1);
+    let width = canvas.width();
+
+    for y in 0..height {
+        let t = y as f32 / (height - 1) as f32;
+        let row_color = Rgba([
+            lerp_channel(top[0], bottom[0], t),
+            lerp_channel(top[1], bottom[1], t),
+            lerp_channel(top[2], bottom[2], t),
+            lerp_channel(top[3], bottom[3], t),
+        ]);
+
+        for x in 0..width {
+            canvas.put_pixel(x, y, row_color);
+        }
+    }
+}
+
+fn blend_pixel(base: &mut Rgba<u8>, overlay: &Rgba<u8>) {
+    let alpha = overlay[3] as f32 / 255.0;
+    if alpha <= 0.0 {
+        return;
+    }
+
+    let inv_alpha = 1.0 - alpha;
+    for idx in 0..3 {
+        base[idx] = (overlay[idx] as f32 * alpha + base[idx] as f32 * inv_alpha)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    base[3] = 255;
+}
+
+fn fill_rect(canvas: &mut RgbaImage, rect: &Rect, color: Rgba<u8>) {
+    let max_x = rect.max_x().min(canvas.width());
+    let max_y = rect.max_y().min(canvas.height());
+
+    for y in rect.y..max_y {
+        for x in rect.x..max_x {
+            let pixel = canvas.get_pixel_mut(x, y);
+            if color[3] == 255 {
+                *pixel = color;
+            } else {
+                blend_pixel(pixel, &color);
+            }
+        }
+    }
+}
+
+fn stroke_rect(canvas: &mut RgbaImage, rect: &Rect, thickness: u32, color: Rgba<u8>) {
+    if thickness == 0 {
+        return;
+    }
+
+    for t in 0..thickness {
+        let left = rect.x.saturating_add(t);
+        let right = rect
+            .max_x()
+            .saturating_sub(1 + t)
+            .min(canvas.width().saturating_sub(1));
+        let top = rect.y.saturating_add(t);
+        let bottom = rect
+            .max_y()
+            .saturating_sub(1 + t)
+            .min(canvas.height().saturating_sub(1));
+
+        if left >= right || top >= bottom {
+            break;
+        }
+
+        for x in left..=right {
+            {
+                let top_pixel = canvas.get_pixel_mut(x, top);
+                if color[3] == 255 {
+                    *top_pixel = color;
+                } else {
+                    blend_pixel(top_pixel, &color);
+                }
+            }
+
+            {
+                let bottom_pixel = canvas.get_pixel_mut(x, bottom);
+                if color[3] == 255 {
+                    *bottom_pixel = color;
+                } else {
+                    blend_pixel(bottom_pixel, &color);
+                }
+            }
+        }
+
+        for y in top..=bottom {
+            {
+                let left_pixel = canvas.get_pixel_mut(left, y);
+                if color[3] == 255 {
+                    *left_pixel = color;
+                } else {
+                    blend_pixel(left_pixel, &color);
+                }
+            }
+
+            {
+                let right_pixel = canvas.get_pixel_mut(right, y);
+                if color[3] == 255 {
+                    *right_pixel = color;
+                } else {
+                    blend_pixel(right_pixel, &color);
+                }
+            }
+        }
+    }
+}
+
+fn format_date_label(date_str: &str) -> String {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .map(|date| date.format("%A, %B %d, %Y").to_string())
+        .unwrap_or_else(|_| date_str.to_string())
+}
+
+fn load_font() -> Result<Font<'static>, Box<dyn std::error::Error>> {
+    let candidates: &[(&[u8], &str)] = &[
+        (
+            include_bytes!("../static/fonts/Questrial-Regular.ttf"),
+            "Questrial Regular",
+        ),
+        (
+            include_bytes!("../static/fonts/JetBrainsMono-Regular.ttf"),
+            "JetBrains Mono Regular",
+        ),
+    ];
+
+    for (bytes, name) in candidates {
+        if let Some(font) = Font::try_from_bytes(*bytes) {
+            info!("Loaded collage font: {}", name);
+            return Ok(font);
+        } else {
+            error!("Failed to parse collage font candidate: {}", name);
+        }
+    }
+
+    Err("No collage font could be loaded".into())
+}
+
+fn draw_text(
+    canvas: &mut RgbaImage,
+    text: &str,
+    font: &Font,
+    scale: Scale,
+    x: u32,
+    y: u32,
+    color: Rgba<u8>,
+) {
+    let v_metrics = font.v_metrics(scale);
+    let glyphs: Vec<_> = font
+        .layout(text, scale, point(0.0, v_metrics.ascent))
+        .collect();
+
+    for glyph in glyphs {
+        if let Some(bb) = glyph.pixel_bounding_box() {
+            glyph.draw(|gx, gy, gv| {
+                let px = x as i32 + gx as i32 + bb.min.x;
+                let py = y as i32 + gy as i32 + bb.min.y;
+
+                if px < 0 || py < 0 || px >= canvas.width() as i32 || py >= canvas.height() as i32 {
+                    return;
+                }
+
+                let alpha = (gv * color[3] as f32).round() as u8;
+                let overlay = Rgba([color[0], color[1], color[2], alpha]);
+                let pixel = canvas.get_pixel_mut(px as u32, py as u32);
+                blend_pixel(pixel, &overlay);
+            });
         }
     }
 }
@@ -228,15 +454,64 @@ fn find_photo_clusters(pool: &DbPool) -> Result<Vec<PhotoCluster>, Box<dyn std::
 fn create_collage_image(
     photos: &[&Photo],
     layout: &CollageLayout,
+    date_label: &str,
 ) -> Result<RgbaImage, Box<dyn std::error::Error>> {
-    // Create 4K canvas (3840x2160)
-    let mut canvas: RgbaImage = ImageBuffer::from_pixel(3840, 2160, Rgba([0, 0, 0, 255]));
+    let mut canvas: RgbaImage =
+        ImageBuffer::from_pixel(COLLAGE_WIDTH, COLLAGE_HEIGHT, Rgba([0, 0, 0, 255]));
+
+    paint_vertical_gradient(&mut canvas, [22, 28, 41, 255], [9, 12, 18, 255]);
+
+    let frame_rect = Rect::new(
+        COLLAGE_PADDING / 2,
+        COLLAGE_PADDING / 3,
+        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING),
+        COLLAGE_HEIGHT.saturating_sub(COLLAGE_PADDING / 2),
+    );
+    fill_rect(&mut canvas, &frame_rect, Rgba([14, 18, 28, 235]));
+    stroke_rect(&mut canvas, &frame_rect, 3, Rgba([88, 104, 136, 200]));
+
+    let header_rect = Rect::new(
+        COLLAGE_PADDING,
+        COLLAGE_PADDING / 2,
+        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
+        COLLAGE_HEADER_HEIGHT.saturating_sub(COLLAGE_PADDING / 2),
+    );
+    fill_rect(&mut canvas, &header_rect, Rgba([26, 33, 48, 235]));
+
+    let content_rect = Rect::new(
+        COLLAGE_PADDING,
+        COLLAGE_HEADER_HEIGHT,
+        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
+        COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING),
+    );
+    fill_rect(&mut canvas, &content_rect, Rgba([18, 24, 36, 235]));
+
+    let font = load_font().map_err(|e| format!("Failed to load collage font: {}", e))?;
+
+    draw_text(
+        &mut canvas,
+        &format_date_label(date_label),
+        &font,
+        Scale { x: 160.0, y: 160.0 },
+        header_rect.x + 32,
+        header_rect.y + 64,
+        Rgba([228, 236, 255, 255]),
+    );
+
+    let total_grid_width = layout.cell_width * layout.grid_cols as u32
+        + COLLAGE_GUTTER * (layout.grid_cols as u32).saturating_sub(1);
+    let total_grid_height = layout.cell_height * layout.grid_rows as u32
+        + COLLAGE_GUTTER * (layout.grid_rows as u32).saturating_sub(1);
+
+    let start_x = COLLAGE_PADDING + (content_rect.width.saturating_sub(total_grid_width)) / 2;
+    let start_y = COLLAGE_HEADER_HEIGHT
+        + COLLAGE_PADDING
+        + (content_rect.height.saturating_sub(total_grid_height)) / 2;
 
     for (idx, photo) in photos.iter().take(layout.photo_count).enumerate() {
         let row = idx / layout.grid_cols;
         let col = idx % layout.grid_cols;
 
-        // Load and resize image
         let img = match image::open(&photo.file_path) {
             Ok(img) => img,
             Err(e) => {
@@ -245,23 +520,36 @@ fn create_collage_image(
             }
         };
 
-        // Resize to fit cell while maintaining aspect ratio
         let resized = img.resize_to_fill(
             layout.cell_width,
             layout.cell_height,
             image::imageops::FilterType::Lanczos3,
         );
 
-        // Calculate position on canvas
-        let x_offset = col as u32 * layout.cell_width;
-        let y_offset = row as u32 * layout.cell_height;
+        let x_offset = start_x + col as u32 * (layout.cell_width + COLLAGE_GUTTER);
+        let y_offset = start_y + row as u32 * (layout.cell_height + COLLAGE_GUTTER);
 
-        // Paste image onto canvas
+        let shadow_rect = Rect::new(
+            x_offset.saturating_sub(SHADOW_MARGIN),
+            y_offset.saturating_sub(SHADOW_MARGIN),
+            layout.cell_width + SHADOW_MARGIN * 2,
+            layout.cell_height + SHADOW_MARGIN * 2,
+        );
+        fill_rect(&mut canvas, &shadow_rect, Rgba([0, 0, 0, 70]));
+
         image::imageops::overlay(
             &mut canvas,
             &resized.to_rgba8(),
             x_offset as i64,
             y_offset as i64,
+        );
+
+        let frame_rect = Rect::new(x_offset, y_offset, layout.cell_width, layout.cell_height);
+        stroke_rect(
+            &mut canvas,
+            &frame_rect,
+            FRAME_THICKNESS,
+            Rgba([228, 234, 246, 255]),
         );
     }
 
@@ -347,7 +635,7 @@ pub async fn generate_collages(
             let layout = CollageLayout::calculate(chunk.len());
 
             // Create collage image
-            let collage_img = match create_collage_image(chunk, &layout) {
+            let collage_img = match create_collage_image(chunk, &layout, &date_str) {
                 Ok(img) => img,
                 Err(e) => {
                     error!(

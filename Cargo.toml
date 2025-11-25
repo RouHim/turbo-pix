@@ -44,6 +44,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
+rusttype = "0.9"
 
 # Async runtime
 tokio = { version = "1.0", features = ["fs", "macros", "rt", "rt-multi-thread", "signal"] }

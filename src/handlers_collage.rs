@@ -67,6 +67,49 @@ pub async fn reject_collage(id: i64, db_pool: DbPool) -> Result<impl Reply, Reje
     }
 }
 
+/// Get collage image file
+pub async fn get_collage_image(id: i64, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    // Find the collage
+    let collage = match Collage::get_by_id(&db_pool, id) {
+        Ok(Some(collage)) => collage,
+        Ok(None) => {
+            log::error!("Collage not found: {}", id);
+            return Err(reject::not_found());
+        }
+        Err(e) => {
+            log::error!("Failed to find collage: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    let file_path = std::path::Path::new(&collage.file_path);
+
+    // Check if file exists
+    if !file_path.exists() {
+        log::error!("Collage file not found: {:?}", file_path);
+        return Err(reject::not_found());
+    }
+
+    // Read file contents
+    let contents = match tokio::fs::read(file_path).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            log::error!("Failed to read collage file: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Failed to read collage file: {}", e),
+            }));
+        }
+    };
+
+    // Return image with appropriate headers
+    let reply = warp::reply::with_header(contents, "content-type", "image/jpeg");
+    let reply = warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
+
+    Ok(reply)
+}
+
 /// Manually trigger collage generation (for testing)
 pub async fn generate_collages_manual(
     db_pool: DbPool,
@@ -105,6 +148,11 @@ pub fn build_collage_routes(
         .and(with_db(db_pool.clone()))
         .and_then(list_pending_collages);
 
+    let get_image = warp::path!("api" / "collages" / i64 / "image")
+        .and(warp::get())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_collage_image);
+
     let data_path_generate = data_path.clone();
     let generate = warp::path!("api" / "collages" / "generate")
         .and(warp::post())
@@ -126,5 +174,9 @@ pub fn build_collage_routes(
         .and(with_db(db_pool))
         .and_then(reject_collage);
 
-    list_pending.or(generate).or(accept).or(reject)
+    list_pending
+        .or(get_image)
+        .or(generate)
+        .or(accept)
+        .or(reject)
 }

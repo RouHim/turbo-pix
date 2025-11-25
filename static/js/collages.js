@@ -66,7 +66,7 @@ class CollagesView {
 
     const img = document.createElement('img');
     img.className = 'collage-image';
-    img.src = collage.thumbnail_path || collage.file_path;
+    img.src = `/api/collages/${collage.id}/image`;
     img.alt = `Collage for ${collage.date}`;
     img.loading = 'lazy';
 

@@ -336,6 +336,8 @@ class TurboPixApp {
           // Clear photo grid and load collages
           if (window.photoGrid) {
             window.photoGrid.clearGrid();
+            // Disable infinite scroll for collages view
+            window.photoGrid.hasMore = false;
           }
           if (window.collagesView) {
             window.collagesView.initialize(window.photoGrid.container);

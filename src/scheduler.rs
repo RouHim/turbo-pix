@@ -82,6 +82,20 @@ impl PhotoScheduler {
         thumbnail_generator: ThumbnailGenerator,
         data_path: PathBuf,
     ) -> Self {
+        let mut photo_paths = photo_paths;
+        let collages_path = data_path.join("collages").join("accepted");
+
+        if !photo_paths.contains(&collages_path) {
+            if let Err(e) = std::fs::create_dir_all(&collages_path) {
+                warn!(
+                    "Failed to create collages directory {}: {}",
+                    collages_path.display(),
+                    e
+                );
+            }
+            photo_paths.push(collages_path);
+        }
+
         Self {
             photo_paths,
             db_pool,

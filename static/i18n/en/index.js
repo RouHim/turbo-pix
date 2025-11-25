@@ -99,7 +99,7 @@ window.EN_TRANSLATIONS = {
     // Metadata panel
     metadata: {
       file_information: 'File Information',
-      filename: 'Filename:',
+      file_path: 'File path:',
       file_size: 'File Size:',
       dimensions: 'Dimensions:',
       type: 'Type:',

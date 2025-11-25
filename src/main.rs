@@ -94,9 +94,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
-    let search_routes = build_search_routes(db_pool.clone(), semantic_search);
+    let search_routes = build_search_routes(db_pool.clone(), semantic_search.clone());
     let indexing_routes = build_indexing_routes(indexing_status);
-    let collage_routes = build_collage_routes(db_pool.clone(), config.data_path.clone().into());
+    let collage_routes = build_collage_routes(
+        db_pool.clone(),
+        config.data_path.clone().into(),
+        semantic_search,
+    );
     let static_routes = build_static_routes();
 
     let routes = health_routes

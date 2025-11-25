@@ -1,9 +1,11 @@
 use log::info;
 use std::path::PathBuf;
+use std::sync::Arc;
 use warp::{reject, Filter, Rejection, Reply};
 
 use crate::collage_generator::{self, Collage};
 use crate::db::DbPool;
+use crate::semantic_search::SemanticSearchEngine;
 use crate::warp_helpers::{with_db, DatabaseError};
 
 /// List all pending collages
@@ -24,27 +26,30 @@ pub async fn accept_collage(
     id: i64,
     db_pool: DbPool,
     data_path: PathBuf,
+    semantic_search: Arc<SemanticSearchEngine>,
 ) -> Result<impl Reply, Rejection> {
     info!("Accepting collage {}", id);
 
-    // Move collage to photos directory
-    let accepted_path = match collage_generator::accept_collage(&db_pool, id, &data_path).await {
-        Ok(path) => path,
-        Err(e) => {
-            log::error!("Failed to accept collage: {}", e);
-            return Err(reject::custom(DatabaseError {
-                message: format!("Failed to accept collage: {}", e),
-            }));
-        }
-    };
+    // Move collage to photos directory and index immediately
+    let accepted_path =
+        match collage_generator::accept_collage(&db_pool, id, &data_path, semantic_search).await {
+            Ok(path) => path,
+            Err(e) => {
+                log::error!("Failed to accept collage: {}", e);
+                return Err(reject::custom(DatabaseError {
+                    message: format!("Failed to accept collage: {}", e),
+                }));
+            }
+        };
 
-    info!("Collage accepted and moved to {:?}", accepted_path);
+    info!(
+        "Collage accepted, indexed, and moved to {:?}",
+        accepted_path
+    );
 
-    // The collage will be indexed in the next nightly rescan
-    // Immediate indexing is not critical for collages
     Ok(warp::reply::json(&serde_json::json!({
         "success": true,
-        "message": "Collage accepted. It will appear in 'All Photos' after the next scan.",
+        "message": "Collage accepted and added to 'All Photos'.",
         "path": accepted_path.to_string_lossy()
     })))
 }
@@ -142,6 +147,7 @@ pub async fn generate_collages_manual(
 pub fn build_collage_routes(
     db_pool: DbPool,
     data_path: PathBuf,
+    semantic_search: Arc<SemanticSearchEngine>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let list_pending = warp::path!("api" / "collages" / "pending")
         .and(warp::get())
@@ -162,10 +168,18 @@ pub fn build_collage_routes(
         .and_then(generate_collages_manual);
 
     let data_path_accept = data_path;
+    let semantic_search_accept = semantic_search;
     let accept = warp::path!("api" / "collages" / i64 / "accept")
         .and(warp::post())
         .and(with_db(db_pool.clone()))
-        .map(move |id, db_pool| (id, db_pool, data_path_accept.clone()))
+        .map(move |id, db_pool| {
+            (
+                id,
+                db_pool,
+                data_path_accept.clone(),
+                semantic_search_accept.clone(),
+            )
+        })
         .untuple_one()
         .and_then(accept_collage);
 

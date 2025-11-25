@@ -99,7 +99,7 @@ window.DE_TRANSLATIONS = {
     // Metadata panel
     metadata: {
       file_information: 'Dateiinformationen',
-      filename: 'Dateiname:',
+      file_path: 'Dateipfad:',
       file_size: 'Dateigröße:',
       dimensions: 'Abmessungen:',
       type: 'Typ:',

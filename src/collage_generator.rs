@@ -4,10 +4,13 @@ use log::{error, info};
 use rand::seq::SliceRandom;
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::db::Photo;
 use crate::db_pool::DbPool;
+use crate::file_scanner::PhotoFile;
+use crate::photo_processor::PhotoProcessor;
 
 /// Collage entity representing a generated photo collage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,12 +124,16 @@ impl Collage {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Mark collage as accepted
-    pub fn accept(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
+    /// Mark collage as accepted and update file path
+    pub fn accept(
+        pool: &DbPool,
+        id: i64,
+        new_file_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = pool.get()?;
         conn.execute(
-            "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [id],
+            "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, file_path = ? WHERE id = ?",
+            [new_file_path, &id.to_string()],
         )?;
         Ok(())
     }
@@ -374,12 +381,13 @@ pub async fn accept_collage(
     pool: &DbPool,
     collage_id: i64,
     data_path: &Path,
+    semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get collage
     let collage = Collage::get_by_id(pool, collage_id)?.ok_or("Collage not found")?;
 
-    // Create destination directory
-    let dest_dir = data_path.join("photos").join("collages");
+    // Create destination directory (separate from staging to avoid premature indexing)
+    let dest_dir = data_path.join("collages").join("accepted");
     std::fs::create_dir_all(&dest_dir)?;
 
     // Move file
@@ -400,8 +408,14 @@ pub async fn accept_collage(
         }
     }
 
-    // Mark as accepted
-    Collage::accept(pool, collage_id)?;
+    // Mark as accepted and update file path
+    Collage::accept(pool, collage_id, &dest.to_string_lossy())?;
+
+    // Index the collage into photos table immediately
+    if let Err(e) = index_collage_file(pool, &dest, semantic_search).await {
+        error!("Failed to index collage into photos table: {}", e);
+        // Don't fail the whole operation if indexing fails
+    }
 
     Ok(dest)
 }
@@ -430,5 +444,47 @@ pub async fn reject_collage(
     // Delete from database
     Collage::delete(pool, collage_id)?;
 
+    Ok(())
+}
+
+/// Index a single collage file into the photos table
+async fn index_collage_file(
+    pool: &DbPool,
+    file_path: &Path,
+    semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Get file metadata
+    let metadata = fs::metadata(file_path)?;
+    let size = metadata.len();
+    let modified = metadata.modified().ok().map(|t| {
+        let duration = t
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0));
+        DateTime::from_timestamp(duration.as_secs() as i64, 0).unwrap_or_else(Utc::now)
+    });
+
+    // Create PhotoFile
+    let photo_file = PhotoFile {
+        path: file_path.to_path_buf(),
+        size,
+        modified,
+        metadata,
+    };
+
+    // Process the file
+    let processor = PhotoProcessor::new(Vec::new(), semantic_search);
+    let processed_photo = processor
+        .process_file_metadata_only(&photo_file)
+        .await
+        .ok_or("Failed to process collage file")?;
+
+    // Convert to Photo and insert into database
+    let photo: Photo = processed_photo.into();
+    let mut conn = pool.get()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    photo.create_or_update_with_connection(&tx)?;
+    tx.commit()?;
+
+    info!("Collage indexed into photos table: {}", file_path.display());
     Ok(())
 }

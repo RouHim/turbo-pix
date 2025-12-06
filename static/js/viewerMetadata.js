@@ -55,7 +55,8 @@ class ViewerMetadata {
   }
 
   updateDetailedMetadata(photo, isVideo) {
-    this.setMetaField('meta-filename', photo.filename);
+    const absolutePath = photo.file_path || photo.filename;
+    this.setMetaField('meta-filename', absolutePath);
     this.setMetaField(
       'meta-filesize',
       photo.file_size ? utils.formatFileSize(photo.file_size) : null

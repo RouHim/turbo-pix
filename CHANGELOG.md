@@ -1,3 +1,5 @@
+## [2.5.1](https://github.com/RouHim/turbo-pix/compare/2.5.0...2.5.1) (2025-12-06)
+
 # [2.5.0](https://github.com/RouHim/turbo-pix/compare/2.4.11...2.5.0) (2025-12-06)
 
 

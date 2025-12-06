@@ -324,6 +324,39 @@
   border-radius: var(--radius-md);
   padding: var(--space-2);
   z-index: 10;
+  max-width: 88%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.viewer-controls::-webkit-scrollbar {
+  display: none;
+}
+
+.viewer-controls::before,
+.viewer-controls::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.viewer-controls::before {
+  left: 0;
+  background: linear-gradient(to right, rgb(0 0 0 / 70%), transparent);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.viewer-controls::after {
+  right: 0;
+  background: linear-gradient(to left, rgb(0 0 0 / 70%), transparent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
 @media (max-width: 768px) {
@@ -346,6 +379,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
 }
 
 .zoom-btn:hover {

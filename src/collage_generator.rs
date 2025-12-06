@@ -11,6 +11,7 @@ use crate::db::Photo;
 use crate::db_pool::DbPool;
 use crate::file_scanner::PhotoFile;
 use crate::photo_processor::PhotoProcessor;
+use crate::raw_processor;
 
 /// Collage entity representing a generated photo collage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,7 +360,7 @@ fn load_font() -> Result<Font<'static>, Box<dyn std::error::Error>> {
     ];
 
     for (bytes, name) in candidates {
-        if let Some(font) = Font::try_from_bytes(*bytes) {
+        if let Some(font) = Font::try_from_bytes(bytes) {
             info!("Loaded collage font: {}", name);
             return Ok(font);
         } else {
@@ -512,13 +513,36 @@ fn create_collage_image(
         let row = idx / layout.grid_cols;
         let col = idx % layout.grid_cols;
 
-        let img = match image::open(&photo.file_path) {
-            Ok(img) => img,
-            Err(e) => {
-                error!("Failed to load image {}: {}", photo.file_path, e);
-                continue;
+        // Load image: decode RAW files using raw_processor, otherwise use standard image loading
+        let mut img = if raw_processor::is_raw_file(Path::new(&photo.file_path)) {
+            match raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path)) {
+                Ok(img) => img,
+                Err(e) => {
+                    error!("Failed to decode RAW file {}: {}", photo.file_path, e);
+                    continue;
+                }
+            }
+        } else {
+            // For non-RAW files, use thumbnail if available, otherwise use original
+            let image_path = photo.thumbnail_path.as_deref().unwrap_or(&photo.file_path);
+            match image::open(image_path) {
+                Ok(img) => img,
+                Err(e) => {
+                    error!("Failed to load image {}: {}", image_path, e);
+                    continue;
+                }
             }
         };
+
+        // Apply orientation correction if needed
+        if let Some(orientation) = photo.orientation {
+            img = match orientation {
+                3 => img.rotate180(),
+                6 => img.rotate90(),
+                8 => img.rotate270(),
+                _ => img,
+            };
+        }
 
         let resized = img.resize_to_fill(
             layout.cell_width,
@@ -537,12 +561,22 @@ fn create_collage_image(
         );
         fill_rect(&mut canvas, &shadow_rect, Rgba([0, 0, 0, 70]));
 
-        image::imageops::overlay(
-            &mut canvas,
-            &resized.to_rgba8(),
-            x_offset as i64,
-            y_offset as i64,
-        );
+        // Convert to RGBA and manually copy pixels
+        // Note: Using manual pixel copying instead of image::imageops::overlay
+        // to ensure proper rendering of RAW-decoded images
+        let rgba_img = resized.to_rgba8();
+
+        for dy in 0..rgba_img.height() {
+            for dx in 0..rgba_img.width() {
+                let canvas_x = x_offset + dx;
+                let canvas_y = y_offset + dy;
+
+                if canvas_x < canvas.width() && canvas_y < canvas.height() {
+                    let pixel = rgba_img.get_pixel(dx, dy);
+                    canvas.put_pixel(canvas_x, canvas_y, *pixel);
+                }
+            }
+        }
 
         let frame_rect = Rect::new(x_offset, y_offset, layout.cell_width, layout.cell_height);
         stroke_rect(
@@ -556,41 +590,15 @@ fn create_collage_image(
     Ok(canvas)
 }
 
-fn chunk_photos<'a>(photos: &'a [Photo]) -> Vec<Vec<&'a Photo>> {
-    if photos.is_empty() {
-        return Vec::new();
-    }
+fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
+    const MIN_PHOTOS_PER_COLLAGE: usize = 2;
 
-    // Always aim for two collages, or three when more than 12 photos are present.
-    let target_collages = if photos.len() > 12 { 3 } else { 2 };
-    let max_slots = target_collages * MAX_PHOTOS_PER_COLLAGE;
-
-    // Distribute photos round-robin while respecting per-collage cap (4).
-    let mut buckets: Vec<Vec<&Photo>> = vec![Vec::new(); target_collages];
-    let mut filled = 0;
-
-    for (idx, photo) in photos.iter().enumerate() {
-        if filled >= max_slots {
-            break;
-        }
-
-        let mut bucket_idx = idx % target_collages;
-        let mut attempts = 0;
-        while buckets[bucket_idx].len() >= MAX_PHOTOS_PER_COLLAGE && attempts < target_collages {
-            bucket_idx = (bucket_idx + 1) % target_collages;
-            attempts += 1;
-        }
-
-        if buckets[bucket_idx].len() < MAX_PHOTOS_PER_COLLAGE {
-            buckets[bucket_idx].push(photo);
-            filled += 1;
-        }
-    }
-
-    // Only keep fully populated collages to avoid empty tiles.
-    buckets
-        .into_iter()
-        .filter(|b| b.len() == MAX_PHOTOS_PER_COLLAGE)
+    // Fill buckets sequentially (4, 4, 4, ..., remainder)
+    // This maximizes the number of full 4-photo collages
+    photos
+        .chunks(MAX_PHOTOS_PER_COLLAGE)
+        .map(|chunk| chunk.iter().collect())
+        .filter(|bucket: &Vec<_>| bucket.len() >= MIN_PHOTOS_PER_COLLAGE)
         .collect()
 }
 
@@ -808,4 +816,191 @@ async fn index_collage_file(
 
     info!("Collage indexed into photos table: {}", file_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    /// Helper to create a mock Photo for testing
+    fn mock_photo(file_path: &str, thumbnail_path: Option<&str>) -> Photo {
+        Photo {
+            hash_sha256: "test_hash".to_string(),
+            file_path: file_path.to_string(),
+            filename: file_path
+                .split('/')
+                .last()
+                .unwrap_or("test.jpg")
+                .to_string(),
+            file_size: 1024,
+            mime_type: Some("image/x-canon-cr2".to_string()),
+            taken_at: Some(Utc::now()),
+            width: Some(6000),
+            height: Some(4000),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: thumbnail_path.map(String::from),
+            has_thumbnail: thumbnail_path.map(|_| true),
+            blurhash: None,
+            is_favorite: None,
+            semantic_vector_indexed: None,
+            metadata: serde_json::json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_raw_photo_detection() {
+        // Given: A RAW photo file path
+        let raw_path = "/path/to/IMG_9899.CR2";
+        let photo = mock_photo(raw_path, None);
+
+        // When: Checking if it's a RAW file
+        let is_raw = raw_processor::is_raw_file(Path::new(&photo.file_path));
+
+        // Then: Should be detected as RAW
+        assert!(is_raw, "CR2 files should be detected as RAW");
+    }
+
+    #[test]
+    fn test_non_raw_photo_detection() {
+        // Given: A JPEG photo file path
+        let jpeg_path = "/path/to/photo.jpg";
+        let photo = mock_photo(jpeg_path, None);
+
+        // When: Checking if it's a RAW file
+        let is_raw = raw_processor::is_raw_file(Path::new(&photo.file_path));
+
+        // Then: Should NOT be detected as RAW
+        assert!(!is_raw, "JPEG files should not be detected as RAW");
+    }
+
+    #[test]
+    fn test_non_raw_photo_uses_thumbnail_when_available() {
+        // Given: A JPEG photo with a thumbnail
+        let jpeg_path = "/path/to/photo.jpg";
+        let thumb_path = "/path/to/thumbnails/photo_small.jpg";
+        let photo = mock_photo(jpeg_path, Some(thumb_path));
+
+        // When: Determining which path to use (for non-RAW files)
+        let is_raw = raw_processor::is_raw_file(Path::new(&photo.file_path));
+        let image_path = if !is_raw {
+            photo.thumbnail_path.as_deref().unwrap_or(&photo.file_path)
+        } else {
+            &photo.file_path
+        };
+
+        // Then: Should use thumbnail for non-RAW photos when available
+        assert_eq!(
+            image_path, thumb_path,
+            "Should use thumbnail for non-RAW photos when available"
+        );
+    }
+
+    #[test]
+    fn test_collage_layout_one_photo() {
+        let layout = CollageLayout::calculate(1);
+        assert_eq!(layout.grid_rows, 1);
+        assert_eq!(layout.grid_cols, 1);
+        assert_eq!(layout.photo_count, 1);
+    }
+
+    #[test]
+    fn test_collage_layout_two_photos() {
+        let layout = CollageLayout::calculate(2);
+        assert_eq!(layout.grid_rows, 1);
+        assert_eq!(layout.grid_cols, 2);
+        assert_eq!(layout.photo_count, 2);
+    }
+
+    #[test]
+    fn test_collage_layout_four_photos() {
+        let layout = CollageLayout::calculate(4);
+        assert_eq!(layout.grid_rows, 2);
+        assert_eq!(layout.grid_cols, 2);
+        assert_eq!(layout.photo_count, 4);
+    }
+
+    #[test]
+    fn test_collage_layout_exceeds_max() {
+        // Should clamp to MAX_PHOTOS_PER_COLLAGE (4)
+        let layout = CollageLayout::calculate(10);
+        assert_eq!(layout.grid_rows, 2);
+        assert_eq!(layout.grid_cols, 2);
+        assert_eq!(layout.photo_count, 4);
+    }
+
+    #[test]
+    fn test_chunk_photos_ten_photos() {
+        let photos: Vec<Photo> = (0..10)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // Sequential filling: [4, 4, 2] = 3 collages
+        assert_eq!(chunks.len(), 3, "Should create 3 collages for 10 photos");
+        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+        assert_eq!(chunks[1].len(), 4, "Second collage should have 4 photos");
+        assert_eq!(chunks[2].len(), 2, "Third collage should have 2 photos");
+    }
+
+    #[test]
+    fn test_chunk_photos_fifteen_photos() {
+        let photos: Vec<Photo> = (0..15)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // Sequential filling: [4, 4, 4, 3] = 4 collages
+        assert_eq!(chunks.len(), 4, "Should create 4 collages for 15 photos");
+        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+        assert_eq!(chunks[1].len(), 4, "Second collage should have 4 photos");
+        assert_eq!(chunks[2].len(), 4, "Third collage should have 4 photos");
+        assert_eq!(chunks[3].len(), 3, "Fourth collage should have 3 photos");
+    }
+
+    #[test]
+    fn test_chunk_photos_six_photos() {
+        let photos: Vec<Photo> = (0..6)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // Sequential filling: [4, 2] = 2 collages
+        assert_eq!(chunks.len(), 2, "Should create 2 collages for 6 photos");
+        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+        assert_eq!(chunks[1].len(), 2, "Second collage should have 2 photos");
+    }
+
+    #[test]
+    fn test_chunk_photos_five_photos() {
+        let photos: Vec<Photo> = (0..5)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // Sequential filling: [4, 1] but 1-photo collages are filtered out
+        assert_eq!(chunks.len(), 1, "Should create 1 collage for 5 photos");
+        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+    }
+
+    #[test]
+    fn test_chunk_photos_one_photo() {
+        let photos: Vec<Photo> = (0..1)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // 1 photo is below MIN_PHOTOS_PER_COLLAGE (2), so filtered out
+        assert_eq!(chunks.len(), 0, "Should create 0 collages for 1 photo");
+    }
 }

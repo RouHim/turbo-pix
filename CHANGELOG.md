@@ -1,3 +1,36 @@
+# [2.5.0](https://github.com/RouHim/turbo-pix/compare/2.4.11...2.5.0) (2025-12-06)
+
+
+### Bug Fixes
+
+* prevent Firefox mobile URL bar from hiding photo viewer action buttons ([23c732c](https://github.com/RouHim/turbo-pix/commit/23c732cf9e51543c22eda9e2864ad5e4faabf66d))
+* resolve CSS linting errors ([9dc35fb](https://github.com/RouHim/turbo-pix/commit/9dc35fb2e421af573de00628df6817e3343dced6))
+
+
+### Features
+
+* add horizontal scrolling with visual hints for photo viewer buttons ([a15d398](https://github.com/RouHim/turbo-pix/commit/a15d39871a5de82d3c5c93b6bc0fae8dd848fa19))
+
+## [2.4.11](https://github.com/RouHim/turbo-pix/compare/2.4.10...2.4.11) (2025-12-06)
+
+## [2.4.10](https://github.com/RouHim/turbo-pix/compare/2.4.9...2.4.10) (2025-12-05)
+
+## [2.4.9](https://github.com/RouHim/turbo-pix/compare/2.4.8...2.4.9) (2025-12-04)
+
+## [2.4.8](https://github.com/RouHim/turbo-pix/compare/2.4.7...2.4.8) (2025-12-02)
+
+## [2.4.7](https://github.com/RouHim/turbo-pix/compare/2.4.6...2.4.7) (2025-12-02)
+
+## [2.4.6](https://github.com/RouHim/turbo-pix/compare/2.4.5...2.4.6) (2025-12-01)
+
+## [2.4.5](https://github.com/RouHim/turbo-pix/compare/2.4.4...2.4.5) (2025-11-29)
+
+## [2.4.4](https://github.com/RouHim/turbo-pix/compare/2.4.3...2.4.4) (2025-11-26)
+
+## [2.4.3](https://github.com/RouHim/turbo-pix/compare/2.4.2...2.4.3) (2025-11-25)
+
+## [2.4.2](https://github.com/RouHim/turbo-pix/compare/2.4.1...2.4.2) (2025-11-25)
+
 ## [2.4.1](https://github.com/RouHim/turbo-pix/compare/2.4.0...2.4.1) (2025-11-24)
 
 # [2.4.0](https://github.com/RouHim/turbo-pix/compare/2.3.1...2.4.0) (2025-11-22)

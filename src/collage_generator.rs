@@ -151,14 +151,13 @@ const COLLAGE_PADDING: u32 = 60;
 const COLLAGE_HEADER_HEIGHT: u32 = 240;
 const COLLAGE_GUTTER: u32 = 20;
 const FRAME_THICKNESS: u32 = 8;
-const SHADOW_MARGIN: u32 = 18;
 
 /// Photo orientation classification
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Orientation {
-    Portrait,   // aspect < 0.9
-    Landscape,  // aspect > 1.1
-    Square,     // 0.9 <= aspect <= 1.1
+    Portrait,  // aspect < 0.9
+    Landscape, // aspect > 1.1
+    Square,    // 0.9 <= aspect <= 1.1
 }
 
 /// Photo analysis information
@@ -191,11 +190,11 @@ enum LayoutTemplate {
     Single,
     TwoSideBySide,
     TwoStacked,
-    ThreeFocal,      // 60/40 split
-    ThreeLinear,     // 33/33/33 horizontal
-    ThreePyramid,    // Top 50%, bottom 25/25
-    FourGrid,        // 2x2 grid
-    FourFocal,       // 50% focal + 3 small
+    ThreeFocal,   // 60/40 split
+    ThreeLinear,  // 33/33/33 horizontal
+    ThreePyramid, // Top 50%, bottom 25/25
+    FourGrid,     // 2x2 grid
+    FourFocal,    // 50% focal + 3 small
 }
 
 /// Collage layout configuration
@@ -224,13 +223,8 @@ impl CollageLayout {
         let start_y = COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING;
 
         // Generate cells using the selected template
-        let photo_cells = generate_template_cells(
-            template,
-            content_width,
-            content_height,
-            start_x,
-            start_y,
-        );
+        let photo_cells =
+            generate_template_cells(template, content_width, content_height, start_x, start_y);
 
         CollageLayout {
             photo_count,
@@ -516,7 +510,9 @@ fn select_best_template(photo_count: usize, photo_infos: &[PhotoInfo]) -> Layout
         .iter()
         .map(|&template| (template, score_template(template, photo_infos)))
         .max_by(|(_, score_a), (_, score_b)| {
-            score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+            score_a
+                .partial_cmp(score_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(template, _)| template)
         .unwrap_or(templates[0])
@@ -535,22 +531,6 @@ fn blend_pixel(base: &mut Rgba<u8>, overlay: &Rgba<u8>) {
             .clamp(0.0, 255.0) as u8;
     }
     base[3] = 255;
-}
-
-fn fill_rect(canvas: &mut RgbaImage, rect: &Rect, color: Rgba<u8>) {
-    let max_x = rect.max_x().min(canvas.width());
-    let max_y = rect.max_y().min(canvas.height());
-
-    for y in rect.y..max_y {
-        for x in rect.x..max_x {
-            let pixel = canvas.get_pixel_mut(x, y);
-            if color[3] == 255 {
-                *pixel = color;
-            } else {
-                blend_pixel(pixel, &color);
-            }
-        }
-    }
 }
 
 fn stroke_rect(canvas: &mut RgbaImage, rect: &Rect, thickness: u32, color: Rgba<u8>) {
@@ -791,14 +771,6 @@ fn create_collage_image(
         );
         let x_offset = cell.x;
         let y_offset = cell.y;
-
-        let shadow_rect = Rect::new(
-            x_offset.saturating_sub(SHADOW_MARGIN),
-            y_offset.saturating_sub(SHADOW_MARGIN),
-            resized.width() + SHADOW_MARGIN * 2,
-            resized.height() + SHADOW_MARGIN * 2,
-        );
-        fill_rect(&mut canvas, &shadow_rect, Rgba([180, 190, 200, 60]));
 
         // Convert to RGBA and manually copy pixels
         // Note: Using manual pixel copying instead of image::imageops::overlay

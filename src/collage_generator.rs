@@ -147,50 +147,94 @@ struct PhotoCluster {
 const MAX_PHOTOS_PER_COLLAGE: usize = 4;
 const COLLAGE_WIDTH: u32 = 3840;
 const COLLAGE_HEIGHT: u32 = 2160;
-const COLLAGE_PADDING: u32 = 140;
-const COLLAGE_HEADER_HEIGHT: u32 = 320;
-const COLLAGE_GUTTER: u32 = 32;
+const COLLAGE_PADDING: u32 = 60;
+const COLLAGE_HEADER_HEIGHT: u32 = 240;
+const COLLAGE_GUTTER: u32 = 20;
 const FRAME_THICKNESS: u32 = 8;
 const SHADOW_MARGIN: u32 = 18;
 
+/// Photo orientation classification
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Orientation {
+    Portrait,   // aspect < 0.9
+    Landscape,  // aspect > 1.1
+    Square,     // 0.9 <= aspect <= 1.1
+}
+
+/// Photo analysis information
+#[derive(Debug, Clone)]
+struct PhotoInfo {
+    aspect_ratio: f32,
+    orientation: Orientation,
+}
+
+impl PhotoInfo {
+    fn new(width: u32, height: u32) -> Self {
+        let aspect_ratio = width as f32 / height as f32;
+        let orientation = if aspect_ratio < 0.9 {
+            Orientation::Portrait
+        } else if aspect_ratio > 1.1 {
+            Orientation::Landscape
+        } else {
+            Orientation::Square
+        };
+        PhotoInfo {
+            aspect_ratio,
+            orientation,
+        }
+    }
+}
+
+/// Layout template types
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LayoutTemplate {
+    Single,
+    TwoSideBySide,
+    TwoStacked,
+    ThreeFocal,      // 60/40 split
+    ThreeLinear,     // 33/33/33 horizontal
+    ThreePyramid,    // Top 50%, bottom 25/25
+    FourGrid,        // 2x2 grid
+    FourFocal,       // 50% focal + 3 small
+}
+
 /// Collage layout configuration
 struct CollageLayout {
-    grid_cols: usize,
-    grid_rows: usize,
     photo_count: usize,
-    cell_width: u32,
-    cell_height: u32,
+    photo_cells: Vec<Rect>,
 }
 
 impl CollageLayout {
-    /// Calculate optimal grid layout for photo count
-    fn calculate(photo_count: usize) -> Self {
-        let clamped = photo_count.clamp(1, MAX_PHOTOS_PER_COLLAGE);
+    /// Calculate optimal layout using smart template selection based on photo characteristics
+    fn calculate(photos: &[&Photo]) -> Self {
+        let photo_count = photos.len().clamp(1, MAX_PHOTOS_PER_COLLAGE);
 
-        // Max 2x2 grid to keep each tile large and readable
-        let (grid_rows, grid_cols) = match clamped {
-            1 => (1, 1),
-            2 => (1, 2),
-            _ => (2, 2),
-        };
+        // Analyze photos to get aspect ratios and orientations
+        let photo_infos = analyze_photos(photos);
 
-        // Use padded content area to leave room for header and framing.
+        // Select the best template based on photo characteristics
+        let template = select_best_template(photo_count, &photo_infos);
+
+        // Use padded content area to leave room for header and framing
         let content_width = COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2);
         let content_height =
             COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING * 2);
 
-        let total_gutter_x = COLLAGE_GUTTER * (grid_cols as u32).saturating_sub(1);
-        let total_gutter_y = COLLAGE_GUTTER * (grid_rows as u32).saturating_sub(1);
+        let start_x = COLLAGE_PADDING;
+        let start_y = COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING;
 
-        let cell_width = (content_width.saturating_sub(total_gutter_x)) / grid_cols as u32;
-        let cell_height = (content_height.saturating_sub(total_gutter_y)) / grid_rows as u32;
+        // Generate cells using the selected template
+        let photo_cells = generate_template_cells(
+            template,
+            content_width,
+            content_height,
+            start_x,
+            start_y,
+        );
 
         CollageLayout {
-            grid_cols,
-            grid_rows,
-            photo_count: clamped,
-            cell_width,
-            cell_height,
+            photo_count,
+            photo_cells,
         }
     }
 }
@@ -222,29 +266,260 @@ impl Rect {
     }
 }
 
-fn lerp_channel(start: u8, end: u8, t: f32) -> u8 {
-    (start as f32 + (end as f32 - start as f32) * t)
-        .round()
-        .clamp(0.0, 255.0) as u8
+/// Analyze photos to extract aspect ratios and orientations
+fn analyze_photos(photos: &[&Photo]) -> Vec<PhotoInfo> {
+    photos
+        .iter()
+        .map(|photo| {
+            // Extract dimensions from photo metadata or use defaults
+            let (width, height) = match (photo.width, photo.height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => (w as u32, h as u32),
+                _ => (3, 2), // Default landscape aspect for missing metadata
+            };
+            PhotoInfo::new(width, height)
+        })
+        .collect()
 }
 
-fn paint_vertical_gradient(canvas: &mut RgbaImage, top: [u8; 4], bottom: [u8; 4]) {
-    let height = canvas.height().max(1);
-    let width = canvas.width();
-
-    for y in 0..height {
-        let t = y as f32 / (height - 1) as f32;
-        let row_color = Rgba([
-            lerp_channel(top[0], bottom[0], t),
-            lerp_channel(top[1], bottom[1], t),
-            lerp_channel(top[2], bottom[2], t),
-            lerp_channel(top[3], bottom[3], t),
-        ]);
-
-        for x in 0..width {
-            canvas.put_pixel(x, y, row_color);
+/// Generate layout cells for a specific template
+fn generate_template_cells(
+    template: LayoutTemplate,
+    content_width: u32,
+    content_height: u32,
+    start_x: u32,
+    start_y: u32,
+) -> Vec<Rect> {
+    match template {
+        LayoutTemplate::Single => {
+            vec![Rect::new(start_x, start_y, content_width, content_height)]
+        }
+        LayoutTemplate::TwoSideBySide => {
+            let cell_width = (content_width.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, cell_width, content_height),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y,
+                    cell_width,
+                    content_height,
+                ),
+            ]
+        }
+        LayoutTemplate::TwoStacked => {
+            let cell_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, content_width, cell_height),
+                Rect::new(
+                    start_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    content_width,
+                    cell_height,
+                ),
+            ]
+        }
+        LayoutTemplate::ThreeFocal => {
+            // 60/40 split: large left, two stacked right
+            let left_width = (content_width * 60) / 100;
+            let right_width = content_width.saturating_sub(left_width + COLLAGE_GUTTER);
+            let right_cell_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, left_width, content_height),
+                Rect::new(
+                    start_x + left_width + COLLAGE_GUTTER,
+                    start_y,
+                    right_width,
+                    right_cell_height,
+                ),
+                Rect::new(
+                    start_x + left_width + COLLAGE_GUTTER,
+                    start_y + right_cell_height + COLLAGE_GUTTER,
+                    right_width,
+                    right_cell_height,
+                ),
+            ]
+        }
+        LayoutTemplate::ThreeLinear => {
+            // Three columns using golden ratio proportions
+            let cell_width = (content_width.saturating_sub(COLLAGE_GUTTER * 2)) / 3;
+            vec![
+                Rect::new(start_x, start_y, cell_width, content_height),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y,
+                    cell_width,
+                    content_height,
+                ),
+                Rect::new(
+                    start_x + (cell_width + COLLAGE_GUTTER) * 2,
+                    start_y,
+                    cell_width,
+                    content_height,
+                ),
+            ]
+        }
+        LayoutTemplate::ThreePyramid => {
+            // Top 50%, bottom two 25% each
+            let top_height = content_height / 2;
+            let bottom_height = content_height.saturating_sub(top_height + COLLAGE_GUTTER);
+            let bottom_width = (content_width.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, content_width, top_height),
+                Rect::new(
+                    start_x,
+                    start_y + top_height + COLLAGE_GUTTER,
+                    bottom_width,
+                    bottom_height,
+                ),
+                Rect::new(
+                    start_x + bottom_width + COLLAGE_GUTTER,
+                    start_y + top_height + COLLAGE_GUTTER,
+                    bottom_width,
+                    bottom_height,
+                ),
+            ]
+        }
+        LayoutTemplate::FourGrid => {
+            // Standard 2x2 grid
+            let cell_width = (content_width.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let cell_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, cell_width, cell_height),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    cell_width,
+                    cell_height,
+                ),
+            ]
+        }
+        LayoutTemplate::FourFocal => {
+            // 50% focal on left, 3 small stacked on right
+            let focal_width = content_width / 2;
+            let right_width = content_width.saturating_sub(focal_width + COLLAGE_GUTTER);
+            let right_cell_height = (content_height.saturating_sub(COLLAGE_GUTTER * 2)) / 3;
+            vec![
+                Rect::new(start_x, start_y, focal_width, content_height),
+                Rect::new(
+                    start_x + focal_width + COLLAGE_GUTTER,
+                    start_y,
+                    right_width,
+                    right_cell_height,
+                ),
+                Rect::new(
+                    start_x + focal_width + COLLAGE_GUTTER,
+                    start_y + right_cell_height + COLLAGE_GUTTER,
+                    right_width,
+                    right_cell_height,
+                ),
+                Rect::new(
+                    start_x + focal_width + COLLAGE_GUTTER,
+                    start_y + (right_cell_height + COLLAGE_GUTTER) * 2,
+                    right_width,
+                    right_cell_height,
+                ),
+            ]
         }
     }
+}
+
+/// Score a template based on photo characteristics
+fn score_template(template: LayoutTemplate, photo_infos: &[PhotoInfo]) -> f32 {
+    let cells = generate_template_cells(
+        template,
+        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
+        COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING * 2),
+        0,
+        0,
+    );
+
+    let mut total_score = 0.0;
+    let count = photo_infos.len().min(cells.len());
+
+    // Calculate aspect ratio compatibility (40% weight)
+    for (info, cell) in photo_infos.iter().zip(cells.iter()).take(count) {
+        let cell_aspect = cell.width as f32 / cell.height as f32;
+        let diff = (info.aspect_ratio - cell_aspect).abs();
+        let aspect_score = 1.0 - (diff / 2.0).min(1.0); // Normalize to 0-1
+        total_score += aspect_score * 0.4;
+    }
+
+    // Orientation match score (30% weight)
+    let landscape_count = photo_infos
+        .iter()
+        .filter(|i| i.orientation == Orientation::Landscape)
+        .count();
+    let portrait_count = photo_infos
+        .iter()
+        .filter(|i| i.orientation == Orientation::Portrait)
+        .count();
+
+    let orientation_score = match template {
+        LayoutTemplate::TwoStacked | LayoutTemplate::ThreePyramid => {
+            // Favor these for portrait photos
+            if portrait_count > landscape_count {
+                1.0
+            } else {
+                0.5
+            }
+        }
+        LayoutTemplate::ThreeLinear => {
+            // Favor for all landscape
+            if landscape_count == photo_infos.len() {
+                1.0
+            } else {
+                0.6
+            }
+        }
+        _ => 0.7, // Default moderate score
+    };
+    total_score += orientation_score * 0.3;
+
+    // Space utilization (30% weight)
+    let mut utilization = 0.0;
+    for (info, cell) in photo_infos.iter().zip(cells.iter()).take(count) {
+        let cell_aspect = cell.width as f32 / cell.height as f32;
+        let aspect_diff = (info.aspect_ratio - cell_aspect).abs() / cell_aspect;
+        // Better utilization when aspects are close
+        utilization += if aspect_diff < 0.20 { 1.0 } else { 0.7 };
+    }
+    total_score += (utilization / count as f32) * 0.3;
+
+    total_score / count as f32
+}
+
+/// Select the best template for the given photos
+fn select_best_template(photo_count: usize, photo_infos: &[PhotoInfo]) -> LayoutTemplate {
+    let templates = match photo_count {
+        1 => vec![LayoutTemplate::Single],
+        2 => vec![LayoutTemplate::TwoSideBySide, LayoutTemplate::TwoStacked],
+        3 => vec![
+            LayoutTemplate::ThreeFocal,
+            LayoutTemplate::ThreeLinear,
+            LayoutTemplate::ThreePyramid,
+        ],
+        _ => vec![LayoutTemplate::FourGrid, LayoutTemplate::FourFocal],
+    };
+
+    templates
+        .iter()
+        .map(|&template| (template, score_template(template, photo_infos)))
+        .max_by(|(_, score_a), (_, score_b)| {
+            score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(template, _)| template)
+        .unwrap_or(templates[0])
 }
 
 fn blend_pixel(base: &mut Rgba<u8>, overlay: &Rgba<u8>) {
@@ -457,61 +732,25 @@ fn create_collage_image(
     layout: &CollageLayout,
     date_label: &str,
 ) -> Result<RgbaImage, Box<dyn std::error::Error>> {
+    // Unified clean background - single color, no gradients or panels
     let mut canvas: RgbaImage =
-        ImageBuffer::from_pixel(COLLAGE_WIDTH, COLLAGE_HEIGHT, Rgba([0, 0, 0, 255]));
-
-    paint_vertical_gradient(&mut canvas, [22, 28, 41, 255], [9, 12, 18, 255]);
-
-    let frame_rect = Rect::new(
-        COLLAGE_PADDING / 2,
-        COLLAGE_PADDING / 3,
-        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING),
-        COLLAGE_HEIGHT.saturating_sub(COLLAGE_PADDING / 2),
-    );
-    fill_rect(&mut canvas, &frame_rect, Rgba([14, 18, 28, 235]));
-    stroke_rect(&mut canvas, &frame_rect, 3, Rgba([88, 104, 136, 200]));
-
-    let header_rect = Rect::new(
-        COLLAGE_PADDING,
-        COLLAGE_PADDING / 2,
-        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
-        COLLAGE_HEADER_HEIGHT.saturating_sub(COLLAGE_PADDING / 2),
-    );
-    fill_rect(&mut canvas, &header_rect, Rgba([26, 33, 48, 235]));
-
-    let content_rect = Rect::new(
-        COLLAGE_PADDING,
-        COLLAGE_HEADER_HEIGHT,
-        COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
-        COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING),
-    );
-    fill_rect(&mut canvas, &content_rect, Rgba([18, 24, 36, 235]));
+        ImageBuffer::from_pixel(COLLAGE_WIDTH, COLLAGE_HEIGHT, Rgba([248, 250, 252, 255]));
 
     let font = load_font().map_err(|e| format!("Failed to load collage font: {}", e))?;
 
+    // Draw date label at top with padding
     draw_text(
         &mut canvas,
         &format_date_label(date_label),
         &font,
-        Scale { x: 160.0, y: 160.0 },
-        header_rect.x + 32,
-        header_rect.y + 64,
-        Rgba([228, 236, 255, 255]),
+        Scale { x: 140.0, y: 140.0 },
+        COLLAGE_PADDING + 20,
+        COLLAGE_PADDING + 20,
+        Rgba([40, 50, 65, 255]),
     );
 
-    let total_grid_width = layout.cell_width * layout.grid_cols as u32
-        + COLLAGE_GUTTER * (layout.grid_cols as u32).saturating_sub(1);
-    let total_grid_height = layout.cell_height * layout.grid_rows as u32
-        + COLLAGE_GUTTER * (layout.grid_rows as u32).saturating_sub(1);
-
-    let start_x = COLLAGE_PADDING + (content_rect.width.saturating_sub(total_grid_width)) / 2;
-    let start_y = COLLAGE_HEADER_HEIGHT
-        + COLLAGE_PADDING
-        + (content_rect.height.saturating_sub(total_grid_height)) / 2;
-
     for (idx, photo) in photos.iter().take(layout.photo_count).enumerate() {
-        let row = idx / layout.grid_cols;
-        let col = idx % layout.grid_cols;
+        let cell = &layout.photo_cells[idx];
 
         // Load image: decode RAW files using raw_processor, otherwise use standard image loading
         let mut img = if raw_processor::is_raw_file(Path::new(&photo.file_path)) {
@@ -544,22 +783,22 @@ fn create_collage_image(
             };
         }
 
+        // Always crop to fill cells for uniform, consistent appearance
         let resized = img.resize_to_fill(
-            layout.cell_width,
-            layout.cell_height,
+            cell.width,
+            cell.height,
             image::imageops::FilterType::Lanczos3,
         );
-
-        let x_offset = start_x + col as u32 * (layout.cell_width + COLLAGE_GUTTER);
-        let y_offset = start_y + row as u32 * (layout.cell_height + COLLAGE_GUTTER);
+        let x_offset = cell.x;
+        let y_offset = cell.y;
 
         let shadow_rect = Rect::new(
             x_offset.saturating_sub(SHADOW_MARGIN),
             y_offset.saturating_sub(SHADOW_MARGIN),
-            layout.cell_width + SHADOW_MARGIN * 2,
-            layout.cell_height + SHADOW_MARGIN * 2,
+            resized.width() + SHADOW_MARGIN * 2,
+            resized.height() + SHADOW_MARGIN * 2,
         );
-        fill_rect(&mut canvas, &shadow_rect, Rgba([0, 0, 0, 70]));
+        fill_rect(&mut canvas, &shadow_rect, Rgba([180, 190, 200, 60]));
 
         // Convert to RGBA and manually copy pixels
         // Note: Using manual pixel copying instead of image::imageops::overlay
@@ -578,12 +817,12 @@ fn create_collage_image(
             }
         }
 
-        let frame_rect = Rect::new(x_offset, y_offset, layout.cell_width, layout.cell_height);
+        let frame_rect = Rect::new(x_offset, y_offset, resized.width(), resized.height());
         stroke_rect(
             &mut canvas,
             &frame_rect,
             FRAME_THICKNESS,
-            Rgba([228, 234, 246, 255]),
+            Rgba([80, 95, 115, 255]),
         );
     }
 
@@ -639,8 +878,8 @@ pub async fn generate_collages(
         );
 
         for (collage_idx, chunk) in chunks.iter().enumerate() {
-            // Calculate layout for the current chunk (max 2x2)
-            let layout = CollageLayout::calculate(chunk.len());
+            // Calculate layout for the current chunk using smart template selection
+            let layout = CollageLayout::calculate(chunk);
 
             // Create collage image
             let collage_img = match create_collage_image(chunk, &layout, &date_str) {
@@ -830,7 +1069,7 @@ mod tests {
             file_path: file_path.to_string(),
             filename: file_path
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("test.jpg")
                 .to_string(),
             file_size: 1024,
@@ -903,35 +1142,57 @@ mod tests {
 
     #[test]
     fn test_collage_layout_one_photo() {
-        let layout = CollageLayout::calculate(1);
-        assert_eq!(layout.grid_rows, 1);
-        assert_eq!(layout.grid_cols, 1);
+        let photo = mock_photo("test1.jpg", None);
+        let photos = vec![&photo];
+        let layout = CollageLayout::calculate(&photos);
         assert_eq!(layout.photo_count, 1);
+        assert_eq!(layout.photo_cells.len(), 1);
     }
 
     #[test]
     fn test_collage_layout_two_photos() {
-        let layout = CollageLayout::calculate(2);
-        assert_eq!(layout.grid_rows, 1);
-        assert_eq!(layout.grid_cols, 2);
+        let photo1 = mock_photo("test1.jpg", None);
+        let photo2 = mock_photo("test2.jpg", None);
+        let photos = vec![&photo1, &photo2];
+        let layout = CollageLayout::calculate(&photos);
         assert_eq!(layout.photo_count, 2);
+        assert_eq!(layout.photo_cells.len(), 2);
+    }
+
+    #[test]
+    fn test_collage_layout_three_photos() {
+        let photo1 = mock_photo("test1.jpg", None);
+        let photo2 = mock_photo("test2.jpg", None);
+        let photo3 = mock_photo("test3.jpg", None);
+        let photos = vec![&photo1, &photo2, &photo3];
+        let layout = CollageLayout::calculate(&photos);
+        assert_eq!(layout.photo_count, 3);
+        assert_eq!(layout.photo_cells.len(), 3);
+        // Template is selected based on photo characteristics, so we just verify count
     }
 
     #[test]
     fn test_collage_layout_four_photos() {
-        let layout = CollageLayout::calculate(4);
-        assert_eq!(layout.grid_rows, 2);
-        assert_eq!(layout.grid_cols, 2);
+        let photo1 = mock_photo("test1.jpg", None);
+        let photo2 = mock_photo("test2.jpg", None);
+        let photo3 = mock_photo("test3.jpg", None);
+        let photo4 = mock_photo("test4.jpg", None);
+        let photos = vec![&photo1, &photo2, &photo3, &photo4];
+        let layout = CollageLayout::calculate(&photos);
         assert_eq!(layout.photo_count, 4);
+        assert_eq!(layout.photo_cells.len(), 4);
     }
 
     #[test]
     fn test_collage_layout_exceeds_max() {
         // Should clamp to MAX_PHOTOS_PER_COLLAGE (4)
-        let layout = CollageLayout::calculate(10);
-        assert_eq!(layout.grid_rows, 2);
-        assert_eq!(layout.grid_cols, 2);
+        let photos_vec: Vec<Photo> = (0..10)
+            .map(|i| mock_photo(&format!("test{}.jpg", i), None))
+            .collect();
+        let photo_refs: Vec<&Photo> = photos_vec.iter().collect();
+        let layout = CollageLayout::calculate(&photo_refs);
         assert_eq!(layout.photo_count, 4);
+        assert_eq!(layout.photo_cells.len(), 4);
     }
 
     #[test]

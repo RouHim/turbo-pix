@@ -266,10 +266,18 @@ fn analyze_photos(photos: &[&Photo]) -> Vec<PhotoInfo> {
         .iter()
         .map(|photo| {
             // Extract dimensions from photo metadata or use defaults
-            let (width, height) = match (photo.width, photo.height) {
+            let (mut width, mut height) = match (photo.width, photo.height) {
                 (Some(w), Some(h)) if w > 0 && h > 0 => (w as u32, h as u32),
                 _ => (3, 2), // Default landscape aspect for missing metadata
             };
+
+            // Account for EXIF orientation: swap dimensions for 90°/270° rotations
+            if let Some(orientation) = photo.orientation {
+                if orientation == 6 || orientation == 8 {
+                    std::mem::swap(&mut width, &mut height);
+                }
+            }
+
             PhotoInfo::new(width, height)
         })
         .collect()
@@ -763,19 +771,29 @@ fn create_collage_image(
             };
         }
 
+        // Fill cell with white background first (defensive coding for any gaps)
+        let cell_rect = Rect::new(cell.x, cell.y, cell.width, cell.height);
+        for y in cell.y..(cell.y + cell.height).min(canvas.height()) {
+            for x in cell.x..(cell.x + cell.width).min(canvas.width()) {
+                canvas.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+            }
+        }
+
         // Always crop to fill cells for uniform, consistent appearance
         let resized = img.resize_to_fill(
             cell.width,
             cell.height,
             image::imageops::FilterType::Lanczos3,
         );
-        let x_offset = cell.x;
-        let y_offset = cell.y;
 
         // Convert to RGBA and manually copy pixels
         // Note: Using manual pixel copying instead of image::imageops::overlay
         // to ensure proper rendering of RAW-decoded images
         let rgba_img = resized.to_rgba8();
+
+        // Center the image in the cell (in case resized dimensions don't match exactly)
+        let x_offset = cell.x + (cell.width.saturating_sub(rgba_img.width())) / 2;
+        let y_offset = cell.y + (cell.height.saturating_sub(rgba_img.height())) / 2;
 
         for dy in 0..rgba_img.height() {
             for dx in 0..rgba_img.width() {
@@ -789,10 +807,10 @@ fn create_collage_image(
             }
         }
 
-        let frame_rect = Rect::new(x_offset, y_offset, resized.width(), resized.height());
+        // Draw frame using cell dimensions (not resized dimensions)
         stroke_rect(
             &mut canvas,
-            &frame_rect,
+            &cell_rect,
             FRAME_THICKNESS,
             Rgba([80, 95, 115, 255]),
         );

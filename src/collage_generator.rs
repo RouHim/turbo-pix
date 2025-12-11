@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
-use log::{error, info};
+use log::{debug, error, info};
 use rusqlite::{params, Row};
 use rusttype::{point, Font, Scale};
 use serde::{Deserialize, Serialize};
@@ -742,7 +742,26 @@ fn create_collage_image(
 
         // Load image: decode RAW files using raw_processor, otherwise use standard image loading
         let is_raw = raw_processor::is_raw_file(Path::new(&photo.file_path));
-        let using_thumbnail = !is_raw && photo.thumbnail_path.is_some();
+
+        // Only use thumbnail if it exists and is accessible
+        let using_thumbnail = !is_raw
+            && photo
+                .thumbnail_path
+                .as_ref()
+                .map(|p| Path::new(p).exists())
+                .unwrap_or(false);
+
+        debug!(
+            "Photo {}: DB dims={}×{}, orientation={:?}, cell={}×{}, using_thumbnail={}, is_raw={}",
+            idx,
+            photo.width.unwrap_or(0),
+            photo.height.unwrap_or(0),
+            photo.orientation,
+            cell.width,
+            cell.height,
+            using_thumbnail,
+            is_raw
+        );
 
         let mut img = if is_raw {
             match raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path)) {
@@ -764,9 +783,37 @@ fn create_collage_image(
             }
         };
 
-        // Apply orientation correction ONLY if not using thumbnail
-        // (thumbnails are pre-rotated by thumbnail_generator)
-        if !using_thumbnail {
+        debug!(
+            "  Loaded image dims={}×{} before orientation check",
+            img.width(),
+            img.height()
+        );
+
+        // Determine if we need to apply orientation based on actual image dimensions
+        // For orientation 6/8, image should be rotated (height > width for landscape originals)
+        // For orientation 3, aspect ratio stays same but image is upside down
+        let needs_rotation = if let Some(orientation) = photo.orientation {
+            if orientation == 6 || orientation == 8 {
+                // For 90°/270° rotations, check if dimensions need swapping
+                // If image is already rotated, width < height for originally landscape photos
+                // If image needs rotation, width > height for originally landscape photos
+                let appears_rotated = img.width() < img.height();
+                let should_be_rotated = match (photo.width, photo.height) {
+                    (Some(w), Some(h)) => w > h, // Original is landscape
+                    _ => false,
+                };
+                should_be_rotated && !appears_rotated
+            } else if orientation == 3 {
+                // 180° rotation - always apply if not using known pre-rotated thumbnail
+                !using_thumbnail
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if needs_rotation {
             if let Some(orientation) = photo.orientation {
                 img = match orientation {
                     3 => img.rotate180(),
@@ -774,7 +821,15 @@ fn create_collage_image(
                     8 => img.rotate270(),
                     _ => img,
                 };
+                debug!(
+                    "  Applied orientation {} → dims={}×{}",
+                    orientation,
+                    img.width(),
+                    img.height()
+                );
             }
+        } else {
+            debug!("  No rotation needed (image already correctly oriented)");
         }
 
         // Always crop to fill cells for uniform, consistent appearance

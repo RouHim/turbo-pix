@@ -741,7 +741,10 @@ fn create_collage_image(
         let cell = &layout.photo_cells[idx];
 
         // Load image: decode RAW files using raw_processor, otherwise use standard image loading
-        let mut img = if raw_processor::is_raw_file(Path::new(&photo.file_path)) {
+        let is_raw = raw_processor::is_raw_file(Path::new(&photo.file_path));
+        let using_thumbnail = !is_raw && photo.thumbnail_path.is_some();
+
+        let mut img = if is_raw {
             match raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path)) {
                 Ok(img) => img,
                 Err(e) => {
@@ -761,21 +764,16 @@ fn create_collage_image(
             }
         };
 
-        // Apply orientation correction if needed
-        if let Some(orientation) = photo.orientation {
-            img = match orientation {
-                3 => img.rotate180(),
-                6 => img.rotate90(),
-                8 => img.rotate270(),
-                _ => img,
-            };
-        }
-
-        // Fill cell with white background first (defensive coding for any gaps)
-        let cell_rect = Rect::new(cell.x, cell.y, cell.width, cell.height);
-        for y in cell.y..(cell.y + cell.height).min(canvas.height()) {
-            for x in cell.x..(cell.x + cell.width).min(canvas.width()) {
-                canvas.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+        // Apply orientation correction ONLY if not using thumbnail
+        // (thumbnails are pre-rotated by thumbnail_generator)
+        if !using_thumbnail {
+            if let Some(orientation) = photo.orientation {
+                img = match orientation {
+                    3 => img.rotate180(),
+                    6 => img.rotate90(),
+                    8 => img.rotate270(),
+                    _ => img,
+                };
             }
         }
 
@@ -791,14 +789,14 @@ fn create_collage_image(
         // to ensure proper rendering of RAW-decoded images
         let rgba_img = resized.to_rgba8();
 
-        // Center the image in the cell (in case resized dimensions don't match exactly)
-        let x_offset = cell.x + (cell.width.saturating_sub(rgba_img.width())) / 2;
-        let y_offset = cell.y + (cell.height.saturating_sub(rgba_img.height())) / 2;
+        // Copy pixels into cell, constraining to cell bounds to prevent overflow
+        let copy_width = rgba_img.width().min(cell.width);
+        let copy_height = rgba_img.height().min(cell.height);
 
-        for dy in 0..rgba_img.height() {
-            for dx in 0..rgba_img.width() {
-                let canvas_x = x_offset + dx;
-                let canvas_y = y_offset + dy;
+        for dy in 0..copy_height {
+            for dx in 0..copy_width {
+                let canvas_x = cell.x + dx;
+                let canvas_y = cell.y + dy;
 
                 if canvas_x < canvas.width() && canvas_y < canvas.height() {
                     let pixel = rgba_img.get_pixel(dx, dy);
@@ -807,7 +805,8 @@ fn create_collage_image(
             }
         }
 
-        // Draw frame using cell dimensions (not resized dimensions)
+        // Draw frame using cell dimensions
+        let cell_rect = Rect::new(cell.x, cell.y, cell.width, cell.height);
         stroke_rect(
             &mut canvas,
             &cell_rect,

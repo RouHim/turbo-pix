@@ -789,20 +789,29 @@ fn create_collage_image(
             img.height()
         );
 
-        // Determine if we need to apply orientation based on actual image dimensions
-        // For orientation 6/8, image should be rotated (height > width for landscape originals)
-        // For orientation 3, aspect ratio stays same but image is upside down
+        // Determine if we need to apply orientation based on aspect ratio comparison
+        // Compare loaded image aspect ratio with database dimensions to detect if already rotated
         let needs_rotation = if let Some(orientation) = photo.orientation {
             if orientation == 6 || orientation == 8 {
-                // For 90°/270° rotations, check if dimensions need swapping
-                // If image is already rotated, width < height for originally landscape photos
-                // If image needs rotation, width > height for originally landscape photos
-                let appears_rotated = img.width() < img.height();
-                let should_be_rotated = match (photo.width, photo.height) {
-                    (Some(w), Some(h)) => w > h, // Original is landscape
-                    _ => false,
-                };
-                should_be_rotated && !appears_rotated
+                // For 90°/270° rotations, check aspect ratio
+                match (photo.width, photo.height) {
+                    (Some(db_w), Some(db_h)) if db_w > 0 && db_h > 0 => {
+                        let loaded_aspect = img.width() as f64 / img.height() as f64;
+                        let original_aspect = db_w as f64 / db_h as f64;
+                        let rotated_aspect = db_h as f64 / db_w as f64;
+
+                        // Check which aspect ratio is closer to loaded image
+                        let diff_original = (loaded_aspect - original_aspect).abs();
+                        let diff_rotated = (loaded_aspect - rotated_aspect).abs();
+
+                        // If closer to original aspect, image hasn't been rotated yet
+                        diff_original < diff_rotated
+                    }
+                    _ => {
+                        // No valid dimensions to compare, fall back to thumbnail detection
+                        !using_thumbnail
+                    }
+                }
             } else if orientation == 3 {
                 // 180° rotation - always apply if not using known pre-rotated thumbnail
                 !using_thumbnail
@@ -839,19 +848,53 @@ fn create_collage_image(
             image::imageops::FilterType::Lanczos3,
         );
 
+        debug!(
+            "  After resize_to_fill: {}×{} (expected: {}×{})",
+            resized.width(),
+            resized.height(),
+            cell.width,
+            cell.height
+        );
+
+        // Verify resized dimensions match cell exactly
+        if resized.width() != cell.width || resized.height() != cell.height {
+            error!(
+                "  MISMATCH! Resized image {}×{} doesn't match cell {}×{}",
+                resized.width(),
+                resized.height(),
+                cell.width,
+                cell.height
+            );
+        }
+
         // Convert to RGBA and manually copy pixels
         // Note: Using manual pixel copying instead of image::imageops::overlay
         // to ensure proper rendering of RAW-decoded images
         let rgba_img = resized.to_rgba8();
 
+        // First, fill cell background with white to ensure no gaps show through
+        for dy in 0..cell.height {
+            for dx in 0..cell.width {
+                let canvas_x = cell.x + dx;
+                let canvas_y = cell.y + dy;
+                if canvas_x < canvas.width() && canvas_y < canvas.height() {
+                    canvas.put_pixel(canvas_x, canvas_y, Rgba([255, 255, 255, 255]));
+                }
+            }
+        }
+
         // Copy pixels into cell, constraining to cell bounds to prevent overflow
         let copy_width = rgba_img.width().min(cell.width);
         let copy_height = rgba_img.height().min(cell.height);
 
+        // Center the image if it doesn't exactly match cell dimensions
+        let offset_x = (cell.width.saturating_sub(copy_width)) / 2;
+        let offset_y = (cell.height.saturating_sub(copy_height)) / 2;
+
         for dy in 0..copy_height {
             for dx in 0..copy_width {
-                let canvas_x = cell.x + dx;
-                let canvas_y = cell.y + dy;
+                let canvas_x = cell.x + offset_x + dx;
+                let canvas_y = cell.y + offset_y + dy;
 
                 if canvas_x < canvas.width() && canvas_y < canvas.height() {
                     let pixel = rgba_img.get_pixel(dx, dy);

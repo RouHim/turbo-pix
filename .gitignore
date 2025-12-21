@@ -2,6 +2,7 @@
 /target/
 data/
 photos/
+collages/
 flamegraph.svg
 perf.data*
 .playwright*

@@ -898,7 +898,12 @@ fn create_collage_image(
 
                 if canvas_x < canvas.width() && canvas_y < canvas.height() {
                     let pixel = rgba_img.get_pixel(dx, dy);
-                    canvas.put_pixel(canvas_x, canvas_y, *pixel);
+                    let target = canvas.get_pixel_mut(canvas_x, canvas_y);
+                    if pixel[3] == 255 {
+                        *target = *pixel;
+                    } else {
+                        blend_pixel(target, pixel);
+                    }
                 }
             }
         }

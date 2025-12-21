@@ -1,6 +1,8 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info};
+use rand::rng;
+use rand::seq::SliceRandom;
 use rusqlite::{params, Row};
 use rusttype::{point, Font, Scale};
 use serde::{Deserialize, Serialize};
@@ -144,12 +146,13 @@ struct PhotoCluster {
     photos: Vec<Photo>,
 }
 
-const MAX_PHOTOS_PER_COLLAGE: usize = 4;
+const MAX_PHOTOS_PER_COLLAGE: usize = 6;
 const COLLAGE_WIDTH: u32 = 3840;
 const COLLAGE_HEIGHT: u32 = 2160;
 const COLLAGE_PADDING: u32 = 60;
 const COLLAGE_HEADER_HEIGHT: u32 = 240;
 const COLLAGE_GUTTER: u32 = 20;
+const TEMPLATE_SCORE_TIE_THRESHOLD: f32 = 0.04;
 const FRAME_THICKNESS: u32 = 8;
 
 /// Photo orientation classification
@@ -195,6 +198,10 @@ enum LayoutTemplate {
     ThreePyramid, // Top 50%, bottom 25/25
     FourGrid,     // 2x2 grid
     FourFocal,    // 50% focal + 3 small
+    FiveGrid,     // 2 tiles top, 3 tiles bottom
+    FiveMosaic,   // 1 large + 4 small
+    SixGrid,      // 3x2 grid
+    SixMosaic,    // Wider left column + two narrow columns
 }
 
 /// Collage layout configuration
@@ -433,6 +440,139 @@ fn generate_template_cells(
                 ),
             ]
         }
+        LayoutTemplate::FiveGrid => {
+            // Two tiles on top, three tiles on bottom
+            let row_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let top_width = (content_width.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let bottom_width = (content_width.saturating_sub(COLLAGE_GUTTER * 2)) / 3;
+            vec![
+                Rect::new(start_x, start_y, top_width, row_height),
+                Rect::new(
+                    start_x + top_width + COLLAGE_GUTTER,
+                    start_y,
+                    top_width,
+                    row_height,
+                ),
+                Rect::new(
+                    start_x,
+                    start_y + row_height + COLLAGE_GUTTER,
+                    bottom_width,
+                    row_height,
+                ),
+                Rect::new(
+                    start_x + bottom_width + COLLAGE_GUTTER,
+                    start_y + row_height + COLLAGE_GUTTER,
+                    bottom_width,
+                    row_height,
+                ),
+                Rect::new(
+                    start_x + (bottom_width + COLLAGE_GUTTER) * 2,
+                    start_y + row_height + COLLAGE_GUTTER,
+                    bottom_width,
+                    row_height,
+                ),
+            ]
+        }
+        LayoutTemplate::FiveMosaic => {
+            // Large left tile, four smaller tiles on the right
+            let left_width = (content_width * 60) / 100;
+            let right_width = content_width.saturating_sub(left_width + COLLAGE_GUTTER);
+            let small_width = (right_width.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let small_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let right_start_x = start_x + left_width + COLLAGE_GUTTER;
+            vec![
+                Rect::new(start_x, start_y, left_width, content_height),
+                Rect::new(right_start_x, start_y, small_width, small_height),
+                Rect::new(
+                    right_start_x + small_width + COLLAGE_GUTTER,
+                    start_y,
+                    small_width,
+                    small_height,
+                ),
+                Rect::new(
+                    right_start_x,
+                    start_y + small_height + COLLAGE_GUTTER,
+                    small_width,
+                    small_height,
+                ),
+                Rect::new(
+                    right_start_x + small_width + COLLAGE_GUTTER,
+                    start_y + small_height + COLLAGE_GUTTER,
+                    small_width,
+                    small_height,
+                ),
+            ]
+        }
+        LayoutTemplate::SixGrid => {
+            // Standard 3x2 grid
+            let cell_width = (content_width.saturating_sub(COLLAGE_GUTTER * 2)) / 3;
+            let cell_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            vec![
+                Rect::new(start_x, start_y, cell_width, cell_height),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x + (cell_width + COLLAGE_GUTTER) * 2,
+                    start_y,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x + cell_width + COLLAGE_GUTTER,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    cell_width,
+                    cell_height,
+                ),
+                Rect::new(
+                    start_x + (cell_width + COLLAGE_GUTTER) * 2,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    cell_width,
+                    cell_height,
+                ),
+            ]
+        }
+        LayoutTemplate::SixMosaic => {
+            // Wider left column, two narrower columns
+            let left_width = (content_width * 50) / 100;
+            let remaining_width = content_width.saturating_sub(left_width + COLLAGE_GUTTER * 2);
+            let narrow_width = remaining_width / 2;
+            let cell_height = (content_height.saturating_sub(COLLAGE_GUTTER)) / 2;
+            let middle_x = start_x + left_width + COLLAGE_GUTTER;
+            let right_x = middle_x + narrow_width + COLLAGE_GUTTER;
+            vec![
+                Rect::new(start_x, start_y, left_width, cell_height),
+                Rect::new(
+                    start_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    left_width,
+                    cell_height,
+                ),
+                Rect::new(middle_x, start_y, narrow_width, cell_height),
+                Rect::new(
+                    middle_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    narrow_width,
+                    cell_height,
+                ),
+                Rect::new(right_x, start_y, narrow_width, cell_height),
+                Rect::new(
+                    right_x,
+                    start_y + cell_height + COLLAGE_GUTTER,
+                    narrow_width,
+                    cell_height,
+                ),
+            ]
+        }
     }
 }
 
@@ -448,6 +588,9 @@ fn score_template(template: LayoutTemplate, photo_infos: &[PhotoInfo]) -> f32 {
 
     let mut total_score = 0.0;
     let count = photo_infos.len().min(cells.len());
+    if count == 0 {
+        return 0.0;
+    }
 
     // Calculate aspect ratio compatibility (40% weight)
     for (info, cell) in photo_infos.iter().zip(cells.iter()).take(count) {
@@ -484,6 +627,13 @@ fn score_template(template: LayoutTemplate, photo_infos: &[PhotoInfo]) -> f32 {
                 0.6
             }
         }
+        LayoutTemplate::FiveMosaic | LayoutTemplate::SixMosaic => {
+            if landscape_count >= portrait_count {
+                0.9
+            } else {
+                0.6
+            }
+        }
         _ => 0.7, // Default moderate score
     };
     total_score += orientation_score * 0.3;
@@ -511,19 +661,34 @@ fn select_best_template(photo_count: usize, photo_infos: &[PhotoInfo]) -> Layout
             LayoutTemplate::ThreeLinear,
             LayoutTemplate::ThreePyramid,
         ],
-        _ => vec![LayoutTemplate::FourGrid, LayoutTemplate::FourFocal],
+        4 => vec![LayoutTemplate::FourGrid, LayoutTemplate::FourFocal],
+        5 => vec![LayoutTemplate::FiveGrid, LayoutTemplate::FiveMosaic],
+        _ => vec![LayoutTemplate::SixGrid, LayoutTemplate::SixMosaic],
     };
 
-    templates
+    let scored: Vec<(LayoutTemplate, f32)> = templates
         .iter()
         .map(|&template| (template, score_template(template, photo_infos)))
-        .max_by(|(_, score_a), (_, score_b)| {
-            score_a
-                .partial_cmp(score_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(template, _)| template)
-        .unwrap_or(templates[0])
+        .collect();
+
+    let max_score = scored
+        .iter()
+        .map(|(_, score)| *score)
+        .fold(f32::MIN, f32::max);
+
+    let mut candidates: Vec<LayoutTemplate> = scored
+        .iter()
+        .filter(|(_, score)| *score >= max_score - TEMPLATE_SCORE_TIE_THRESHOLD)
+        .map(|(template, _)| *template)
+        .collect();
+
+    if candidates.is_empty() {
+        return templates[0];
+    }
+
+    let mut rng = rng();
+    candidates.shuffle(&mut rng);
+    candidates[0]
 }
 
 fn blend_pixel(base: &mut Rgba<u8>, overlay: &Rgba<u8>) {
@@ -922,15 +1087,39 @@ fn create_collage_image(
 }
 
 fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
-    const MIN_PHOTOS_PER_COLLAGE: usize = 2;
+    const MIN_PHOTOS_PER_COLLAGE: usize = 3;
+    if photos.len() < MIN_PHOTOS_PER_COLLAGE {
+        return Vec::new();
+    }
 
-    // Fill buckets sequentially (4, 4, 4, ..., remainder)
-    // This maximizes the number of full 4-photo collages
-    photos
-        .chunks(MAX_PHOTOS_PER_COLLAGE)
-        .map(|chunk| chunk.iter().collect())
-        .filter(|bucket: &Vec<_>| bucket.len() >= MIN_PHOTOS_PER_COLLAGE)
-        .collect()
+    let mut sizes = Vec::new();
+    let mut remaining = photos.len();
+
+    while remaining >= MIN_PHOTOS_PER_COLLAGE {
+        let mut size = remaining.min(MAX_PHOTOS_PER_COLLAGE);
+        let remainder = remaining.saturating_sub(size);
+        if remainder > 0 && remainder < MIN_PHOTOS_PER_COLLAGE {
+            let needed = MIN_PHOTOS_PER_COLLAGE.saturating_sub(remainder);
+            size = size.saturating_sub(needed);
+        }
+        if size < MIN_PHOTOS_PER_COLLAGE {
+            break;
+        }
+        sizes.push(size);
+        remaining = remaining.saturating_sub(size);
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    for size in sizes {
+        let end = start + size;
+        if end > photos.len() {
+            break;
+        }
+        chunks.push(photos[start..end].iter().collect());
+        start = end;
+    }
+    chunks
 }
 
 /// Generate collages for all detected clusters
@@ -1276,15 +1465,42 @@ mod tests {
     }
 
     #[test]
+    fn test_collage_layout_five_photos() {
+        let photo1 = mock_photo("test1.jpg", None);
+        let photo2 = mock_photo("test2.jpg", None);
+        let photo3 = mock_photo("test3.jpg", None);
+        let photo4 = mock_photo("test4.jpg", None);
+        let photo5 = mock_photo("test5.jpg", None);
+        let photos = vec![&photo1, &photo2, &photo3, &photo4, &photo5];
+        let layout = CollageLayout::calculate(&photos);
+        assert_eq!(layout.photo_count, 5);
+        assert_eq!(layout.photo_cells.len(), 5);
+    }
+
+    #[test]
+    fn test_collage_layout_six_photos() {
+        let photo1 = mock_photo("test1.jpg", None);
+        let photo2 = mock_photo("test2.jpg", None);
+        let photo3 = mock_photo("test3.jpg", None);
+        let photo4 = mock_photo("test4.jpg", None);
+        let photo5 = mock_photo("test5.jpg", None);
+        let photo6 = mock_photo("test6.jpg", None);
+        let photos = vec![&photo1, &photo2, &photo3, &photo4, &photo5, &photo6];
+        let layout = CollageLayout::calculate(&photos);
+        assert_eq!(layout.photo_count, 6);
+        assert_eq!(layout.photo_cells.len(), 6);
+    }
+
+    #[test]
     fn test_collage_layout_exceeds_max() {
-        // Should clamp to MAX_PHOTOS_PER_COLLAGE (4)
+        // Should clamp to MAX_PHOTOS_PER_COLLAGE (6)
         let photos_vec: Vec<Photo> = (0..10)
             .map(|i| mock_photo(&format!("test{}.jpg", i), None))
             .collect();
         let photo_refs: Vec<&Photo> = photos_vec.iter().collect();
         let layout = CollageLayout::calculate(&photo_refs);
-        assert_eq!(layout.photo_count, 4);
-        assert_eq!(layout.photo_cells.len(), 4);
+        assert_eq!(layout.photo_count, 6);
+        assert_eq!(layout.photo_cells.len(), 6);
     }
 
     #[test]
@@ -1295,11 +1511,10 @@ mod tests {
 
         let chunks = chunk_photos(&photos);
 
-        // Sequential filling: [4, 4, 2] = 3 collages
-        assert_eq!(chunks.len(), 3, "Should create 3 collages for 10 photos");
-        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+        // Sequential filling: [6, 4] = 2 collages
+        assert_eq!(chunks.len(), 2, "Should create 2 collages for 10 photos");
+        assert_eq!(chunks[0].len(), 6, "First collage should have 6 photos");
         assert_eq!(chunks[1].len(), 4, "Second collage should have 4 photos");
-        assert_eq!(chunks[2].len(), 2, "Third collage should have 2 photos");
     }
 
     #[test]
@@ -1310,12 +1525,11 @@ mod tests {
 
         let chunks = chunk_photos(&photos);
 
-        // Sequential filling: [4, 4, 4, 3] = 4 collages
-        assert_eq!(chunks.len(), 4, "Should create 4 collages for 15 photos");
-        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
-        assert_eq!(chunks[1].len(), 4, "Second collage should have 4 photos");
-        assert_eq!(chunks[2].len(), 4, "Third collage should have 4 photos");
-        assert_eq!(chunks[3].len(), 3, "Fourth collage should have 3 photos");
+        // Sequential filling: [6, 6, 3] = 3 collages
+        assert_eq!(chunks.len(), 3, "Should create 3 collages for 15 photos");
+        assert_eq!(chunks[0].len(), 6, "First collage should have 6 photos");
+        assert_eq!(chunks[1].len(), 6, "Second collage should have 6 photos");
+        assert_eq!(chunks[2].len(), 3, "Third collage should have 3 photos");
     }
 
     #[test]
@@ -1326,10 +1540,9 @@ mod tests {
 
         let chunks = chunk_photos(&photos);
 
-        // Sequential filling: [4, 2] = 2 collages
-        assert_eq!(chunks.len(), 2, "Should create 2 collages for 6 photos");
-        assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
-        assert_eq!(chunks[1].len(), 2, "Second collage should have 2 photos");
+        // Sequential filling: [6] = 1 collage
+        assert_eq!(chunks.len(), 1, "Should create 1 collage for 6 photos");
+        assert_eq!(chunks[0].len(), 6, "First collage should have 6 photos");
     }
 
     #[test]
@@ -1340,9 +1553,23 @@ mod tests {
 
         let chunks = chunk_photos(&photos);
 
-        // Sequential filling: [4, 1] but 1-photo collages are filtered out
+        // Sequential filling: [5] = 1 collage
         assert_eq!(chunks.len(), 1, "Should create 1 collage for 5 photos");
+        assert_eq!(chunks[0].len(), 5, "First collage should have 5 photos");
+    }
+
+    #[test]
+    fn test_chunk_photos_seven_photos() {
+        let photos: Vec<Photo> = (0..7)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // Sequential filling: [4, 3] = 2 collages
+        assert_eq!(chunks.len(), 2, "Should create 2 collages for 7 photos");
         assert_eq!(chunks[0].len(), 4, "First collage should have 4 photos");
+        assert_eq!(chunks[1].len(), 3, "Second collage should have 3 photos");
     }
 
     #[test]
@@ -1353,7 +1580,19 @@ mod tests {
 
         let chunks = chunk_photos(&photos);
 
-        // 1 photo is below MIN_PHOTOS_PER_COLLAGE (2), so filtered out
+        // 1 photo is below MIN_PHOTOS_PER_COLLAGE (3), so filtered out
         assert_eq!(chunks.len(), 0, "Should create 0 collages for 1 photo");
+    }
+
+    #[test]
+    fn test_chunk_photos_two_photos() {
+        let photos: Vec<Photo> = (0..2)
+            .map(|i| mock_photo(&format!("/photo_{}.jpg", i), None))
+            .collect();
+
+        let chunks = chunk_photos(&photos);
+
+        // 2 photos are below MIN_PHOTOS_PER_COLLAGE (3), so filtered out
+        assert_eq!(chunks.len(), 0, "Should create 0 collages for 2 photos");
     }
 }

@@ -34,6 +34,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 
 - KISS: Keep It Simple, Stupid (DRY, YAGNI, etc.)
 - SOLID principles (single responsibility, open/closed, etc.)
+- Zero linting issues - investigate each issue in detail, don't just silence it
 
 # Commit Gatekeeping
 

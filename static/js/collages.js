@@ -26,18 +26,6 @@ class CollagesView {
     // Clear existing content
     this.container.innerHTML = '';
 
-    // Create header with generate button
-    const header = document.createElement('div');
-    header.className = 'collage-header';
-
-    const generateBtn = document.createElement('button');
-    generateBtn.className = 'collage-btn collage-btn-generate';
-    generateBtn.textContent = window.i18nManager.t('ui.generate_collages');
-    generateBtn.onclick = () => this.generateCollages();
-
-    header.appendChild(generateBtn);
-    this.container.appendChild(header);
-
     if (this.collages.length === 0) {
       this.renderEmptyState();
       return;
@@ -149,38 +137,6 @@ class CollagesView {
     } catch (error) {
       console.error('Failed to reject collage:', error);
       window.toast?.show(window.i18nManager.t('notifications.collageRejectFailed'), 'error');
-    }
-  }
-
-  async generateCollages() {
-    try {
-      // Disable button during generation
-      const generateBtn = this.container.querySelector('.collage-btn-generate');
-      if (generateBtn) {
-        generateBtn.disabled = true;
-        generateBtn.textContent = window.i18nManager.t('ui.generating_collages');
-      }
-
-      const result = await window.api.generateCollages();
-
-      // Reload collages
-      await this.loadPendingCollages();
-
-      // Show success notification
-      window.toast?.show(
-        window.i18nManager.t('notifications.collagesGenerated', { count: result.count }),
-        'success'
-      );
-    } catch (error) {
-      console.error('Failed to generate collages:', error);
-      window.toast?.show(window.i18nManager.t('notifications.collageGenerateFailed'), 'error');
-
-      // Re-enable button on error
-      const generateBtn = this.container.querySelector('.collage-btn-generate');
-      if (generateBtn) {
-        generateBtn.disabled = false;
-        generateBtn.textContent = window.i18nManager.t('ui.generate_collages');
-      }
     }
   }
 

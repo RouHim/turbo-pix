@@ -71,8 +71,6 @@ window.EN_TRANSLATIONS = {
     delete_photo: 'Delete Photo',
     accept_collage: 'Accept',
     reject_collage: 'Reject',
-    generate_collages: 'Generate Collages',
-    generating_collages: 'Generating...',
     collages_load_failed: 'Failed to load collages',
     collage_for: 'Collage for {{date}}',
 

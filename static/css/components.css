@@ -1512,29 +1512,6 @@ body:has(#indexing-banner[style*='display: block']) .main-content {
   transform: translateY(-1px);
 }
 
-.collage-header {
-  display: flex;
-  justify-content: flex-end;
-  padding: 1rem 0;
-  margin-bottom: 1rem;
-}
-
-.collage-btn-generate {
-  background: var(--color-primary);
-  color: white;
-  padding: 0.75rem 1.5rem;
-}
-
-.collage-btn-generate:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.collage-btn-generate:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  transform: translateY(-1px);
-}
-
 /* Responsive collage grid */
 @media (width <= 768px) {
   .collage-grid {

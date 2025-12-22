@@ -75,6 +75,9 @@ class CollagesView {
     imageContainer.appendChild(img);
 
     // Collage info
+    const meta = document.createElement('div');
+    meta.className = 'collage-meta';
+
     const info = document.createElement('div');
     info.className = 'collage-info';
 
@@ -108,9 +111,11 @@ class CollagesView {
     actions.appendChild(acceptBtn);
     actions.appendChild(rejectBtn);
 
+    meta.appendChild(info);
+    meta.appendChild(actions);
+
     card.appendChild(imageContainer);
-    card.appendChild(info);
-    card.appendChild(actions);
+    card.appendChild(meta);
 
     return card;
   }

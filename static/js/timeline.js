@@ -353,7 +353,7 @@ class TimelineSlider {
 
     // Populate month select
     if (this.monthSelect) {
-    const monthKeys = window.APP_CONSTANTS.MONTH_KEYS;
+      const monthKeys = window.APP_CONSTANTS.MONTH_KEYS;
       monthKeys.forEach((key, index) => {
         const option = document.createElement('option');
         option.value = index + 1;

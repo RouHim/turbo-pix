@@ -153,7 +153,7 @@ const COLLAGE_PADDING: u32 = 60;
 const COLLAGE_HEADER_HEIGHT: u32 = 240;
 const COLLAGE_GUTTER: u32 = 20;
 const TEMPLATE_SCORE_TIE_THRESHOLD: f32 = 0.04;
-const FRAME_THICKNESS: u32 = 8;
+const FRAME_THICKNESS: u32 = 4;
 
 /// Photo orientation classification
 #[derive(Debug, Clone, Copy, PartialEq)]

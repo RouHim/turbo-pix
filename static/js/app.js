@@ -284,6 +284,8 @@ class TurboPixApp {
 
       // Load photos based on current view
       const currentView = this.state.get('currentView');
+      this.updateSortVisibility(currentView);
+      this.updateTimelineVisibility(currentView);
       await this.loadViewData(currentView);
     } catch (error) {
       if (window.logger) {
@@ -309,6 +311,8 @@ class TurboPixApp {
     this.state.set('currentView', view);
     this.updateActiveNavItem(view);
     this.updateViewTitle(view);
+    this.updateSortVisibility(view);
+    this.updateTimelineVisibility(view);
 
     await this.loadViewData(view);
   }
@@ -417,6 +421,20 @@ class TurboPixApp {
       const localizedTitle = window.i18nManager.t(`ui.${i18nKey}`);
       titleEl.textContent = localizedTitle;
     }
+  }
+
+  updateSortVisibility(view) {
+    const sortSelect = utils.$('#sort-select');
+    if (!sortSelect) return;
+    const shouldHide = view === 'collages';
+    sortSelect.hidden = shouldHide;
+    sortSelect.disabled = shouldHide;
+  }
+
+  updateTimelineVisibility(view) {
+    const timelineContainer = utils.$('.timeline-container');
+    if (!timelineContainer) return;
+    timelineContainer.hidden = view === 'collages';
   }
 
   async setSortBy(sortBy) {

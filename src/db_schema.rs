@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS collages (
     thumbnail_path TEXT,
     photo_count INTEGER NOT NULL,
     photo_hashes TEXT NOT NULL,
+    signature TEXT NOT NULL,
     accepted_at DATETIME,
+    rejected_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 "#;
@@ -84,6 +86,7 @@ pub const SCHEMA_SQL: &[&str] = &[
     COLLAGES_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_collages_date ON collages(date);",
     "CREATE INDEX IF NOT EXISTS idx_collages_accepted_at ON collages(accepted_at);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_collages_signature ON collages(signature);",
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

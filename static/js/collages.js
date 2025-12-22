@@ -41,6 +41,10 @@ class CollagesView {
     });
 
     this.container.appendChild(collageGrid);
+
+    if (window.iconHelper) {
+      window.iconHelper.initializeIcons();
+    }
   }
 
   createCollageCard(collage) {
@@ -88,12 +92,20 @@ class CollagesView {
 
     const acceptBtn = document.createElement('button');
     acceptBtn.className = 'collage-btn collage-btn-accept';
-    acceptBtn.textContent = window.i18nManager.t('ui.accept_collage');
+    acceptBtn.dataset.icon = 'check';
+    acceptBtn.dataset.iconSize = '20';
+    acceptBtn.dataset.iconStrokeWidth = '2';
+    acceptBtn.setAttribute('aria-label', window.i18nManager.t('ui.accept_collage'));
+    acceptBtn.title = window.i18nManager.t('ui.accept_collage');
     acceptBtn.onclick = () => this.acceptCollage(collage.id);
 
     const rejectBtn = document.createElement('button');
     rejectBtn.className = 'collage-btn collage-btn-reject';
-    rejectBtn.textContent = window.i18nManager.t('ui.reject_collage');
+    rejectBtn.dataset.icon = 'x';
+    rejectBtn.dataset.iconSize = '20';
+    rejectBtn.dataset.iconStrokeWidth = '2';
+    rejectBtn.setAttribute('aria-label', window.i18nManager.t('ui.reject_collage'));
+    rejectBtn.title = window.i18nManager.t('ui.reject_collage');
     rejectBtn.onclick = () => this.rejectCollage(collage.id);
 
     actions.appendChild(acceptBtn);

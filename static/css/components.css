@@ -179,6 +179,11 @@
   background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
 }
 
+.collage-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 .favorite-btn.active svg {
   fill: currentcolor;
 }
@@ -1408,9 +1413,12 @@ body:has(#indexing-banner[style*='display: block']) .main-content {
 
 .collage-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 2rem;
   padding: 2rem;
+  width: 100%;
+  box-sizing: border-box;
+  grid-column: 1 / -1;
 }
 
 .collage-card {
@@ -1490,6 +1498,10 @@ body:has(#indexing-banner[style*='display: block']) .main-content {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .collage-btn-accept {

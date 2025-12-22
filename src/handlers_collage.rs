@@ -10,7 +10,7 @@ use crate::warp_helpers::{with_db, DatabaseError};
 
 /// List all pending collages
 pub async fn list_pending_collages(db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Collage::list_pending(&db_pool) {
+    match Collage::list_pending_cleaned(&db_pool) {
         Ok(collages) => Ok(warp::reply::json(&collages)),
         Err(e) => {
             log::error!("Failed to list pending collages: {}", e);
@@ -54,7 +54,7 @@ pub async fn accept_collage(
     })))
 }
 
-/// Reject a collage (delete files and database record)
+/// Reject a collage (delete files and mark as rejected)
 pub async fn reject_collage(id: i64, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     info!("Rejecting collage {}", id);
 

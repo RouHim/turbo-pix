@@ -49,6 +49,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 - E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
 - when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
 - **Avoid:** Hardcoded paths and fallback logic mask bugs
+- When troubleshooting bugs, try to reproduce the bug first writing a test 
 
 ## Testing
 

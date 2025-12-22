@@ -13,6 +13,7 @@ pub struct Config {
     pub data_path: String,
     pub db_path: String,
     pub cache: CacheConfig,
+    pub locale: String,
 }
 
 impl Config {
@@ -35,6 +36,9 @@ impl Config {
             .map(|s| s.trim().to_string())
             .collect();
 
+        let locale =
+            parse_locale(env::var("TURBO_PIX_LOCALE").unwrap_or_else(|_| "en".to_string()));
+
         let cache = CacheConfig {
             thumbnail_cache_path,
             max_cache_size_mb,
@@ -46,6 +50,64 @@ impl Config {
             data_path,
             db_path,
             cache,
+            locale,
         })
+    }
+}
+
+fn parse_locale(value: String) -> String {
+    let normalized = value.trim().to_lowercase();
+    if normalized == "de" || normalized == "en" {
+        normalized
+    } else {
+        "en".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_env_lock<T>(f: impl FnOnce() -> T) -> T {
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        f()
+    }
+
+    #[test]
+    fn parses_locale_from_env() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_LOCALE").ok();
+            env::set_var("TURBO_PIX_LOCALE", "de");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.locale, "de");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_LOCALE", value);
+            } else {
+                env::remove_var("TURBO_PIX_LOCALE");
+            }
+        });
+    }
+
+    #[test]
+    fn falls_back_to_english_for_invalid_locale() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_LOCALE").ok();
+            env::set_var("TURBO_PIX_LOCALE", "fr");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.locale, "en");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_LOCALE", value);
+            } else {
+                env::remove_var("TURBO_PIX_LOCALE");
+            }
+        });
     }
 }

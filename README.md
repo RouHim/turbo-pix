@@ -121,6 +121,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_PHOTO_PATHS` | Comma-separated list of photo directories to scan | `./photos`    | Yes      |
 | `TURBO_PIX_DATA_PATH`   | Data directory for database, cache, and AI models | `./data`      | No       |
 | `TURBO_PIX_PORT`        | Port on which the application should listen       | `18473`       | No       |
+| `TURBO_PIX_LOCALE`      | Default UI locale (`en`, `de`)                    | `en`          | No       |
 | `RUST_LOG`              | Log level (trace, debug, info, warn, error)       | `info`        | No       |
 
 ### Derived Paths

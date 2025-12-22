@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, Locale, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info};
 use rand::rng;
@@ -769,10 +769,23 @@ fn stroke_rect(canvas: &mut RgbaImage, rect: &Rect, thickness: u32, color: Rgba<
     }
 }
 
-fn format_date_label(date_str: &str) -> String {
-    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .map(|date| date.format("%A, %B %d, %Y").to_string())
-        .unwrap_or_else(|_| date_str.to_string())
+fn format_date_label(date_str: &str, locale: &str) -> String {
+    let date = match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        Ok(date) => date,
+        Err(_) => return date_str.to_string(),
+    };
+
+    let chrono_locale = match locale {
+        "de" => Locale::de_DE,
+        _ => Locale::en_US,
+    };
+    let format = if locale == "de" {
+        "%A, %d. %B %Y"
+    } else {
+        "%A, %B %d, %Y"
+    };
+
+    date.format_localized(format, chrono_locale).to_string()
 }
 
 fn load_font() -> Result<Font<'static>, Box<dyn std::error::Error>> {
@@ -884,6 +897,7 @@ fn create_collage_image(
     photos: &[&Photo],
     layout: &CollageLayout,
     date_label: &str,
+    locale: &str,
 ) -> Result<RgbaImage, Box<dyn std::error::Error>> {
     // Unified clean background - single color, no gradients or panels
     let mut canvas: RgbaImage =
@@ -894,7 +908,7 @@ fn create_collage_image(
     // Draw date label at top with padding
     draw_text(
         &mut canvas,
-        &format_date_label(date_label),
+        &format_date_label(date_label, locale),
         &font,
         Scale { x: 140.0, y: 140.0 },
         COLLAGE_PADDING + 20,
@@ -1126,6 +1140,7 @@ fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
 pub async fn generate_collages(
     pool: &DbPool,
     data_path: &Path,
+    locale: &str,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     info!("Starting collage generation...");
 
@@ -1163,7 +1178,7 @@ pub async fn generate_collages(
             let layout = CollageLayout::calculate(chunk);
 
             // Create collage image
-            let collage_img = match create_collage_image(chunk, &layout, &date_str) {
+            let collage_img = match create_collage_image(chunk, &layout, &date_str, locale) {
                 Ok(img) => img,
                 Err(e) => {
                     error!(

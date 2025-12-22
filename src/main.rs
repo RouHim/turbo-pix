@@ -7,6 +7,7 @@ mod db_schema;
 mod db_types;
 mod file_scanner;
 mod handlers_collage;
+mod handlers_config;
 mod handlers_health;
 mod handlers_indexing;
 mod handlers_photo;
@@ -36,6 +37,7 @@ use warp::Filter;
 
 use cache_manager::CacheManager;
 use handlers_collage::build_collage_routes;
+use handlers_config::build_config_routes;
 use handlers_health::build_health_routes;
 use handlers_indexing::build_indexing_routes;
 use handlers_photo::build_photo_routes;
@@ -75,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
     info!("Cache path: {}", config.cache.thumbnail_cache_path);
+    info!("Default locale: {}", config.locale);
 
     // Check if port is available before initializing services
     if let Some(value) = check_port(port) {
@@ -99,8 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let collage_routes = build_collage_routes(
         db_pool.clone(),
         config.data_path.clone().into(),
+        config.locale.clone(),
         semantic_search,
     );
+    let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
     let routes = health_routes
@@ -109,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(search_routes)
         .or(indexing_routes)
         .or(collage_routes)
+        .or(config_routes)
         .or(static_routes)
         .with(cors())
         .with(warp::log("turbo_pix"))
@@ -179,6 +185,7 @@ fn initialize_services(
         semantic_search.clone(),
         thumbnail_generator.clone(),
         data_path,
+        config.locale.clone(),
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

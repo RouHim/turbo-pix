@@ -119,10 +119,11 @@ pub async fn get_collage_image(id: i64, db_pool: DbPool) -> Result<impl Reply, R
 pub async fn generate_collages_manual(
     db_pool: DbPool,
     data_path: PathBuf,
+    locale: String,
 ) -> Result<impl Reply, Rejection> {
     info!("Manual collage generation triggered");
 
-    match collage_generator::generate_collages(&db_pool, &data_path).await {
+    match collage_generator::generate_collages(&db_pool, &data_path, &locale).await {
         Ok(count) => {
             info!(
                 "Manual collage generation completed: {} collages created",
@@ -147,6 +148,7 @@ pub async fn generate_collages_manual(
 pub fn build_collage_routes(
     db_pool: DbPool,
     data_path: PathBuf,
+    locale: String,
     semantic_search: Arc<SemanticSearchEngine>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let list_pending = warp::path!("api" / "collages" / "pending")
@@ -160,10 +162,11 @@ pub fn build_collage_routes(
         .and_then(get_collage_image);
 
     let data_path_generate = data_path.clone();
+    let locale_generate = locale.clone();
     let generate = warp::path!("api" / "collages" / "generate")
         .and(warp::post())
         .and(with_db(db_pool.clone()))
-        .map(move |db_pool| (db_pool, data_path_generate.clone()))
+        .map(move |db_pool| (db_pool, data_path_generate.clone(), locale_generate.clone()))
         .untuple_one()
         .and_then(generate_collages_manual);
 

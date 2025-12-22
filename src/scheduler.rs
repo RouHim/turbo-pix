@@ -69,6 +69,7 @@ pub struct PhotoScheduler {
     semantic_search: Arc<SemanticSearchEngine>,
     _thumbnail_generator: ThumbnailGenerator,
     data_path: PathBuf,
+    locale: String,
     rescan_lock: Arc<Mutex<()>>,
     pub status: IndexingStatus,
 }
@@ -81,6 +82,7 @@ impl PhotoScheduler {
         semantic_search: Arc<SemanticSearchEngine>,
         thumbnail_generator: ThumbnailGenerator,
         data_path: PathBuf,
+        locale: String,
     ) -> Self {
         let mut photo_paths = photo_paths;
         let collages_path = data_path.join("collages").join("accepted");
@@ -103,6 +105,7 @@ impl PhotoScheduler {
             semantic_search,
             _thumbnail_generator: thumbnail_generator,
             data_path,
+            locale,
             rescan_lock: Arc::new(Mutex::new(())),
             status: IndexingStatus::new(),
         }
@@ -212,6 +215,7 @@ impl PhotoScheduler {
         let data_path = self.data_path.clone();
         let rescan_lock = self.rescan_lock.clone();
         let status = self.status.clone();
+        let locale = self.locale.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -273,7 +277,13 @@ impl PhotoScheduler {
                         // Phase 3: Generate collages
                         info!("Phase 3: Generating collages");
                         status.set_phase("collages").await;
-                        match collage_generator::generate_collages(&db_pool, &data_path).await {
+                        match collage_generator::generate_collages(
+                            &db_pool,
+                            &data_path,
+                            locale.as_str(),
+                        )
+                        .await
+                        {
                             Ok(count) => info!("Phase 3 completed: {} collages generated", count),
                             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
                         }
@@ -369,7 +379,9 @@ impl PhotoScheduler {
         // Phase 3: Generate collages
         info!("Phase 3: Generating collages");
         self.status.set_phase("collages").await;
-        match collage_generator::generate_collages(&self.db_pool, &self.data_path).await {
+        match collage_generator::generate_collages(&self.db_pool, &self.data_path, &self.locale)
+            .await
+        {
             Ok(count) => info!("Phase 3 completed: {} collages generated", count),
             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
         }
@@ -431,6 +443,7 @@ mod tests {
                             .to_string(),
                         max_cache_size_mb: 100,
                     },
+                    locale: "en".to_string(),
                 },
                 db_pool.clone(),
             )
@@ -443,6 +456,7 @@ mod tests {
                 semantic_search,
                 thumbnail_generator,
                 data_path,
+                "en".to_string(),
             );
 
             Self {
@@ -695,6 +709,7 @@ mod tests {
                         .to_string(),
                     max_cache_size_mb: 100,
                 },
+                locale: "en".to_string(),
             },
             db_pool.clone(),
         )
@@ -709,6 +724,7 @@ mod tests {
             semantic_search,
             thumbnail_generator,
             data_path,
+            "en".to_string(),
         );
 
         // Should handle errors gracefully

@@ -113,6 +113,10 @@ class TurboPixAPI {
     return response.blob();
   }
 
+  async getConfig() {
+    return this.request('/api/config');
+  }
+
   async searchPhotos(query, params = {}) {
     return this.getPhotos({ ...params, query });
   }

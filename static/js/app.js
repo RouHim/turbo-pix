@@ -28,6 +28,8 @@ class TurboPixApp {
       });
     }
 
+    this.appConfig = await this.loadAppConfig();
+
     // Initialize i18n system first
     await this.initializeI18n();
 
@@ -58,7 +60,8 @@ class TurboPixApp {
       }
 
       // Initialize the i18n system
-      await window.i18nManager.initializeI18n();
+      const defaultLocale = this.appConfig?.default_locale;
+      await window.i18nManager.initializeI18n(defaultLocale);
 
       if (window.logger) {
         window.logger.info('i18n system initialized');
@@ -67,6 +70,21 @@ class TurboPixApp {
       if (window.logger) {
         window.logger.error('Failed to initialize i18n', error);
       }
+    }
+  }
+
+  async loadAppConfig() {
+    if (!window.api) return {};
+
+    try {
+      const config = await window.api.getConfig();
+      window.appConfig = config;
+      return config;
+    } catch (error) {
+      if (window.logger) {
+        window.logger.warn('Failed to load app config', error);
+      }
+      return {};
     }
   }
 

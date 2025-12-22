@@ -67,7 +67,8 @@ const formatFileSize = (bytes) => {
 const formatDate = (dateString) => {
   try {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    const locale = window.i18nManager?.getLocale?.() || window.appConfig?.default_locale || 'en';
+    return date.toLocaleDateString(locale, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',

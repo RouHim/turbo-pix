@@ -5,24 +5,22 @@ class I18nManager {
     this.initialized = false;
   }
 
-  detectBrowserLocale() {
-    const saved = localStorage.getItem('turbo-pix-locale');
-    if (saved && this.isValidLocale(saved)) {
-      return saved;
+  resolveLocale(defaultLocale) {
+    if (defaultLocale && this.isValidLocale(defaultLocale)) {
+      return defaultLocale;
     }
 
-    const browserLocale = navigator.language.split('-')[0];
-    return this.isValidLocale(browserLocale) ? browserLocale : 'en';
+    return 'en';
   }
 
   isValidLocale(locale) {
     return ['en', 'de'].includes(locale);
   }
 
-  async initializeI18n() {
+  async initializeI18n(defaultLocale) {
     if (this.initialized) return;
 
-    const locale = this.detectBrowserLocale();
+    const locale = this.resolveLocale(defaultLocale);
     await this.setLocale(locale);
     this.initialized = true;
   }

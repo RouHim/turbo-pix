@@ -67,7 +67,9 @@ class CollagesView {
     const img = document.createElement('img');
     img.className = 'collage-image';
     img.src = `/api/collages/${collage.id}/image`;
-    img.alt = `Collage for ${collage.date}`;
+    img.alt = window.i18nManager.t('ui.collage_for', {
+      date: this.formatCollageDate(collage.date),
+    });
     img.loading = 'lazy';
 
     imageContainer.appendChild(img);
@@ -78,7 +80,7 @@ class CollagesView {
 
     const date = document.createElement('div');
     date.className = 'collage-date';
-    date.textContent = collage.date;
+    date.textContent = this.formatCollageDate(collage.date);
 
     const photoCount = document.createElement('div');
     photoCount.className = 'collage-photo-count';
@@ -204,9 +206,46 @@ class CollagesView {
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
       </div>
-      <p class="empty-state-message">Failed to load collages</p>
+      <p class="empty-state-message">${window.i18nManager.t('ui.collages_load_failed')}</p>
     `;
     this.container.appendChild(errorState);
+  }
+
+  formatCollageDate(dateString) {
+    if (!dateString || typeof dateString !== 'string') {
+      return dateString;
+    }
+
+    const parts = dateString.split('-').map((value) => parseInt(value, 10));
+    if (parts.length !== 3 || parts.some((value) => Number.isNaN(value))) {
+      return dateString;
+    }
+
+    const [year, month, day] = parts;
+    const monthKey = window.APP_CONSTANTS.MONTH_KEYS[month - 1];
+    if (!monthKey) {
+      return dateString;
+    }
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const weekdayKey = window.APP_CONSTANTS.WEEKDAY_KEYS[date.getUTCDay()];
+    if (!weekdayKey) {
+      return dateString;
+    }
+
+    const monthName = window.i18nManager
+      ? window.i18nManager.t(`ui.months.${monthKey}`)
+      : monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
+    const weekdayName = window.i18nManager
+      ? window.i18nManager.t(`ui.weekdays.${weekdayKey}`)
+      : weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
+    const locale = window.i18nManager?.getLocale?.() || 'en';
+
+    if (locale === 'de') {
+      return `${weekdayName}, ${day}. ${monthName} ${year}`;
+    }
+
+    return `${weekdayName}, ${monthName} ${day}, ${year}`;
   }
 
   clear() {

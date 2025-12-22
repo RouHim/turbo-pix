@@ -73,6 +73,8 @@ window.DE_TRANSLATIONS = {
     reject_collage: 'Ablehnen',
     generate_collages: 'Collagen generieren',
     generating_collages: 'Wird generiert...',
+    collages_load_failed: 'Collagen konnten nicht geladen werden',
+    collage_for: 'Collage für {{date}}',
 
     // Values
     unknown: 'Unbekannt',
@@ -94,6 +96,15 @@ window.DE_TRANSLATIONS = {
       october: 'Oktober',
       november: 'November',
       december: 'Dezember',
+    },
+    weekdays: {
+      sunday: 'Sonntag',
+      monday: 'Montag',
+      tuesday: 'Dienstag',
+      wednesday: 'Mittwoch',
+      thursday: 'Donnerstag',
+      friday: 'Freitag',
+      saturday: 'Samstag',
     },
 
     // Metadata panel

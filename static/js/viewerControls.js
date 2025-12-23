@@ -78,6 +78,23 @@ class ViewerControls {
     this.applyZoom();
   }
 
+  updateZoomButtonStates() {
+    // Disable zoom buttons for videos (zooming not supported for videos)
+    const isVideo = this.viewer.isVideoFile(this.viewer.getCurrentPhoto()?.filename);
+    
+    if (this.elements.zoomIn) {
+      this.elements.zoomIn.disabled = isVideo;
+      this.elements.zoomIn.classList.toggle('btn-disabled', isVideo);
+      this.elements.zoomIn.title = isVideo ? 'Zoom not supported for videos' : 'Zoom In';
+    }
+    
+    if (this.elements.zoomOut) {
+      this.elements.zoomOut.disabled = isVideo;
+      this.elements.zoomOut.classList.toggle('btn-disabled', isVideo);
+      this.elements.zoomOut.title = isVideo ? 'Zoom not supported for videos' : 'Zoom Out';
+    }
+  }
+
   applyZoom() {
     if (!this.elements.image) return;
 

@@ -59,6 +59,13 @@
   z-index: 2;
 }
 
+/* Button states */
+.btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .photo-card-image-container.image-loaded .photo-card-image {
   opacity: 1;
 }

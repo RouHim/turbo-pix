@@ -583,8 +583,7 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
     if (this.elements.rotateLeftBtn) {
       this.elements.rotateLeftBtn.disabled = shouldDisable;
-      this.elements.rotateLeftBtn.style.opacity = shouldDisable ? '0.5' : '1';
-      this.elements.rotateLeftBtn.style.cursor = shouldDisable ? 'not-allowed' : 'pointer';
+      this.elements.rotateLeftBtn.classList.toggle('btn-disabled', shouldDisable);
       this.elements.rotateLeftBtn.title = isRaw
         ? 'RAW files cannot be rotated'
         : isVideo
@@ -593,13 +592,17 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     }
     if (this.elements.rotateRightBtn) {
       this.elements.rotateRightBtn.disabled = shouldDisable;
-      this.elements.rotateRightBtn.style.opacity = shouldDisable ? '0.5' : '1';
-      this.elements.rotateRightBtn.style.cursor = shouldDisable ? 'not-allowed' : 'pointer';
+      this.elements.rotateRightBtn.classList.toggle('btn-disabled', shouldDisable);
       this.elements.rotateRightBtn.title = isRaw
         ? 'RAW files cannot be rotated'
         : isVideo
           ? 'Video rotation is not supported'
           : 'Rotate Right';
+    }
+
+    // Update zoom button states for videos
+    if (this.controls && typeof this.controls.updateZoomButtonStates === 'function') {
+      this.controls.updateZoomButtonStates();
     }
   }
 

@@ -396,7 +396,6 @@ mod tests {
                 max_cache_size_mb: 1024,
             },
             locale: "en".to_string(),
-            collage: crate::config::CollageConfig::default(),
         };
 
         (config, temp_dir)

@@ -1192,29 +1192,48 @@ fn create_collage_image(
     Ok(canvas)
 }
 
+/// Chunk photos into groups of 3-6 photos for collage generation
+///
+/// Uses a greedy approach with lookahead to prevent orphan photos:
+/// - Fills collages with up to MAX_PHOTOS_PER_COLLAGE (6) photos
+/// - If the remainder after a chunk would be < MIN (3), "borrows" photos from the current chunk
+/// - Example: 7 photos → [4, 3] instead of [6, 1], since 1 photo can't form a collage
+/// - Example: 10 photos → [6, 4] is optimal
+///
+/// Returns an empty vector if fewer than MIN_PHOTOS_PER_COLLAGE photos are provided.
 fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
     const MIN_PHOTOS_PER_COLLAGE: usize = 3;
     if photos.len() < MIN_PHOTOS_PER_COLLAGE {
         return Vec::new();
     }
 
+    // Phase 1: Calculate optimal chunk sizes
     let mut sizes = Vec::new();
     let mut remaining = photos.len();
 
     while remaining >= MIN_PHOTOS_PER_COLLAGE {
+        // Start with maximum size or remaining photos, whichever is smaller
         let mut size = remaining.min(MAX_PHOTOS_PER_COLLAGE);
+
+        // Check if the remainder after this chunk would be too small
         let remainder = remaining.saturating_sub(size);
         if remainder > 0 && remainder < MIN_PHOTOS_PER_COLLAGE {
+            // Borrow photos from current chunk to ensure next chunk has at least MIN photos
+            // Example: 7 photos, size=6, remainder=1 → borrow 2, so size=4, remainder=3
             let needed = MIN_PHOTOS_PER_COLLAGE.saturating_sub(remainder);
             size = size.saturating_sub(needed);
         }
+
+        // Safety check: ensure we don't create undersized chunks
         if size < MIN_PHOTOS_PER_COLLAGE {
             break;
         }
+
         sizes.push(size);
         remaining = remaining.saturating_sub(size);
     }
 
+    // Phase 2: Build actual chunks from photos using calculated sizes
     let mut chunks = Vec::new();
     let mut start = 0;
     for size in sizes {
@@ -1226,6 +1245,40 @@ fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
         start = end;
     }
     chunks
+}
+
+/// Generate a thumbnail for a collage image
+///
+/// Creates a 400px thumbnail and saves it to the thumbnails directory.
+///
+/// # Arguments
+/// * `img` - The source collage image
+/// * `data_path` - Application data directory
+/// * `date_str` - Date string for the collage (YYYY-MM-DD)
+/// * `collage_idx` - Index of the collage for the date
+///
+/// # Returns
+/// Path to the generated thumbnail file
+fn generate_collage_thumbnail(
+    img: &DynamicImage,
+    data_path: &Path,
+    date_str: &str,
+    collage_idx: usize,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Create thumbnails directory
+    let thumbnails_dir = data_path.join("collages").join("thumbnails");
+    std::fs::create_dir_all(&thumbnails_dir)?;
+
+    // Generate thumbnail at 400px (medium size)
+    let thumbnail = img.thumbnail(400, 400);
+
+    // Save thumbnail
+    let thumbnail_filename = format!("collage_{}_{}_thumb.jpg", date_str, collage_idx);
+    let thumbnail_path = thumbnails_dir.join(&thumbnail_filename);
+
+    thumbnail.save_with_format(&thumbnail_path, image::ImageFormat::Jpeg)?;
+
+    Ok(thumbnail_path.to_string_lossy().to_string())
 }
 
 /// Generate collages for all detected clusters
@@ -1245,6 +1298,8 @@ pub async fn generate_collages(
     info!("Found {} photo clusters to process", clusters.len());
 
     let mut generated_count = 0;
+    let mut error_count = 0;
+    let mut skipped_count = 0;
 
     for cluster in clusters {
         let date_str = cluster.date.format("%Y-%m-%d").to_string();
@@ -1275,6 +1330,7 @@ pub async fn generate_collages(
                     collage_idx + 1,
                     date_str
                 );
+                skipped_count += 1;
                 continue;
             }
 
@@ -1291,6 +1347,7 @@ pub async fn generate_collages(
                         date_str,
                         e
                     );
+                    error_count += 1;
                     continue;
                 }
             };
@@ -1302,12 +1359,19 @@ pub async fn generate_collages(
 
             if let Err(e) = img.save_with_format(&file_path, image::ImageFormat::Jpeg) {
                 error!("Failed to save collage to {:?}: {}", file_path, e);
+                error_count += 1;
                 continue;
             }
 
-            // For now, skip thumbnail generation for collages
-            // Thumbnails can be generated on-demand later if needed
-            let thumbnail_path: Option<String> = None;
+            // Generate thumbnail for collage
+            let thumbnail_path =
+                match generate_collage_thumbnail(&img, data_path, &date_str, collage_idx + 1) {
+                    Ok(path) => Some(path),
+                    Err(e) => {
+                        warn!("Failed to generate thumbnail for collage: {}", e);
+                        None
+                    }
+                };
 
             // Save to database
             match Collage::insert(
@@ -1331,14 +1395,15 @@ pub async fn generate_collages(
                     error!("Failed to insert collage into database: {}", e);
                     // Clean up file
                     let _ = std::fs::remove_file(&file_path);
+                    error_count += 1;
                 }
             }
         }
     }
 
     info!(
-        "Collage generation complete: {} collages created",
-        generated_count
+        "Collage generation complete: {} collages created, {} skipped, {} errors",
+        generated_count, skipped_count, error_count
     );
     Ok(generated_count)
 }
@@ -2013,5 +2078,40 @@ mod tests {
 
         // 2 photos are below MIN_PHOTOS_PER_COLLAGE (3), so filtered out
         assert_eq!(chunks.len(), 0, "Should create 0 collages for 2 photos");
+    }
+
+    #[test]
+    fn test_generate_collage_thumbnail() {
+        use image::{ImageBuffer, Rgba};
+        use tempfile::TempDir;
+
+        // Create test directory
+        let temp_dir = TempDir::new().unwrap();
+        let data_path = temp_dir.path();
+
+        // Create a test image (100x100 red square)
+        let img = ImageBuffer::from_fn(100, 100, |_, _| Rgba([255u8, 0u8, 0u8, 255u8]));
+        let dynamic_img = DynamicImage::ImageRgba8(img);
+
+        // Generate thumbnail
+        let result = generate_collage_thumbnail(&dynamic_img, data_path, "2024-01-15", 1);
+        assert!(result.is_ok(), "Thumbnail generation should succeed");
+
+        let thumbnail_path = result.unwrap();
+        let thumb_file = std::path::Path::new(&thumbnail_path);
+
+        // Verify thumbnail was created
+        assert!(thumb_file.exists(), "Thumbnail file should exist");
+
+        // Verify it's in the correct directory
+        assert!(thumbnail_path.contains("collages/thumbnails"));
+        assert!(thumbnail_path.contains("collage_2024-01-15_1_thumb.jpg"));
+
+        // Verify thumbnail is smaller than original
+        let thumb_img = image::open(thumb_file).unwrap();
+        assert!(
+            thumb_img.width() <= 400 && thumb_img.height() <= 400,
+            "Thumbnail should be at most 400x400"
+        );
     }
 }

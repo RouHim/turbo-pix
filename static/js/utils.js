@@ -91,6 +91,48 @@ const formatDuration = (seconds) => {
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 };
 
+/**
+ * Format a collage date string (YYYY-MM-DD) into a localized readable format
+ * @param {string} dateString - Date in YYYY-MM-DD format
+ * @returns {string} Formatted date string
+ */
+const formatCollageDate = (dateString) => {
+  if (!dateString || typeof dateString !== 'string') {
+    return dateString;
+  }
+
+  const parts = dateString.split('-').map((value) => parseInt(value, 10));
+  if (parts.length !== 3 || parts.some((value) => Number.isNaN(value))) {
+    return dateString;
+  }
+
+  const [year, month, day] = parts;
+  const monthKey = window.APP_CONSTANTS?.MONTH_KEYS?.[month - 1];
+  if (!monthKey) {
+    return dateString;
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const weekdayKey = window.APP_CONSTANTS?.WEEKDAY_KEYS?.[date.getUTCDay()];
+  if (!weekdayKey) {
+    return dateString;
+  }
+
+  const monthName = window.i18nManager
+    ? window.i18nManager.t(`ui.months.${monthKey}`)
+    : monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
+  const weekdayName = window.i18nManager
+    ? window.i18nManager.t(`ui.weekdays.${weekdayKey}`)
+    : weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
+  const locale = window.i18nManager?.getLocale?.() || 'en';
+
+  if (locale === 'de') {
+    return `${weekdayName}, ${day}. ${monthName} ${year}`;
+  }
+
+  return `${weekdayName}, ${monthName} ${day}, ${year}`;
+};
+
 // Debounce function
 const debounce = (func, wait) => {
   let timeout;
@@ -492,6 +534,7 @@ window.utils = {
   formatFileSize,
   formatDate,
   formatDuration,
+  formatCollageDate,
   debounce,
   throttle,
   showLoading,

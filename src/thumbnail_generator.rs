@@ -398,6 +398,7 @@ mod tests {
                 max_cache_size_mb: 1024,
             },
             locale: "en".to_string(),
+            collage: crate::config::CollageConfig::default(),
         };
 
         (config, temp_dir)
@@ -650,6 +651,7 @@ mod tests {
                 max_cache_size_mb: 1,
             },
             locale: "en".to_string(),
+            collage: crate::config::CollageConfig::default(),
         };
 
         let db_pool = create_in_memory_pool().unwrap();
@@ -705,6 +707,7 @@ mod tests {
                 max_cache_size_mb: 1,
             },
             locale: "en".to_string(),
+            collage: crate::config::CollageConfig::default(),
         };
 
         let db_pool = create_in_memory_pool().unwrap();
@@ -797,6 +800,7 @@ mod tests {
                 max_cache_size_mb: 2,
             },
             locale: "en".to_string(),
+            collage: crate::config::CollageConfig::default(),
         };
 
         let db_pool = create_in_memory_pool().unwrap();
@@ -904,6 +908,7 @@ mod tests {
                 max_cache_size_mb: 1024,
             },
             locale: "en".to_string(),
+            collage: crate::config::CollageConfig::default(),
         };
         let db_pool = create_in_memory_pool().unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();

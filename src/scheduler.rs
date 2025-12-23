@@ -12,7 +12,6 @@ use crate::collage_generator;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
-use crate::thumbnail_generator::ThumbnailGenerator;
 
 /// Batch size for database writes (I/O-bound operations)
 /// Larger batches (250) reduce transaction overhead and improve throughput.
@@ -67,7 +66,6 @@ pub struct PhotoScheduler {
     db_pool: DbPool,
     cache_manager: CacheManager,
     semantic_search: Arc<SemanticSearchEngine>,
-    _thumbnail_generator: ThumbnailGenerator,
     data_path: PathBuf,
     locale: String,
     rescan_lock: Arc<Mutex<()>>,
@@ -80,7 +78,6 @@ impl PhotoScheduler {
         db_pool: DbPool,
         cache_manager: CacheManager,
         semantic_search: Arc<SemanticSearchEngine>,
-        thumbnail_generator: ThumbnailGenerator,
         data_path: PathBuf,
         locale: String,
     ) -> Self {
@@ -103,7 +100,6 @@ impl PhotoScheduler {
             db_pool,
             cache_manager,
             semantic_search,
-            _thumbnail_generator: thumbnail_generator,
             data_path,
             locale,
             rescan_lock: Arc::new(Mutex::new(())),
@@ -428,33 +424,11 @@ mod tests {
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let data_path = temp_dir.path().to_path_buf();
 
-            // Create a test thumbnail generator
-            let thumbnail_generator = ThumbnailGenerator::new(
-                &crate::config::Config {
-                    port: 18473,
-                    photo_paths: vec![],
-                    data_path: data_path.to_string_lossy().to_string(),
-                    db_path: ":memory:".to_string(),
-                    cache: crate::config::CacheConfig {
-                        thumbnail_cache_path: temp_dir
-                            .path()
-                            .join("thumbnails")
-                            .to_string_lossy()
-                            .to_string(),
-                        max_cache_size_mb: 100,
-                    },
-                    locale: "en".to_string(),
-                },
-                db_pool.clone(),
-            )
-            .unwrap();
-
             let scheduler = PhotoScheduler::new(
                 photo_paths,
                 db_pool.clone(),
                 cache_manager.clone(),
                 semantic_search,
-                thumbnail_generator,
                 data_path,
                 "en".to_string(),
             );
@@ -695,26 +669,6 @@ mod tests {
             Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
         let data_path = temp_dir.path().to_path_buf();
 
-        let thumbnail_generator = ThumbnailGenerator::new(
-            &crate::config::Config {
-                port: 18473,
-                photo_paths: vec![],
-                data_path: data_path.to_string_lossy().to_string(),
-                db_path: ":memory:".to_string(),
-                cache: crate::config::CacheConfig {
-                    thumbnail_cache_path: temp_dir
-                        .path()
-                        .join("thumbnails")
-                        .to_string_lossy()
-                        .to_string(),
-                    max_cache_size_mb: 100,
-                },
-                locale: "en".to_string(),
-            },
-            db_pool.clone(),
-        )
-        .unwrap();
-
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];
         let scheduler = PhotoScheduler::new(
@@ -722,7 +676,6 @@ mod tests {
             db_pool,
             cache_manager,
             semantic_search,
-            thumbnail_generator,
             data_path,
             "en".to_string(),
         );

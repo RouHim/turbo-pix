@@ -183,7 +183,6 @@ fn initialize_services(
         db_pool.clone(),
         cache_manager.clone(),
         semantic_search.clone(),
-        thumbnail_generator.clone(),
         data_path,
         config.locale.clone(),
     );

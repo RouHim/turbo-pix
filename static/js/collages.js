@@ -60,7 +60,7 @@ class CollagesView {
     img.className = 'collage-image';
     img.src = `/api/collages/${collage.id}/image`;
     img.alt = window.i18nManager.t('ui.collage_for', {
-      date: this.formatCollageDate(collage.date),
+      date: window.utils.formatCollageDate(collage.date),
     });
     img.loading = 'lazy';
 
@@ -75,7 +75,7 @@ class CollagesView {
 
     const date = document.createElement('div');
     date.className = 'collage-date';
-    date.textContent = this.formatCollageDate(collage.date);
+    date.textContent = window.utils.formatCollageDate(collage.date);
 
     const photoCount = document.createElement('div');
     photoCount.className = 'collage-photo-count';
@@ -121,7 +121,20 @@ class CollagesView {
   }
 
   async acceptCollage(collageId) {
+    const card = document.querySelector(`[data-collage-id="${collageId}"]`);
+    const acceptBtn = card?.querySelector('.collage-btn-accept');
+    const rejectBtn = card?.querySelector('.collage-btn-reject');
+
     try {
+      // Disable buttons and add loading state
+      if (acceptBtn) {
+        acceptBtn.disabled = true;
+        acceptBtn.classList.add('loading');
+      }
+      if (rejectBtn) {
+        rejectBtn.disabled = true;
+      }
+
       await window.api.acceptCollage(collageId);
 
       // Remove from UI
@@ -133,11 +146,33 @@ class CollagesView {
     } catch (error) {
       console.error('Failed to accept collage:', error);
       window.toast?.show(window.i18nManager.t('notifications.collageAcceptFailed'), 'error');
+
+      // Re-enable buttons on error
+      if (acceptBtn) {
+        acceptBtn.disabled = false;
+        acceptBtn.classList.remove('loading');
+      }
+      if (rejectBtn) {
+        rejectBtn.disabled = false;
+      }
     }
   }
 
   async rejectCollage(collageId) {
+    const card = document.querySelector(`[data-collage-id="${collageId}"]`);
+    const acceptBtn = card?.querySelector('.collage-btn-accept');
+    const rejectBtn = card?.querySelector('.collage-btn-reject');
+
     try {
+      // Disable buttons and add loading state
+      if (acceptBtn) {
+        acceptBtn.disabled = true;
+      }
+      if (rejectBtn) {
+        rejectBtn.disabled = true;
+        rejectBtn.classList.add('loading');
+      }
+
       await window.api.rejectCollage(collageId);
 
       // Remove from UI
@@ -149,6 +184,15 @@ class CollagesView {
     } catch (error) {
       console.error('Failed to reject collage:', error);
       window.toast?.show(window.i18nManager.t('notifications.collageRejectFailed'), 'error');
+
+      // Re-enable buttons on error
+      if (acceptBtn) {
+        acceptBtn.disabled = false;
+      }
+      if (rejectBtn) {
+        rejectBtn.disabled = false;
+        rejectBtn.classList.remove('loading');
+      }
     }
   }
 
@@ -182,43 +226,6 @@ class CollagesView {
       <p class="empty-state-message">${window.i18nManager.t('ui.collages_load_failed')}</p>
     `;
     this.container.appendChild(errorState);
-  }
-
-  formatCollageDate(dateString) {
-    if (!dateString || typeof dateString !== 'string') {
-      return dateString;
-    }
-
-    const parts = dateString.split('-').map((value) => parseInt(value, 10));
-    if (parts.length !== 3 || parts.some((value) => Number.isNaN(value))) {
-      return dateString;
-    }
-
-    const [year, month, day] = parts;
-    const monthKey = window.APP_CONSTANTS.MONTH_KEYS[month - 1];
-    if (!monthKey) {
-      return dateString;
-    }
-
-    const date = new Date(Date.UTC(year, month - 1, day));
-    const weekdayKey = window.APP_CONSTANTS.WEEKDAY_KEYS[date.getUTCDay()];
-    if (!weekdayKey) {
-      return dateString;
-    }
-
-    const monthName = window.i18nManager
-      ? window.i18nManager.t(`ui.months.${monthKey}`)
-      : monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
-    const weekdayName = window.i18nManager
-      ? window.i18nManager.t(`ui.weekdays.${weekdayKey}`)
-      : weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
-    const locale = window.i18nManager?.getLocale?.() || 'en';
-
-    if (locale === 'de') {
-      return `${weekdayName}, ${day}. ${monthName} ${year}`;
-    }
-
-    return `${weekdayName}, ${monthName} ${day}, ${year}`;
   }
 
   clear() {

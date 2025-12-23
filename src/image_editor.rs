@@ -20,6 +20,18 @@ use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo};
 use crate::raw_processor;
 
+/// Check if a file is a video based on its extension
+fn is_video_file(file_path: &Path) -> bool {
+    const VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "mov", "avi", "mkv", "webm", "m4v"];
+
+    file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+        .map(|ext| VIDEO_EXTENSIONS.contains(&ext.as_str()))
+        .unwrap_or(false)
+}
+
 /// Angle for rotation operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationAngle {
@@ -98,6 +110,18 @@ pub fn rotate_image(
             .unwrap_or("unknown");
         return Err(ImageEditError::UnsupportedFormat(format!(
             "RAW format '.{}' cannot be rotated. RAW files are read-only. Convert to JPEG/PNG first.",
+            extension
+        )));
+    }
+
+    // Block video files (not supported)
+    if is_video_file(file_path) {
+        let extension = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown");
+        return Err(ImageEditError::UnsupportedFormat(format!(
+            "Video format '.{}' cannot be rotated. Video rotation is not supported.",
             extension
         )));
     }

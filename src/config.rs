@@ -7,6 +7,23 @@ pub struct CacheConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct CollageConfig {
+    pub width: u32,
+    pub height: u32,
+    pub max_photos: usize,
+}
+
+impl Default for CollageConfig {
+    fn default() -> Self {
+        Self {
+            width: 3840,
+            height: 2160,
+            max_photos: 6,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
     pub photo_paths: Vec<String>,
@@ -14,6 +31,7 @@ pub struct Config {
     pub db_path: String,
     pub cache: CacheConfig,
     pub locale: String,
+    pub collage: CollageConfig,
 }
 
 impl Config {
@@ -44,6 +62,21 @@ impl Config {
             max_cache_size_mb,
         };
 
+        let collage = CollageConfig {
+            width: env::var("TURBO_PIX_COLLAGE_WIDTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3840),
+            height: env::var("TURBO_PIX_COLLAGE_HEIGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2160),
+            max_photos: env::var("TURBO_PIX_COLLAGE_MAX_PHOTOS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6),
+        };
+
         Ok(Config {
             port,
             photo_paths,
@@ -51,6 +84,7 @@ impl Config {
             db_path,
             cache,
             locale,
+            collage,
         })
     }
 }

@@ -1,3 +1,10 @@
+# [2.6.0](https://github.com/RouHim/turbo-pix/compare/2.5.6...2.6.0) (2025-12-24)
+
+
+### Features
+
+* add automatic collage generation from photo clusters ([#11](https://github.com/RouHim/turbo-pix/issues/11)) ([2643678](https://github.com/RouHim/turbo-pix/commit/2643678b54466331961ae7594c392f537ebe4ac6))
+
 ## [2.5.6](https://github.com/RouHim/turbo-pix/compare/2.5.5...2.5.6) (2025-12-20)
 
 ## [2.5.5](https://github.com/RouHim/turbo-pix/compare/2.5.4...2.5.5) (2025-12-10)

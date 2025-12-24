@@ -389,7 +389,9 @@ impl PhotoProcessor {
 
                     // Compute semantic vector
                     let result = if is_video {
-                        semantic_search.compute_video_semantic_vector(&path).await
+                        semantic_search
+                            .compute_video_semantic_vector(&path, None)
+                            .await
                     } else {
                         semantic_search.compute_semantic_vector(&path)
                     };

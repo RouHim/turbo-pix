@@ -1,0 +1,37 @@
+pub mod cache_manager;
+pub mod collage_generator;
+pub mod config;
+pub mod db;
+pub mod db_pool;
+pub mod db_schema;
+pub mod db_types;
+pub mod file_scanner;
+pub mod handlers_collage;
+pub mod handlers_config;
+pub mod handlers_health;
+pub mod handlers_indexing;
+pub mod handlers_photo;
+pub mod handlers_search;
+pub mod handlers_static;
+pub mod handlers_thumbnail;
+pub mod handlers_video;
+pub mod image_editor;
+pub mod indexer;
+pub mod metadata_extractor;
+pub mod metadata_writer;
+pub mod mimetype_detector;
+pub mod photo_processor;
+pub mod raw_processor;
+pub mod scheduler;
+pub mod semantic_search;
+pub mod thumbnail_generator;
+pub mod thumbnail_types;
+pub mod video_processor;
+pub mod warp_helpers;
+
+// Re-export common types if needed
+pub use semantic_search::SemanticSearchEngine;
+pub use config::Config;
+pub use db::create_db_pool;
+pub use video_processor::extract_frames_batch;
+pub use video_processor::extract_video_metadata;

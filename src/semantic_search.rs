@@ -51,7 +51,7 @@ const CLIP_STD: [f32; 3] = [0.26862954, 0.261_302_6, 0.275_777_1];
 const MIN_SIMILARITY_SCORE: f32 = 0.615;
 
 // Video frame sampling configuration
-const VIDEO_FRAME_COUNT: usize = 5;
+const VIDEO_FRAME_COUNT: usize = 3;
 const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
 
 /// Semantic search engine for image search
@@ -247,7 +247,11 @@ impl SemanticSearchEngine {
     }
 
     /// Computes and caches semantic vector for a video by sampling frames
-    pub async fn compute_video_semantic_vector(&self, video_path: &str) -> Result<()> {
+    pub async fn compute_video_semantic_vector(
+        &self,
+        video_path: &str,
+        frame_count: Option<usize>,
+    ) -> Result<()> {
         use crate::video_processor::{extract_frames_batch, extract_video_metadata};
 
         // Quick check without holding a transaction (to avoid holding lock across async)
@@ -268,10 +272,11 @@ impl SemanticSearchEngine {
 
         log::info!("Computing semantic vector for video: {}", video_path);
         let start_time = std::time::Instant::now();
+        let frames_to_sample = frame_count.unwrap_or(VIDEO_FRAME_COUNT);
 
         // Extract video metadata
         let metadata = extract_video_metadata(Path::new(video_path)).await?;
-        let frame_times = calculate_frame_positions(metadata.duration);
+        let frame_times = calculate_frame_positions(metadata.duration, frames_to_sample);
 
         log::debug!(
             "Sampling {} frames at positions: {:?}",
@@ -297,7 +302,7 @@ impl SemanticSearchEngine {
         );
 
         // Step 2: Encode frames to embeddings (sequential due to RwLock model access)
-        let mut frame_embeddings = Vec::with_capacity(VIDEO_FRAME_COUNT);
+        let mut frame_embeddings = Vec::with_capacity(frames_to_sample);
         for temp_frame_path in &extracted_frames {
             let model_read = self
                 .model
@@ -358,7 +363,7 @@ impl SemanticSearchEngine {
                     store_video_metadata_tx(
                         &tx,
                         path,
-                        VIDEO_FRAME_COUNT,
+                        frames_to_sample,
                         &frame_times,
                         MODEL_VERSION,
                     )?;
@@ -554,10 +559,10 @@ fn store_semantic_vector_tx(
     Ok(())
 }
 
-/// Calculate frame sampling positions for video (5 frames evenly distributed, excluding endpoints)
-fn calculate_frame_positions(duration: f64) -> Vec<f64> {
-    (1..=VIDEO_FRAME_COUNT)
-        .map(|i| duration * (i as f64) / (VIDEO_FRAME_COUNT as f64 + 1.0))
+/// Calculate frame sampling positions for video (evenly distributed, excluding endpoints)
+fn calculate_frame_positions(duration: f64, count: usize) -> Vec<f64> {
+    (1..=count)
+        .map(|i| duration * (i as f64) / (count as f64 + 1.0))
         .collect()
 }
 
@@ -755,18 +760,18 @@ mod tests {
 
     #[test]
     fn test_calculate_frame_positions() {
-        // Test 30s video
-        let positions = calculate_frame_positions(30.0);
+        // Test 30s video with 5 frames
+        let positions = calculate_frame_positions(30.0, 5);
         assert_eq!(positions.len(), 5, "Should generate 5 frame positions");
         assert_eq!(positions, vec![5.0, 10.0, 15.0, 20.0, 25.0]);
 
-        // Test 60s video
-        let positions = calculate_frame_positions(60.0);
+        // Test 60s video with 5 frames
+        let positions = calculate_frame_positions(60.0, 5);
         assert_eq!(positions.len(), 5);
         assert_eq!(positions, vec![10.0, 20.0, 30.0, 40.0, 50.0]);
 
-        // Test short video (6s)
-        let positions = calculate_frame_positions(6.0);
+        // Test short video (6s) with 5 frames
+        let positions = calculate_frame_positions(6.0, 5);
         assert_eq!(positions.len(), 5);
         assert_eq!(positions, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     }
@@ -824,7 +829,7 @@ mod tests {
         let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         let video_path_str = video_path.to_string_lossy().to_string();
-        let result = engine.compute_video_semantic_vector(&video_path_str).await;
+        let result = engine.compute_video_semantic_vector(&video_path_str, None).await;
 
         assert!(
             result.is_ok(),
@@ -884,7 +889,7 @@ mod tests {
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         let video_path_str = video_path.to_string_lossy().to_string();
         engine
-            .compute_video_semantic_vector(&video_path_str)
+            .compute_video_semantic_vector(&video_path_str, None)
             .await
             .unwrap();
 

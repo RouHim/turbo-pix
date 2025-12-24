@@ -154,38 +154,28 @@ pub async fn extract_frames_batch(
     let frame_count = frame_times.len();
 
     let output = tokio::task::spawn_blocking(move || {
-        // Build filter_complex for extracting frames at specific times
-        // select='eq(t,10)+eq(t,20)+eq(t,30)' selects frames at 10s, 20s, 30s
-        let select_expr = frame_times
-            .iter()
-            .map(|t| format!("eq(t\\,{:.2})", t))
-            .collect::<Vec<_>>()
-            .join("+");
+        let mut args = vec!["-y".to_string()];
 
-        let filter_complex = format!(
-            "[0:v]select='{}',split={}{}",
-            select_expr,
-            frame_times.len(),
-            (0..frame_times.len())
-                .map(|i| format!("[f{}]", i))
-                .collect::<Vec<_>>()
-                .join("")
-        );
+        // Add inputs with seeking
+        for t in &frame_times {
+            args.push("-ss".to_string());
+            args.push(t.to_string());
+            args.push("-i".to_string());
+            args.push(video_path.to_str().unwrap().to_string());
+        }
 
-        // Build output arguments: -map [f0] out0.jpg -map [f1] out1.jpg ...
-        let mut args = vec![
-            "-y".to_string(),
-            "-i".to_string(),
-            video_path.to_str().unwrap().to_string(),
-            "-filter_complex".to_string(),
-            filter_complex,
-        ];
-
-        for i in 0..frame_times.len() {
+        // Map inputs to outputs
+        for i in 0..frame_count {
             args.push("-map".to_string());
-            args.push(format!("[f{}]", i));
+            args.push(format!("{}:v", i));
+            args.push("-frames:v".to_string());
+            args.push("1".to_string());
             args.push("-q:v".to_string());
-            args.push("5".to_string()); // Lower quality for semantic encoding
+            args.push("5".to_string());
+            args.push("-strict".to_string());
+            args.push("-1".to_string());
+            args.push("-update".to_string());
+            args.push("1".to_string());
             args.push(
                 output_dir_path
                     .join(format!("frame_{}.jpg", i))
@@ -209,9 +199,10 @@ pub async fn extract_frames_batch(
         )));
     }
 
-    // Return paths to extracted frames
+    // Return paths to extracted frames (only those that were successfully created)
     Ok((0..frame_count)
         .map(|i| output_dir_clone.join(format!("frame_{}.jpg", i)))
+        .filter(|p| p.exists())
         .collect())
 }
 

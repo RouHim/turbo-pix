@@ -28,6 +28,8 @@ class TurboPixApp {
       });
     }
 
+    this.appConfig = await this.loadAppConfig();
+
     // Initialize i18n system first
     await this.initializeI18n();
 
@@ -58,7 +60,8 @@ class TurboPixApp {
       }
 
       // Initialize the i18n system
-      await window.i18nManager.initializeI18n();
+      const defaultLocale = this.appConfig?.default_locale;
+      await window.i18nManager.initializeI18n(defaultLocale);
 
       if (window.logger) {
         window.logger.info('i18n system initialized');
@@ -67,6 +70,21 @@ class TurboPixApp {
       if (window.logger) {
         window.logger.error('Failed to initialize i18n', error);
       }
+    }
+  }
+
+  async loadAppConfig() {
+    if (!window.api) return {};
+
+    try {
+      const config = await window.api.getConfig();
+      window.appConfig = config;
+      return config;
+    } catch (error) {
+      if (window.logger) {
+        window.logger.warn('Failed to load app config', error);
+      }
+      return {};
     }
   }
 
@@ -266,6 +284,8 @@ class TurboPixApp {
 
       // Load photos based on current view
       const currentView = this.state.get('currentView');
+      this.updateSortVisibility(currentView);
+      this.updateTimelineVisibility(currentView);
       await this.loadViewData(currentView);
     } catch (error) {
       if (window.logger) {
@@ -291,6 +311,8 @@ class TurboPixApp {
     this.state.set('currentView', view);
     this.updateActiveNavItem(view);
     this.updateViewTitle(view);
+    this.updateSortVisibility(view);
+    this.updateTimelineVisibility(view);
 
     await this.loadViewData(view);
   }
@@ -330,6 +352,19 @@ class TurboPixApp {
         case 'videos':
           // This would need backend support for file type filtering
           await window.photoGrid.loadPhotos('type:video', filters, true);
+          break;
+
+        case 'collages':
+          // Clear photo grid and load collages
+          if (window.photoGrid) {
+            window.photoGrid.clearGrid();
+            // Disable infinite scroll for collages view
+            window.photoGrid.hasMore = false;
+          }
+          if (window.collagesView) {
+            window.collagesView.initialize(window.photoGrid.container);
+            await window.collagesView.loadPendingCollages();
+          }
           break;
       }
     } catch (error) {
@@ -379,12 +414,27 @@ class TurboPixApp {
         all: 'all_photos',
         favorites: 'favorites',
         videos: 'videos',
+        collages: 'pending_collages',
       };
 
       const i18nKey = titleKeys[view] || 'all_photos';
       const localizedTitle = window.i18nManager.t(`ui.${i18nKey}`);
       titleEl.textContent = localizedTitle;
     }
+  }
+
+  updateSortVisibility(view) {
+    const sortSelect = utils.$('#sort-select');
+    if (!sortSelect) return;
+    const shouldHide = view === 'collages';
+    sortSelect.hidden = shouldHide;
+    sortSelect.disabled = shouldHide;
+  }
+
+  updateTimelineVisibility(view) {
+    const timelineContainer = utils.$('.timeline-container');
+    if (!timelineContainer) return;
+    timelineContainer.hidden = view === 'collages';
   }
 
   async setSortBy(sortBy) {

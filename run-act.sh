@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/env bash
 
 # Configure act to work with Podman
 # Based on: https://github.com/nektos/act/issues/303 and related issues

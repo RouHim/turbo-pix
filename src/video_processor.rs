@@ -395,6 +395,7 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
+            locale: "en".to_string(),
         };
 
         (config, temp_dir)

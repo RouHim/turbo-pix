@@ -1,10 +1,13 @@
 mod cache_manager;
+mod collage_generator;
 mod config;
 mod db;
 mod db_pool;
 mod db_schema;
 mod db_types;
 mod file_scanner;
+mod handlers_collage;
+mod handlers_config;
 mod handlers_health;
 mod handlers_indexing;
 mod handlers_photo;
@@ -33,6 +36,8 @@ use std::path::PathBuf;
 use warp::Filter;
 
 use cache_manager::CacheManager;
+use handlers_collage::build_collage_routes;
+use handlers_config::build_config_routes;
 use handlers_health::build_health_routes;
 use handlers_indexing::build_indexing_routes;
 use handlers_photo::build_photo_routes;
@@ -72,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
     info!("Cache path: {}", config.cache.thumbnail_cache_path);
+    info!("Default locale: {}", config.locale);
 
     // Check if port is available before initializing services
     if let Some(value) = check_port(port) {
@@ -91,8 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
-    let search_routes = build_search_routes(db_pool.clone(), semantic_search);
+    let search_routes = build_search_routes(db_pool.clone(), semantic_search.clone());
     let indexing_routes = build_indexing_routes(indexing_status);
+    let collage_routes = build_collage_routes(
+        db_pool.clone(),
+        config.data_path.clone().into(),
+        config.locale.clone(),
+        semantic_search,
+    );
+    let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
     let routes = health_routes
@@ -100,6 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(thumbnail_routes)
         .or(search_routes)
         .or(indexing_routes)
+        .or(collage_routes)
+        .or(config_routes)
         .or(static_routes)
         .with(cors())
         .with(warp::log("turbo_pix"))
@@ -162,11 +177,14 @@ fn initialize_services(
 
     // Initialize and start photo scheduler
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
+    let data_path = PathBuf::from(&config.data_path);
     let photo_scheduler = PhotoScheduler::new(
         photo_paths,
         db_pool.clone(),
         cache_manager.clone(),
         semantic_search.clone(),
+        data_path,
+        config.locale.clone(),
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

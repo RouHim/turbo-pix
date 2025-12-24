@@ -20,7 +20,7 @@ pub fn decode_raw_to_dynamic_image(path: &Path) -> Result<DynamicImage, RawError
         rawloader::decode_file(path).map_err(|e| RawError::DecodeError(format!("{:?}", e)))?;
 
     // 2. Extract bayer pattern data
-    let (width, height, mut data) = match raw_image.data {
+    let (mut width, mut height, mut data) = match raw_image.data {
         rawloader::RawImageData::Integer(data) => (raw_image.width, raw_image.height, data),
         rawloader::RawImageData::Float(data) => {
             // Convert float data to u16
@@ -37,9 +37,54 @@ pub fn decode_raw_to_dynamic_image(path: &Path) -> Result<DynamicImage, RawError
     );
 
     // 3. Get CFA pattern
-    let cfa_pattern = parse_cfa_from_rawloader(&raw_image.cfa)?;
+    let mut cfa_pattern = parse_cfa_from_rawloader(&raw_image.cfa)?;
 
-    // 4. Apply RAW processing pipeline
+    // 4. Crop to active area to remove sensor black borders
+    let crop_top = raw_image.crops[0];
+    let crop_right = raw_image.crops[1];
+    let crop_bottom = raw_image.crops[2];
+    let crop_left = raw_image.crops[3];
+    let crop_horiz = crop_left.saturating_add(crop_right);
+    let crop_vert = crop_top.saturating_add(crop_bottom);
+
+    if crop_horiz > 0 || crop_vert > 0 {
+        if crop_horiz >= width || crop_vert >= height {
+            warn!(
+                "RAW crop values too large (top={}, right={}, bottom={}, left={}); skipping",
+                crop_top, crop_right, crop_bottom, crop_left
+            );
+        } else {
+            let crop_width = width.saturating_sub(crop_horiz);
+            let crop_height = height.saturating_sub(crop_vert);
+            let mut cropped = vec![0u16; crop_width * crop_height];
+
+            for y in 0..crop_height {
+                let src_row = (y + crop_top) * width + crop_left;
+                let dst_row = y * crop_width;
+                let src = &data[src_row..src_row + crop_width];
+                let dst = &mut cropped[dst_row..dst_row + crop_width];
+                dst.copy_from_slice(src);
+            }
+
+            data = cropped;
+            width = crop_width;
+            height = crop_height;
+
+            if crop_left % 2 == 1 {
+                cfa_pattern = cfa_pattern.next_x();
+            }
+            if crop_top % 2 == 1 {
+                cfa_pattern = cfa_pattern.next_y();
+            }
+
+            debug!(
+                "Applied RAW crops top={} right={} bottom={} left={} -> {}x{}",
+                crop_top, crop_right, crop_bottom, crop_left, width, height
+            );
+        }
+    }
+
+    // 5. Apply RAW processing pipeline
     // Step 1: Black level subtraction and normalization
     apply_black_white_levels(
         &mut data,

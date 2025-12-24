@@ -576,19 +576,33 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
       window.metadataEditor.setPhoto(this.currentPhoto);
     }
 
-    // Disable rotation buttons for RAW files (read-only format)
+    // Disable rotation buttons for RAW files and videos (read-only/unsupported formats)
     const isRaw = this.isRawFile(this.currentPhoto.filename);
+    const isVideo = this.isVideoFile(this.currentPhoto.filename);
+    const shouldDisable = isRaw || isVideo;
+
     if (this.elements.rotateLeftBtn) {
-      this.elements.rotateLeftBtn.disabled = isRaw;
-      this.elements.rotateLeftBtn.style.opacity = isRaw ? '0.5' : '1';
-      this.elements.rotateLeftBtn.style.cursor = isRaw ? 'not-allowed' : 'pointer';
-      this.elements.rotateLeftBtn.title = isRaw ? 'RAW files cannot be rotated' : 'Rotate Left';
+      this.elements.rotateLeftBtn.disabled = shouldDisable;
+      this.elements.rotateLeftBtn.classList.toggle('btn-disabled', shouldDisable);
+      this.elements.rotateLeftBtn.title = isRaw
+        ? 'RAW files cannot be rotated'
+        : isVideo
+          ? 'Video rotation is not supported'
+          : 'Rotate Left';
     }
     if (this.elements.rotateRightBtn) {
-      this.elements.rotateRightBtn.disabled = isRaw;
-      this.elements.rotateRightBtn.style.opacity = isRaw ? '0.5' : '1';
-      this.elements.rotateRightBtn.style.cursor = isRaw ? 'not-allowed' : 'pointer';
-      this.elements.rotateRightBtn.title = isRaw ? 'RAW files cannot be rotated' : 'Rotate Right';
+      this.elements.rotateRightBtn.disabled = shouldDisable;
+      this.elements.rotateRightBtn.classList.toggle('btn-disabled', shouldDisable);
+      this.elements.rotateRightBtn.title = isRaw
+        ? 'RAW files cannot be rotated'
+        : isVideo
+          ? 'Video rotation is not supported'
+          : 'Rotate Right';
+    }
+
+    // Update zoom button states for videos
+    if (this.controls && typeof this.controls.updateZoomButtonStates === 'function') {
+      this.controls.updateZoomButtonStates();
     }
   }
 
@@ -685,6 +699,17 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
       utils.showToast(
         'Cannot Rotate',
         'RAW files cannot be rotated. RAW files are read-only camera sensor data.',
+        'error',
+        4000
+      );
+      return;
+    }
+
+    // Block rotation for video files (not supported)
+    if (this.isVideoFile(this.currentPhoto.filename)) {
+      utils.showToast(
+        'Cannot Rotate',
+        'Video rotation is not supported. Videos cannot be rotated at this time.',
         'error',
         4000
       );

@@ -7,6 +7,8 @@ window.DE_TRANSLATIONS = {
     all_photos: 'Alle Medien',
     favorites: 'Favoriten',
     videos: 'Videos',
+    collages: 'Collagen',
+    pending_collages: 'Ausstehende Collagen',
     favorite_photos: 'Lieblingsfotos',
     load_more: 'Mehr laden',
     loading: 'Wird geladen...',
@@ -62,6 +64,15 @@ window.DE_TRANSLATIONS = {
     add_to_favorites: 'Zu Favoriten hinzufügen',
     remove_from_favorites: 'Von Favoriten entfernen',
     toggle_theme: 'Design wechseln',
+    rotate_left: 'Links drehen 90°',
+    rotate_right: 'Rechts drehen 90°',
+    flip_horizontal: 'Horizontal spiegeln',
+    flip_vertical: 'Vertikal spiegeln',
+    delete_photo: 'Foto löschen',
+    accept_collage: 'Akzeptieren',
+    reject_collage: 'Ablehnen',
+    collages_load_failed: 'Collagen konnten nicht geladen werden',
+    collage_for: 'Collage für {{date}}',
 
     // Values
     unknown: 'Unbekannt',
@@ -84,11 +95,20 @@ window.DE_TRANSLATIONS = {
       november: 'November',
       december: 'Dezember',
     },
+    weekdays: {
+      sunday: 'Sonntag',
+      monday: 'Montag',
+      tuesday: 'Dienstag',
+      wednesday: 'Mittwoch',
+      thursday: 'Donnerstag',
+      friday: 'Freitag',
+      saturday: 'Samstag',
+    },
 
     // Metadata panel
     metadata: {
       file_information: 'Dateiinformationen',
-      filename: 'Dateiname:',
+      file_path: 'Dateipfad:',
       file_size: 'Dateigröße:',
       dimensions: 'Abmessungen:',
       type: 'Typ:',
@@ -161,6 +181,12 @@ window.DE_TRANSLATIONS = {
     indexing_photos: 'Fotos werden indexiert...',
     indexing_metadata: 'Metadaten werden indexiert...',
     indexing_semantic: 'Semantische Vektoren werden berechnet...',
+    indexing_collages: 'Collagen werden generiert...',
+
+    // Collages
+    no_pending_collages: 'Keine ausstehenden Collagen',
+    collage_date: 'Datum:',
+    collage_photos: '{{count}} Fotos',
   },
 
   errors: {
@@ -181,6 +207,12 @@ window.DE_TRANSLATIONS = {
     downloadStarted: 'Foto-Download gestartet',
     sharedSuccessfully: 'Foto erfolgreich geteilt',
     sharingCancelled: 'Teilen abgebrochen oder nicht unterstützt',
+    collageAccepted: 'Collage akzeptiert. Wird nach dem nächsten Scan in Alle Fotos angezeigt.',
+    collageRejected: 'Collage abgelehnt und gelöscht',
+    collageAcceptFailed: 'Collage konnte nicht akzeptiert werden',
+    collageRejectFailed: 'Collage konnte nicht abgelehnt werden',
+    collagesGenerated: '{{count}} Collage(n) erfolgreich generiert',
+    collageGenerateFailed: 'Collagen konnten nicht generiert werden',
 
     // Toast titles
     added: 'Hinzugefügt',

@@ -65,7 +65,9 @@
   --accent-color: #f59e0b;
   --accent-dark: #d97706;
   --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
   --color-success: #10b981;
+  --color-success-hover: #059669;
   --background-color: #fafafa;
   --background-secondary: #f8fafc;
   --surface-color: #fff;

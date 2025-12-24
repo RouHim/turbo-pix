@@ -163,21 +163,7 @@ class TimelineSlider {
   }
 
   formatDate(year, month) {
-    const monthKeys = [
-      'january',
-      'february',
-      'march',
-      'april',
-      'may',
-      'june',
-      'july',
-      'august',
-      'september',
-      'october',
-      'november',
-      'december',
-    ];
-    const monthKey = monthKeys[month - 1];
+    const monthKey = window.APP_CONSTANTS.MONTH_KEYS[month - 1];
     const monthName = window.i18nManager
       ? window.i18nManager.t(`ui.months.${monthKey}`)
       : monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
@@ -367,20 +353,7 @@ class TimelineSlider {
 
     // Populate month select
     if (this.monthSelect) {
-      const monthKeys = [
-        'january',
-        'february',
-        'march',
-        'april',
-        'may',
-        'june',
-        'july',
-        'august',
-        'september',
-        'october',
-        'november',
-        'december',
-      ];
+      const monthKeys = window.APP_CONSTANTS.MONTH_KEYS;
       monthKeys.forEach((key, index) => {
         const option = document.createElement('option');
         option.value = index + 1;

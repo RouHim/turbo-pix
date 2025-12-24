@@ -45,6 +45,9 @@ impl FileScanner {
                 let path = entry.path();
 
                 if path.is_dir() {
+                    if Self::is_collage_dir(&path) {
+                        continue;
+                    }
                     Self::walk_directory(&path, photos);
                 } else if path.is_file() && Self::is_supported_file(&path) {
                     if let Ok(metadata) = fs::metadata(&path) {
@@ -65,6 +68,13 @@ impl FileScanner {
                 }
             }
         }
+    }
+
+    fn is_collage_dir(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name == "collages")
+            .unwrap_or(false)
     }
 
     fn is_supported_file(path: &Path) -> bool {

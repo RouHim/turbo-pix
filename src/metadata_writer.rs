@@ -265,6 +265,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use image::GenericImageView;
+    use img_parts::jpeg::Jpeg;
     use std::fs;
     use tempfile::TempDir;
 
@@ -294,6 +295,17 @@ mod tests {
     fn can_decode_image(path: &Path) -> bool {
         // Try to decode the image with the image crate
         image::open(path).is_ok()
+    }
+
+    fn jpeg_entropy_segment(path: &Path) -> Vec<u8> {
+        let image_bytes = std::fs::read(path).expect("Failed to read JPEG for entropy segment");
+        let jpeg = Jpeg::from_bytes(image_bytes.into()).expect("Failed to parse JPEG segments");
+        let segment = jpeg
+            .segments()
+            .iter()
+            .find(|segment| segment.has_entropy())
+            .expect("No entropy segment found in JPEG");
+        segment.clone().encoder().bytes().to_vec()
     }
 
     #[test]
@@ -757,9 +769,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let image_path = create_test_image(&temp_dir);
 
-        // Capture original pixels
-        let original_image = image::open(&image_path).unwrap();
-        let original_pixels: Vec<u8> = original_image.to_rgb8().into_raw();
+        // Capture original entropy segment (compressed image data)
+        let original_entropy = jpeg_entropy_segment(&image_path);
 
         // WHEN: Perform multiple update cycles
         for i in 0..3 {
@@ -778,26 +789,12 @@ mod tests {
         let date_field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY);
         assert!(date_field.is_some());
 
-        // THEN: Pixels should still be IDENTICAL after multiple writes
-        let final_image = image::open(&image_path).unwrap();
-        let final_pixels: Vec<u8> = final_image.to_rgb8().into_raw();
-
+        // THEN: Compressed image data should still be IDENTICAL after multiple writes
+        let final_entropy = jpeg_entropy_segment(&image_path);
         assert_eq!(
-            original_pixels.len(),
-            final_pixels.len(),
-            "Pixel buffer size changed after multiple writes"
-        );
-
-        let differences: usize = original_pixels
-            .iter()
-            .zip(final_pixels.iter())
-            .filter(|(a, b)| a != b)
-            .count();
-
-        assert_eq!(
-            differences, 0,
-            "Found {} pixel differences after {} write cycles! Image was re-encoded.",
-            differences, 3
+            original_entropy, final_entropy,
+            "Entropy segment changed after {} write cycles! Image was re-encoded.",
+            3
         );
     }
 

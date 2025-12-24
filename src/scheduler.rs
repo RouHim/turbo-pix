@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::cache_manager::CacheManager;
+use crate::collage_generator;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
@@ -65,6 +66,8 @@ pub struct PhotoScheduler {
     db_pool: DbPool,
     cache_manager: CacheManager,
     semantic_search: Arc<SemanticSearchEngine>,
+    data_path: PathBuf,
+    locale: String,
     rescan_lock: Arc<Mutex<()>>,
     pub status: IndexingStatus,
 }
@@ -75,12 +78,30 @@ impl PhotoScheduler {
         db_pool: DbPool,
         cache_manager: CacheManager,
         semantic_search: Arc<SemanticSearchEngine>,
+        data_path: PathBuf,
+        locale: String,
     ) -> Self {
+        let mut photo_paths = photo_paths;
+        let collages_path = data_path.join("collages").join("accepted");
+
+        if !photo_paths.contains(&collages_path) {
+            if let Err(e) = std::fs::create_dir_all(&collages_path) {
+                warn!(
+                    "Failed to create collages directory {}: {}",
+                    collages_path.display(),
+                    e
+                );
+            }
+            photo_paths.push(collages_path);
+        }
+
         Self {
             photo_paths,
             db_pool,
             cache_manager,
             semantic_search,
+            data_path,
+            locale,
             rescan_lock: Arc::new(Mutex::new(())),
             status: IndexingStatus::new(),
         }
@@ -187,8 +208,10 @@ impl PhotoScheduler {
         let db_pool = self.db_pool.clone();
         let cache_manager = self.cache_manager.clone();
         let semantic_search = self.semantic_search.clone();
+        let data_path = self.data_path.clone();
         let rescan_lock = self.rescan_lock.clone();
         let status = self.status.clone();
+        let locale = self.locale.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -245,6 +268,20 @@ impl PhotoScheduler {
                                 )
                             }
                             Err(e) => error!("Phase 2 failed: {}", e),
+                        }
+
+                        // Phase 3: Generate collages
+                        info!("Phase 3: Generating collages");
+                        status.set_phase("collages").await;
+                        match collage_generator::generate_collages(
+                            &db_pool,
+                            &data_path,
+                            locale.as_str(),
+                        )
+                        .await
+                        {
+                            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
+                            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
                         }
                     }
                     Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
@@ -335,8 +372,18 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 2 failed: {}", e),
         }
 
+        // Phase 3: Generate collages
+        info!("Phase 3: Generating collages");
+        self.status.set_phase("collages").await;
+        match collage_generator::generate_collages(&self.db_pool, &self.data_path, &self.locale)
+            .await
+        {
+            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
+            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
+        }
+
         info!(
-            "Startup rescan completed (two-phase): {} photos indexed, {} errors",
+            "Startup rescan completed (three-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
 
@@ -375,11 +422,15 @@ mod tests {
                 Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
+            let data_path = temp_dir.path().to_path_buf();
+
             let scheduler = PhotoScheduler::new(
                 photo_paths,
                 db_pool.clone(),
                 cache_manager.clone(),
                 semantic_search,
+                data_path,
+                "en".to_string(),
             );
 
             Self {
@@ -616,10 +667,18 @@ mod tests {
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
         let semantic_search =
             Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+        let data_path = temp_dir.path().to_path_buf();
 
         // Create scheduler with non-existent path
         let invalid_paths = vec![PathBuf::from("/nonexistent/path")];
-        let scheduler = PhotoScheduler::new(invalid_paths, db_pool, cache_manager, semantic_search);
+        let scheduler = PhotoScheduler::new(
+            invalid_paths,
+            db_pool,
+            cache_manager,
+            semantic_search,
+            data_path,
+            "en".to_string(),
+        );
 
         // Should handle errors gracefully
         let result = scheduler.run_startup_rescan().await;

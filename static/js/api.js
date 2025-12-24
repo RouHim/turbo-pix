@@ -113,6 +113,10 @@ class TurboPixAPI {
     return response.blob();
   }
 
+  async getConfig() {
+    return this.request('/api/config');
+  }
+
   async searchPhotos(query, params = {}) {
     return this.getPhotos({ ...params, query });
   }
@@ -292,6 +296,29 @@ class TurboPixAPI {
 
   clearSearchHistory() {
     utils.storage.remove('searchHistory');
+  }
+
+  // Collages
+  async getPendingCollages() {
+    return this.request('/api/collages/pending');
+  }
+
+  async generateCollages() {
+    return this.request('/api/collages/generate', {
+      method: 'POST',
+    });
+  }
+
+  async acceptCollage(collageId) {
+    return this.request(`/api/collages/${collageId}/accept`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectCollage(collageId) {
+    return this.request(`/api/collages/${collageId}/reject`, {
+      method: 'DELETE',
+    });
   }
 }
 

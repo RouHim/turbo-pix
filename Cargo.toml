@@ -2,6 +2,7 @@
 name = "turbo-pix"
 version = "0.1.0"
 edition = "2021"
+default-run = "turbo-pix"
 
 [dependencies]
 # Memory allocator

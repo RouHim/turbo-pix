@@ -35,6 +35,7 @@
                 placeholder="AI-powered photo search..."
                 data-i18n-placeholder="ui.search_ai_placeholder"
                 class="search-input"
+                tabindex="1"
               />
               <button id="search-btn" class="search-btn" data-i18n="ui.search">Search</button>
             </div>
@@ -434,7 +435,7 @@
         <form id="metadata-edit-form">
           <div class="form-group">
             <label for="edit-taken-at" data-i18n="ui.metadata.edit_date_label">Date Taken</label>
-            <input type="datetime-local" id="edit-taken-at" name="taken_at" />
+            <input type="datetime-local" id="edit-taken-at" name="taken_at" tabindex="1" />
           </div>
           <div class="form-group-row">
             <div class="form-group">
@@ -449,6 +450,7 @@
                 min="-90"
                 max="90"
                 placeholder="-90 to 90"
+                tabindex="2"
               />
             </div>
             <div class="form-group">
@@ -463,6 +465,7 @@
                 min="-180"
                 max="180"
                 placeholder="-180 to 180"
+                tabindex="3"
               />
             </div>
           </div>

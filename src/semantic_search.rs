@@ -301,19 +301,14 @@ impl SemanticSearchEngine {
             extraction_start.elapsed()
         );
 
-        // Step 2: Encode frames to embeddings (sequential due to RwLock model access)
-        let mut frame_embeddings = Vec::with_capacity(frames_to_sample);
-        for temp_frame_path in &extracted_frames {
-            let model_read = self
-                .model
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
-            let embedding =
-                encode_image(&model_read, temp_frame_path.to_str().unwrap(), &self.device)?;
-            drop(model_read);
-
-            frame_embeddings.push(embedding);
-        }
+        // Step 2: Encode frames to embeddings (batch inference)
+        let model_read = self
+            .model
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+        
+        let batch_embeddings = encode_image_batch(&model_read, &extracted_frames, &self.device)?;
+        drop(model_read);
 
         // Step 3: Cleanup temp files
         for temp_frame_path in &extracted_frames {
@@ -335,8 +330,8 @@ impl SemanticSearchEngine {
             );
         }
 
-        // Average pool all frame embeddings
-        let video_embedding = average_pool_embeddings(&frame_embeddings, &self.device)?;
+        // Average pool all frame embeddings: [N, 512] -> [512]
+        let video_embedding = batch_embeddings.mean(0)?;
         let normalized_embedding = normalize_vector(&video_embedding)?;
 
         // Store embedding and metadata in a transaction (after all async work is done)
@@ -494,13 +489,17 @@ fn encode_image(model: &clip::ClipModel, image_path: &str, device: &Device) -> R
         image::open(path)?
     };
 
-    let resized = img.resize_exact(
-        CLIP_IMAGE_SIZE,
-        CLIP_IMAGE_SIZE,
-        image::imageops::FilterType::Triangle,
-    );
+    let img = if img.width() == CLIP_IMAGE_SIZE && img.height() == CLIP_IMAGE_SIZE {
+        img
+    } else {
+        img.resize_exact(
+            CLIP_IMAGE_SIZE,
+            CLIP_IMAGE_SIZE,
+            image::imageops::FilterType::Triangle,
+        )
+    };
 
-    let img_rgb = resized.to_rgb8();
+    let img_rgb = img.to_rgb8();
 
     let data: Vec<f32> = img_rgb
         .pixels()
@@ -529,9 +528,87 @@ fn encode_image(model: &clip::ClipModel, image_path: &str, device: &Device) -> R
     normalize_vector(&features)
 }
 
+/// Encodes a batch of images into normalized 512-dimensional semantic vectors
+fn encode_image_batch(
+    model: &clip::ClipModel,
+    image_paths: &[std::path::PathBuf],
+    device: &Device,
+) -> Result<Tensor> {
+    use rayon::prelude::*;
+
+    let tensors: Vec<Tensor> = image_paths
+        .par_iter()
+        .map(|path| {
+            let img = if raw_processor::is_raw_file(path) {
+                raw_processor::decode_raw_to_dynamic_image(path)
+                    .context("Failed to decode RAW file for CLIP encoding")?
+            } else {
+                image::open(path)?
+            };
+
+            let img = if img.width() == CLIP_IMAGE_SIZE && img.height() == CLIP_IMAGE_SIZE {
+                img
+            } else {
+                img.resize_exact(
+                    CLIP_IMAGE_SIZE,
+                    CLIP_IMAGE_SIZE,
+                    image::imageops::FilterType::Triangle,
+                )
+            };
+
+            let img_rgb = img.to_rgb8();
+
+            let data: Vec<f32> = img_rgb
+                .pixels()
+                .flat_map(|p| {
+                    [
+                        (p[0] as f32) / 255.0,
+                        (p[1] as f32) / 255.0,
+                        (p[2] as f32) / 255.0,
+                    ]
+                })
+                .collect();
+
+            let img_tensor = Tensor::from_vec(
+                data,
+                (CLIP_IMAGE_SIZE as usize, CLIP_IMAGE_SIZE as usize, 3),
+                &Device::Cpu, // Always decode on CPU
+            )?
+            .permute((2, 0, 1))?;
+
+            Ok(img_tensor)
+        })
+        .collect::<Result<Vec<Tensor>>>()?;
+
+    if tensors.is_empty() {
+        return Err(anyhow::anyhow!("Cannot encode empty batch"));
+    }
+
+    // Move tensors to the target device if necessary
+    let tensors: Vec<Tensor> = tensors
+        .into_iter()
+        .map(|t| t.to_device(device))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Stack: [B, 3, 224, 224]
+    let batch = Tensor::stack(&tensors, 0)?;
+
+    let mean = Tensor::new(&CLIP_MEAN, device)?.reshape((1, 3, 1, 1))?;
+    let std = Tensor::new(&CLIP_STD, device)?.reshape((1, 3, 1, 1))?;
+    let batch_normalized = batch.broadcast_sub(&mean)?.broadcast_div(&std)?;
+
+    let features = model.get_image_features(&batch_normalized)?;
+    normalize_vector(&features)
+}
+
 /// Computes L2 normalization of a semantic vector
 fn normalize_vector(vector: &Tensor) -> Result<Tensor> {
-    let norm = vector.sqr()?.sum_keepdim(1)?.sqrt()?;
+    let dim = match vector.rank() {
+        1 => 0,
+        2 => 1,
+        r => return Err(anyhow::anyhow!("Unexpected tensor rank for normalization: {}", r)),
+    };
+    let norm = vector.sqr()?.sum_keepdim(dim)?.sqrt()?;
     Ok(vector.broadcast_div(&norm)?)
 }
 
@@ -564,21 +641,6 @@ fn calculate_frame_positions(duration: f64, count: usize) -> Vec<f64> {
     (1..=count)
         .map(|i| duration * (i as f64) / (count as f64 + 1.0))
         .collect()
-}
-
-/// Average pool multiple embeddings into a single embedding
-fn average_pool_embeddings(embeddings: &[Tensor], _device: &Device) -> Result<Tensor> {
-    if embeddings.is_empty() {
-        return Err(anyhow::anyhow!("Cannot average pool empty embeddings"));
-    }
-
-    // Stack embeddings: [N, 512] where N is number of frames
-    let stacked = Tensor::stack(embeddings, 0)?;
-
-    // Compute mean across dimension 0: [512]
-    let averaged = stacked.mean(0)?;
-
-    Ok(averaged)
 }
 
 /// Stores video semantic computation metadata within a transaction
@@ -774,34 +836,6 @@ mod tests {
         let positions = calculate_frame_positions(6.0, 5);
         assert_eq!(positions.len(), 5);
         assert_eq!(positions, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-    }
-
-    #[test]
-    fn test_average_pool_embeddings() {
-        use candle_core::Device;
-
-        let device = Device::Cpu;
-
-        // Create 3 mock embeddings of 512 dimensions
-        let emb1 = Tensor::ones((512,), candle_core::DType::F32, &device).unwrap();
-        let emb2 = Tensor::ones((512,), candle_core::DType::F32, &device)
-            .unwrap()
-            .affine(2.0, 0.0)
-            .unwrap();
-        let emb3 = Tensor::ones((512,), candle_core::DType::F32, &device)
-            .unwrap()
-            .affine(3.0, 0.0)
-            .unwrap();
-
-        let embeddings = vec![emb1, emb2, emb3];
-        let averaged = average_pool_embeddings(&embeddings, &device).unwrap();
-
-        // Average should be (1 + 2 + 3) / 3 = 2.0
-        let avg_vals: Vec<f32> = averaged.flatten_all().unwrap().to_vec1().unwrap();
-        assert_eq!(avg_vals.len(), 512);
-        for val in avg_vals {
-            assert!((val - 2.0).abs() < 0.001, "Average should be 2.0");
-        }
     }
 
     #[tokio::test]

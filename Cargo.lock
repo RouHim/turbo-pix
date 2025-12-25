@@ -3726,6 +3726,7 @@ dependencies = [
  "r2d2_sqlite",
  "rand",
  "rawloader",
+ "rayon 1.11.0",
  "rusqlite",
  "rusttype",
  "serde",

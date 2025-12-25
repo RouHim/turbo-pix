@@ -176,6 +176,8 @@ pub async fn extract_frames_batch(
             args.push("-1".to_string());
             args.push("-update".to_string());
             args.push("1".to_string());
+            args.push("-vf".to_string());
+            args.push("scale=224:224".to_string());
             args.push(
                 output_dir_path
                     .join(format!("frame_{}.jpg", i))

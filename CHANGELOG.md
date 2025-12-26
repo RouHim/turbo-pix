@@ -1,3 +1,11 @@
+## [2.6.1](https://github.com/RouHim/turbo-pix/compare/2.6.0...2.6.1) (2025-12-26)
+
+
+### Bug Fixes
+
+* resolve clippy and formatting issues ([69fa684](https://github.com/RouHim/turbo-pix/commit/69fa684daf85de1711494916d5e6b37f8e534e11))
+* set turbo-pix as default-run binary ([c0dae5f](https://github.com/RouHim/turbo-pix/commit/c0dae5fbe608c4c396a8699c0c2c784f7c64310a))
+
 # [2.6.0](https://github.com/RouHim/turbo-pix/compare/2.5.6...2.6.0) (2025-12-24)
 
 

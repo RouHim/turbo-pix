@@ -306,7 +306,7 @@ impl SemanticSearchEngine {
             .model
             .read()
             .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
-        
+
         let batch_embeddings = encode_image_batch(&model_read, &extracted_frames, &self.device)?;
         drop(model_read);
 
@@ -606,7 +606,12 @@ fn normalize_vector(vector: &Tensor) -> Result<Tensor> {
     let dim = match vector.rank() {
         1 => 0,
         2 => 1,
-        r => return Err(anyhow::anyhow!("Unexpected tensor rank for normalization: {}", r)),
+        r => {
+            return Err(anyhow::anyhow!(
+                "Unexpected tensor rank for normalization: {}",
+                r
+            ))
+        }
     };
     let norm = vector.sqr()?.sum_keepdim(dim)?.sqrt()?;
     Ok(vector.broadcast_div(&norm)?)
@@ -863,7 +868,9 @@ mod tests {
         let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
 
         let video_path_str = video_path.to_string_lossy().to_string();
-        let result = engine.compute_video_semantic_vector(&video_path_str, None).await;
+        let result = engine
+            .compute_video_semantic_vector(&video_path_str, None)
+            .await;
 
         assert!(
             result.is_ok(),

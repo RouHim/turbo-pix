@@ -30,8 +30,8 @@ pub mod video_processor;
 pub mod warp_helpers;
 
 // Re-export common types if needed
-pub use semantic_search::SemanticSearchEngine;
 pub use config::Config;
 pub use db::create_db_pool;
+pub use semantic_search::SemanticSearchEngine;
 pub use video_processor::extract_frames_batch;
 pub use video_processor::extract_video_metadata;

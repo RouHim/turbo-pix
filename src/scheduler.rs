@@ -30,6 +30,12 @@ pub struct IndexingStatus {
     pub started_at: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 }
 
+impl Default for IndexingStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IndexingStatus {
     pub fn new() -> Self {
         Self {

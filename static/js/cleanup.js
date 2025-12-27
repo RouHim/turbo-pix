@@ -71,13 +71,7 @@ class CleanupManager {
 
     // Convert candidates to photos with attached cleanup metadata
     const photos = this.candidates.map((c) => {
-      // The API returns flat fields: photo_hash, file_path, reason, score
-      const p = {
-        hash_sha256: c.photo_hash,
-        file_path: c.file_path,
-        // We might miss other metadata (width, height, date), but PhotoCard should handle it gracefully or we fetch it?
-        // For cleanup view, we mostly need the image.
-      };
+      const p = c.photo;
       p.cleanupReason = c.reason;
       p.cleanupScore = c.score;
       return p;
@@ -96,6 +90,11 @@ class CleanupManager {
         if (index < 3) console.log('Rendered card:', photo.hash_sha256);
       } catch (e) {
         console.error('Error rendering card for photo:', photo, e);
+        // Create a fallback error element so the user knows something went wrong with this item
+        const errorEl = utils.createElement('div', 'photo-card error-placeholder');
+        errorEl.textContent = '!';
+        errorEl.title = `Error rendering photo: ${e.message}`;
+        fragment.appendChild(errorEl);
       }
     });
 
@@ -134,7 +133,7 @@ class CleanupManager {
     if (card) {
       card.remove();
     }
-    this.candidates = this.candidates.filter((c) => c.photo_hash !== hash);
+    this.candidates = this.candidates.filter((c) => c.photo.hash_sha256 !== hash);
     if (this.candidates.length === 0) {
       this.container.innerHTML =
         '<div class="no-photos">No cleanup candidates found. Your library is clean!</div>';

@@ -52,6 +52,20 @@ class PhotoCard {
       imageContainer.classList.add('image-loaded');
     };
 
+    img.onerror = () => {
+      // Show placeholder on error
+      const placeholder = utils.createElement('div', 'photo-card-placeholder');
+      // Remove the picture element (which contains the broken img)
+      if (imageContainer.contains(picture)) {
+        imageContainer.removeChild(picture);
+      }
+      imageContainer.appendChild(placeholder);
+
+      // Also hide blurhash if present as it might be irrelevant/distracting if main image failed
+      const blurhash = imageContainer.querySelector('.photo-card-blurhash');
+      if (blurhash) blurhash.style.display = 'none';
+    };
+
     picture.appendChild(img);
     imageContainer.appendChild(picture);
 
@@ -104,14 +118,14 @@ class PhotoCard {
       const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
       keepBtn.title = 'Keep (Remove from cleanup list)';
       keepBtn.dataset.action = 'keep';
-      keepBtn.innerHTML = window.iconHelper.getSemanticIcon('x', { size: 18 });
+      keepBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
       keepBtn.style.color = '#10b981'; // Green
 
       // Delete Button
       const deleteBtn = utils.createElement('button', 'card-action-btn delete-btn');
       deleteBtn.title = 'Delete Photo';
       deleteBtn.dataset.action = 'delete-cleanup'; // specific action
-      deleteBtn.innerHTML = window.iconHelper.getSemanticIcon('trash-2', { size: 18 });
+      deleteBtn.innerHTML = window.iconHelper.getIcon('trash-2', { size: 18 });
       deleteBtn.style.color = '#ef4444'; // Red
 
       actions.appendChild(keepBtn);

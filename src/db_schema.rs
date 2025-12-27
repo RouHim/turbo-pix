@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS collages (
 )
 "#;
 
+
+
+pub const CLEANUP_CANDIDATES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS cleanup_candidates (
+    photo_hash TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    score REAL NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (photo_hash, reason),
+    FOREIGN KEY (photo_hash) REFERENCES photos(hash_sha256) ON DELETE CASCADE
+)
+"#;
+
 pub const SCHEMA_SQL: &[&str] = &[
     PHOTOS_TABLE,
     "CREATE INDEX IF NOT EXISTS idx_photos_file_path ON photos(file_path);",
@@ -87,6 +100,8 @@ pub const SCHEMA_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_collages_date ON collages(date);",
     "CREATE INDEX IF NOT EXISTS idx_collages_accepted_at ON collages(accepted_at);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_collages_signature ON collages(signature);",
+    CLEANUP_CANDIDATES_TABLE,
+    "CREATE INDEX IF NOT EXISTS idx_cleanup_candidates_reason ON cleanup_candidates(reason);",
 ];
 
 pub fn initialize_schema(conn: &Connection) -> SqlResult<()> {

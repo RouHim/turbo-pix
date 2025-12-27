@@ -8,6 +8,7 @@ window.DE_TRANSLATIONS = {
     favorites: 'Favoriten',
     videos: 'Videos',
     collages: 'Collagen',
+    cleanup: 'Aufräumen',
     pending_collages: 'Ausstehende Collagen',
     favorite_photos: 'Lieblingsfotos',
     load_more: 'Mehr laden',
@@ -182,6 +183,7 @@ window.DE_TRANSLATIONS = {
     indexing_metadata: 'Metadaten werden indexiert...',
     indexing_semantic: 'Semantische Vektoren werden berechnet...',
     indexing_collages: 'Collagen werden generiert...',
+    indexing_cleanup: 'Identifiziere Aufräumkandidaten...',
 
     // Collages
     no_pending_collages: 'Keine ausstehenden Collagen',

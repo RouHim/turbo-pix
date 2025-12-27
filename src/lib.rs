@@ -1,4 +1,5 @@
 pub mod cache_manager;
+pub mod cleanup_manager;
 pub mod collage_generator;
 pub mod config;
 pub mod db;
@@ -6,6 +7,7 @@ pub mod db_pool;
 pub mod db_schema;
 pub mod db_types;
 pub mod file_scanner;
+pub mod handlers_cleanup;
 pub mod handlers_collage;
 pub mod handlers_config;
 pub mod handlers_health;

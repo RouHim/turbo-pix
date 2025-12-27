@@ -66,6 +66,25 @@ class PhotoCard {
     overlay.appendChild(title);
     overlay.appendChild(meta);
 
+    // Cleanup Reason Badge
+    if (this.photo.cleanupReason) {
+      const badge = utils.createElement('div', 'cleanup-badge');
+      const score =
+        typeof this.photo.cleanupScore === 'number' ? Math.round(this.photo.cleanupScore) : '?';
+      badge.textContent = `${this.photo.cleanupReason} (${score}%)`;
+      badge.style.position = 'absolute';
+      badge.style.top = '10px';
+      badge.style.left = '10px';
+      badge.style.background = 'rgba(239, 68, 68, 0.9)'; // Red
+      badge.style.color = 'white';
+      badge.style.padding = '4px 8px';
+      badge.style.borderRadius = '4px';
+      badge.style.fontSize = '12px';
+      badge.style.fontWeight = 'bold';
+      badge.style.zIndex = '2';
+      card.appendChild(badge);
+    }
+
     const actions = this.createActions();
 
     card.appendChild(imageContainer);
@@ -80,21 +99,40 @@ class PhotoCard {
   createActions() {
     const actions = utils.createElement('div', 'photo-card-actions');
 
-    const favoriteBtn = utils.createElement(
-      'button',
-      `card-action-btn favorite-btn${this.photo.is_favorite ? ' active' : ''}`
-    );
-    favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
-    favoriteBtn.dataset.action = 'favorite';
-    favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
+    if (this.photo.cleanupReason) {
+      // Keep Button (Remove from list)
+      const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
+      keepBtn.title = 'Keep (Remove from cleanup list)';
+      keepBtn.dataset.action = 'keep';
+      keepBtn.innerHTML = window.iconHelper.getSemanticIcon('x', { size: 18 });
+      keepBtn.style.color = '#10b981'; // Green
 
-    const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
-    downloadBtn.title = utils.t('ui.download', 'Download');
-    downloadBtn.dataset.action = 'download';
-    downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
+      // Delete Button
+      const deleteBtn = utils.createElement('button', 'card-action-btn delete-btn');
+      deleteBtn.title = 'Delete Photo';
+      deleteBtn.dataset.action = 'delete-cleanup'; // specific action
+      deleteBtn.innerHTML = window.iconHelper.getSemanticIcon('trash-2', { size: 18 });
+      deleteBtn.style.color = '#ef4444'; // Red
 
-    actions.appendChild(favoriteBtn);
-    actions.appendChild(downloadBtn);
+      actions.appendChild(keepBtn);
+      actions.appendChild(deleteBtn);
+    } else {
+      const favoriteBtn = utils.createElement(
+        'button',
+        `card-action-btn favorite-btn${this.photo.is_favorite ? ' active' : ''}`
+      );
+      favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
+      favoriteBtn.dataset.action = 'favorite';
+      favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
+
+      const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
+      downloadBtn.title = utils.t('ui.download', 'Download');
+      downloadBtn.dataset.action = 'download';
+      downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
+
+      actions.appendChild(favoriteBtn);
+      actions.appendChild(downloadBtn);
+    }
 
     return actions;
   }
@@ -108,16 +146,36 @@ class PhotoCard {
 
     const favoriteBtn = card.querySelector('[data-action="favorite"]');
     const downloadBtn = card.querySelector('[data-action="download"]');
+    const keepBtn = card.querySelector('[data-action="keep"]');
+    const deleteCleanupBtn = card.querySelector('[data-action="delete-cleanup"]');
 
-    utils.on(favoriteBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.toggleFavorite(favoriteBtn);
-    });
+    if (favoriteBtn) {
+      utils.on(favoriteBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.toggleFavorite(favoriteBtn);
+      });
+    }
 
-    utils.on(downloadBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.download();
-    });
+    if (downloadBtn) {
+      utils.on(downloadBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.download();
+      });
+    }
+
+    if (keepBtn) {
+      utils.on(keepBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.keepPhoto();
+      });
+    }
+
+    if (deleteCleanupBtn) {
+      utils.on(deleteCleanupBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.deletePhoto();
+      });
+    }
   }
 
   getTitle() {
@@ -203,6 +261,39 @@ class PhotoCard {
       'info',
       2000
     );
+  }
+
+  async keepPhoto() {
+    try {
+      await api.removeCleanupCandidate(this.photo.hash_sha256);
+      utils.showToast('Kept', 'Photo removed from cleanup candidates', 'success', 2000);
+      // Remove card from UI
+      if (this.grid && this.grid.removePhoto) {
+        this.grid.removePhoto(this.photo.hash_sha256);
+      } else {
+        // Fallback if grid doesn't have removePhoto or we are just removing the card element
+        // But PhotoGrid usually manages DOM.
+        // We will implement removePhoto in CleanupManager's grid or similar.
+        // For now, emit an event
+        utils.emit(window, 'cleanupCandidateRemoved', { hash: this.photo.hash_sha256 });
+      }
+    } catch (e) {
+      console.error('Failed to keep photo:', e);
+      utils.showToast('Error', 'Failed to keep photo', 'error');
+    }
+  }
+
+  async deletePhoto() {
+    if (!confirm('Are you sure you want to permanently delete this photo?')) return;
+
+    try {
+      await api.deletePhoto(this.photo.hash_sha256);
+      utils.showToast('Deleted', 'Photo deleted permanently', 'success', 2000);
+      utils.emit(window, 'cleanupCandidateRemoved', { hash: this.photo.hash_sha256 });
+    } catch (e) {
+      console.error('Failed to delete photo:', e);
+      utils.showToast('Error', 'Failed to delete photo', 'error');
+    }
   }
 
   openViewer() {

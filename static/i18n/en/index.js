@@ -8,6 +8,7 @@ window.EN_TRANSLATIONS = {
     favorites: 'Favorites',
     videos: 'Videos',
     collages: 'Collages',
+    cleanup: 'Cleanup',
     pending_collages: 'Pending Collages',
     favorite_photos: 'Favorite Photos',
     load_more: 'Load More',
@@ -181,6 +182,7 @@ window.EN_TRANSLATIONS = {
     indexing_metadata: 'Indexing metadata...',
     indexing_semantic: 'Computing semantic vectors...',
     indexing_collages: 'Generating collages...',
+    indexing_cleanup: 'Identifying cleanup candidates...',
 
     // Collages
     no_pending_collages: 'No pending collages',

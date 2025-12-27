@@ -114,6 +114,10 @@ class IndexingStatusManager {
       message = window.i18n?.t('ui.indexing_metadata') || 'Indexing metadata...';
     } else if (phase === 'semantic_vectors') {
       message = window.i18n?.t('ui.indexing_semantic') || 'Computing semantic vectors...';
+    } else if (phase === 'collages') {
+      message = window.i18n?.t('ui.indexing_collages') || 'Generating collages...';
+    } else if (phase === 'cleanup') {
+      message = window.i18n?.t('ui.indexing_cleanup') || 'Identifying cleanup candidates...';
     } else {
       message = window.i18n?.t('ui.indexing_photos') || 'Indexing photos...';
     }
@@ -125,6 +129,9 @@ class IndexingStatusManager {
     } else if (phase === 'semantic_vectors' && photos_total > 0) {
       progressText = `${photos_semantic_indexed} / ${photos_total} (${Math.round(progress_percent)}%)`;
     }
+
+    // Emit event for other components
+    utils.emit(window, 'indexingStatusChanged', status);
 
     // Update DOM
     if (this.messageEl) {

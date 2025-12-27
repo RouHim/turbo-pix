@@ -366,6 +366,16 @@ class TurboPixApp {
             await window.collagesView.loadPendingCollages();
           }
           break;
+
+        case 'cleanup':
+          if (window.photoGrid) {
+            window.photoGrid.clearGrid();
+            window.photoGrid.hasMore = false;
+          }
+          if (window.cleanupManager) {
+            await window.cleanupManager.loadAndRender();
+          }
+          break;
       }
     } catch (error) {
       // Only show error if this is still the current request
@@ -415,6 +425,7 @@ class TurboPixApp {
         favorites: 'favorites',
         videos: 'videos',
         collages: 'pending_collages',
+        cleanup: 'cleanup',
       };
 
       const i18nKey = titleKeys[view] || 'all_photos';

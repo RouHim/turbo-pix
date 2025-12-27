@@ -149,6 +149,7 @@
   gap: var(--space-1);
   opacity: 0;
   transition: var(--transition-medium);
+  z-index: 10;
 }
 
 .photo-card:hover .photo-card-actions {

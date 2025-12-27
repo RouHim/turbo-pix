@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::cache_manager::CacheManager;
+use crate::cleanup_manager;
 use crate::collage_generator;
 use crate::db::DbPool;
 use crate::indexer::PhotoProcessor;
@@ -289,6 +290,14 @@ impl PhotoScheduler {
                             Ok(count) => info!("Phase 3 completed: {} collages generated", count),
                             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
                         }
+
+                        // Phase 4: Cleanup Identification
+                        info!("Phase 4: Identifying cleanup candidates");
+                        status.set_phase("cleanup").await;
+                        match cleanup_manager::run_cleanup_scan(&db_pool, &semantic_search).await {
+                            Ok(count) => info!("Phase 4 completed: {} cleanup candidates identified", count),
+                            Err(e) => error!("Phase 4 (cleanup identification) failed: {}", e),
+                        }
                     }
                     Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
                 }
@@ -388,8 +397,16 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
         }
 
+        // Phase 4: Cleanup Identification
+        info!("Phase 4: Identifying cleanup candidates");
+        self.status.set_phase("cleanup").await;
+        match cleanup_manager::run_cleanup_scan(&self.db_pool, &self.semantic_search).await {
+            Ok(count) => info!("Phase 4 completed: {} cleanup candidates identified", count),
+            Err(e) => error!("Phase 4 (cleanup identification) failed: {}", e),
+        }
+
         info!(
-            "Startup rescan completed (three-phase): {} photos indexed, {} errors",
+            "Startup rescan completed (four-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
 

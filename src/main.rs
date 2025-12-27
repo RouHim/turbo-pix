@@ -9,7 +9,7 @@ use turbo_pix::cache_manager::CacheManager;
 use turbo_pix::config;
 use turbo_pix::db;
 use turbo_pix::db_pool;
-use turbo_pix::handlers_cleanup::build_cleanup_routes;
+use turbo_pix::handlers_housekeeping::build_housekeeping_routes;
 use turbo_pix::handlers_collage::build_collage_routes;
 use turbo_pix::handlers_config::build_config_routes;
 use turbo_pix::handlers_health::build_health_routes;
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.locale.clone(),
         semantic_search,
     );
-    let cleanup_routes = build_cleanup_routes(db_pool.clone());
+    let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
     let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(search_routes)
         .or(indexing_routes)
         .or(collage_routes)
-        .or(cleanup_routes)
+        .or(housekeeping_routes)
         .or(config_routes)
         .or(static_routes)
         .with(cors())
@@ -174,7 +174,7 @@ fn initialize_services(
 }
 
 fn start_background_tasks(photo_scheduler: PhotoScheduler) {
-    info!("Running startup photo rescan and cleanup...");
+    info!("Running startup photo rescan and housekeeping...");
     tokio::spawn(async move {
         if let Err(e) = photo_scheduler.run_startup_rescan().await {
             log::error!("Startup rescan failed: {}", e);

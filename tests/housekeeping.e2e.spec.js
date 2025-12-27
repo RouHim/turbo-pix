@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Cleanup Functionality', () => {
+test.describe('Housekeeping Functionality', () => {
   test.beforeEach(async ({ page }) => {
       page.on('console', msg => console.log(`PAGE LOG: ${msg.text()}`));
       page.on('pageerror', exception => console.log(`PAGE ERROR: ${exception}`));
@@ -12,27 +12,35 @@ test.describe('Cleanup Functionality', () => {
       });
   });
 
-  test('should display cleanup candidates and allow keeping them', async ({ page }) => {
+  test('should display housekeeping candidates and allow keeping them', async ({ page }) => {
     // 1. Mock the API to ensure predictable state for UI testing
     const mockCandidates = {
       candidates: [
         {
-          photo_hash: 'mock_hash_1',
-          file_path: '/photos/mock_screenshot.png',
+          photo: {
+              hash_sha256: 'mock_hash_1',
+              file_path: '/photos/mock_screenshot.png',
+              width: 800,
+              height: 600
+          },
           reason: 'screenshot',
           score: 0.95
         },
         {
-            photo_hash: 'mock_hash_2',
-            file_path: '/photos/mock_meme.jpg',
-            reason: 'meme',
-            score: 0.88
+          photo: {
+              hash_sha256: 'mock_hash_2',
+              file_path: '/photos/mock_meme.jpg',
+              width: 800,
+              height: 600
+          },
+          reason: 'meme',
+          score: 0.88
         }
       ]
     };
 
-    // Intercept the cleanup candidates request
-    await page.route('**/api/cleanup/candidates', async route => {
+    // Intercept the housekeeping candidates request
+    await page.route('**/api/housekeeping/candidates', async route => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -41,8 +49,8 @@ test.describe('Cleanup Functionality', () => {
     });
 
     // Mock the Keep (Delete candidate) API
-    // The frontend calls DELETE /api/cleanup/candidates/:hash
-    await page.route('**/api/cleanup/candidates/mock_hash_1', async route => {
+    // The frontend calls DELETE /api/housekeeping/candidates/:hash
+    await page.route('**/api/housekeeping/candidates/mock_hash_1', async route => {
         await route.fulfill({ status: 200, body: '{}' });
     });
     
@@ -64,20 +72,20 @@ test.describe('Cleanup Functionality', () => {
     // We assume the app is running on localhost:18473 as per AGENTS.md
     await page.goto('http://localhost:18473');
 
-    // 3. Click the Cleanup navigation button
-    // Selector based on data-view="cleanup" from index.html
-    await page.click('button[data-view="cleanup"]');
+    // 3. Click the Housekeeping navigation button
+    // Selector based on data-view="housekeeping" from index.html
+    await page.click('button[data-view="housekeeping"]');
 
     // 4. Verify candidates are displayed
-    // "Found 2 candidates" text
-    await expect(page.locator('.cleanup-summary')).toContainText('Found 2 candidates');
+    // Wait for grid to load
+    await expect(page.locator('.photo-grid')).toBeVisible();
     
     // Check for specific candidate elements (photo cards)
     const keepButtons = page.locator('[data-action="keep"]');
     await expect(keepButtons).toHaveCount(2);
 
     // Verify reason badges
-    await expect(page.locator('.cleanup-badge').first()).toContainText('screenshot');
+    await expect(page.locator('.housekeeping-badge').first()).toContainText('screenshot');
 
     // 5. Test "Keep" functionality
     // Hover the first card to make buttons visible (if they are hover-only)
@@ -100,7 +108,7 @@ test.describe('Cleanup Functionality', () => {
   });
   
   test('should show empty state when no candidates found', async ({ page }) => {
-      await page.route('**/api/cleanup/candidates', async route => {
+      await page.route('**/api/housekeeping/candidates', async route => {
           await route.fulfill({
               status: 200,
               contentType: 'application/json',
@@ -109,9 +117,8 @@ test.describe('Cleanup Functionality', () => {
       });
 
       await page.goto('http://localhost:18473');
-      await page.click('button[data-view="cleanup"]');
+      await page.click('button[data-view="housekeeping"]');
       
-      // Based on cleanup.js L51: <div class="no-photos">No cleanup candidates found. Your library is clean!</div>
-      await expect(page.locator('.no-photos')).toContainText('No cleanup candidates found');
-  });
+          // Based on housekeeping.js: <div class="no-photos">No housekeeping candidates found. Your library is clean!</div>
+          await expect(page.locator('.no-photos')).toContainText('No housekeeping candidates found');  });
 });

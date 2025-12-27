@@ -80,12 +80,14 @@ class PhotoCard {
     overlay.appendChild(title);
     overlay.appendChild(meta);
 
-    // Cleanup Reason Badge
-    if (this.photo.cleanupReason) {
-      const badge = utils.createElement('div', 'cleanup-badge');
+    // Housekeeping Reason Badge
+    if (this.photo.housekeepingReason) {
+      const badge = utils.createElement('div', 'housekeeping-badge');
       const score =
-        typeof this.photo.cleanupScore === 'number' ? Math.round(this.photo.cleanupScore) : '?';
-      badge.textContent = `${this.photo.cleanupReason} (${score}%)`;
+        typeof this.photo.housekeepingScore === 'number'
+          ? Math.round(this.photo.housekeepingScore)
+          : '?';
+      badge.textContent = `${this.photo.housekeepingReason} (${score}%)`;
       badge.style.position = 'absolute';
       badge.style.top = '10px';
       badge.style.left = '10px';
@@ -113,10 +115,10 @@ class PhotoCard {
   createActions() {
     const actions = utils.createElement('div', 'photo-card-actions');
 
-    if (this.photo.cleanupReason) {
+    if (this.photo.housekeepingReason) {
       // Keep Button (Remove from list)
       const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
-      keepBtn.title = 'Keep (Remove from cleanup list)';
+      keepBtn.title = 'Keep (Remove from housekeeping list)';
       keepBtn.dataset.action = 'keep';
       keepBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
       keepBtn.style.color = '#10b981'; // Green
@@ -124,7 +126,7 @@ class PhotoCard {
       // Delete Button
       const deleteBtn = utils.createElement('button', 'card-action-btn delete-btn');
       deleteBtn.title = 'Delete Photo';
-      deleteBtn.dataset.action = 'delete-cleanup'; // specific action
+      deleteBtn.dataset.action = 'delete-housekeeping'; // specific action
       deleteBtn.innerHTML = window.iconHelper.getIcon('trash-2', { size: 18 });
       deleteBtn.style.color = '#ef4444'; // Red
 
@@ -161,7 +163,7 @@ class PhotoCard {
     const favoriteBtn = card.querySelector('[data-action="favorite"]');
     const downloadBtn = card.querySelector('[data-action="download"]');
     const keepBtn = card.querySelector('[data-action="keep"]');
-    const deleteCleanupBtn = card.querySelector('[data-action="delete-cleanup"]');
+    const deleteHousekeepingBtn = card.querySelector('[data-action="delete-housekeeping"]');
 
     if (favoriteBtn) {
       utils.on(favoriteBtn, 'click', (e) => {
@@ -184,8 +186,8 @@ class PhotoCard {
       });
     }
 
-    if (deleteCleanupBtn) {
-      utils.on(deleteCleanupBtn, 'click', (e) => {
+    if (deleteHousekeepingBtn) {
+      utils.on(deleteHousekeepingBtn, 'click', (e) => {
         e.stopPropagation();
         this.deletePhoto();
       });
@@ -279,17 +281,17 @@ class PhotoCard {
 
   async keepPhoto() {
     try {
-      await api.removeCleanupCandidate(this.photo.hash_sha256);
-      utils.showToast('Kept', 'Photo removed from cleanup candidates', 'success', 2000);
+      await api.removeHousekeepingCandidate(this.photo.hash_sha256);
+      utils.showToast('Kept', 'Photo removed from housekeeping candidates', 'success', 2000);
       // Remove card from UI
       if (this.grid && this.grid.removePhoto) {
         this.grid.removePhoto(this.photo.hash_sha256);
       } else {
         // Fallback if grid doesn't have removePhoto or we are just removing the card element
         // But PhotoGrid usually manages DOM.
-        // We will implement removePhoto in CleanupManager's grid or similar.
+        // We will implement removePhoto in HousekeepingManager's grid or similar.
         // For now, emit an event
-        utils.emit(window, 'cleanupCandidateRemoved', { hash: this.photo.hash_sha256 });
+        utils.emit(window, 'housekeepingCandidateRemoved', { hash: this.photo.hash_sha256 });
       }
     } catch (e) {
       console.error('Failed to keep photo:', e);
@@ -303,7 +305,7 @@ class PhotoCard {
     try {
       await api.deletePhoto(this.photo.hash_sha256);
       utils.showToast('Deleted', 'Photo deleted permanently', 'success', 2000);
-      utils.emit(window, 'cleanupCandidateRemoved', { hash: this.photo.hash_sha256 });
+      utils.emit(window, 'housekeepingCandidateRemoved', { hash: this.photo.hash_sha256 });
     } catch (e) {
       console.error('Failed to delete photo:', e);
       utils.showToast('Error', 'Failed to delete photo', 'error');

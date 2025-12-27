@@ -116,8 +116,9 @@ class IndexingStatusManager {
       message = window.i18n?.t('ui.indexing_semantic') || 'Computing semantic vectors...';
     } else if (phase === 'collages') {
       message = window.i18n?.t('ui.indexing_collages') || 'Generating collages...';
-    } else if (phase === 'cleanup') {
-      message = window.i18n?.t('ui.indexing_cleanup') || 'Identifying cleanup candidates...';
+    } else if (phase === 'housekeeping') {
+      message =
+        window.i18n?.t('ui.indexing_housekeeping') || 'Identifying housekeeping candidates...';
     } else {
       message = window.i18n?.t('ui.indexing_photos') || 'Indexing photos...';
     }
@@ -163,7 +164,7 @@ class IndexingStatusManager {
   }
 
   /**
-   * Cleanup when destroying the manager
+   * Housekeeping when destroying the manager
    */
   destroy() {
     this.stopPolling();

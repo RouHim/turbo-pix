@@ -367,13 +367,13 @@ class TurboPixApp {
           }
           break;
 
-        case 'cleanup':
+        case 'housekeeping':
           if (window.photoGrid) {
             window.photoGrid.clearGrid();
             window.photoGrid.hasMore = false;
           }
-          if (window.cleanupManager) {
-            await window.cleanupManager.loadAndRender();
+          if (window.housekeepingManager) {
+            await window.housekeepingManager.loadAndRender();
           }
           break;
       }
@@ -425,7 +425,7 @@ class TurboPixApp {
         favorites: 'favorites',
         videos: 'videos',
         collages: 'pending_collages',
-        cleanup: 'cleanup',
+        housekeeping: 'housekeeping',
       };
 
       const i18nKey = titleKeys[view] || 'all_photos';
@@ -437,7 +437,7 @@ class TurboPixApp {
   updateSortVisibility(view) {
     const sortSelect = utils.$('#sort-select');
     if (!sortSelect) return;
-    const shouldHide = view === 'collages' || view === 'cleanup';
+    const shouldHide = view === 'collages' || view === 'housekeeping';
     sortSelect.hidden = shouldHide;
     sortSelect.disabled = shouldHide;
   }
@@ -445,7 +445,7 @@ class TurboPixApp {
   updateTimelineVisibility(view) {
     const timelineContainer = utils.$('.timeline-container');
     if (!timelineContainer) return;
-    timelineContainer.hidden = view === 'collages' || view === 'cleanup';
+    timelineContainer.hidden = view === 'collages' || view === 'housekeeping';
   }
 
   async setSortBy(sortBy) {

@@ -1,6 +1,6 @@
-// Cleanup Manager to handle deletion candidates
+// Housekeeping Manager to handle deletion candidates
 
-class CleanupManager {
+class HousekeepingManager {
   constructor() {
     this.container = document.getElementById('photo-grid');
     this.candidates = [];
@@ -8,7 +8,7 @@ class CleanupManager {
   }
 
   async init() {
-    // We don't have a specific container for cleanup, we reuse the main photo grid.
+    // We don't have a specific container for housekeeping, we reuse the main photo grid.
     // The App class handles view switching.
   }
 
@@ -27,8 +27,8 @@ class CleanupManager {
     `;
 
     try {
-      const response = await api.getCleanupCandidates();
-      console.log('Cleanup response:', response);
+      const response = await api.getHousekeepingCandidates();
+      console.log('Housekeeping response:', response);
       if (response && response.candidates) {
         console.log(`Found ${response.candidates.length} candidates`);
         this.candidates = response.candidates;
@@ -38,8 +38,8 @@ class CleanupManager {
       }
       this.render();
     } catch (e) {
-      console.error('Failed to load cleanup candidates:', e);
-      this.container.innerHTML = `<div class="error-message">Failed to load cleanup candidates: ${e.message}</div>`;
+      console.error('Failed to load housekeeping candidates:', e);
+      this.container.innerHTML = `<div class="error-message">Failed to load housekeeping candidates: ${e.message}</div>`;
     }
   }
 
@@ -49,15 +49,15 @@ class CleanupManager {
 
     if (this.candidates.length === 0) {
       this.container.innerHTML =
-        '<div class="no-photos">No cleanup candidates found. Your library is clean!</div>';
+        '<div class="no-photos">No housekeeping candidates found. Your library is clean!</div>';
       return;
     }
 
-    // Convert candidates to photos with attached cleanup metadata
+    // Convert candidates to photos with attached housekeeping metadata
     const photos = this.candidates.map((c) => {
       const p = c.photo;
-      p.cleanupReason = c.reason;
-      p.cleanupScore = c.score;
+      p.housekeepingReason = c.reason;
+      p.housekeepingScore = c.score;
       return p;
     });
 
@@ -86,7 +86,7 @@ class CleanupManager {
 
     // Add event listener for removal
     this.removeHandler = (e) => this.removePhoto(e.detail.hash);
-    utils.on(window, 'cleanupCandidateRemoved', this.removeHandler);
+    utils.on(window, 'housekeepingCandidateRemoved', this.removeHandler);
 
     this.indexingHandler = (e) => this.handleIndexingStatus(e.detail);
     utils.on(window, 'indexingStatusChanged', this.indexingHandler);
@@ -95,20 +95,20 @@ class CleanupManager {
   handleIndexingStatus(status) {
     if (!this.isActive) return;
 
-    if (status.phase === 'cleanup' && status.is_indexing) {
+    if (status.phase === 'housekeeping' && status.is_indexing) {
       this.container.innerHTML = `
               <div class="indexing-message-container" style="text-align: center; padding: 40px; color: var(--text-secondary);">
                   <div class="spinner" style="margin: 0 auto 20px;"></div>
-                  <h3>${window.i18nManager.t('ui.indexing_cleanup')}</h3>
+                  <h3>${window.i18nManager.t('ui.indexing_housekeeping')}</h3>
                   <p>This may take a moment...</p>
               </div>
           `;
-    } else if (this.wasIndexingCleanup && !status.is_indexing) {
-      // Cleanup phase finished
+    } else if (this.wasIndexingHousekeeping && !status.is_indexing) {
+      // Housekeeping phase finished
       this.loadAndRender();
     }
 
-    this.wasIndexingCleanup = status.phase === 'cleanup' && status.is_indexing;
+    this.wasIndexingHousekeeping = status.phase === 'housekeeping' && status.is_indexing;
   }
 
   removePhoto(hash) {
@@ -119,14 +119,14 @@ class CleanupManager {
     this.candidates = this.candidates.filter((c) => c.photo.hash_sha256 !== hash);
     if (this.candidates.length === 0) {
       this.container.innerHTML =
-        '<div class="no-photos">No cleanup candidates found. Your library is clean!</div>';
+        '<div class="no-photos">No housekeeping candidates found. Your library is clean!</div>';
     }
   }
 
   destroy() {
     this.isActive = false;
     if (this.removeHandler) {
-      window.removeEventListener('cleanupCandidateRemoved', this.removeHandler);
+      window.removeEventListener('housekeepingCandidateRemoved', this.removeHandler);
     }
     if (this.indexingHandler) {
       window.removeEventListener('indexingStatusChanged', this.indexingHandler);
@@ -134,4 +134,4 @@ class CleanupManager {
   }
 }
 
-window.cleanupManager = new CleanupManager();
+window.housekeepingManager = new HousekeepingManager();

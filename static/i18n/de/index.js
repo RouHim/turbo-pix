@@ -8,8 +8,7 @@ window.DE_TRANSLATIONS = {
     favorites: 'Favoriten',
     videos: 'Videos',
     collages: 'Collagen',
-    cleanup: 'Aufräumen',
-    pending_collages: 'Ausstehende Collagen',
+    housekeeping: 'Aufräumen', // Keep german translation but key changed
     favorite_photos: 'Lieblingsfotos',
     load_more: 'Mehr laden',
     loading: 'Wird geladen...',
@@ -180,10 +179,7 @@ window.DE_TRANSLATIONS = {
 
     // Indexing
     indexing_photos: 'Fotos werden indexiert...',
-    indexing_metadata: 'Metadaten werden indexiert...',
-    indexing_semantic: 'Semantische Vektoren werden berechnet...',
-    indexing_collages: 'Collagen werden generiert...',
-    indexing_cleanup: 'Identifiziere Aufräumkandidaten...',
+    indexing_housekeeping: 'Identifiziere Aufräumkandidaten...',
 
     // Collages
     no_pending_collages: 'Keine ausstehenden Collagen',

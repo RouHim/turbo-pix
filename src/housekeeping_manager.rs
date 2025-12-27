@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::db::DbPool;
 use crate::semantic_search::SemanticSearchEngine;
 
-const CLEANUP_TERMS: &[&str] = &[
+const HOUSEKEEPING_TERMS: &[&str] = &[
     "screenshot",
     "blurry image",
     "scanned document",
@@ -23,11 +23,11 @@ const CLEANUP_TERMS: &[&str] = &[
 /// limit per term to avoid flooding
 const MAX_RESULTS_PER_TERM: usize = 100;
 
-pub async fn run_cleanup_scan(
+pub async fn run_housekeeping_scan(
     db_pool: &DbPool,
     semantic_search: &Arc<SemanticSearchEngine>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    info!("Starting cleanup candidate identification scan...");
+    info!("Starting housekeeping candidate identification scan...");
     
     // We will collect all candidates first to avoid holding a DB lock for too long
     // while querying semantic search (which might be fast, but good practice).
@@ -46,11 +46,11 @@ pub async fn run_cleanup_scan(
         info!("DEBUG: media_semantic_vectors count: {}", count);
     }
 
-    for &term in CLEANUP_TERMS {
+    for &term in HOUSEKEEPING_TERMS {
         // Search for the term
         match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0) {
             Ok(results) => {
-                info!("Found {} results for cleanup term '{}'", results.len(), term);
+                info!("Found {} results for housekeeping term '{}'", results.len(), term);
                 for (path, score) in results {
                     // We need to map path to hash. We'll do this in bulk or per item?
                     // Let's store path for now and resolve to hash later.
@@ -59,7 +59,7 @@ pub async fn run_cleanup_scan(
                 }
             }
             Err(e) => {
-                warn!("Failed to search for cleanup term '{}': {}", term, e);
+                warn!("Failed to search for housekeeping term '{}': {}", term, e);
             }
         }
     }
@@ -70,11 +70,11 @@ pub async fn run_cleanup_scan(
 
     // 1. Clear existing candidates
     // Always clear table to ensure a fresh list, even if no new candidates are found.
-    tx.execute("DELETE FROM cleanup_candidates", [])?;
+    tx.execute("DELETE FROM housekeeping_candidates", [])?;
 
     if candidates.is_empty() {
         tx.commit()?;
-        info!("No cleanup candidates found.");
+        info!("No housekeeping candidates found.");
         return Ok(0);
     }
 
@@ -85,7 +85,7 @@ pub async fn run_cleanup_scan(
     {
         let mut stmt_get_hash = tx.prepare("SELECT hash_sha256 FROM photos WHERE file_path = ?")?;
         let mut stmt_insert = tx.prepare(
-            "INSERT OR IGNORE INTO cleanup_candidates (photo_hash, reason, score) VALUES (?, ?, ?)"
+            "INSERT OR IGNORE INTO housekeeping_candidates (photo_hash, reason, score) VALUES (?, ?, ?)"
         )?;
 
         for (path, reason, score) in candidates {
@@ -107,7 +107,7 @@ pub async fn run_cleanup_scan(
 
     tx.commit()?;
 
-    info!("Cleanup scan completed. Identified {} candidates.", inserted_count);
+    info!("Housekeeping scan completed. Identified {} candidates.", inserted_count);
 
     Ok(inserted_count)
 }

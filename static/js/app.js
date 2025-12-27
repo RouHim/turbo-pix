@@ -437,7 +437,7 @@ class TurboPixApp {
   updateSortVisibility(view) {
     const sortSelect = utils.$('#sort-select');
     if (!sortSelect) return;
-    const shouldHide = view === 'collages';
+    const shouldHide = view === 'collages' || view === 'cleanup';
     sortSelect.hidden = shouldHide;
     sortSelect.disabled = shouldHide;
   }
@@ -445,7 +445,7 @@ class TurboPixApp {
   updateTimelineVisibility(view) {
     const timelineContainer = utils.$('.timeline-container');
     if (!timelineContainer) return;
-    timelineContainer.hidden = view === 'collages';
+    timelineContainer.hidden = view === 'collages' || view === 'cleanup';
   }
 
   async setSortBy(sortBy) {

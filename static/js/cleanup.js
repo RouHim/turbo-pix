@@ -53,22 +53,6 @@ class CleanupManager {
       return;
     }
 
-    // Add summary header
-    const summary = utils.createElement(
-      'div',
-      'cleanup-summary',
-      `Found ${this.candidates.length} candidates`
-    );
-    summary.style.gridColumn = '1 / -1';
-    summary.style.padding = '20px';
-    summary.style.textAlign = 'center';
-    summary.style.color = 'var(--text-main)'; // Use main text color
-    summary.style.fontSize = '1.2rem';
-    summary.style.fontWeight = 'bold';
-    summary.style.backgroundColor = 'var(--bg-secondary)';
-    summary.style.marginBottom = '20px';
-    summary.style.borderRadius = '8px';
-
     // Convert candidates to photos with attached cleanup metadata
     const photos = this.candidates.map((c) => {
       const p = c.photo;
@@ -79,7 +63,6 @@ class CleanupManager {
 
     // Create a fragment
     const fragment = document.createDocumentFragment();
-    fragment.appendChild(summary);
 
     console.log('Rendering photos...');
     photos.forEach((photo, index) => {

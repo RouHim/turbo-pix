@@ -1,3 +1,10 @@
+## [2.10.1](https://github.com/RouHim/turbo-pix/compare/2.10.0...2.10.1) (2025-12-29)
+
+
+### Bug Fixes
+
+* remove dev profile optimization causing test failures ([8163457](https://github.com/RouHim/turbo-pix/commit/8163457642d05d38942ba758729bb4d987da798d))
+
 # [2.10.0](https://github.com/RouHim/turbo-pix/compare/2.9.0...2.10.0) (2025-12-29)
 
 

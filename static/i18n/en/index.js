@@ -73,6 +73,9 @@ window.EN_TRANSLATIONS = {
     reject_collage: 'Reject',
     collages_load_failed: 'Failed to load collages',
     collage_for: 'Collage for {{date}}',
+    no_pending_collages: 'No pending collages',
+    pending_collages: 'Pending Collages',
+    collage_photos: '{{count}} photos',
 
     // Values
     unknown: 'Unknown',

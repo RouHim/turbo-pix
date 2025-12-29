@@ -25,27 +25,37 @@ class PhotoCard {
 
     // Responsive images with WebP and JPEG fallback
     const picture = utils.createElement('picture');
+    let img;
 
-    // WebP source with srcset for responsive images
-    const webpSource = utils.createElement('source');
-    webpSource.type = 'image/webp';
-    webpSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=webp 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=webp 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=webp 800w`;
-    webpSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
-    picture.appendChild(webpSource);
+    if (this.photo.isCollage) {
+      // For collages, use direct image path (no responsive images)
+      img = utils.createElement('img', 'photo-card-image');
+      img.src = this.photo.thumbnail_path || this.photo.path;
+      img.alt = this.getTitle();
+      img.loading = 'lazy';
+      img.decoding = 'async';
+    } else {
+      // For photos, use responsive images with WebP and JPEG fallback
+      const webpSource = utils.createElement('source');
+      webpSource.type = 'image/webp';
+      webpSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=webp 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=webp 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=webp 800w`;
+      webpSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+      picture.appendChild(webpSource);
 
-    // JPEG fallback source with srcset
-    const jpegSource = utils.createElement('source');
-    jpegSource.type = 'image/jpeg';
-    jpegSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=jpeg 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=jpeg 800w`;
-    jpegSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
-    picture.appendChild(jpegSource);
+      // JPEG fallback source with srcset
+      const jpegSource = utils.createElement('source');
+      jpegSource.type = 'image/jpeg';
+      jpegSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=jpeg 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=jpeg 800w`;
+      jpegSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+      picture.appendChild(jpegSource);
 
-    // img fallback for browsers that don't support picture
-    const img = utils.createElement('img', 'photo-card-image');
-    img.src = `${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg`;
-    img.alt = this.getTitle();
-    img.loading = 'lazy';
-    img.decoding = 'async';
+      // img fallback for browsers that don't support picture
+      img = utils.createElement('img', 'photo-card-image');
+      img.src = `${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg`;
+      img.alt = this.getTitle();
+      img.loading = 'lazy';
+      img.decoding = 'async';
+    }
 
     // Fade in image when loaded
     img.onload = () => {
@@ -94,7 +104,24 @@ class PhotoCard {
   createActions() {
     const actions = utils.createElement('div', 'photo-card-actions');
 
-    if (this.photo.housekeepingReason) {
+    if (this.photo.isCollage) {
+      // Accept Button (Green, check icon)
+      const acceptBtn = utils.createElement('button', 'card-action-btn accept-btn');
+      acceptBtn.title = 'Accept Collage';
+      acceptBtn.dataset.action = 'accept-collage';
+      acceptBtn.innerHTML = window.iconHelper.getIcon('check', { size: 18 });
+      acceptBtn.style.color = '#10b981'; // Green
+
+      // Reject Button (Red, x icon)
+      const rejectBtn = utils.createElement('button', 'card-action-btn reject-btn');
+      rejectBtn.title = 'Reject Collage';
+      rejectBtn.dataset.action = 'reject-collage';
+      rejectBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
+      rejectBtn.style.color = '#ef4444'; // Red
+
+      actions.appendChild(acceptBtn);
+      actions.appendChild(rejectBtn);
+    } else if (this.photo.housekeepingReason) {
       // Keep Button (Remove from list)
       const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
       keepBtn.title = 'Keep (Remove from housekeeping list)';
@@ -135,7 +162,10 @@ class PhotoCard {
   bindEvents(card) {
     utils.on(card, 'click', (e) => {
       if (!e.target.closest('.card-action-btn')) {
-        this.openViewer();
+        // Don't open viewer for collages
+        if (!this.photo.isCollage) {
+          this.openViewer();
+        }
       }
     });
 
@@ -143,6 +173,8 @@ class PhotoCard {
     const downloadBtn = card.querySelector('[data-action="download"]');
     const keepBtn = card.querySelector('[data-action="keep"]');
     const deleteHousekeepingBtn = card.querySelector('[data-action="delete-housekeeping"]');
+    const acceptCollageBtn = card.querySelector('[data-action="accept-collage"]');
+    const rejectCollageBtn = card.querySelector('[data-action="reject-collage"]');
 
     if (favoriteBtn) {
       utils.on(favoriteBtn, 'click', (e) => {
@@ -169,6 +201,20 @@ class PhotoCard {
       utils.on(deleteHousekeepingBtn, 'click', (e) => {
         e.stopPropagation();
         this.deletePhoto();
+      });
+    }
+
+    if (acceptCollageBtn) {
+      utils.on(acceptCollageBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.acceptCollage();
+      });
+    }
+
+    if (rejectCollageBtn) {
+      utils.on(rejectCollageBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.rejectCollage();
       });
     }
   }
@@ -288,6 +334,30 @@ class PhotoCard {
     } catch (e) {
       console.error('Failed to delete photo:', e);
       utils.showToast('Error', 'Failed to delete photo', 'error');
+    }
+  }
+
+  async acceptCollage() {
+    try {
+      await api.acceptCollage(this.photo.collageId);
+      utils.showToast('Accepted', 'Collage accepted', 'success', 2000);
+      utils.emit(window, 'collageAccepted', { collageId: this.photo.collageId });
+    } catch (e) {
+      console.error('Failed to accept collage:', e);
+      utils.showToast('Error', 'Failed to accept collage', 'error');
+    }
+  }
+
+  async rejectCollage() {
+    if (!confirm('Are you sure you want to reject this collage?')) return;
+
+    try {
+      await api.rejectCollage(this.photo.collageId);
+      utils.showToast('Rejected', 'Collage rejected', 'success', 2000);
+      utils.emit(window, 'collageRejected', { collageId: this.photo.collageId });
+    } catch (e) {
+      console.error('Failed to reject collage:', e);
+      utils.showToast('Error', 'Failed to reject collage', 'error');
     }
   }
 

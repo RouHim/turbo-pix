@@ -28,7 +28,7 @@ pub async fn run_housekeeping_scan(
     semantic_search: &Arc<SemanticSearchEngine>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     info!("Starting housekeeping candidate identification scan...");
-    
+
     // We will collect all candidates first to avoid holding a DB lock for too long
     // while querying semantic search (which might be fast, but good practice).
     // Structure: Photo Hash -> (Reason, Score)
@@ -38,11 +38,11 @@ pub async fn run_housekeeping_scan(
     // DEBUG: Check if we have any semantic vectors at all
     {
         let conn = db_pool.get()?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM media_semantic_vectors",
-            [],
-            |row| row.get(0)
-        ).unwrap_or(0);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_semantic_vectors", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
         info!("DEBUG: media_semantic_vectors count: {}", count);
     }
 
@@ -50,7 +50,11 @@ pub async fn run_housekeeping_scan(
         // Search for the term
         match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0) {
             Ok(results) => {
-                info!("Found {} results for housekeeping term '{}'", results.len(), term);
+                info!(
+                    "Found {} results for housekeeping term '{}'",
+                    results.len(),
+                    term
+                );
                 for (path, score) in results {
                     // We need to map path to hash. We'll do this in bulk or per item?
                     // Let's store path for now and resolve to hash later.
@@ -90,7 +94,8 @@ pub async fn run_housekeeping_scan(
 
         for (path, reason, score) in candidates {
             // Find hash for path
-            let hash_result: Result<String, _> = stmt_get_hash.query_row(params![path], |row| row.get(0));
+            let hash_result: Result<String, _> =
+                stmt_get_hash.query_row(params![path], |row| row.get(0));
 
             match hash_result {
                 Ok(hash) => {
@@ -107,7 +112,10 @@ pub async fn run_housekeeping_scan(
 
     tx.commit()?;
 
-    info!("Housekeeping scan completed. Identified {} candidates.", inserted_count);
+    info!(
+        "Housekeeping scan completed. Identified {} candidates.",
+        inserted_count
+    );
 
     Ok(inserted_count)
 }

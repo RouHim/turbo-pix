@@ -74,8 +74,6 @@ CREATE TABLE IF NOT EXISTS collages (
 )
 "#;
 
-
-
 pub const HOUSEKEEPING_CANDIDATES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS housekeeping_candidates (
     photo_hash TEXT NOT NULL,

@@ -1,3 +1,10 @@
+# [2.7.0](https://github.com/RouHim/turbo-pix/compare/2.6.1...2.7.0) (2025-12-29)
+
+
+### Features
+
+* implement cleanup candidates view and e2e tests ([63e03e1](https://github.com/RouHim/turbo-pix/commit/63e03e1d1604c30dd9e05c21683e7e3774c67103))
+
 ## [2.6.1](https://github.com/RouHim/turbo-pix/compare/2.6.0...2.6.1) (2025-12-26)
 
 

@@ -33,6 +33,7 @@ class TurboPixApp {
     // Initialize i18n system first
     await this.initializeI18n();
 
+    this.initRouting();
     this.bindEvents();
     this.setupNavigation();
     this.setupViewControls();
@@ -86,6 +87,62 @@ class TurboPixApp {
       }
       return {};
     }
+  }
+
+  /**
+   * Initialize URL routing
+   * Sets up browser history management and handles initial route
+   */
+  initRouting() {
+    // Handle browser back/forward buttons
+    utils.on(window, 'popstate', (e) => {
+      const view = this.getViewFromPath() || 'all';
+      const photoHash = this.getPhotoFromUrl();
+
+      // Handle viewer state
+      if (window.photoViewer) {
+        if (photoHash && !window.photoViewer.isOpen) {
+          // Photo in URL but viewer closed - open it
+          window.photoViewer.openByHash(photoHash);
+        } else if (!photoHash && window.photoViewer.isOpen) {
+          // No photo in URL but viewer open - close it
+          window.photoViewer.close(false); // false = don't update URL
+        }
+      }
+
+      // Handle view switching
+      if (view !== this.state.get('currentView')) {
+        this.switchView(view, false); // false = don't push to history
+      }
+    });
+
+    // Get initial view from URL
+    const initialView = this.getViewFromPath();
+    if (initialView) {
+      this.state.set('currentView', initialView);
+    }
+  }
+
+  /**
+   * Extract view name from current URL path
+   * @returns {string|null} View name or null if root path
+   */
+  getViewFromPath() {
+    const path = window.location.pathname;
+    // Remove leading slash
+    const view = path.replace(/^\//, '').replace(/\/$/, '');
+    // Only return if it's a valid view
+    const validViews = ['all', 'favorites', 'videos', 'collages'];
+    return validViews.includes(view) ? view : null;
+  }
+
+  /**
+   * Extract photo hash from URL query parameters
+   * @returns {string|null} Photo hash or null if not present
+   */
+  getPhotoFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('photo');
   }
 
   bindEvents() {
@@ -287,6 +344,12 @@ class TurboPixApp {
       this.updateSortVisibility(currentView);
       this.updateTimelineVisibility(currentView);
       await this.loadViewData(currentView);
+
+      // Check if there's a photo hash in the URL and open viewer
+      const photoHash = this.getPhotoFromUrl();
+      if (photoHash && window.photoViewer) {
+        await window.photoViewer.openByHash(photoHash);
+      }
     } catch (error) {
       if (window.logger) {
         window.logger.error('Error loading initial data', error, {
@@ -303,9 +366,10 @@ class TurboPixApp {
   /**
    * Switches to a different view (all, favorites, videos)
    * @param {string} view - The view to switch to
+   * @param {boolean} pushState - Whether to push to browser history (default: true)
    * @returns {Promise<void>}
    */
-  async switchView(view) {
+  async switchView(view, pushState = true) {
     if (view === this.state.get('currentView')) return;
 
     this.state.set('currentView', view);
@@ -313,6 +377,12 @@ class TurboPixApp {
     this.updateViewTitle(view);
     this.updateSortVisibility(view);
     this.updateTimelineVisibility(view);
+
+    // Update URL using History API
+    if (pushState) {
+      const path = view === 'all' ? '/' : `/${view}`;
+      window.history.pushState({ view }, '', path);
+    }
 
     await this.loadViewData(view);
   }

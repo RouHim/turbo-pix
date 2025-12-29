@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS photos (
+    hash_sha256 TEXT PRIMARY KEY NOT NULL CHECK(length(hash_sha256) = 64),
+    file_path TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    mime_type TEXT,
+    taken_at TEXT,
+    width INTEGER,
+    height INTEGER,
+    orientation INTEGER,
+    duration REAL,
+    thumbnail_path TEXT,
+    has_thumbnail INTEGER DEFAULT 0,
+    blurhash TEXT,
+    is_favorite INTEGER DEFAULT 0,
+    semantic_vector_indexed INTEGER DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    file_modified TEXT NOT NULL,
+    date_indexed TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+) WITHOUT ROWID;

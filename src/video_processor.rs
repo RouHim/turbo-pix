@@ -433,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn test_video_thumbnail_generation() {
         let (config, _temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let video_filename = "test_video.mp4";
@@ -530,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn test_video_thumbnail_different_sizes() {
         let (config, _temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let video_filename = "test_video.mp4";

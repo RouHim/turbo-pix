@@ -87,7 +87,7 @@ impl std::error::Error for ImageEditError {}
 /// # Note
 /// Thumbnails are invalidated by setting `has_thumbnail = false` in the database.
 /// The cache manager is not needed as orphaned thumbnails are cleaned up separately.
-pub fn rotate_image(
+pub async fn rotate_image(
     photo: &Photo,
     angle: RotationAngle,
     db_pool: &DbPool,
@@ -200,7 +200,7 @@ pub fn rotate_image(
     // We could spawn a task here, but it's not critical for correctness
 
     // Invalidate semantic vector (will be regenerated at midnight rescan)
-    if let Err(e) = invalidate_semantic_vector(db_pool, &photo.file_path) {
+    if let Err(e) = invalidate_semantic_vector(db_pool, &photo.file_path).await {
         log::warn!(
             "Failed to invalidate semantic vector for {}: {}",
             photo.file_path,
@@ -224,6 +224,7 @@ pub fn rotate_image(
     // Use update_with_old_hash to find record by old hash and update to new hash
     updated_photo
         .update_with_old_hash(db_pool, &old_hash)
+        .await
         .map_err(|e| ImageEditError::DatabaseError(format!("Failed to update database: {}", e)))?;
 
     log::info!(
@@ -361,7 +362,7 @@ fn compute_file_hash(file_path: &Path) -> Result<String, ImageEditError> {
 ///
 /// # Returns
 /// Ok(()) on success, error otherwise
-pub fn delete_photo(
+pub async fn delete_photo(
     photo: &Photo,
     db_pool: &DbPool,
     cache_manager: &CacheManager,
@@ -391,7 +392,7 @@ pub fn delete_photo(
     });
 
     // Delete semantic vector
-    if let Err(e) = invalidate_semantic_vector(db_pool, &photo.file_path) {
+    if let Err(e) = invalidate_semantic_vector(db_pool, &photo.file_path).await {
         log::warn!(
             "Failed to delete semantic vector for {}: {}",
             photo.file_path,
@@ -400,15 +401,13 @@ pub fn delete_photo(
     }
 
     // Delete from database
-    let conn = db_pool.get().map_err(|e| {
-        ImageEditError::DatabaseError(format!("Failed to get DB connection: {}", e))
-    })?;
-
-    conn.execute(
-        "DELETE FROM photos WHERE hash_sha256 = ?",
-        [&photo.hash_sha256],
-    )
-    .map_err(|e| ImageEditError::DatabaseError(format!("Failed to delete from database: {}", e)))?;
+    sqlx::query("DELETE FROM photos WHERE hash_sha256 = ?")
+        .bind(&photo.hash_sha256)
+        .execute(db_pool)
+        .await
+        .map_err(|e| {
+            ImageEditError::DatabaseError(format!("Failed to delete from database: {}", e))
+        })?;
 
     log::info!("Deleted photo from database: {}", photo.hash_sha256);
 
@@ -417,24 +416,20 @@ pub fn delete_photo(
 
 /// Invalidates semantic vector for a file path
 /// The vector will be regenerated during the next midnight rescan
-fn invalidate_semantic_vector(pool: &DbPool, file_path: &str) -> Result<(), String> {
-    let conn = pool
-        .get()
-        .map_err(|e| format!("Failed to get database connection: {}", e))?;
-
+async fn invalidate_semantic_vector(pool: &DbPool, file_path: &str) -> Result<(), String> {
     // Delete from mapping table
-    conn.execute(
-        "DELETE FROM semantic_vector_path_mapping WHERE path = ?",
-        [file_path],
-    )
-    .map_err(|e| format!("Failed to delete semantic vector mapping: {}", e))?;
+    sqlx::query("DELETE FROM semantic_vector_path_mapping WHERE path = ?")
+        .bind(file_path)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete semantic vector mapping: {}", e))?;
 
     // Delete from video metadata if present
-    conn.execute(
-        "DELETE FROM video_semantic_metadata WHERE path = ?",
-        [file_path],
-    )
-    .map_err(|e| format!("Failed to delete video semantic metadata: {}", e))?;
+    sqlx::query("DELETE FROM video_semantic_metadata WHERE path = ?")
+        .bind(file_path)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete video semantic metadata: {}", e))?;
 
     // Orphaned vectors in media_semantic_vectors will be cleaned up by the cleanup job
 
@@ -491,21 +486,21 @@ mod tests {
         (dest_path, photo)
     }
 
-    #[test]
-    fn test_rotate_image_90() {
+    #[tokio::test]
+    async fn test_rotate_image_90() {
         // GIVEN: A test image in database
         let temp_dir = TempDir::new().unwrap();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
 
         let (file_path, photo) = create_test_photo(&temp_dir, "test_rotate_90.jpg");
-        photo.create_or_update(&db_pool).unwrap();
+        photo.create_or_update(&db_pool).await.unwrap();
 
         let original_width = photo.width.unwrap();
         let original_height = photo.height.unwrap();
         let original_hash = photo.hash_sha256.clone();
 
         // WHEN: Rotate image 90 degrees
-        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool);
+        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool).await;
 
         // THEN: Should succeed
         assert!(result.is_ok(), "Rotation failed: {:?}", result);
@@ -532,20 +527,20 @@ mod tests {
         assert!(image::open(&file_path).is_ok());
     }
 
-    #[test]
-    fn test_rotate_image_180() {
+    #[tokio::test]
+    async fn test_rotate_image_180() {
         // GIVEN: A test image
         let temp_dir = TempDir::new().unwrap();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
 
         let (file_path, photo) = create_test_photo(&temp_dir, "test_rotate_180.jpg");
-        photo.create_or_update(&db_pool).unwrap();
+        photo.create_or_update(&db_pool).await.unwrap();
 
         let original_width = photo.width.unwrap();
         let original_height = photo.height.unwrap();
 
         // WHEN: Rotate 180 degrees
-        let result = rotate_image(&photo, RotationAngle::Rotate180, &db_pool);
+        let result = rotate_image(&photo, RotationAngle::Rotate180, &db_pool).await;
 
         // THEN: Should succeed
         assert!(result.is_ok());
@@ -560,11 +555,11 @@ mod tests {
         assert!(image::open(&file_path).is_ok());
     }
 
-    #[test]
-    fn test_rotate_raw_file_blocked() {
+    #[tokio::test]
+    async fn test_rotate_raw_file_blocked() {
         // GIVEN: A RAW file (if available)
         let temp_dir = TempDir::new().unwrap();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
 
         let raw_source = Path::new("test-data/IMG_9899.CR2");
         if !raw_source.exists() {
@@ -598,7 +593,7 @@ mod tests {
         };
 
         // WHEN: Attempt to rotate RAW file
-        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool);
+        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool).await;
 
         // THEN: Should fail with UnsupportedFormat error
         assert!(result.is_err());
@@ -608,10 +603,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_rotate_nonexistent_file() {
+    #[tokio::test]
+    async fn test_rotate_nonexistent_file() {
         // GIVEN: Photo with nonexistent file
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
 
         let photo = Photo {
             hash_sha256: "test".to_string(),
@@ -637,7 +632,7 @@ mod tests {
         };
 
         // WHEN: Attempt to rotate
-        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool);
+        let result = rotate_image(&photo, RotationAngle::Rotate90, &db_pool).await;
 
         // THEN: Should fail with FileNotFound
         assert!(result.is_err());

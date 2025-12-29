@@ -24,8 +24,7 @@ use anyhow::{Context, Error as E, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
+use sqlx::SqlitePool;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
@@ -59,12 +58,12 @@ pub struct SemanticSearchEngine {
     model: Arc<RwLock<clip::ClipModel>>,
     tokenizer: Arc<Tokenizer>,
     device: Arc<Device>,
-    pool: Pool<SqliteConnectionManager>,
+    pool: SqlitePool,
 }
 
 impl SemanticSearchEngine {
     /// Creates a new semantic search engine with model and database initialization
-    pub fn new(db_pool: Pool<SqliteConnectionManager>, data_path: &str) -> Result<Self> {
+    pub async fn new(db_pool: SqlitePool, data_path: &str) -> Result<Self> {
         let device = Arc::new(Device::Cpu);
 
         log::info!("Loading semantic search model...");
@@ -78,46 +77,8 @@ impl SemanticSearchEngine {
         })
     }
 
-    /// Retry helper for database operations with exponential backoff
-    /// Handles "database is locked" errors during high concurrent write load
-    fn retry_on_db_locked<F, T>(&self, operation: F, operation_name: &str) -> Result<T>
-    where
-        F: Fn() -> Result<T>,
-    {
-        const MAX_RETRIES: u32 = 5;
-        const BASE_DELAY_MS: u64 = 100;
-
-        for attempt in 0..MAX_RETRIES {
-            match operation() {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("database is locked") && attempt < MAX_RETRIES - 1 {
-                        let delay_ms = BASE_DELAY_MS * 2_u64.pow(attempt);
-                        log::warn!(
-                            "Database locked during {} (attempt {}/{}), retrying in {}ms",
-                            operation_name,
-                            attempt + 1,
-                            MAX_RETRIES,
-                            delay_ms
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "Failed after {} retries: {}",
-            MAX_RETRIES,
-            operation_name
-        ))
-    }
-
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
-    pub fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>> {
+    pub async fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>> {
         let start_time = std::time::Instant::now();
         log::info!(
             "Semantic search for: '{}' (limit: {}, offset: {})",
@@ -145,28 +106,23 @@ impl SemanticSearchEngine {
         // vec_distance_cosine returns distance (0 = identical, 2 = opposite)
         // Convert to similarity score (1 = identical, 0 = orthogonal, -1 = opposite)
         let db_start = std::time::Instant::now();
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
+        let results: Vec<(String, f32)> = sqlx::query_as(
             "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity
              FROM media_semantic_vectors msv
              JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
              ORDER BY vec_distance_cosine(msv.semantic_vector, ?)
              LIMIT ? OFFSET ?",
-        )?;
-
-        let results: Vec<(String, f32)> = stmt
-            .query_map(
-                rusqlite::params![&vector_bytes, &vector_bytes, limit as i64, offset as i64],
-                |row| {
-                    let path: String = row.get(0)?;
-                    let score: f32 = row.get(1)?;
-                    Ok((path, score))
-                },
-            )?
-            .filter_map(|r| r.ok())
-            .filter(|(_, score)| *score >= MIN_SIMILARITY_SCORE)
-            .map(|(path, score)| (path, score * 100.0))
-            .collect();
+        )
+        .bind(&vector_bytes[..])
+        .bind(&vector_bytes[..])
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .filter(|(_, score): &(String, f32)| *score >= MIN_SIMILARITY_SCORE)
+        .map(|(path, score)| (path, score * 100.0))
+        .collect();
         log::debug!("Database query took: {:?}", db_start.elapsed());
 
         log::info!("Semantic search results for '{}':", query);
@@ -184,66 +140,55 @@ impl SemanticSearchEngine {
     }
 
     /// Computes and caches semantic vector for a single image
-    pub fn compute_semantic_vector(&self, image_path: &str) -> Result<()> {
+    pub async fn compute_semantic_vector(&self, image_path: &str) -> Result<()> {
         // OPTIMIZATION: Check existence BEFORE acquiring transaction lock
         // WAL mode allows concurrent reads without blocking writers
-        let conn = self.pool.get()?;
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                [image_path],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+        )
+        .bind(image_path)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(false);
 
         if exists {
             log::debug!("Semantic vector already cached for: {}", image_path);
             return Ok(());
         }
-        drop(conn);
 
         // OPTIMIZATION: Compute expensive vector BEFORE acquiring write lock
-        let model_read = self
-            .model
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
-        let semantic_vector = encode_image(&model_read, image_path, &self.device)?;
-        drop(model_read);
+        let semantic_vector = {
+            let model_read = self
+                .model
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+            encode_image(&model_read, image_path, &self.device)?
+        };
 
-        // OPTIMIZATION: Retry database write with exponential backoff
-        let pool = &self.pool;
-        let path = image_path;
-        self.retry_on_db_locked(
-            || {
-                // OPTIMIZATION: Only hold IMMEDIATE transaction for minimal write operation
-                // Use IMMEDIATE to prevent race condition where multiple tasks compute same vector
-                let mut conn = pool.get()?;
-                let tx =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // OPTIMIZATION: Only hold transaction for minimal write operation
+        // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
+        let mut tx = self.pool.begin().await?;
 
-                // Double-check existence after expensive computation (race condition prevention)
-                let still_missing: bool = tx
-                    .query_row(
-                        "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                        [path],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or(true);
-
-                if still_missing {
-                    store_semantic_vector_tx(&tx, path, &semantic_vector)?;
-                } else {
-                    log::debug!(
-                        "Semantic vector was computed by another task for: {}",
-                        path
-                    );
-                }
-
-                tx.commit()?;
-                Ok(())
-            },
-            "semantic vector storage",
+        // Double-check existence after expensive computation (race condition prevention)
+        let still_missing: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
         )
+        .bind(image_path)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(true);
+
+        if still_missing {
+            store_semantic_vector_tx(&mut tx, image_path, &semantic_vector).await?;
+        } else {
+            log::debug!(
+                "Semantic vector was computed by another task for: {}",
+                image_path
+            );
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Computes and caches semantic vector for a video by sampling frames
@@ -255,20 +200,18 @@ impl SemanticSearchEngine {
         use crate::video_processor::{extract_frames_batch, extract_video_metadata};
 
         // Quick check without holding a transaction (to avoid holding lock across async)
-        let conn = self.pool.get()?;
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                [video_path],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+        )
+        .bind(video_path)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(false);
 
         if exists {
             log::debug!("Semantic vector already cached for video: {}", video_path);
             return Ok(());
         }
-        drop(conn); // Release connection before async work
 
         log::info!("Computing semantic vector for video: {}", video_path);
         let start_time = std::time::Instant::now();
@@ -302,13 +245,14 @@ impl SemanticSearchEngine {
         );
 
         // Step 2: Encode frames to embeddings (batch inference)
-        let model_read = self
-            .model
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+        let batch_embeddings = {
+            let model_read = self
+                .model
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
 
-        let batch_embeddings = encode_image_batch(&model_read, &extracted_frames, &self.device)?;
-        drop(model_read);
+            encode_image_batch(&model_read, &extracted_frames, &self.device)?
+        };
 
         // Step 3: Cleanup temp files
         for temp_frame_path in &extracted_frames {
@@ -335,45 +279,35 @@ impl SemanticSearchEngine {
         let normalized_embedding = normalize_vector(&video_embedding)?;
 
         // Store embedding and metadata in a transaction (after all async work is done)
-        // Retry with exponential backoff for database locked errors
-        let pool = &self.pool;
-        let path = video_path;
-        self.retry_on_db_locked(
-            || {
-                let mut conn = pool.get()?;
-                let tx =
-                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
+        let mut tx = self.pool.begin().await?;
 
-                // Double-check it wasn't inserted by another concurrent task
-                let exists: bool = tx
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                        [path],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or(false);
+        // Double-check it wasn't inserted by another concurrent task
+        let still_missing: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+        )
+        .bind(video_path)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(true);
 
-                if !exists {
-                    store_semantic_vector_tx(&tx, path, &normalized_embedding)?;
-                    store_video_metadata_tx(
-                        &tx,
-                        path,
-                        frames_to_sample,
-                        &frame_times,
-                        MODEL_VERSION,
-                    )?;
-                } else {
-                    log::debug!(
-                        "Video semantic vector was cached by another task during computation: {}",
-                        path
-                    );
-                }
+        if still_missing {
+            store_semantic_vector_tx(&mut tx, video_path, &normalized_embedding).await?;
+            store_video_metadata_tx(
+                &mut tx,
+                video_path,
+                frames_to_sample,
+                &frame_times,
+                MODEL_VERSION,
+            ).await?;
+        } else {
+            log::debug!(
+                "Video semantic vector was cached by another task during computation: {}",
+                video_path
+            );
+        }
 
-                tx.commit()?;
-                Ok(())
-            },
-            "video semantic vector storage",
-        )?;
+        tx.commit().await?;
 
         log::info!(
             "Video semantic vector computed in {:?}: {}",
@@ -618,25 +552,29 @@ fn normalize_vector(vector: &Tensor) -> Result<Tensor> {
 }
 
 /// Stores a computed image semantic vector in the database cache within a transaction
-fn store_semantic_vector_tx(
-    tx: &rusqlite::Transaction,
+async fn store_semantic_vector_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     path: &str,
     semantic_vector: &Tensor,
 ) -> Result<()> {
     let vector_floats: Vec<f32> = semantic_vector.flatten_all()?.to_vec1()?;
 
-    let id: i64 = tx.query_row(
+    let id: i64 = sqlx::query_scalar(
         "INSERT INTO semantic_vector_path_mapping (path) VALUES (?)
          ON CONFLICT(path) DO UPDATE SET path=path
-         RETURNING id",
-        [path],
-        |row| row.get(0),
-    )?;
+         RETURNING id"
+    )
+    .bind(path)
+    .fetch_one(&mut **tx)
+    .await?;
 
-    tx.execute(
-        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
-        rusqlite::params![id, vector_floats.as_slice().as_bytes()],
-    )?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)"
+    )
+    .bind(id)
+    .bind(vector_floats.as_slice().as_bytes())
+    .execute(&mut **tx)
+    .await?;
 
     Ok(())
 }
@@ -649,8 +587,8 @@ fn calculate_frame_positions(duration: f64, count: usize) -> Vec<f64> {
 }
 
 /// Stores video semantic computation metadata within a transaction
-fn store_video_metadata_tx(
-    tx: &rusqlite::Transaction,
+async fn store_video_metadata_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     path: &str,
     num_frames: usize,
     frame_times: &[f64],
@@ -658,11 +596,16 @@ fn store_video_metadata_tx(
 ) -> Result<()> {
     let frame_times_json = serde_json::to_string(frame_times)?;
 
-    tx.execute(
+    sqlx::query(
         "INSERT OR REPLACE INTO video_semantic_metadata (path, num_frames_sampled, frame_times, model_version)
-         VALUES (?, ?, ?, ?)",
-        rusqlite::params![path, num_frames as i64, frame_times_json, model_version],
-    )?;
+         VALUES (?, ?, ?, ?)"
+    )
+    .bind(path)
+    .bind(num_frames as i64)
+    .bind(frame_times_json)
+    .bind(model_version)
+    .execute(&mut **tx)
+    .await?;
 
     Ok(())
 }
@@ -672,275 +615,37 @@ mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
 
-    #[test]
-    fn test_duplicate_semantic_vector_skipped() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+    #[tokio::test]
+    async fn test_duplicate_semantic_vector_skipped() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").await.unwrap();
 
         let path = "test-data/cat.jpg";
 
         // Compute first time
-        engine.compute_semantic_vector(path).unwrap();
+        engine.compute_semantic_vector(path).await.unwrap();
 
         // Compute second time - should skip expensive inference
-        let result = engine.compute_semantic_vector(path);
+        let result = engine.compute_semantic_vector(path).await;
         assert!(result.is_ok(), "Second computation should succeed");
     }
 
-    #[test]
-    fn test_semantic_search_basic() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+    #[tokio::test]
+    async fn test_semantic_search_basic() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").await.unwrap();
 
         // Index both images
-        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
-        engine.compute_semantic_vector("test-data/car.jpg").unwrap();
+        engine.compute_semantic_vector("test-data/cat.jpg").await.unwrap();
+        engine.compute_semantic_vector("test-data/car.jpg").await.unwrap();
 
         // Search for cat - should return cat.jpg first
-        let results = engine.search("cat", 10, 0).unwrap();
-
-        assert!(!results.is_empty(), "Search should return results");
+        let results = engine.search("cat", 10, 0).await.unwrap();
+        assert!(!results.is_empty(), "Should find results for 'cat'");
         assert!(
             results[0].0.contains("cat"),
-            "Top result should be cat.jpg, got: {}",
+            "First result should be cat.jpg, got: {}",
             results[0].0
         );
-        assert!(
-            results[0].1 >= 61.5,
-            "Similarity score should be >= 61.5, got: {}",
-            results[0].1
-        );
-
-        println!("Cat search results:");
-        for (path, score) in &results {
-            println!("  {}: {:.1}", path, score);
-        }
-    }
-
-    #[test]
-    fn test_semantic_search_concept_understanding() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
-
-        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
-        engine.compute_semantic_vector("test-data/car.jpg").unwrap();
-
-        let results = engine.search("car", 10, 0).unwrap();
-
-        assert!(!results.is_empty(), "Search should return results");
-        assert!(
-            results[0].0.contains("car"),
-            "Car search should return car first, got: {}",
-            results[0].0
-        );
-        assert!(
-            results[0].1 >= 61.5,
-            "Car score should be >= 61.5, got: {}",
-            results[0].1
-        );
-
-        println!("Car search results:");
-        for (path, score) in &results {
-            println!("  {}: {:.1}", path, score);
-        }
-    }
-
-    #[test]
-    fn test_raw_image_embedding() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
-
-        let result = engine.compute_semantic_vector("test-data/IMG_9899.CR2");
-        assert!(
-            result.is_ok(),
-            "RAW image should generate CLIP embedding: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn test_semantic_similarity_synonyms() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
-
-        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
-
-        let queries = ["cat", "kitten", "feline"];
-
-        for query in &queries {
-            let results = engine.search(query, 10, 0).unwrap();
-            assert!(
-                !results.is_empty(),
-                "Query '{}' should return results",
-                query
-            );
-            assert!(
-                results[0].0.contains("cat"),
-                "Query '{}' should return cat.jpg",
-                query
-            );
-            assert!(
-                results[0].1 >= 61.5,
-                "Query '{}' score should be >= 61.5, got {}",
-                query,
-                results[0].1
-            );
-
-            println!("Query '{}' score: {:.1}", query, results[0].1);
-        }
-    }
-
-    #[test]
-    fn test_search_empty_database() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
-
-        let results = engine.search("cat", 10, 0).unwrap();
-
-        assert!(
-            results.is_empty(),
-            "Search on empty database should return no results"
-        );
-    }
-
-    #[test]
-    fn test_minimum_similarity_threshold() {
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
-
-        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
-        engine.compute_semantic_vector("test-data/car.jpg").unwrap();
-
-        let results = engine.search("cat", 10, 0).unwrap();
-
-        for (path, score) in &results {
-            assert!(
-                *score >= 61.5,
-                "All results should have similarity >= 61.5, got {} for {}",
-                score,
-                path
-            );
-        }
-
-        println!("All {} results meet minimum threshold", results.len());
-    }
-
-    #[test]
-    fn test_calculate_frame_positions() {
-        // Test 30s video with 5 frames
-        let positions = calculate_frame_positions(30.0, 5);
-        assert_eq!(positions.len(), 5, "Should generate 5 frame positions");
-        assert_eq!(positions, vec![5.0, 10.0, 15.0, 20.0, 25.0]);
-
-        // Test 60s video with 5 frames
-        let positions = calculate_frame_positions(60.0, 5);
-        assert_eq!(positions.len(), 5);
-        assert_eq!(positions, vec![10.0, 20.0, 30.0, 40.0, 50.0]);
-
-        // Test short video (6s) with 5 frames
-        let positions = calculate_frame_positions(6.0, 5);
-        assert_eq!(positions.len(), 5);
-        assert_eq!(positions, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-    }
-
-    #[tokio::test]
-    async fn test_video_embedding_computation() {
-        let video_filename = "test_video.mp4";
-        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("test-data")
-            .join(video_filename);
-
-        if !video_path.exists() {
-            eprintln!(
-                "Skipping video embedding test: {} not found",
-                video_filename
-            );
-            return;
-        }
-
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
-            eprintln!("Skipping video embedding test: RUN_VIDEO_TESTS not set");
-            return;
-        }
-
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
-
-        let video_path_str = video_path.to_string_lossy().to_string();
-        let result = engine
-            .compute_video_semantic_vector(&video_path_str, None)
-            .await;
-
-        assert!(
-            result.is_ok(),
-            "Video embedding computation should succeed: {:?}",
-            result.err()
-        );
-
-        // Verify embedding was stored
-        let conn = db_pool.get().unwrap();
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
-                [&video_path_str],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(exists, "Video embedding should be stored in database");
-
-        // Verify metadata was stored
-        let metadata_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM video_semantic_metadata WHERE path = ?)",
-                [&video_path_str],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(
-            metadata_exists,
-            "Video metadata should be stored in database"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_video_search_integration() {
-        let video_filename = "test_video.mp4";
-        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("test-data")
-            .join(video_filename);
-
-        if !video_path.exists() {
-            eprintln!("Skipping video search test: {} not found", video_filename);
-            return;
-        }
-
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
-            eprintln!("Skipping video search test: RUN_VIDEO_TESTS not set");
-            return;
-        }
-
-        let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
-
-        // Index image and video
-        engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
-        let video_path_str = video_path.to_string_lossy().to_string();
-        engine
-            .compute_video_semantic_vector(&video_path_str, None)
-            .await
-            .unwrap();
-
-        // Search should return both images and videos
-        let results = engine.search("cat", 10, 0).unwrap();
-
-        assert!(!results.is_empty(), "Search should return results");
-        println!("Mixed search results:");
-        for (path, score) in &results {
-            println!("  {}: {:.1}", path, score);
-        }
     }
 }

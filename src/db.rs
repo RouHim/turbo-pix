@@ -1,7 +1,8 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
-use rusqlite::{params, Result as SqlResult, Row};
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::FromRow;
 
 pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
@@ -18,6 +19,7 @@ pub struct Photo {
     pub mime_type: Option<String>,
 
     // === COMPUTATIONAL (used in application logic) ===
+    #[serde(deserialize_with = "deserialize_optional_datetime")]
     pub taken_at: Option<DateTime<Utc>>,
     pub width: Option<i32>,
     pub height: Option<i32>,
@@ -34,13 +36,132 @@ pub struct Photo {
     // === METADATA (JSON blob) ===
     /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
     /// location{latitude,longitude}, video{codec,audio_codec,bitrate,frame_rate}
+    #[serde(deserialize_with = "deserialize_json_value")]
     pub metadata: serde_json::Value,
 
     // === SYSTEM TIMESTAMPS ===
+    #[serde(deserialize_with = "deserialize_datetime", rename = "file_modified")]
     pub date_modified: DateTime<Utc>,
+    #[serde(deserialize_with = "deserialize_optional_datetime")]
     pub date_indexed: Option<DateTime<Utc>>,
+    #[serde(deserialize_with = "deserialize_datetime")]
     pub created_at: DateTime<Utc>,
+    #[serde(deserialize_with = "deserialize_datetime")]
     pub updated_at: DateTime<Utc>,
+}
+
+// Custom deserializers for handling SQLite TEXT -> Rust DateTime conversion
+fn deserialize_datetime<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    parse_datetime(&s).ok_or_else(|| serde::de::Error::custom("invalid datetime format"))
+}
+
+fn deserialize_optional_datetime<'de, D>(
+    deserializer: D,
+) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Deserialize::deserialize(deserializer)?;
+    Ok(s.and_then(|s| parse_datetime(&s)))
+}
+
+fn deserialize_json_value<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    s.parse().map_err(|_| {
+        log::warn!("Failed to parse metadata JSON, using empty object");
+        D::Error::custom("invalid JSON")
+    }).or(Ok(json!({})))
+}
+
+fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
+    // Try RFC3339 first (new format)
+    if s.contains('T') {
+        DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))
+    } else {
+        // Fallback to legacy SQLite format
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|ndt| ndt.and_utc())
+    }
+}
+
+impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+
+        Ok(Photo {
+            hash_sha256: row.try_get("hash_sha256")?,
+            file_path: row.try_get("file_path")?,
+            filename: row.try_get("filename")?,
+            file_size: row.try_get("file_size")?,
+            mime_type: row.try_get("mime_type")?,
+            taken_at: row
+                .try_get::<Option<String>, _>("taken_at")?
+                .and_then(|s| parse_datetime(&s)),
+            width: row.try_get("width")?,
+            height: row.try_get("height")?,
+            orientation: row.try_get("orientation")?,
+            duration: row.try_get("duration")?,
+            thumbnail_path: row.try_get("thumbnail_path")?,
+            has_thumbnail: row.try_get("has_thumbnail")?,
+            blurhash: row.try_get("blurhash")?,
+            is_favorite: row.try_get("is_favorite")?,
+            semantic_vector_indexed: row.try_get("semantic_vector_indexed")?,
+            metadata: row
+                .try_get::<String, _>("metadata")?
+                .parse()
+                .unwrap_or_else(|e| {
+                    log::warn!("Failed to parse metadata JSON for photo: {}", e);
+                    json!({})
+                }),
+            date_modified: row
+                .try_get::<String, _>("file_modified")?
+                .parse::<String>()
+                .ok()
+                .and_then(|s| parse_datetime(&s))
+                .ok_or_else(|| sqlx::Error::ColumnDecode {
+                    index: "file_modified".to_string(),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid datetime",
+                    )),
+                })?,
+            date_indexed: row
+                .try_get::<Option<String>, _>("date_indexed")?
+                .and_then(|s| parse_datetime(&s)),
+            created_at: row
+                .try_get::<String, _>("created_at")?
+                .parse::<String>()
+                .ok()
+                .and_then(|s| parse_datetime(&s))
+                .ok_or_else(|| sqlx::Error::ColumnDecode {
+                    index: "created_at".to_string(),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid datetime",
+                    )),
+                })?,
+            updated_at: row
+                .try_get::<String, _>("updated_at")?
+                .parse::<String>()
+                .ok()
+                .and_then(|s| parse_datetime(&s))
+                .ok_or_else(|| sqlx::Error::ColumnDecode {
+                    index: "updated_at".to_string(),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid datetime",
+                    )),
+                })?,
+        })
+    }
 }
 
 impl Photo {
@@ -167,88 +288,6 @@ impl Photo {
 
     // ===== DATABASE OPERATIONS =====
 
-    pub fn from_row(row: &Row) -> SqlResult<Self> {
-        Ok(Photo {
-            hash_sha256: row.get(0)?,
-            file_path: row.get(1)?,
-            filename: row.get(2)?,
-            file_size: row.get(3)?,
-            mime_type: row.get(4)?,
-            taken_at: row
-                .get::<_, Option<String>>(5)?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
-            width: row.get(6)?,
-            height: row.get(7)?,
-            orientation: row.get(8)?,
-            duration: row.get(9)?,
-            thumbnail_path: row.get(10)?,
-            has_thumbnail: row.get(11)?,
-            blurhash: row.get(12)?,
-            is_favorite: row.get(13)?,
-            semantic_vector_indexed: row.get(14)?,
-            metadata: row.get::<_, String>(15)?.parse().unwrap_or_else(|e| {
-                log::warn!("Failed to parse metadata JSON for photo: {}", e);
-                json!({})
-            }),
-            date_modified: DateTime::parse_from_rfc3339(&row.get::<_, String>(16)?)
-                .unwrap()
-                .with_timezone(&Utc),
-            date_indexed: row
-                .get::<_, Option<String>>(17)?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
-            created_at: {
-                let datetime_str = row.get::<_, String>(18)?;
-                if datetime_str.contains('T') {
-                    DateTime::parse_from_rfc3339(&datetime_str)
-                        .map_err(|_| {
-                            rusqlite::Error::InvalidColumnType(
-                                18,
-                                "created_at".to_string(),
-                                rusqlite::types::Type::Text,
-                            )
-                        })?
-                        .with_timezone(&Utc)
-                } else {
-                    NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
-                        .map_err(|_| {
-                            rusqlite::Error::InvalidColumnType(
-                                18,
-                                "created_at".to_string(),
-                                rusqlite::types::Type::Text,
-                            )
-                        })?
-                        .and_utc()
-                }
-            },
-            updated_at: {
-                let datetime_str = row.get::<_, String>(19)?;
-                if datetime_str.contains('T') {
-                    DateTime::parse_from_rfc3339(&datetime_str)
-                        .map_err(|_| {
-                            rusqlite::Error::InvalidColumnType(
-                                19,
-                                "updated_at".to_string(),
-                                rusqlite::types::Type::Text,
-                            )
-                        })?
-                        .with_timezone(&Utc)
-                } else {
-                    NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%d %H:%M:%S")
-                        .map_err(|_| {
-                            rusqlite::Error::InvalidColumnType(
-                                19,
-                                "updated_at".to_string(),
-                                rusqlite::types::Type::Text,
-                            )
-                        })?
-                        .and_utc()
-                }
-            },
-        })
-    }
-
     /// Update photo fields from extracted metadata
     /// Preserves existing fields that are not part of the extracted metadata
     pub fn update_from_extracted(&mut self, extracted: crate::metadata_extractor::PhotoMetadata) {
@@ -294,31 +333,35 @@ impl Photo {
         self.updated_at = Utc::now();
     }
 
-    /// Update photo (convenience wrapper that gets connection from pool)
-    pub fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        self.update_with_connection(&conn)
+    /// Update photo (convenience wrapper)
+    pub async fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tx = pool.begin().await?;
+        self.update_with_transaction(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
-    /// Create or update photo (convenience wrapper that gets connection from pool)
+    /// Create or update photo (convenience wrapper)
     /// Use `batch_write_photos` in production for better performance
     #[cfg(test)]
-    pub fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        self.create_or_update_with_connection(&conn)
+    pub async fn create_or_update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tx = pool.begin().await?;
+        self.create_or_update_with_transaction(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
-    pub fn list_with_pagination(
+    pub async fn list_with_pagination(
         pool: &DbPool,
         limit: i64,
         offset: i64,
         sort: Option<&str>,
         order: Option<&str>,
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
         // Get total count
-        let total: i64 = conn.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+            .fetch_one(pool)
+            .await?;
 
         // Build ORDER BY clause
         let sort_field = match sort {
@@ -335,66 +378,59 @@ impl Photo {
         };
 
         // Get paginated results
-        let query = format!(
+        let query_str = format!(
             "SELECT * FROM photos ORDER BY {} {} LIMIT ? OFFSET ?",
             sort_field, sort_order
         );
 
-        let mut stmt = conn.prepare(&query)?;
-        let photo_iter = stmt.query_map([limit, offset], Photo::from_row)?;
+        let photos = sqlx::query_as::<_, Photo>(&query_str)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
 
-        let mut photos = Vec::new();
-        for photo in photo_iter {
-            photos.push(photo?);
-        }
         Ok((photos, total))
     }
 
-    pub fn find_by_hash(
+    pub async fn find_by_hash(
         pool: &DbPool,
         hash: &str,
     ) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare("SELECT * FROM photos WHERE hash_sha256 = ?")?;
+        let photo = sqlx::query_as::<_, Photo>("SELECT * FROM photos WHERE hash_sha256 = ?")
+            .bind(hash)
+            .fetch_optional(pool)
+            .await?;
 
-        match stmt.query_row([hash], Photo::from_row) {
-            Ok(photo) => Ok(Some(photo)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Box::new(e)),
-        }
+        Ok(photo)
     }
 
     /// Check if a photo exists with matching path, size, and modification time
     /// Returns the full Photo if unchanged, None if new/modified
-    pub fn find_unchanged_photo(
+    pub async fn find_unchanged_photo(
         pool: &DbPool,
         file_path: &str,
         file_size: i64,
         date_modified: DateTime<Utc>,
     ) -> Result<Option<Photo>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
-        let mut stmt = conn.prepare(
+        let photo = sqlx::query_as::<_, Photo>(
             "SELECT * FROM photos WHERE file_path = ? AND file_size = ? AND file_modified = ?",
-        )?;
+        )
+        .bind(file_path)
+        .bind(file_size)
+        .bind(date_modified.to_rfc3339())
+        .fetch_optional(pool)
+        .await?;
 
-        match stmt.query_row(
-            params![file_path, file_size, date_modified.to_rfc3339()],
-            Photo::from_row,
-        ) {
-            Ok(photo) => Ok(Some(photo)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Box::new(e)),
-        }
+        Ok(photo)
     }
 
-    /// Create photo using an existing connection (for batch operations within a transaction)
+    /// Create photo using an existing transaction (for batch operations)
     #[cfg(test)]
-    pub fn create_with_connection(
+    pub async fn create_with_transaction(
         &self,
-        conn: &rusqlite::Connection,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        conn.execute(
+        sqlx::query(
             r#"
             INSERT INTO photos (
                 hash_sha256, file_path, filename, file_size, mime_type,
@@ -406,46 +442,48 @@ impl Photo {
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
             )
             "#,
-            params![
-                self.hash_sha256,
-                self.file_path,
-                self.filename,
-                self.file_size,
-                self.mime_type,
-                self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.width,
-                self.height,
-                self.orientation,
-                self.duration,
-                self.thumbnail_path,
-                self.has_thumbnail,
-                self.blurhash,
-                self.is_favorite.unwrap_or(false),
-                self.semantic_vector_indexed.unwrap_or(false),
-                self.metadata.to_string(),
-                self.date_modified.to_rfc3339(),
-                self.date_indexed.map(|dt| dt.to_rfc3339()),
-                Utc::now().to_rfc3339(),
-                Utc::now().to_rfc3339(),
-            ],
-        )?;
+        )
+        .bind(&self.hash_sha256)
+        .bind(&self.file_path)
+        .bind(&self.filename)
+        .bind(self.file_size)
+        .bind(&self.mime_type)
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.width)
+        .bind(self.height)
+        .bind(self.orientation)
+        .bind(self.duration)
+        .bind(&self.thumbnail_path)
+        .bind(self.has_thumbnail)
+        .bind(&self.blurhash)
+        .bind(self.is_favorite.unwrap_or(false))
+        .bind(self.semantic_vector_indexed.unwrap_or(false))
+        .bind(self.metadata.to_string())
+        .bind(self.date_modified.to_rfc3339())
+        .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
+        .bind(Utc::now().to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut **tx)
+        .await?;
 
         Ok(())
     }
 
-    /// Create photo (test helper - use create_with_connection for production)
+    /// Create photo (test helper - use create_with_transaction for production)
     #[cfg(test)]
-    pub fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        self.create_with_connection(&conn)
+    pub async fn create(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tx = pool.begin().await?;
+        self.create_with_transaction(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
-    /// Update photo using an existing connection (for batch operations within a transaction)
-    pub fn update_with_connection(
+    /// Update photo using an existing transaction (for batch operations)
+    pub async fn update_with_transaction(
         &self,
-        conn: &rusqlite::Connection,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        conn.execute(
+        sqlx::query(
             r#"
             UPDATE photos SET
                 file_path = ?, filename = ?, file_size = ?, mime_type = ?,
@@ -455,38 +493,38 @@ impl Photo {
                 file_modified = ?, updated_at = ?
             WHERE hash_sha256 = ?
             "#,
-            params![
-                self.file_path,
-                self.filename,
-                self.file_size,
-                self.mime_type,
-                self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.width,
-                self.height,
-                self.orientation,
-                self.duration,
-                self.thumbnail_path,
-                self.has_thumbnail,
-                self.blurhash,
-                self.is_favorite.unwrap_or(false),
-                self.semantic_vector_indexed.unwrap_or(false),
-                self.metadata.to_string(),
-                self.date_modified.to_rfc3339(),
-                Utc::now().to_rfc3339(),
-                self.hash_sha256,
-            ],
-        )?;
+        )
+        .bind(&self.file_path)
+        .bind(&self.filename)
+        .bind(self.file_size)
+        .bind(&self.mime_type)
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.width)
+        .bind(self.height)
+        .bind(self.orientation)
+        .bind(self.duration)
+        .bind(&self.thumbnail_path)
+        .bind(self.has_thumbnail)
+        .bind(&self.blurhash)
+        .bind(self.is_favorite.unwrap_or(false))
+        .bind(self.semantic_vector_indexed.unwrap_or(false))
+        .bind(self.metadata.to_string())
+        .bind(self.date_modified.to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .bind(&self.hash_sha256)
+        .execute(&mut **tx)
+        .await?;
+
         Ok(())
     }
 
     /// Update photo using old hash in WHERE clause (for operations that change the hash)
-    pub fn update_with_old_hash(
+    pub async fn update_with_old_hash(
         &self,
         pool: &DbPool,
         old_hash: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        conn.execute(
+        sqlx::query(
             r#"
             UPDATE photos SET
                 hash_sha256 = ?,
@@ -497,32 +535,33 @@ impl Photo {
                 file_modified = ?, updated_at = ?
             WHERE hash_sha256 = ?
             "#,
-            params![
-                self.hash_sha256,
-                self.file_path,
-                self.filename,
-                self.file_size,
-                self.mime_type,
-                self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.width,
-                self.height,
-                self.orientation,
-                self.duration,
-                self.thumbnail_path,
-                self.has_thumbnail,
-                self.blurhash,
-                self.is_favorite.unwrap_or(false),
-                self.semantic_vector_indexed.unwrap_or(false),
-                self.metadata.to_string(),
-                self.date_modified.to_rfc3339(),
-                Utc::now().to_rfc3339(),
-                old_hash,
-            ],
-        )?;
+        )
+        .bind(&self.hash_sha256)
+        .bind(&self.file_path)
+        .bind(&self.filename)
+        .bind(self.file_size)
+        .bind(&self.mime_type)
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.width)
+        .bind(self.height)
+        .bind(self.orientation)
+        .bind(self.duration)
+        .bind(&self.thumbnail_path)
+        .bind(self.has_thumbnail)
+        .bind(&self.blurhash)
+        .bind(self.is_favorite.unwrap_or(false))
+        .bind(self.semantic_vector_indexed.unwrap_or(false))
+        .bind(self.metadata.to_string())
+        .bind(self.date_modified.to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .bind(old_hash)
+        .execute(pool)
+        .await?;
+
         Ok(())
     }
 
-    /// Create or update photo using an existing connection (for batch operations)
+    /// Create or update photo using an existing transaction (for batch operations)
     ///
     /// # Transaction Requirement
     ///
@@ -539,32 +578,33 @@ impl Photo {
     ///
     /// # Safety
     ///
-    /// Caller must ensure this is called within a transaction (e.g., via
-    /// `transaction_with_behavior(TransactionBehavior::Immediate)`). The `batch_write_photos`
+    /// Caller must ensure this is called within a transaction. The `batch_write_photos`
     /// function in `scheduler.rs` demonstrates correct usage.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    /// let mut tx = pool.begin().await?;
+    /// sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await?;
     /// for photo in photos {
-    ///     photo.create_or_update_with_connection(&tx)?;
+    ///     photo.create_or_update_with_transaction(&mut tx).await?;
     /// }
-    /// tx.commit()?;
+    /// tx.commit().await?;
     /// ```
-    pub fn create_or_update_with_connection(
+    pub async fn create_or_update_with_transaction(
         &self,
-        conn: &rusqlite::Connection,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // First, delete any existing photo with same file_path but different hash
         // This handles the case where a file was modified (hash changed)
-        conn.execute(
-            "DELETE FROM photos WHERE file_path = ? AND hash_sha256 != ?",
-            [&self.file_path, &self.hash_sha256],
-        )?;
+        sqlx::query("DELETE FROM photos WHERE file_path = ? AND hash_sha256 != ?")
+            .bind(&self.file_path)
+            .bind(&self.hash_sha256)
+            .execute(&mut **tx)
+            .await?;
 
         // Then use UPSERT to insert or update by hash
-        conn.execute(
+        sqlx::query(
             r#"
             INSERT INTO photos (
                 hash_sha256, file_path, filename, file_size, mime_type,
@@ -594,34 +634,34 @@ impl Photo {
                 file_modified = excluded.file_modified,
                 updated_at = excluded.updated_at
             "#,
-            params![
-                self.hash_sha256,
-                self.file_path,
-                self.filename,
-                self.file_size,
-                self.mime_type,
-                self.taken_at.map(|dt| dt.to_rfc3339()),
-                self.width,
-                self.height,
-                self.orientation,
-                self.duration,
-                self.thumbnail_path,
-                self.has_thumbnail,
-                self.blurhash,
-                self.is_favorite.unwrap_or(false),
-                self.semantic_vector_indexed.unwrap_or(false),
-                self.metadata.to_string(),
-                self.date_modified.to_rfc3339(),
-                self.date_indexed.map(|dt| dt.to_rfc3339()),
-                Utc::now().to_rfc3339(),
-                Utc::now().to_rfc3339(),
-            ],
-        )?;
+        )
+        .bind(&self.hash_sha256)
+        .bind(&self.file_path)
+        .bind(&self.filename)
+        .bind(self.file_size)
+        .bind(&self.mime_type)
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.width)
+        .bind(self.height)
+        .bind(self.orientation)
+        .bind(self.duration)
+        .bind(&self.thumbnail_path)
+        .bind(self.has_thumbnail)
+        .bind(&self.blurhash)
+        .bind(self.is_favorite.unwrap_or(false))
+        .bind(self.semantic_vector_indexed.unwrap_or(false))
+        .bind(self.metadata.to_string())
+        .bind(self.date_modified.to_rfc3339())
+        .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
+        .bind(Utc::now().to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut **tx)
+        .await?;
 
         Ok(())
     }
 
-    pub fn search_photos(
+    pub async fn search_photos(
         pool: &DbPool,
         query: &SearchQuery,
         limit: i64,
@@ -629,11 +669,9 @@ impl Photo {
         sort: Option<&str>,
         order: Option<&str>,
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
         // Build the WHERE clause (reusable for both count and data queries)
         let mut where_clause = String::from(" WHERE 1=1");
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
 
         if let Some(ref q) = query.q {
             // Handle special type: queries
@@ -650,9 +688,9 @@ impl Photo {
                         // Unknown type, fall back to general search
                         where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                         let pattern = format!("%{}%", q);
-                        params.push(Box::new(pattern.clone()));
-                        params.push(Box::new(pattern.clone()));
-                        params.push(Box::new(pattern));
+                        params.push(pattern.clone());
+                        params.push(pattern.clone());
+                        params.push(pattern);
                     }
                 }
             } else if q.starts_with("is_favorite:") {
@@ -668,36 +706,38 @@ impl Photo {
                         // Unknown value, fall back to general search
                         where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                         let pattern = format!("%{}%", q);
-                        params.push(Box::new(pattern.clone()));
-                        params.push(Box::new(pattern.clone()));
-                        params.push(Box::new(pattern));
+                        params.push(pattern.clone());
+                        params.push(pattern.clone());
+                        params.push(pattern);
                     }
                 }
             } else {
                 // General search across multiple fields (filename + JSON metadata)
                 where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
                 let pattern = format!("%{}%", q);
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern));
+                params.push(pattern.clone());
+                params.push(pattern.clone());
+                params.push(pattern);
             }
         }
 
         if let Some(year) = query.year {
             where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
-            params.push(Box::new(year.to_string()));
+            params.push(year.to_string());
         }
 
         if let Some(month) = query.month {
             where_clause.push_str(" AND strftime('%m', taken_at) = ?");
-            params.push(Box::new(format!("{:02}", month)));
+            params.push(format!("{:02}", month));
         }
 
         // Get total count
         let count_sql = format!("SELECT COUNT(*) FROM photos{}", where_clause);
-        let mut count_stmt = conn.prepare(&count_sql)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let total: i64 = count_stmt.query_row(param_refs.as_slice(), |row| row.get(0))?;
+        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+        for param in &params {
+            count_query = count_query.bind(param);
+        }
+        let total = count_query.fetch_one(pool).await?;
 
         // Get the actual photos
         let sort_field = match sort {
@@ -717,33 +757,30 @@ impl Photo {
             "SELECT * FROM photos{} ORDER BY {} {} LIMIT ? OFFSET ?",
             where_clause, sort_field, sort_order
         );
-        params.push(Box::new(limit));
-        params.push(Box::new(offset));
 
-        let mut stmt = conn.prepare(&data_sql)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let photo_iter = stmt.query_map(param_refs.as_slice(), Photo::from_row)?;
-
-        let mut photos = Vec::new();
-        for photo in photo_iter {
-            photos.push(photo?);
+        let mut data_query = sqlx::query_as::<_, Photo>(&data_sql);
+        for param in &params {
+            data_query = data_query.bind(param);
         }
+        data_query = data_query.bind(limit).bind(offset);
+
+        let photos = data_query.fetch_all(pool).await?;
 
         Ok((photos, total))
     }
 
-    pub fn get_timeline_data(pool: &DbPool) -> Result<TimelineData, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-
+    pub async fn get_timeline_data(
+        pool: &DbPool,
+    ) -> Result<TimelineData, Box<dyn std::error::Error>> {
         // Get min and max dates
-        let (min_date, max_date): (Option<String>, Option<String>) = conn.query_row(
+        let (min_date, max_date): (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT MIN(taken_at), MAX(taken_at) FROM photos WHERE taken_at IS NOT NULL",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        )
+        .fetch_one(pool)
+        .await?;
 
         // Get photo density by year and month
-        let mut stmt = conn.prepare(
+        let density: Vec<TimelineDensity> = sqlx::query_as(
             "SELECT
                 CAST(strftime('%Y', taken_at) AS INTEGER) as year,
                 CAST(strftime('%m', taken_at) AS INTEGER) as month,
@@ -752,20 +789,9 @@ impl Photo {
              WHERE taken_at IS NOT NULL
              GROUP BY year, month
              ORDER BY year, month",
-        )?;
-
-        let density_iter = stmt.query_map([], |row| {
-            Ok(TimelineDensity {
-                year: row.get(0)?,
-                month: row.get(1)?,
-                count: row.get(2)?,
-            })
-        })?;
-
-        let mut density = Vec::new();
-        for item in density_iter {
-            density.push(item?);
-        }
+        )
+        .fetch_all(pool)
+        .await?;
 
         Ok(TimelineData {
             min_date,
@@ -888,50 +914,48 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
 impl Photo {}
 
 #[cfg(test)]
-pub fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
-    crate::db_pool::create_in_memory_pool()
+pub async fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
+    crate::db_pool::create_in_memory_pool().await
 }
 
 #[cfg(test)]
-pub fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
-    crate::db_pool::create_in_memory_pool()
+pub async fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
+    crate::db_pool::create_in_memory_pool().await
 }
 
 /// Get all photo file paths from the database
 #[cfg(test)]
-pub fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare("SELECT file_path FROM photos ORDER BY file_path")?;
-    let paths = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<String>, _>>()?;
+pub async fn get_all_photo_paths(
+    pool: &DbPool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let paths: Vec<String> =
+        sqlx::query_scalar("SELECT file_path FROM photos ORDER BY file_path")
+            .fetch_all(pool)
+            .await?;
     Ok(paths)
 }
 
 /// Get file paths of photos that need semantic vector indexing (Phase 2)
-pub fn get_paths_needing_semantic_indexing(
+pub async fn get_paths_needing_semantic_indexing(
     pool: &DbPool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare(
+    let paths: Vec<String> = sqlx::query_scalar(
         "SELECT file_path FROM photos WHERE semantic_vector_indexed = 0 OR semantic_vector_indexed IS NULL ORDER BY file_path"
-    )?;
-    let paths = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<String>, _>>()?;
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(paths)
 }
 
 /// Mark a photo as semantically indexed
-pub fn mark_photo_as_semantically_indexed(
+pub async fn mark_photo_as_semantically_indexed(
     pool: &DbPool,
     file_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-    conn.execute(
-        "UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?",
-        [file_path],
-    )?;
+    sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
+        .bind(file_path)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -964,9 +988,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_get_timeline_data() {
-        let pool = create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_get_timeline_data() {
+        let pool = create_test_db_pool().await.unwrap();
 
         // Create test photos with different dates
         let photo1 = create_test_photo_with_date(
@@ -999,13 +1023,13 @@ mod tests {
         );
 
         // Insert photos
-        photo1.create(&pool).unwrap();
-        photo2.create(&pool).unwrap();
-        photo3.create(&pool).unwrap();
-        photo4.create(&pool).unwrap();
+        photo1.create(&pool).await.unwrap();
+        photo2.create(&pool).await.unwrap();
+        photo3.create(&pool).await.unwrap();
+        photo4.create(&pool).await.unwrap();
 
         // Get timeline data
-        let timeline = Photo::get_timeline_data(&pool).unwrap();
+        let timeline = Photo::get_timeline_data(&pool).await.unwrap();
 
         // Verify min/max dates
         assert_eq!(
@@ -1045,12 +1069,12 @@ mod tests {
         assert_eq!(jan_2024.count, 1);
     }
 
-    #[test]
-    fn test_get_timeline_data_empty() {
-        let pool = create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_get_timeline_data_empty() {
+        let pool = create_test_db_pool().await.unwrap();
 
         // Get timeline data from empty database
-        let timeline = Photo::get_timeline_data(&pool).unwrap();
+        let timeline = Photo::get_timeline_data(&pool).await.unwrap();
 
         // Should return None for dates and empty density
         assert_eq!(timeline.min_date, None);

@@ -115,6 +115,7 @@ impl PhotoProcessor {
 
         // Step 3: Delete orphaned photos (in database but not on disk) and clear their caches
         let deleted_paths = crate::db::delete_orphaned_photos(db_pool, &existing_paths)
+            .await
             .unwrap_or_else(|e| {
                 error!("Failed to delete orphaned photos: {}", e);
                 Vec::new()
@@ -142,20 +143,24 @@ impl PhotoProcessor {
 
                 let file_path = photo_file.path.to_string_lossy().to_string();
                 let semantic_search = self.semantic_search.clone();
+                let db_pool_clone = db_pool.clone();
+                let modified = photo_file.modified;
+                let file_size = photo_file.size;
 
-                // Check if file is unchanged (same path, size, and modification time)
-                if let Some(modified) = photo_file.modified {
-                    if let Ok(Some(existing_photo)) = crate::db::Photo::find_unchanged_photo(
-                        db_pool,
-                        &file_path,
-                        photo_file.size as i64,
-                        modified,
-                    ) {
-                        log::debug!("Skipping unchanged file: {}", file_path);
+                // Spawn task that handles both unchanged and new files
+                tasks.spawn(async move {
+                    // Check if file is unchanged (same path, size, and modification time)
+                    if let Some(modified) = modified {
+                        if let Ok(Some(existing_photo)) = crate::db::Photo::find_unchanged_photo(
+                            &db_pool_clone,
+                            &file_path,
+                            file_size as i64,
+                            modified,
+                        ).await {
+                            log::debug!("Skipping unchanged file: {}", file_path);
 
-                        // Convert existing Photo to ProcessedPhoto - no async needed
-                        tasks.spawn(async move {
-                            Some(ProcessedPhoto {
+                            // Convert existing Photo to ProcessedPhoto
+                            return Some(ProcessedPhoto {
                                 file_path: existing_photo.file_path.clone(),
                                 filename: existing_photo.filename.clone(),
                                 file_size: existing_photo.file_size,
@@ -187,15 +192,11 @@ impl PhotoProcessor {
                                 audio_codec: existing_photo.audio_codec().map(String::from),
                                 bitrate: existing_photo.bitrate(),
                                 frame_rate: existing_photo.frame_rate(),
-                            })
-                        });
-                        continue;
+                            });
+                        }
                     }
-                }
 
-                // File is new or modified - spawn async processing task
-                tasks.spawn(async move {
-                    // Need to recreate processor context in the task
+                    // File is new or modified - process it
                     let processor = PhotoProcessor {
                         scanner: FileScanner::new(Vec::new()), // Empty scanner, not used
                         semantic_search,
@@ -337,7 +338,7 @@ impl PhotoProcessor {
         info!("Phase 2: Starting batch semantic vector computation");
 
         // Get only photos that need semantic indexing
-        let photo_paths = crate::db::get_paths_needing_semantic_indexing(db_pool)?;
+        let photo_paths = crate::db::get_paths_needing_semantic_indexing(db_pool).await?;
         let total_count = photo_paths.len();
 
         if total_count == 0 {
@@ -393,13 +394,13 @@ impl PhotoProcessor {
                             .compute_video_semantic_vector(&path, None)
                             .await
                     } else {
-                        semantic_search.compute_semantic_vector(&path)
+                        semantic_search.compute_semantic_vector(&path).await
                     };
 
                     // Mark as indexed if successful
                     if result.is_ok() {
                         if let Err(e) =
-                            crate::db::mark_photo_as_semantically_indexed(&db_pool, &path)
+                            crate::db::mark_photo_as_semantically_indexed(&db_pool, &path).await
                         {
                             error!("Failed to mark photo as indexed {}: {}", path, e);
                         }

@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize services
     let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =
-        initialize_services(&config)?;
+        initialize_services(&config).await?;
 
     // Extract indexing status before moving photo_scheduler
     let indexing_status = photo_scheduler.status.clone();
@@ -126,11 +126,11 @@ type InitServicesResult = (
     CacheManager,
 );
 
-fn initialize_services(
+async fn initialize_services(
     config: &config::Config,
 ) -> Result<InitServicesResult, Box<dyn std::error::Error>> {
     // Initialize database
-    let db_pool = db::create_db_pool(&config.db_path)?;
+    let db_pool = db::create_db_pool(&config.db_path).await?;
     info!("Database initialized successfully");
 
     // Initialize cache manager
@@ -143,6 +143,7 @@ fn initialize_services(
     // Initialize semantic search engine
     let semantic_search = Arc::new(
         SemanticSearchEngine::new(db_pool.clone(), &config.data_path)
+            .await
             .map_err(|e| format!("Failed to initialize semantic search: {}", e))?,
     );
     info!("Semantic search initialized");

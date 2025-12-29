@@ -52,21 +52,13 @@ pub async fn semantic_search(
     // Perform semantic search
     let results = semantic_search
         .search(&query.q, query.limit, query.offset)
+        .await
         .map_err(|e| {
             log::error!("Semantic search error: {}", e);
             reject::custom(DatabaseError {
                 message: format!("Semantic search error: {}", e),
             })
         })?;
-
-    // Convert file paths to hashes by looking up in database
-    // Use a single query with IN clause to avoid N+1 problem
-    let conn = db_pool.get().map_err(|e| {
-        log::error!("Database connection error: {}", e);
-        reject::custom(DatabaseError {
-            message: format!("Database error: {}", e),
-        })
-    })?;
 
     if results.is_empty() {
         return Ok(warp::reply::json(&SemanticSearchResponse {
@@ -79,34 +71,30 @@ pub async fn semantic_search(
     // Build path-to-score map
     let path_scores: std::collections::HashMap<String, f32> = results.into_iter().collect();
 
-    // Query all hashes in a single batch
-    let paths: Vec<&str> = path_scores.keys().map(|s| s.as_str()).collect();
-    let placeholders = paths.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    // Query all hashes in a single batch using sqlx
+    let paths: Vec<String> = path_scores.keys().cloned().collect();
+    
+    // Construct dynamic IN query
+    let placeholders: Vec<String> = paths.iter().map(|_| "?".to_string()).collect();
     let query_sql = format!(
         "SELECT file_path, hash_sha256 FROM photos WHERE file_path IN ({})",
-        placeholders
+        placeholders.join(",")
     );
 
-    let mut stmt = conn.prepare(&query_sql).map_err(|e| {
-        log::error!("Failed to prepare query: {}", e);
+    let mut query_builder = sqlx::query_as::<_, (String, String)>(&query_sql);
+    for path in &paths {
+        query_builder = query_builder.bind(path);
+    }
+
+    let rows = query_builder.fetch_all(&db_pool).await.map_err(|e| {
+        log::error!("Database query failed: {}", e);
         reject::custom(DatabaseError {
             message: format!("Database error: {}", e),
         })
     })?;
 
-    let mut search_results: Vec<SemanticSearchResult> = stmt
-        .query_map(rusqlite::params_from_iter(paths), |row| {
-            let path: String = row.get(0)?;
-            let hash: String = row.get(1)?;
-            Ok((path, hash))
-        })
-        .map_err(|e| {
-            log::error!("Query execution failed: {}", e);
-            reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            })
-        })?
-        .filter_map(|r| r.ok())
+    let mut search_results: Vec<SemanticSearchResult> = rows
+        .into_iter()
         .filter_map(|(path, hash)| {
             path_scores
                 .get(&path)

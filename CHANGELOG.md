@@ -1,3 +1,10 @@
+# [2.10.0](https://github.com/RouHim/turbo-pix/compare/2.9.0...2.10.0) (2025-12-29)
+
+
+### Features
+
+* remove UI notifications feature ([43c85ba](https://github.com/RouHim/turbo-pix/commit/43c85ba1940fa19c1f9ed5dc0871e66655e092ca))
+
 # [2.9.0](https://github.com/RouHim/turbo-pix/compare/2.8.1...2.9.0) (2025-12-29)
 
 

@@ -13,6 +13,7 @@ class PhotoViewer {
       viewer: utils.$('#photo-viewer'),
       overlay: utils.$('.viewer-overlay'),
       content: utils.$('.viewer-content'),
+      main: utils.$('.viewer-main'),
       close: utils.$('.viewer-close'),
       prev: utils.$('.viewer-prev'),
       next: utils.$('.viewer-next'),
@@ -90,6 +91,15 @@ class PhotoViewer {
 
     if (this.elements.deletePhotoBtn) {
       utils.on(this.elements.deletePhotoBtn, 'click', () => this.deletePhoto());
+    }
+
+    if (this.elements.main) {
+      utils.on(this.elements.main, 'click', (e) => {
+        // Close when clicking the void (background), but not when clicking on the media
+        if (e.target === this.elements.main) {
+          this.close();
+        }
+      });
     }
 
     if (this.elements.content) {

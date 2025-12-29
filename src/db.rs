@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -81,17 +81,9 @@ where
 }
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    // Try RFC3339 first (new format)
-    if s.contains('T') {
-        DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
-    } else {
-        // Fallback to legacy SQLite format
-        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-            .ok()
-            .map(|ndt| ndt.and_utc())
-    }
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {

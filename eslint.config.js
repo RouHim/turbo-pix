@@ -37,6 +37,8 @@ export default [
         module: 'readonly',
         utils: 'readonly',
         api: 'readonly',
+        PhotoCard: 'writable',
+        confirm: 'readonly',
       },
     },
     rules: {
@@ -45,6 +47,7 @@ export default [
       'prefer-const': 'error',
       'no-var': 'error',
       'no-case-declarations': 'off',
+      'no-redeclare': ['error', { builtinGlobals: false }],
     },
   },
   {

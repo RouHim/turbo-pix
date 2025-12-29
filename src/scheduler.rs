@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use crate::cache_manager::CacheManager;
 use crate::collage_generator;
 use crate::db::DbPool;
+use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
 
@@ -289,6 +290,22 @@ impl PhotoScheduler {
                             Ok(count) => info!("Phase 3 completed: {} collages generated", count),
                             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
                         }
+
+                        // Phase 4: Housekeeping Identification
+                        info!("Phase 4: Identifying housekeeping candidates");
+                        status.set_phase("housekeeping").await;
+                        match housekeeping_manager::run_housekeeping_scan(
+                            &db_pool,
+                            &semantic_search,
+                        )
+                        .await
+                        {
+                            Ok(count) => info!(
+                                "Phase 4 completed: {} housekeeping candidates identified",
+                                count
+                            ),
+                            Err(e) => error!("Phase 4 (housekeeping identification) failed: {}", e),
+                        }
                     }
                     Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
                 }
@@ -388,8 +405,21 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
         }
 
+        // Phase 4: Housekeeping Identification
+        info!("Phase 4: Identifying housekeeping candidates");
+        self.status.set_phase("housekeeping").await;
+        match housekeeping_manager::run_housekeeping_scan(&self.db_pool, &self.semantic_search)
+            .await
+        {
+            Ok(count) => info!(
+                "Phase 4 completed: {} housekeeping candidates identified",
+                count
+            ),
+            Err(e) => error!("Phase 4 (housekeeping identification) failed: {}", e),
+        }
+
         info!(
-            "Startup rescan completed (three-phase): {} photos indexed, {} errors",
+            "Startup rescan completed (four-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
 

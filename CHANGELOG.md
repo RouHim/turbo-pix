@@ -1,3 +1,10 @@
+# [2.9.0](https://github.com/RouHim/turbo-pix/compare/2.8.1...2.9.0) (2025-12-29)
+
+
+### Features
+
+* add click-outside-to-close for media detail view ([d80c5b5](https://github.com/RouHim/turbo-pix/commit/d80c5b5dd4e26dd8bce52914eebdb6a457a18e59))
+
 ## [2.8.1](https://github.com/RouHim/turbo-pix/compare/2.8.0...2.8.1) (2025-12-29)
 
 

@@ -1,3 +1,10 @@
+# [2.8.0](https://github.com/RouHim/turbo-pix/compare/2.7.0...2.8.0) (2025-12-29)
+
+
+### Features
+
+* implement SPA routing and URL state management ([59fd7c0](https://github.com/RouHim/turbo-pix/commit/59fd7c07ac2905a237ee015265a3545d4ff35c6f))
+
 # [2.7.0](https://github.com/RouHim/turbo-pix/compare/2.6.1...2.7.0) (2025-12-29)
 
 

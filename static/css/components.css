@@ -637,7 +637,7 @@
   font-weight: var(--font-semibold);
   font-size: var(--font-base);
   color: var(--text-secondary);
-  word-break: break-word;
+  overflow-wrap: break-word;
   min-width: 140px;
   flex-shrink: 0;
 }
@@ -646,7 +646,7 @@
   color: var(--text-primary);
   font-size: var(--font-base);
   font-weight: var(--font-medium);
-  word-break: break-word;
+  overflow-wrap: break-word;
   text-align: right;
   flex: 1;
 }
@@ -1244,7 +1244,7 @@
 .modal .form-group input:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
+  box-shadow: 0 0 0 3px rgb(var(--primary-rgb) / 10%);
 }
 
 .error-message {

@@ -95,7 +95,7 @@ class TurboPixApp {
    */
   initRouting() {
     // Handle browser back/forward buttons
-    utils.on(window, 'popstate', (e) => {
+    utils.on(window, 'popstate', () => {
       const view = this.getViewFromPath() || 'all';
       const photoHash = this.getPhotoFromUrl();
 

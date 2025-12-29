@@ -156,7 +156,9 @@ impl PhotoProcessor {
                             &file_path,
                             file_size as i64,
                             modified,
-                        ).await {
+                        )
+                        .await
+                        {
                             log::debug!("Skipping unchanged file: {}", file_path);
 
                             // Convert existing Photo to ProcessedPhoto

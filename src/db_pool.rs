@@ -1,5 +1,5 @@
-use log::info;
 use libsqlite3_sys::sqlite3_auto_extension;
+use log::info;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use std::str::FromStr;
@@ -52,8 +52,8 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(30))
         .pragma("temp_store", "MEMORY")
-        .pragma("cache_size", "-128000")  // 128MB cache
-        .pragma("mmap_size", "536870912")  // 512MB memory-mapped I/O
+        .pragma("cache_size", "-128000") // 128MB cache
+        .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
         .pragma("wal_autocheckpoint", "10000")
         .pragma("analysis_limit", "1000");
 
@@ -69,15 +69,13 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
     // Create pool
     let pool = SqlitePoolOptions::new()
         .max_connections(pool_size as u32)
-        .min_connections(2)  // Keep minimum connections alive
+        .min_connections(2) // Keep minimum connections alive
         .acquire_timeout(Duration::from_secs(30))
         .connect_with(connect_options)
         .await?;
 
     // Run migrations
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
 }
@@ -91,9 +89,7 @@ pub async fn delete_orphaned_photos(
             .fetch_all(pool)
             .await?;
 
-        sqlx::query("DELETE FROM photos")
-            .execute(pool)
-            .await?;
+        sqlx::query("DELETE FROM photos").execute(pool).await?;
         sqlx::query("DELETE FROM media_semantic_vectors")
             .execute(pool)
             .await?;
@@ -176,9 +172,7 @@ pub async fn delete_orphaned_photos(
 }
 
 pub async fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-    sqlx::query("VACUUM")
-        .execute(pool)
-        .await?;
+    sqlx::query("VACUUM").execute(pool).await?;
     info!("Database vacuum completed");
     Ok(())
 }
@@ -197,8 +191,7 @@ pub async fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error
         >(sqlite3_vec_init as *const ())));
     }
 
-    let options = SqliteConnectOptions::from_str("sqlite::memory:")?
-        .create_if_missing(true);
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")?.create_if_missing(true);
 
     // CRITICAL: In-memory databases must use max_connections(1)
     // SQLite in-memory databases are connection-specific
@@ -208,9 +201,7 @@ pub async fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error
         .await?;
 
     // Run migrations
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
 }
@@ -227,14 +218,14 @@ mod tests {
 
         // Insert test data
         sqlx::query(
-            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (1, '/path/to/photo1.jpg')"
+            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (1, '/path/to/photo1.jpg')",
         )
         .execute(&pool)
         .await
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (2, '/path/to/photo2.jpg')"
+            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (2, '/path/to/photo2.jpg')",
         )
         .execute(&pool)
         .await
@@ -244,66 +235,59 @@ mod tests {
         let dummy_feature_vector = vec![0.0f32; 512];
         let vector_bytes = dummy_feature_vector.as_slice().as_bytes();
 
-        sqlx::query(
-            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)"
-        )
-        .bind(vector_bytes)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)")
+            .bind(vector_bytes)
+            .execute(&pool)
+            .await
+            .unwrap();
 
-        sqlx::query(
-            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (2, ?)"
-        )
-        .bind(vector_bytes)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (2, ?)")
+            .bind(vector_bytes)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Verify initial state
-        let cache_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM semantic_vector_path_mapping"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let cache_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM semantic_vector_path_mapping")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(cache_count, 2);
 
-        let feature_vector_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM media_semantic_vectors"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let feature_vector_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(feature_vector_count, 2);
 
         // Delete orphaned photos (only keep photo1)
         let existing_paths = vec!["/path/to/photo1.jpg".to_string()];
-        delete_orphaned_photos(&pool, &existing_paths).await.unwrap();
+        delete_orphaned_photos(&pool, &existing_paths)
+            .await
+            .unwrap();
 
         // Verify cleanup
-        let cache_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM semantic_vector_path_mapping"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let cache_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM semantic_vector_path_mapping")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(cache_count, 1, "Should have 1 cached feature vector");
 
-        let feature_vector_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM media_semantic_vectors"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let feature_vector_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(feature_vector_count, 1, "Should have 1 feature vector");
 
-        let remaining_path: String = sqlx::query_scalar(
-            "SELECT path FROM semantic_vector_path_mapping"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let remaining_path: String =
+            sqlx::query_scalar("SELECT path FROM semantic_vector_path_mapping")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(remaining_path, "/path/to/photo1.jpg");
     }
 
@@ -314,7 +298,7 @@ mod tests {
 
         // Insert test data
         sqlx::query(
-            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (1, '/path/to/photo1.jpg')"
+            "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (1, '/path/to/photo1.jpg')",
         )
         .execute(&pool)
         .await
@@ -323,32 +307,28 @@ mod tests {
         let dummy_feature_vector = vec![0.0f32; 512];
         let vector_bytes = dummy_feature_vector.as_slice().as_bytes();
 
-        sqlx::query(
-            "INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)"
-        )
-        .bind(vector_bytes)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (1, ?)")
+            .bind(vector_bytes)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Delete all photos (empty existing_paths)
         delete_orphaned_photos(&pool, &[]).await.unwrap();
 
         // Verify all cleaned up
-        let cache_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM semantic_vector_path_mapping"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let cache_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM semantic_vector_path_mapping")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(cache_count, 0);
 
-        let feature_vector_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM media_semantic_vectors"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let feature_vector_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(feature_vector_count, 0);
     }
 }

@@ -59,9 +59,7 @@ where
     parse_datetime(&s).ok_or_else(|| serde::de::Error::custom("invalid datetime format"))
 }
 
-fn deserialize_optional_datetime<'de, D>(
-    deserializer: D,
-) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -74,16 +72,20 @@ where
     D: serde::Deserializer<'de>,
 {
     let s: String = Deserialize::deserialize(deserializer)?;
-    s.parse().map_err(|_| {
-        log::warn!("Failed to parse metadata JSON, using empty object");
-        D::Error::custom("invalid JSON")
-    }).or(Ok(json!({})))
+    s.parse()
+        .map_err(|_| {
+            log::warn!("Failed to parse metadata JSON, using empty object");
+            D::Error::custom("invalid JSON")
+        })
+        .or(Ok(json!({})))
 }
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
     // Try RFC3339 first (new format)
     if s.contains('T') {
-        DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))
+        DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
     } else {
         // Fallback to legacy SQLite format
         NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
@@ -925,13 +927,10 @@ pub async fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error
 
 /// Get all photo file paths from the database
 #[cfg(test)]
-pub async fn get_all_photo_paths(
-    pool: &DbPool,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let paths: Vec<String> =
-        sqlx::query_scalar("SELECT file_path FROM photos ORDER BY file_path")
-            .fetch_all(pool)
-            .await?;
+pub async fn get_all_photo_paths(pool: &DbPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let paths: Vec<String> = sqlx::query_scalar("SELECT file_path FROM photos ORDER BY file_path")
+        .fetch_all(pool)
+        .await?;
     Ok(paths)
 }
 

@@ -297,7 +297,8 @@ pub async fn update_photo_metadata(
 
     // Update GPS coordinates if provided
     if metadata_req.latitude.is_some() || metadata_req.longitude.is_some() {
-        let mut location = updated_photo.metadata
+        let mut location = updated_photo
+            .metadata
             .get("location")
             .and_then(|v| v.as_object())
             .cloned()
@@ -310,7 +311,8 @@ pub async fn update_photo_metadata(
             location.insert("longitude".to_string(), json!(lon));
         }
 
-        updated_photo.metadata
+        updated_photo
+            .metadata
             .as_object_mut()
             .unwrap()
             .insert("location".to_string(), json!(location));
@@ -633,14 +635,19 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        photo.create(db_pool).await.expect("Failed to create test photo");
+        photo
+            .create(db_pool)
+            .await
+            .expect("Failed to create test photo");
 
         (photo.hash_sha256.clone(), temp_image)
     }
 
     #[tokio::test]
     async fn test_update_photo_metadata_endpoint() {
-        let db_pool = create_in_memory_pool().await.expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
@@ -659,7 +666,8 @@ mod tests {
         assert!(result.is_ok(), "Handler should succeed");
 
         // Verify the photo was updated in the database
-        let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash).await
+        let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
+            .await
             .expect("Failed to query database")
             .expect("Photo should exist");
 
@@ -691,7 +699,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_invalid_coordinates() {
-        let db_pool = create_in_memory_pool().await.expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
@@ -715,7 +725,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_missing_longitude() {
-        let db_pool = create_in_memory_pool().await.expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;

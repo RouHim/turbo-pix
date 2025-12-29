@@ -78,7 +78,12 @@ impl SemanticSearchEngine {
     }
 
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
-    pub async fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, f32)>> {
         let start_time = std::time::Instant::now();
         log::info!(
             "Semantic search for: '{}' (limit: {}, offset: {})",
@@ -144,7 +149,7 @@ impl SemanticSearchEngine {
         // OPTIMIZATION: Check existence BEFORE acquiring transaction lock
         // WAL mode allows concurrent reads without blocking writers
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
         )
         .bind(image_path)
         .fetch_one(&self.pool)
@@ -171,7 +176,7 @@ impl SemanticSearchEngine {
 
         // Double-check existence after expensive computation (race condition prevention)
         let still_missing: bool = sqlx::query_scalar(
-            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
         )
         .bind(image_path)
         .fetch_one(&mut *tx)
@@ -201,7 +206,7 @@ impl SemanticSearchEngine {
 
         // Quick check without holding a transaction (to avoid holding lock across async)
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
         )
         .bind(video_path)
         .fetch_one(&self.pool)
@@ -284,7 +289,7 @@ impl SemanticSearchEngine {
 
         // Double-check it wasn't inserted by another concurrent task
         let still_missing: bool = sqlx::query_scalar(
-            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)"
+            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
         )
         .bind(video_path)
         .fetch_one(&mut *tx)
@@ -299,7 +304,8 @@ impl SemanticSearchEngine {
                 frames_to_sample,
                 &frame_times,
                 MODEL_VERSION,
-            ).await?;
+            )
+            .await?;
         } else {
             log::debug!(
                 "Video semantic vector was cached by another task during computation: {}",
@@ -562,14 +568,14 @@ async fn store_semantic_vector_tx(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO semantic_vector_path_mapping (path) VALUES (?)
          ON CONFLICT(path) DO UPDATE SET path=path
-         RETURNING id"
+         RETURNING id",
     )
     .bind(path)
     .fetch_one(&mut **tx)
     .await?;
 
     sqlx::query(
-        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)"
+        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
     )
     .bind(id)
     .bind(vector_floats.as_slice().as_bytes())
@@ -618,7 +624,9 @@ mod tests {
     #[tokio::test]
     async fn test_duplicate_semantic_vector_skipped() {
         let db_pool = create_test_db_pool().await.unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").await.unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data")
+            .await
+            .unwrap();
 
         let path = "test-data/cat.jpg";
 
@@ -633,11 +641,19 @@ mod tests {
     #[tokio::test]
     async fn test_semantic_search_basic() {
         let db_pool = create_test_db_pool().await.unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").await.unwrap();
+        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data")
+            .await
+            .unwrap();
 
         // Index both images
-        engine.compute_semantic_vector("test-data/cat.jpg").await.unwrap();
-        engine.compute_semantic_vector("test-data/car.jpg").await.unwrap();
+        engine
+            .compute_semantic_vector("test-data/cat.jpg")
+            .await
+            .unwrap();
+        engine
+            .compute_semantic_vector("test-data/car.jpg")
+            .await
+            .unwrap();
 
         // Search for cat - should return cat.jpg first
         let results = engine.search("cat", 10, 0).await.unwrap();

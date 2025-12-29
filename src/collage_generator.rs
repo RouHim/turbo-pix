@@ -212,12 +212,11 @@ impl Collage {
         pool: &DbPool,
         signature: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collages WHERE signature = ? LIMIT 1)",
-        )
-        .bind(signature)
-        .fetch_one(pool)
-        .await?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM collages WHERE signature = ? LIMIT 1)")
+                .bind(signature)
+                .fetch_one(pool)
+                .await?;
         Ok(exists)
     }
 }
@@ -944,7 +943,9 @@ fn draw_text(
 }
 
 /// Find photo clusters (dates with ≥10 photos) in the last 365 days
-async fn find_photo_clusters(pool: &DbPool) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
+async fn find_photo_clusters(
+    pool: &DbPool,
+) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
     // Get cutoff date (365 days ago)
     let cutoff_date = (Utc::now() - Duration::days(365)).to_rfc3339();
 
@@ -1384,7 +1385,9 @@ pub async fn generate_collages(
                 chunk.len() as i32,
                 &photo_hashes,
                 &signature,
-            ).await {
+            )
+            .await
+            {
                 Ok(_) => {
                     info!(
                         "Successfully created collage {} for {}",
@@ -1418,7 +1421,9 @@ pub async fn accept_collage(
     semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get collage
-    let collage = Collage::get_by_id(pool, collage_id).await?.ok_or("Collage not found")?;
+    let collage = Collage::get_by_id(pool, collage_id)
+        .await?
+        .ok_or("Collage not found")?;
 
     // Create destination directory (separate from staging to avoid premature indexing)
     let dest_dir = data_path.join("collages").join("accepted");
@@ -1460,7 +1465,9 @@ pub async fn reject_collage(
     collage_id: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get collage
-    let collage = Collage::get_by_id(pool, collage_id).await?.ok_or("Collage not found")?;
+    let collage = Collage::get_by_id(pool, collage_id)
+        .await?
+        .ok_or("Collage not found")?;
 
     // Delete files
     let file_path = PathBuf::from(&collage.file_path);
@@ -1570,7 +1577,12 @@ mod tests {
         img.save_with_format(path, ImageFormat::Jpeg).unwrap();
     }
 
-    async fn insert_photo(pool: &DbPool, file_path: &Path, hash_seed: u64, taken_at: DateTime<Utc>) {
+    async fn insert_photo(
+        pool: &DbPool,
+        file_path: &Path,
+        hash_seed: u64,
+        taken_at: DateTime<Utc>,
+    ) {
         let hash = format!("{:064x}", hash_seed);
         let filename = file_path
             .file_name()
@@ -1603,7 +1615,10 @@ mod tests {
         };
 
         let mut tx = pool.begin().await.unwrap();
-        photo.create_or_update_with_transaction(&mut tx).await.unwrap();
+        photo
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
     }
 
@@ -1796,7 +1811,9 @@ mod tests {
         // Then: It should not be pending, but the signature should remain
         let pending = Collage::list_pending(&pool).await.unwrap();
         assert!(pending.is_empty());
-        assert!(Collage::exists_by_signature(&pool, &signature).await.unwrap());
+        assert!(Collage::exists_by_signature(&pool, &signature)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

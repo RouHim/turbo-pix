@@ -1,3 +1,10 @@
+## [2.8.1](https://github.com/RouHim/turbo-pix/compare/2.8.0...2.8.1) (2025-12-29)
+
+
+### Bug Fixes
+
+* resolve linting issues for updated stylelint rules ([195062b](https://github.com/RouHim/turbo-pix/commit/195062b3bb0bc56e0a9d7f5fa596b6226cf77b46))
+
 # [2.8.0](https://github.com/RouHim/turbo-pix/compare/2.7.0...2.8.0) (2025-12-29)
 
 

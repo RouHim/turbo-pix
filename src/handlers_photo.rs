@@ -10,7 +10,6 @@ use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo, SearchQuery};
 use crate::handlers_video::{get_video_file, VideoQuery};
 use crate::image_editor::{self, RotationAngle};
-use crate::metadata_extractor::MetadataExtractor;
 use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError};

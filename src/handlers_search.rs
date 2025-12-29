@@ -73,7 +73,6 @@ pub async fn semantic_search(
 
     // Query all hashes in a single batch using sqlx
     let paths: Vec<String> = path_scores.keys().cloned().collect();
-
     // Construct dynamic IN query
     let placeholders: Vec<String> = paths.iter().map(|_| "?".to_string()).collect();
     let query_sql = format!(

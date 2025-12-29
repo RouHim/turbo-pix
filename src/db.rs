@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -59,7 +59,9 @@ where
     parse_datetime(&s).ok_or_else(|| serde::de::Error::custom("invalid datetime format"))
 }
 
-fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(
+    deserializer: D,
+) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -81,9 +83,18 @@ where
 }
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    // Try RFC3339 first (new format)
+    if s.contains('T') {
+        DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
+    } else {
+        // Fallback to legacy SQLite format
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|ndt| ndt.and_utc())
+    }
+}
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
@@ -989,7 +1000,6 @@ mod tests {
         };
         create_test_photo_with_date(&hash_64, &filename, Utc::now())
     }
-
     #[tokio::test]
     async fn test_get_timeline_data() {
         let pool = create_test_db_pool().await.unwrap();

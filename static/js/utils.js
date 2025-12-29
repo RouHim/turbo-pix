@@ -169,30 +169,9 @@ const hideLoading = () => {
   if (indicator) indicator.classList.remove('show');
 };
 
-// Toast notifications
-const showToast = (title, message, type = 'info', duration = 4000) => {
-  const container = $('#toast-container');
-  if (!container) return;
-
-  const toast = createElement('div', `toast ${type}`);
-
-  // Build with DOM API to prevent XSS
-  const titleDiv = createElement('div', 'toast-title', title);
-  const messageDiv = createElement('div', 'toast-message', message);
-
-  toast.appendChild(titleDiv);
-  toast.appendChild(messageDiv);
-
-  container.appendChild(toast);
-
-  // Trigger animation
-  setTimeout(() => toast.classList.add('show'), 10);
-
-  // Auto remove
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => container.removeChild(toast), 300);
-  }, duration);
+// Toast notifications (Disabled)
+const showToast = () => {
+  // Feature removed
 };
 
 // Image lazy loading

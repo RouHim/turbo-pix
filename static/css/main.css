@@ -577,14 +577,6 @@ body {
   }
 }
 
-.toast-container {
-  position: fixed;
-  top: 80px;
-  right: var(--space-6);
-  z-index: 1100;
-  max-width: 400px;
-}
-
 /* Utility Classes */
 .hidden {
   display: none;

@@ -699,44 +699,6 @@
   font-size: 22px;
 }
 
-.toast {
-  background: var(--surface-color);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-medium);
-  padding: var(--space-4);
-  margin-bottom: var(--space-3);
-  transform: translateX(100%);
-  transition: var(--transition-medium);
-  border-left: 4px solid var(--primary-color);
-}
-
-.toast.show {
-  transform: translateX(0);
-}
-
-.toast.success {
-  border-left-color: #4caf50;
-}
-
-.toast.error {
-  border-left-color: #f44336;
-}
-
-.toast.warning {
-  border-left-color: #ff9800;
-}
-
-.toast-title {
-  font-weight: var(--font-semibold);
-  margin-bottom: var(--space-1);
-  color: var(--text-primary);
-}
-
-.toast-message {
-  color: var(--text-secondary);
-  font-size: var(--font-base);
-}
-
 .lazy-image {
   opacity: 0;
   transition: opacity var(--transition-medium);

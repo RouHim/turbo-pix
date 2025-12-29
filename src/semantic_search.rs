@@ -78,6 +78,21 @@ impl SemanticSearchEngine {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_model(
+        model: Arc<RwLock<clip::ClipModel>>,
+        tokenizer: Arc<Tokenizer>,
+        device: Arc<Device>,
+        pool: Pool<SqliteConnectionManager>,
+    ) -> Self {
+        Self {
+            model,
+            tokenizer,
+            device,
+            pool,
+        }
+    }
+
     /// Retry helper for database operations with exponential backoff
     /// Handles "database is locked" errors during high concurrent write load
     fn retry_on_db_locked<F, T>(&self, operation: F, operation_name: &str) -> Result<T>
@@ -671,11 +686,34 @@ fn store_video_metadata_tx(
 mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
+    use std::sync::OnceLock;
+
+    type CachedModel = (Arc<RwLock<clip::ClipModel>>, Arc<Tokenizer>, Arc<Device>);
+
+    static MODEL_CACHE: OnceLock<CachedModel> = OnceLock::new();
+
+    fn get_cached_model() -> CachedModel {
+        let (model, tokenizer, device) = MODEL_CACHE
+            .get_or_init(|| {
+                let device = Arc::new(Device::Cpu);
+                // Ensure the path is correct relative to the project root where `cargo test` runs
+                let (model, tokenizer) =
+                    load_clip_model(&device, "./data").expect("Failed to load model");
+                (Arc::new(RwLock::new(model)), Arc::new(tokenizer), device)
+            })
+            .clone();
+        (model, tokenizer, device)
+    }
+
+    fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
+        let (model, tokenizer, device) = get_cached_model();
+        SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+    }
 
     #[test]
     fn test_duplicate_semantic_vector_skipped() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         let path = "test-data/cat.jpg";
 
@@ -690,7 +728,7 @@ mod tests {
     #[test]
     fn test_semantic_search_basic() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         // Index both images
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
@@ -720,7 +758,7 @@ mod tests {
     #[test]
     fn test_semantic_search_concept_understanding() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
@@ -748,7 +786,7 @@ mod tests {
     #[test]
     fn test_raw_image_embedding() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         let result = engine.compute_semantic_vector("test-data/IMG_9899.CR2");
         assert!(
@@ -761,7 +799,7 @@ mod tests {
     #[test]
     fn test_semantic_similarity_synonyms() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool);
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
 
@@ -793,7 +831,7 @@ mod tests {
     #[test]
     fn test_search_empty_database() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool, "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool);
 
         let results = engine.search("cat", 10, 0).unwrap();
 
@@ -806,7 +844,7 @@ mod tests {
     #[test]
     fn test_minimum_similarity_threshold() {
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();
         engine.compute_semantic_vector("test-data/car.jpg").unwrap();
@@ -865,7 +903,7 @@ mod tests {
         }
 
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         let video_path_str = video_path.to_string_lossy().to_string();
         let result = engine
@@ -924,7 +962,7 @@ mod tests {
         }
 
         let db_pool = create_test_db_pool().unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         // Index image and video
         engine.compute_semantic_vector("test-data/cat.jpg").unwrap();

@@ -80,27 +80,6 @@ class PhotoCard {
     overlay.appendChild(title);
     overlay.appendChild(meta);
 
-    // Housekeeping Reason Badge
-    if (this.photo.housekeepingReason) {
-      const badge = utils.createElement('div', 'housekeeping-badge');
-      const score =
-        typeof this.photo.housekeepingScore === 'number'
-          ? Math.round(this.photo.housekeepingScore)
-          : '?';
-      badge.textContent = `${this.photo.housekeepingReason} (${score}%)`;
-      badge.style.position = 'absolute';
-      badge.style.top = '10px';
-      badge.style.left = '10px';
-      badge.style.background = 'rgba(239, 68, 68, 0.9)'; // Red
-      badge.style.color = 'white';
-      badge.style.padding = '4px 8px';
-      badge.style.borderRadius = '4px';
-      badge.style.fontSize = '12px';
-      badge.style.fontWeight = 'bold';
-      badge.style.zIndex = '2';
-      card.appendChild(badge);
-    }
-
     const actions = this.createActions();
 
     card.appendChild(imageContainer);
@@ -120,7 +99,7 @@ class PhotoCard {
       const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
       keepBtn.title = 'Keep (Remove from housekeeping list)';
       keepBtn.dataset.action = 'keep';
-      keepBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
+      keepBtn.innerHTML = window.iconHelper.getIcon('check', { size: 18 });
       keepBtn.style.color = '#10b981'; // Green
 
       // Delete Button

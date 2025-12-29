@@ -59,9 +59,7 @@ where
     parse_datetime(&s).ok_or_else(|| serde::de::Error::custom("invalid datetime format"))
 }
 
-fn deserialize_optional_datetime<'de, D>(
-    deserializer: D,
-) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

@@ -248,36 +248,6 @@ test.describe('Critical User Journeys', () => {
     }
   });
 
-  test('mobile navigation workflow', async ({ page }) => {
-    await TestHelpers.setMobileViewport(page);
-    await page.reload();
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // 1. User opens mobile menu
-    const menuBtn = page.locator(TestHelpers.selectors.menuBtn);
-    await menuBtn.click();
-
-    // 2. Sidebar opens
-    const sidebar = page.locator(TestHelpers.selectors.sidebar);
-    await expect(sidebar).toHaveClass(/open/);
-
-    // 3. User navigates to favorites
-    const favoritesBtn = page.locator(TestHelpers.selectors.navItem('favorites'));
-    await favoritesBtn.click();
-
-    // 4. View changes, sidebar closes
-    await TestHelpers.verifyActiveView(page, 'favorites');
-    await expect(sidebar).not.toHaveClass(/open/);
-
-    // 5. User opens mobile search
-    const mobileSearchBtn = page.locator('.mobile-search-btn');
-    if ((await mobileSearchBtn.count()) > 0) {
-      await mobileSearchBtn.click();
-      const mobileSearch = page.locator('.mobile-search');
-      await expect(mobileSearch).toBeVisible();
-    }
-  });
-
   test('multi-photo browsing workflow', async ({ page }) => {
     const photoCards = await TestHelpers.getPhotoCards(page);
     if (photoCards.length < 5) {

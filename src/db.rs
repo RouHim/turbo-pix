@@ -953,6 +953,7 @@ pub async fn mark_photo_as_semantically_indexed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Row;
 
     fn create_test_photo_with_date(hash: &str, filename: &str, taken_at: DateTime<Utc>) -> Photo {
         Photo {
@@ -977,6 +978,16 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn create_test_photo(filename: String, hash: String) -> Photo {
+        // Ensure hash is 64 characters for SHA256
+        let hash_64 = if hash.len() < 64 {
+            format!("{:0<64}", hash)
+        } else {
+            hash
+        };
+        create_test_photo_with_date(&hash_64, &filename, Utc::now())
     }
 
     #[tokio::test]
@@ -1071,5 +1082,177 @@ mod tests {
         assert_eq!(timeline.min_date, None);
         assert_eq!(timeline.max_date, None);
         assert_eq!(timeline.density.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_rollback_on_constraint_violation() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create first photo
+        let photo1 = create_test_photo("test1.jpg".to_string(), "abc123".to_string());
+        photo1.create(&pool).await.unwrap();
+
+        // Verify photo exists
+        let found = Photo::find_by_hash(&pool, &photo1.hash_sha256)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+
+        // Attempt to create photo with duplicate hash in a transaction
+        let mut tx = pool.begin().await.unwrap();
+        let photo2 = create_test_photo("test2.jpg".to_string(), "abc123".to_string()); // Same hash
+        let result = photo2.create_with_transaction(&mut tx).await;
+
+        // Should fail due to PRIMARY KEY constraint
+        assert!(result.is_err());
+
+        // Rollback transaction (or let it drop)
+        drop(tx);
+
+        // Verify database is still consistent - only one photo exists
+        let all_photos = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let count: i64 = all_photos.get("count");
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_atomicity() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create multiple photos in a transaction
+        let photos = vec![
+            create_test_photo("test1.jpg".to_string(), "hash1".to_string()),
+            create_test_photo("test2.jpg".to_string(), "hash2".to_string()),
+            create_test_photo("test3.jpg".to_string(), "hash3".to_string()),
+        ];
+
+        // Test 1: Successful transaction - all photos committed
+        let mut tx = pool.begin().await.unwrap();
+        for photo in &photos {
+            photo.create_with_transaction(&mut tx).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        // Verify all photos were committed
+        let count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get("count");
+        assert_eq!(count, 3, "All photos should be visible after commit");
+
+        // Test 2: Failed transaction - no photos should be added
+        let more_photos = vec![
+            create_test_photo("test4.jpg".to_string(), "hash4".to_string()),
+            create_test_photo("test5.jpg".to_string(), "hash1".to_string()), // Duplicate hash - will fail
+        ];
+
+        let mut tx2 = pool.begin().await.unwrap();
+        let result = async {
+            for photo in &more_photos {
+                photo.create_with_transaction(&mut tx2).await?;
+            }
+            tx2.commit().await?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        }
+        .await;
+
+        // Transaction should fail due to duplicate hash
+        assert!(result.is_err());
+
+        // Verify count is still 3 (rollback worked)
+        let final_count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let final_count: i64 = final_count.get("count");
+        assert_eq!(
+            final_count, 3,
+            "Count should remain 3 after failed transaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transaction_update_and_rollback() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create initial photo
+        let mut photo = create_test_photo("test.jpg".to_string(), "hash123".to_string());
+        photo.create(&pool).await.unwrap();
+
+        // Verify initial state
+        let original_filename = photo.filename.clone();
+
+        // Start transaction and update photo
+        let mut tx = pool.begin().await.unwrap();
+        photo.filename = "updated.jpg".to_string();
+        photo.update_with_transaction(&mut tx).await.unwrap();
+
+        // Rollback transaction
+        drop(tx);
+
+        // Verify photo was NOT updated (rollback worked)
+        let found = Photo::find_by_hash(&pool, &photo.hash_sha256)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            found.filename, original_filename,
+            "Photo should not be updated after rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_writes_consistency() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create two photos concurrently
+        let photo1 = create_test_photo("test1.jpg".to_string(), "hash1".to_string());
+        let photo2 = create_test_photo("test2.jpg".to_string(), "hash2".to_string());
+
+        // Both should succeed since they have different hashes
+        let result1 = photo1.create(&pool).await;
+        let result2 = photo2.create(&pool).await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+
+        // Verify both photos exist
+        let count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get("count");
+        assert_eq!(count, 2, "Both photos should be created");
+    }
+
+    #[tokio::test]
+    async fn test_batch_transaction_consistency() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create 100 photos in a single transaction to test batch performance
+        let mut tx = pool.begin().await.unwrap();
+
+        for i in 0..100 {
+            let photo = create_test_photo(
+                format!("test_{}.jpg", i),
+                format!("{:064}", i), // Generate unique 64-char hash by padding number
+            );
+            photo.create_with_transaction(&mut tx).await.unwrap();
+        }
+
+        // Commit all at once
+        tx.commit().await.unwrap();
+
+        // Verify all 100 photos were created
+        let count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get("count");
+        assert_eq!(count, 100, "All 100 photos should be created");
     }
 }

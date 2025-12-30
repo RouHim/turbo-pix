@@ -196,7 +196,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "pastey",
- "rayon 1.11.0",
+ "rayon",
  "thiserror 2.0.17",
  "v_frame",
  "y4m",
@@ -242,18 +242,6 @@ name = "base64ct"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e050f626429857a27ddccb31e0aca21356bfa709c04041aefddac081a8f068a"
-
-[[package]]
-name = "bayer"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6e1192ce4b27090f77b470ccac7165ba9ca291a7327a74b44f36422d7e11a3b"
-dependencies = [
- "byteorder",
- "libc",
- "quick-error 1.2.3",
- "rayon 0.8.2",
-]
 
 [[package]]
 name = "bit-set"
@@ -373,7 +361,7 @@ dependencies = [
  "num_cpus",
  "rand 0.9.2",
  "rand_distr",
- "rayon 1.11.0",
+ "rayon",
  "safetensors",
  "thiserror 1.0.69",
  "ug",
@@ -390,7 +378,7 @@ dependencies = [
  "candle-core",
  "half",
  "num-traits",
- "rayon 1.11.0",
+ "rayon",
  "safetensors",
  "serde",
  "thiserror 1.0.69",
@@ -408,7 +396,7 @@ dependencies = [
  "fancy-regex",
  "num-traits",
  "rand 0.9.2",
- "rayon 1.11.0",
+ "rayon",
  "serde",
  "serde_json",
  "serde_plain",
@@ -1288,7 +1276,7 @@ dependencies = [
  "paste",
  "pulp 0.18.22",
  "raw-cpuid 10.7.0",
- "rayon 1.11.0",
+ "rayon",
  "seq-macro",
  "sysctl 0.5.5",
 ]
@@ -1309,7 +1297,7 @@ dependencies = [
  "paste",
  "pulp 0.21.5",
  "raw-cpuid 11.6.0",
- "rayon 1.11.0",
+ "rayon",
  "seq-macro",
  "sysctl 0.6.0",
 ]
@@ -1328,7 +1316,7 @@ dependencies = [
  "num-traits",
  "paste",
  "raw-cpuid 10.7.0",
- "rayon 1.11.0",
+ "rayon",
  "seq-macro",
 ]
 
@@ -1346,7 +1334,7 @@ dependencies = [
  "num-traits",
  "paste",
  "raw-cpuid 11.6.0",
- "rayon 1.11.0",
+ "rayon",
  "seq-macro",
 ]
 
@@ -1881,7 +1869,7 @@ dependencies = [
  "png",
  "qoi",
  "ravif",
- "rayon 1.11.0",
+ "rayon",
  "tiff",
  "zune-core 0.5.0",
  "zune-jpeg 0.5.5",
@@ -1894,7 +1882,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
- "quick-error 2.0.1",
+ "quick-error",
 ]
 
 [[package]]
@@ -2195,7 +2183,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
- "rayon 1.11.0",
+ "rayon",
 ]
 
 [[package]]
@@ -2801,12 +2789,6 @@ dependencies = [
 
 [[package]]
 name = "quick-error"
-version = "1.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
-
-[[package]]
-name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
@@ -2994,9 +2976,9 @@ dependencies = [
  "avif-serialize",
  "imgref",
  "loop9",
- "quick-error 2.0.1",
+ "quick-error",
  "rav1e",
- "rayon 1.11.0",
+ "rayon",
  "rgb",
 ]
 
@@ -3028,18 +3010,9 @@ dependencies = [
  "enumn",
  "glob",
  "lazy_static",
- "rayon 1.11.0",
+ "rayon",
  "rustc_version",
  "toml",
-]
-
-[[package]]
-name = "rayon"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b614fe08b6665cb9a231d07ac1364b0ef3cb3698f1239ee0c4c3a88a524f54c8"
-dependencies = [
- "rayon-core",
 ]
 
 [[package]]
@@ -3060,7 +3033,7 @@ checksum = "2964d0cf57a3e7a06e8183d14a8b527195c706b7983549cd5462d5aa3747438f"
 dependencies = [
  "either",
  "itertools",
- "rayon 1.11.0",
+ "rayon",
 ]
 
 [[package]]
@@ -3912,7 +3885,7 @@ dependencies = [
  "fax",
  "flate2",
  "half",
- "quick-error 2.0.1",
+ "quick-error",
  "weezl",
  "zune-jpeg 0.4.21",
 ]
@@ -3963,7 +3936,7 @@ dependencies = [
  "onig",
  "paste",
  "rand 0.9.2",
- "rayon 1.11.0",
+ "rayon",
  "rayon-cond",
  "regex",
  "regex-syntax",
@@ -4170,7 +4143,6 @@ name = "turbo-pix"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bayer",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -4188,7 +4160,7 @@ dependencies = [
  "num_cpus",
  "rand 0.9.2",
  "rawloader",
- "rayon 1.11.0",
+ "rayon",
  "rusttype",
  "serde",
  "serde_json",
@@ -4222,7 +4194,7 @@ dependencies = [
  "num",
  "num-traits",
  "num_cpus",
- "rayon 1.11.0",
+ "rayon",
  "safetensors",
  "serde",
  "thiserror 1.0.69",

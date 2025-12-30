@@ -11,6 +11,41 @@ pub enum RawError {
     IoError(#[from] std::io::Error),
 }
 
+/// Color Filter Array pattern for Bayer images
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CFA {
+    /// Red-Green-Green-Blue pattern
+    RGGB,
+    /// Blue-Green-Green-Red pattern
+    BGGR,
+    /// Green-Red-Blue-Green pattern
+    GRBG,
+    /// Green-Blue-Red-Green pattern
+    GBRG,
+}
+
+impl CFA {
+    /// Shift CFA pattern horizontally (for crop adjustments)
+    fn next_x(self) -> Self {
+        match self {
+            CFA::RGGB => CFA::GRBG,
+            CFA::GRBG => CFA::RGGB,
+            CFA::BGGR => CFA::GBRG,
+            CFA::GBRG => CFA::BGGR,
+        }
+    }
+
+    /// Shift CFA pattern vertically (for crop adjustments)
+    fn next_y(self) -> Self {
+        match self {
+            CFA::RGGB => CFA::GBRG,
+            CFA::GBRG => CFA::RGGB,
+            CFA::BGGR => CFA::GRBG,
+            CFA::GRBG => CFA::BGGR,
+        }
+    }
+}
+
 /// Decode a RAW image file to a DynamicImage
 pub fn decode_raw_to_dynamic_image(path: &Path) -> Result<DynamicImage, RawError> {
     debug!("Decoding RAW file: {}", path.display());
@@ -130,7 +165,7 @@ fn apply_black_white_levels(
     height: usize,
     blacklevels: &[u16],
     whitelevels: &[u16],
-    _cfa: bayer::CFA,
+    _cfa: CFA,
 ) {
     // Get average black and white levels (per-channel if available)
     let black = if blacklevels.is_empty() {
@@ -164,13 +199,7 @@ fn apply_black_white_levels(
 }
 
 /// Apply white balance coefficients
-fn apply_white_balance(
-    data: &mut [u16],
-    width: usize,
-    height: usize,
-    wb_coeffs: &[f32],
-    cfa: bayer::CFA,
-) {
+fn apply_white_balance(data: &mut [u16], width: usize, height: usize, wb_coeffs: &[f32], cfa: CFA) {
     // Extract RGB multipliers from wb_coeffs
     // wb_coeffs format: [R, G, B, G2] where G2 might be NaN
     if wb_coeffs.len() < 3 {
@@ -196,7 +225,7 @@ fn apply_white_balance(
 
             // Apply multiplier based on CFA position
             let multiplier = match cfa {
-                bayer::CFA::RGGB => match (y % 2, x % 2) {
+                CFA::RGGB => match (y % 2, x % 2) {
                     (0, 0) => r_mult, // R pixel
                     (0, 1) => g_mult, // G pixel
                     (1, 0) => g_mult, // G pixel
@@ -263,7 +292,7 @@ fn simple_demosaic_16bit(
     data: &[u16],
     width: usize,
     height: usize,
-    cfa: bayer::CFA,
+    cfa: CFA,
 ) -> Result<Vec<u16>, RawError> {
     let mut rgb_data = vec![0u16; width * height * 3];
 
@@ -283,7 +312,7 @@ fn simple_demosaic_16bit(
 
             // Determine RGB values based on CFA pattern and position
             let (r, g, b) = match cfa {
-                bayer::CFA::RGGB => match (y % 2, x % 2) {
+                CFA::RGGB => match (y % 2, x % 2) {
                     (0, 0) => (pixel, get_pixel(x + 1, y), get_pixel(x, y + 1)), // R pixel
                     (0, 1) => (get_pixel(x.wrapping_sub(1), y), pixel, get_pixel(x, y + 1)), // G pixel (R row)
                     (1, 0) => (get_pixel(x, y.wrapping_sub(1)), pixel, get_pixel(x + 1, y)), // G pixel (B row)
@@ -307,24 +336,24 @@ fn simple_demosaic_16bit(
     Ok(rgb_data)
 }
 
-/// Parse CFA pattern from rawloader format to bayer format
-fn parse_cfa_from_rawloader(cfa: &rawloader::CFA) -> Result<bayer::CFA, RawError> {
+/// Parse CFA pattern from rawloader format to our CFA enum
+fn parse_cfa_from_rawloader(cfa: &rawloader::CFA) -> Result<CFA, RawError> {
     // Try to get the pattern name from the CFA
     // rawloader CFA is a struct with pattern information
     let pattern_name = format!("{:?}", cfa);
 
     // Extract pattern from debug string (e.g., "CFA { name: \"RGGB\", ... }" -> "RGGB")
     if pattern_name.contains("RGGB") {
-        Ok(bayer::CFA::RGGB)
+        Ok(CFA::RGGB)
     } else if pattern_name.contains("BGGR") {
-        Ok(bayer::CFA::BGGR)
+        Ok(CFA::BGGR)
     } else if pattern_name.contains("GRBG") {
-        Ok(bayer::CFA::GRBG)
+        Ok(CFA::GRBG)
     } else if pattern_name.contains("GBRG") {
-        Ok(bayer::CFA::GBRG)
+        Ok(CFA::GBRG)
     } else {
         warn!("Unknown CFA pattern, using default RGGB");
-        Ok(bayer::CFA::RGGB)
+        Ok(CFA::RGGB)
     }
 }
 

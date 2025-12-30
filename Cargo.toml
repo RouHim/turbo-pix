@@ -29,7 +29,7 @@ rawloader = "0.37"
 candle-core = "0.9.1"
 candle-nn = "0.9.1"
 candle-transformers = "0.9.1"
-hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "ureq", "rustls-tls"] }
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq", "rustls-tls"] }
 tokenizers = "0.22.1"
 sqlite-vec = "0.1.7-alpha.2"
 zerocopy = "0.8"

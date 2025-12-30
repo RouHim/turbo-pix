@@ -288,12 +288,6 @@ test.describe('Photo Metadata', () => {
     // Manual testing should verify form validation works correctly
   });
 
-        // Either shows error or form validation prevents submission
-        expect(hasError || true).toBe(true);
-      }
-    }
-  });
-
   test('should display full EXIF metadata', async ({ page }) => {
     const photoCards = await TestHelpers.getPhotoCards(page);
     if (photoCards.length === 0) {

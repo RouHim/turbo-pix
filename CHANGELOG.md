@@ -1,3 +1,49 @@
+## [2.10.3](https://github.com/RouHim/turbo-pix/compare/2.10.2...2.10.3) (2025-12-30)
+
+## [2.10.2](https://github.com/RouHim/turbo-pix/compare/2.10.1...2.10.2) (2025-12-30)
+
+## [2.10.1](https://github.com/RouHim/turbo-pix/compare/2.10.0...2.10.1) (2025-12-29)
+
+
+### Bug Fixes
+
+* remove dev profile optimization causing test failures ([8163457](https://github.com/RouHim/turbo-pix/commit/8163457642d05d38942ba758729bb4d987da798d))
+
+# [2.10.0](https://github.com/RouHim/turbo-pix/compare/2.9.0...2.10.0) (2025-12-29)
+
+
+### Features
+
+* remove UI notifications feature ([43c85ba](https://github.com/RouHim/turbo-pix/commit/43c85ba1940fa19c1f9ed5dc0871e66655e092ca))
+
+# [2.9.0](https://github.com/RouHim/turbo-pix/compare/2.8.1...2.9.0) (2025-12-29)
+
+
+### Features
+
+* add click-outside-to-close for media detail view ([d80c5b5](https://github.com/RouHim/turbo-pix/commit/d80c5b5dd4e26dd8bce52914eebdb6a457a18e59))
+
+## [2.8.1](https://github.com/RouHim/turbo-pix/compare/2.8.0...2.8.1) (2025-12-29)
+
+
+### Bug Fixes
+
+* resolve linting issues for updated stylelint rules ([195062b](https://github.com/RouHim/turbo-pix/commit/195062b3bb0bc56e0a9d7f5fa596b6226cf77b46))
+
+# [2.8.0](https://github.com/RouHim/turbo-pix/compare/2.7.0...2.8.0) (2025-12-29)
+
+
+### Features
+
+* implement SPA routing and URL state management ([59fd7c0](https://github.com/RouHim/turbo-pix/commit/59fd7c07ac2905a237ee015265a3545d4ff35c6f))
+
+# [2.7.0](https://github.com/RouHim/turbo-pix/compare/2.6.1...2.7.0) (2025-12-29)
+
+
+### Features
+
+* implement cleanup candidates view and e2e tests ([63e03e1](https://github.com/RouHim/turbo-pix/commit/63e03e1d1604c30dd9e05c21683e7e3774c67103))
+
 ## [2.6.1](https://github.com/RouHim/turbo-pix/compare/2.6.0...2.6.1) (2025-12-26)
 
 

@@ -25,31 +25,55 @@ class PhotoCard {
 
     // Responsive images with WebP and JPEG fallback
     const picture = utils.createElement('picture');
+    let img;
 
-    // WebP source with srcset for responsive images
-    const webpSource = utils.createElement('source');
-    webpSource.type = 'image/webp';
-    webpSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=webp 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=webp 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=webp 800w`;
-    webpSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
-    picture.appendChild(webpSource);
+    if (this.photo.isCollage) {
+      // For collages, use direct image path (no responsive images)
+      img = utils.createElement('img', 'photo-card-image');
+      img.src = this.photo.thumbnail_path || this.photo.path;
+      img.alt = this.getTitle();
+      img.loading = 'lazy';
+      img.decoding = 'async';
+    } else {
+      // For photos, use responsive images with WebP and JPEG fallback
+      const webpSource = utils.createElement('source');
+      webpSource.type = 'image/webp';
+      webpSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=webp 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=webp 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=webp 800w`;
+      webpSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+      picture.appendChild(webpSource);
 
-    // JPEG fallback source with srcset
-    const jpegSource = utils.createElement('source');
-    jpegSource.type = 'image/jpeg';
-    jpegSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=jpeg 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=jpeg 800w`;
-    jpegSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
-    picture.appendChild(jpegSource);
+      // JPEG fallback source with srcset
+      const jpegSource = utils.createElement('source');
+      jpegSource.type = 'image/jpeg';
+      jpegSource.srcset = `${utils.getThumbnailUrl(this.photo, 'small')}&format=jpeg 200w, ${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg 400w, ${utils.getThumbnailUrl(this.photo, 'large')}&format=jpeg 800w`;
+      jpegSource.sizes = '(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px';
+      picture.appendChild(jpegSource);
 
-    // img fallback for browsers that don't support picture
-    const img = utils.createElement('img', 'photo-card-image');
-    img.src = `${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg`;
-    img.alt = this.getTitle();
-    img.loading = 'lazy';
-    img.decoding = 'async';
+      // img fallback for browsers that don't support picture
+      img = utils.createElement('img', 'photo-card-image');
+      img.src = `${utils.getThumbnailUrl(this.photo, 'medium')}&format=jpeg`;
+      img.alt = this.getTitle();
+      img.loading = 'lazy';
+      img.decoding = 'async';
+    }
 
     // Fade in image when loaded
     img.onload = () => {
       imageContainer.classList.add('image-loaded');
+    };
+
+    img.onerror = () => {
+      // Show placeholder on error
+      const placeholder = utils.createElement('div', 'photo-card-placeholder');
+      // Remove the picture element (which contains the broken img)
+      if (imageContainer.contains(picture)) {
+        imageContainer.removeChild(picture);
+      }
+      imageContainer.appendChild(placeholder);
+
+      // Also hide blurhash if present as it might be irrelevant/distracting if main image failed
+      const blurhash = imageContainer.querySelector('.photo-card-blurhash');
+      if (blurhash) blurhash.style.display = 'none';
     };
 
     picture.appendChild(img);
@@ -80,21 +104,57 @@ class PhotoCard {
   createActions() {
     const actions = utils.createElement('div', 'photo-card-actions');
 
-    const favoriteBtn = utils.createElement(
-      'button',
-      `card-action-btn favorite-btn${this.photo.is_favorite ? ' active' : ''}`
-    );
-    favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
-    favoriteBtn.dataset.action = 'favorite';
-    favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
+    if (this.photo.isCollage) {
+      // Accept Button (Green, check icon)
+      const acceptBtn = utils.createElement('button', 'card-action-btn accept-btn');
+      acceptBtn.title = 'Accept Collage';
+      acceptBtn.dataset.action = 'accept-collage';
+      acceptBtn.innerHTML = window.iconHelper.getIcon('check', { size: 18 });
+      acceptBtn.style.color = '#10b981'; // Green
 
-    const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
-    downloadBtn.title = utils.t('ui.download', 'Download');
-    downloadBtn.dataset.action = 'download';
-    downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
+      // Reject Button (Red, x icon)
+      const rejectBtn = utils.createElement('button', 'card-action-btn reject-btn');
+      rejectBtn.title = 'Reject Collage';
+      rejectBtn.dataset.action = 'reject-collage';
+      rejectBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
+      rejectBtn.style.color = '#ef4444'; // Red
 
-    actions.appendChild(favoriteBtn);
-    actions.appendChild(downloadBtn);
+      actions.appendChild(acceptBtn);
+      actions.appendChild(rejectBtn);
+    } else if (this.photo.housekeepingReason) {
+      // Keep Button (Remove from list)
+      const keepBtn = utils.createElement('button', 'card-action-btn keep-btn');
+      keepBtn.title = 'Keep (Remove from housekeeping list)';
+      keepBtn.dataset.action = 'keep';
+      keepBtn.innerHTML = window.iconHelper.getIcon('check', { size: 18 });
+      keepBtn.style.color = '#10b981'; // Green
+
+      // Delete Button
+      const deleteBtn = utils.createElement('button', 'card-action-btn delete-btn');
+      deleteBtn.title = 'Delete Photo';
+      deleteBtn.dataset.action = 'delete-housekeeping'; // specific action
+      deleteBtn.innerHTML = window.iconHelper.getIcon('trash-2', { size: 18 });
+      deleteBtn.style.color = '#ef4444'; // Red
+
+      actions.appendChild(keepBtn);
+      actions.appendChild(deleteBtn);
+    } else {
+      const favoriteBtn = utils.createElement(
+        'button',
+        `card-action-btn favorite-btn${this.photo.is_favorite ? ' active' : ''}`
+      );
+      favoriteBtn.title = utils.t('ui.add_to_favorites', 'Add to Favorites');
+      favoriteBtn.dataset.action = 'favorite';
+      favoriteBtn.innerHTML = window.iconHelper.getSemanticIcon('favorite', { size: 18 });
+
+      const downloadBtn = utils.createElement('button', 'card-action-btn download-btn');
+      downloadBtn.title = utils.t('ui.download', 'Download');
+      downloadBtn.dataset.action = 'download';
+      downloadBtn.innerHTML = window.iconHelper.getSemanticIcon('download', { size: 18 });
+
+      actions.appendChild(favoriteBtn);
+      actions.appendChild(downloadBtn);
+    }
 
     return actions;
   }
@@ -102,22 +162,61 @@ class PhotoCard {
   bindEvents(card) {
     utils.on(card, 'click', (e) => {
       if (!e.target.closest('.card-action-btn')) {
-        this.openViewer();
+        // Don't open viewer for collages
+        if (!this.photo.isCollage) {
+          this.openViewer();
+        }
       }
     });
 
     const favoriteBtn = card.querySelector('[data-action="favorite"]');
     const downloadBtn = card.querySelector('[data-action="download"]');
+    const keepBtn = card.querySelector('[data-action="keep"]');
+    const deleteHousekeepingBtn = card.querySelector('[data-action="delete-housekeeping"]');
+    const acceptCollageBtn = card.querySelector('[data-action="accept-collage"]');
+    const rejectCollageBtn = card.querySelector('[data-action="reject-collage"]');
 
-    utils.on(favoriteBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.toggleFavorite(favoriteBtn);
-    });
+    if (favoriteBtn) {
+      utils.on(favoriteBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.toggleFavorite(favoriteBtn);
+      });
+    }
 
-    utils.on(downloadBtn, 'click', (e) => {
-      e.stopPropagation();
-      this.download();
-    });
+    if (downloadBtn) {
+      utils.on(downloadBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.download();
+      });
+    }
+
+    if (keepBtn) {
+      utils.on(keepBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.keepPhoto();
+      });
+    }
+
+    if (deleteHousekeepingBtn) {
+      utils.on(deleteHousekeepingBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.deletePhoto();
+      });
+    }
+
+    if (acceptCollageBtn) {
+      utils.on(acceptCollageBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.acceptCollage();
+      });
+    }
+
+    if (rejectCollageBtn) {
+      utils.on(rejectCollageBtn, 'click', (e) => {
+        e.stopPropagation();
+        this.rejectCollage();
+      });
+    }
   }
 
   getTitle() {
@@ -203,6 +302,63 @@ class PhotoCard {
       'info',
       2000
     );
+  }
+
+  async keepPhoto() {
+    try {
+      await api.removeHousekeepingCandidate(this.photo.hash_sha256);
+      utils.showToast('Kept', 'Photo removed from housekeeping candidates', 'success', 2000);
+      // Remove card from UI
+      if (this.grid && this.grid.removePhoto) {
+        this.grid.removePhoto(this.photo.hash_sha256);
+      } else {
+        // Fallback if grid doesn't have removePhoto or we are just removing the card element
+        // But PhotoGrid usually manages DOM.
+        // We will implement removePhoto in HousekeepingManager's grid or similar.
+        // For now, emit an event
+        utils.emit(window, 'housekeepingCandidateRemoved', { hash: this.photo.hash_sha256 });
+      }
+    } catch (e) {
+      console.error('Failed to keep photo:', e);
+      utils.showToast('Error', 'Failed to keep photo', 'error');
+    }
+  }
+
+  async deletePhoto() {
+    if (!confirm('Are you sure you want to permanently delete this photo?')) return;
+
+    try {
+      await api.deletePhoto(this.photo.hash_sha256);
+      utils.showToast('Deleted', 'Photo deleted permanently', 'success', 2000);
+      utils.emit(window, 'housekeepingCandidateRemoved', { hash: this.photo.hash_sha256 });
+    } catch (e) {
+      console.error('Failed to delete photo:', e);
+      utils.showToast('Error', 'Failed to delete photo', 'error');
+    }
+  }
+
+  async acceptCollage() {
+    try {
+      await api.acceptCollage(this.photo.collageId);
+      utils.showToast('Accepted', 'Collage accepted', 'success', 2000);
+      utils.emit(window, 'collageAccepted', { collageId: this.photo.collageId });
+    } catch (e) {
+      console.error('Failed to accept collage:', e);
+      utils.showToast('Error', 'Failed to accept collage', 'error');
+    }
+  }
+
+  async rejectCollage() {
+    if (!confirm('Are you sure you want to reject this collage?')) return;
+
+    try {
+      await api.rejectCollage(this.photo.collageId);
+      utils.showToast('Rejected', 'Collage rejected', 'success', 2000);
+      utils.emit(window, 'collageRejected', { collageId: this.photo.collageId });
+    } catch (e) {
+      console.error('Failed to reject collage:', e);
+      utils.showToast('Error', 'Failed to reject collage', 'error');
+    }
   }
 
   openViewer() {

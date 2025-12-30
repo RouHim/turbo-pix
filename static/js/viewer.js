@@ -13,6 +13,7 @@ class PhotoViewer {
       viewer: utils.$('#photo-viewer'),
       overlay: utils.$('.viewer-overlay'),
       content: utils.$('.viewer-content'),
+      main: utils.$('.viewer-main'),
       close: utils.$('.viewer-close'),
       prev: utils.$('.viewer-prev'),
       next: utils.$('.viewer-next'),
@@ -90,6 +91,15 @@ class PhotoViewer {
 
     if (this.elements.deletePhotoBtn) {
       utils.on(this.elements.deletePhotoBtn, 'click', () => this.deletePhoto());
+    }
+
+    if (this.elements.main) {
+      utils.on(this.elements.main, 'click', (e) => {
+        // Close when clicking the void (background), but not when clicking on the media
+        if (e.target === this.elements.main) {
+          this.close();
+        }
+      });
     }
 
     if (this.elements.content) {
@@ -246,7 +256,7 @@ class PhotoViewer {
     }
   }
 
-  async open(photo, allPhotos = []) {
+  async open(photo, allPhotos = [], updateUrl = true) {
     this.photos = allPhotos;
     this.currentIndex = this.photos.findIndex((p) => p.hash_sha256 === photo.hash_sha256);
     if (this.currentIndex === -1) {
@@ -268,6 +278,11 @@ class PhotoViewer {
       this.elements.sidebar.classList.remove('show');
     }
 
+    // Update URL with photo hash
+    if (updateUrl) {
+      this.updateUrl(photo.hash_sha256);
+    }
+
     // Load and display photo
     await this.displayPhoto(photo);
     this.updateNavigation();
@@ -280,7 +295,7 @@ class PhotoViewer {
     utils.performance.mark('viewer-open');
   }
 
-  close() {
+  close(updateUrl = true) {
     this.isOpen = false;
 
     if (this.elements.viewer) {
@@ -301,6 +316,11 @@ class PhotoViewer {
     // Clear preloaded images to free memory
     this.preloadedImages.clear();
 
+    // Remove photo hash from URL
+    if (updateUrl) {
+      this.updateUrl(null);
+    }
+
     utils.performance.mark('viewer-close');
   }
 
@@ -318,11 +338,16 @@ class PhotoViewer {
     }
   }
 
-  async showPhotoAtIndex(index) {
+  async showPhotoAtIndex(index, updateUrl = true) {
     if (index < 0 || index >= this.photos.length) return;
 
     this.currentIndex = index;
     this.currentPhoto = this.photos[index];
+
+    // Update URL with new photo hash
+    if (updateUrl) {
+      this.updateUrl(this.currentPhoto.hash_sha256);
+    }
 
     await this.displayPhoto(this.currentPhoto);
     this.updateNavigation();
@@ -847,6 +872,50 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     if (!filename) return false;
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
     return window.APP_CONSTANTS.RAW_EXTENSIONS.includes(ext);
+  }
+
+  /**
+   * Update URL with photo hash
+   * @param {string|null} photoHash - Photo hash to add to URL, or null to remove
+   */
+  updateUrl(photoHash) {
+    const url = new URL(window.location);
+
+    if (photoHash) {
+      url.searchParams.set('photo', photoHash);
+    } else {
+      url.searchParams.delete('photo');
+    }
+
+    window.history.replaceState({ photo: photoHash }, '', url);
+  }
+
+  /**
+   * Open photo by hash from URL
+   * @param {string} photoHash - Photo hash from URL
+   * @returns {Promise<boolean>} - True if photo was found and opened
+   */
+  async openByHash(photoHash) {
+    if (!photoHash) return false;
+
+    try {
+      // Try to fetch the photo details
+      const photo = await window.api.getPhoto(photoHash);
+      if (photo) {
+        // Get all photos in current view for navigation
+        const allPhotos = window.photoGrid ? window.photoGrid.photos : [];
+        await this.open(photo, allPhotos, false); // Don't update URL since we're loading from URL
+        return true;
+      }
+    } catch (error) {
+      if (window.logger) {
+        window.logger.error('Failed to open photo from URL', error, {
+          component: 'PhotoViewer',
+          photoHash,
+        });
+      }
+    }
+    return false;
   }
 
   // Public API

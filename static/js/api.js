@@ -320,6 +320,17 @@ class TurboPixAPI {
       method: 'DELETE',
     });
   }
+
+  // Housekeeping
+  async getHousekeepingCandidates() {
+    return this.request('/api/housekeeping/candidates');
+  }
+
+  async removeHousekeepingCandidate(hash) {
+    return this.request(`/api/housekeeping/candidates/${hash}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 // Create global API instance

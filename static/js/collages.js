@@ -31,169 +31,54 @@ class CollagesView {
       return;
     }
 
-    // Create collage grid
-    const collageGrid = document.createElement('div');
-    collageGrid.className = 'collage-grid';
+    // Use photo-grid class for consistent layout
+    this.container.className = 'photo-grid';
+
+    const fragment = document.createDocumentFragment();
 
     this.collages.forEach((collage) => {
-      const collageCard = this.createCollageCard(collage);
-      collageGrid.appendChild(collageCard);
+      // Convert collage to PhotoCard-compatible format
+      const collageAsPhoto = {
+        hash_sha256: collage.id,
+        thumbnail_path: `/api/collages/${collage.id}/image`,
+        path: `/api/collages/${collage.id}/image`,
+        filename: window.utils.formatCollageDate(collage.date),
+        isCollage: true,
+        collageId: collage.id,
+        collageDate: collage.date,
+        collagePhotoCount: collage.photo_count,
+      };
+
+      // Create PhotoCard instance
+      const photoCard = new window.PhotoCard(collageAsPhoto, this);
+      const card = photoCard.create();
+
+      fragment.appendChild(card);
     });
 
-    this.container.appendChild(collageGrid);
+    this.container.appendChild(fragment);
 
     if (window.iconHelper) {
       window.iconHelper.initializeIcons();
     }
+
+    // Listen for collage events to remove from UI
+    this.bindCollageEvents();
   }
 
-  createCollageCard(collage) {
-    const card = document.createElement('div');
-    card.className = 'collage-card';
-    card.dataset.collageId = collage.id;
-
-    // Collage image with thumbnail
-    const imageContainer = document.createElement('div');
-    imageContainer.className = 'collage-image-container';
-
-    const img = document.createElement('img');
-    img.className = 'collage-image';
-    img.src = `/api/collages/${collage.id}/image`;
-    img.alt = window.i18nManager.t('ui.collage_for', {
-      date: window.utils.formatCollageDate(collage.date),
-    });
-    img.loading = 'lazy';
-
-    imageContainer.appendChild(img);
-
-    // Collage info
-    const meta = document.createElement('div');
-    meta.className = 'collage-meta';
-
-    const info = document.createElement('div');
-    info.className = 'collage-info';
-
-    const date = document.createElement('div');
-    date.className = 'collage-date';
-    date.textContent = window.utils.formatCollageDate(collage.date);
-
-    const photoCount = document.createElement('div');
-    photoCount.className = 'collage-photo-count';
-    photoCount.textContent = window.i18nManager.t('ui.collage_photos', {
-      count: collage.photo_count,
+  bindCollageEvents() {
+    window.utils.on(window, 'collageAccepted', (e) => {
+      this.removeCollage(e.detail.collageId);
     });
 
-    info.appendChild(date);
-    info.appendChild(photoCount);
-
-    // Action buttons
-    const actions = document.createElement('div');
-    actions.className = 'collage-actions';
-
-    const acceptBtn = document.createElement('button');
-    acceptBtn.className = 'collage-btn collage-btn-accept';
-    acceptBtn.dataset.icon = 'check';
-    acceptBtn.dataset.iconSize = '20';
-    acceptBtn.dataset.iconStrokeWidth = '2';
-    acceptBtn.setAttribute('aria-label', window.i18nManager.t('ui.accept_collage'));
-    acceptBtn.title = window.i18nManager.t('ui.accept_collage');
-    acceptBtn.onclick = () => this.acceptCollage(collage.id);
-
-    const rejectBtn = document.createElement('button');
-    rejectBtn.className = 'collage-btn collage-btn-reject';
-    rejectBtn.dataset.icon = 'x';
-    rejectBtn.dataset.iconSize = '20';
-    rejectBtn.dataset.iconStrokeWidth = '2';
-    rejectBtn.setAttribute('aria-label', window.i18nManager.t('ui.reject_collage'));
-    rejectBtn.title = window.i18nManager.t('ui.reject_collage');
-    rejectBtn.onclick = () => this.rejectCollage(collage.id);
-
-    actions.appendChild(acceptBtn);
-    actions.appendChild(rejectBtn);
-
-    meta.appendChild(info);
-    meta.appendChild(actions);
-
-    card.appendChild(imageContainer);
-    card.appendChild(meta);
-
-    return card;
+    window.utils.on(window, 'collageRejected', (e) => {
+      this.removeCollage(e.detail.collageId);
+    });
   }
 
-  async acceptCollage(collageId) {
-    const card = document.querySelector(`[data-collage-id="${collageId}"]`);
-    const acceptBtn = card?.querySelector('.collage-btn-accept');
-    const rejectBtn = card?.querySelector('.collage-btn-reject');
-
-    try {
-      // Disable buttons and add loading state
-      if (acceptBtn) {
-        acceptBtn.disabled = true;
-        acceptBtn.classList.add('loading');
-      }
-      if (rejectBtn) {
-        rejectBtn.disabled = true;
-      }
-
-      await window.api.acceptCollage(collageId);
-
-      // Remove from UI
-      this.collages = this.collages.filter((c) => c.id !== collageId);
-      this.render();
-
-      // Show success notification
-      window.toast?.show(window.i18nManager.t('notifications.collageAccepted'), 'success');
-    } catch (error) {
-      console.error('Failed to accept collage:', error);
-      window.toast?.show(window.i18nManager.t('notifications.collageAcceptFailed'), 'error');
-
-      // Re-enable buttons on error
-      if (acceptBtn) {
-        acceptBtn.disabled = false;
-        acceptBtn.classList.remove('loading');
-      }
-      if (rejectBtn) {
-        rejectBtn.disabled = false;
-      }
-    }
-  }
-
-  async rejectCollage(collageId) {
-    const card = document.querySelector(`[data-collage-id="${collageId}"]`);
-    const acceptBtn = card?.querySelector('.collage-btn-accept');
-    const rejectBtn = card?.querySelector('.collage-btn-reject');
-
-    try {
-      // Disable buttons and add loading state
-      if (acceptBtn) {
-        acceptBtn.disabled = true;
-      }
-      if (rejectBtn) {
-        rejectBtn.disabled = true;
-        rejectBtn.classList.add('loading');
-      }
-
-      await window.api.rejectCollage(collageId);
-
-      // Remove from UI
-      this.collages = this.collages.filter((c) => c.id !== collageId);
-      this.render();
-
-      // Show success notification
-      window.toast?.show(window.i18nManager.t('notifications.collageRejected'), 'success');
-    } catch (error) {
-      console.error('Failed to reject collage:', error);
-      window.toast?.show(window.i18nManager.t('notifications.collageRejectFailed'), 'error');
-
-      // Re-enable buttons on error
-      if (acceptBtn) {
-        acceptBtn.disabled = false;
-      }
-      if (rejectBtn) {
-        rejectBtn.disabled = false;
-        rejectBtn.classList.remove('loading');
-      }
-    }
+  removeCollage(collageId) {
+    this.collages = this.collages.filter((c) => c.id !== collageId);
+    this.render();
   }
 
   renderEmptyState() {

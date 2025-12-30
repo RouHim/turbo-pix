@@ -77,6 +77,21 @@ impl SemanticSearchEngine {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_model(
+        model: Arc<RwLock<clip::ClipModel>>,
+        tokenizer: Arc<Tokenizer>,
+        device: Arc<Device>,
+        pool: SqlitePool,
+    ) -> Self {
+        Self {
+            model,
+            tokenizer,
+            device,
+            pool,
+        }
+    }
+
     /// Performs semantic search for a text query across all images using sqlite-vec KNN
     pub async fn search(
         &self,
@@ -620,13 +635,34 @@ async fn store_video_metadata_tx(
 mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
+    use std::sync::OnceLock;
+
+    type CachedModel = (Arc<RwLock<clip::ClipModel>>, Arc<Tokenizer>, Arc<Device>);
+
+    static MODEL_CACHE: OnceLock<CachedModel> = OnceLock::new();
+
+    fn get_cached_model() -> CachedModel {
+        let (model, tokenizer, device) = MODEL_CACHE
+            .get_or_init(|| {
+                let device = Arc::new(Device::Cpu);
+                // Ensure the path is correct relative to the project root where `cargo test` runs
+                let (model, tokenizer) =
+                    load_clip_model(&device, "./data").expect("Failed to load model");
+                (Arc::new(RwLock::new(model)), Arc::new(tokenizer), device)
+            })
+            .clone();
+        (model, tokenizer, device)
+    }
+
+    fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
+        let (model, tokenizer, device) = get_cached_model();
+        SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+    }
 
     #[tokio::test]
     async fn test_duplicate_semantic_vector_skipped() {
         let db_pool = create_test_db_pool().await.unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data")
-            .await
-            .unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         let path = "test-data/cat.jpg";
 
@@ -641,9 +677,7 @@ mod tests {
     #[tokio::test]
     async fn test_semantic_search_basic() {
         let db_pool = create_test_db_pool().await.unwrap();
-        let engine = SemanticSearchEngine::new(db_pool.clone(), "./data")
-            .await
-            .unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
 
         // Index both images
         engine

@@ -30,6 +30,7 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "js/i18n.js",
     "js/app.js",
     "js/collages.js",
+    "js/housekeeping.js",
     "js/indexingStatus.js",
     "js/gestureManager.js",
     "js/gestureRecognizers.js",
@@ -85,5 +86,37 @@ pub fn build_static_routes(
         .next()
         .expect("At least one static file must be defined");
 
-    iter.fold(first.boxed(), |acc, route| acc.or(route).unify().boxed())
+    let all_static = iter.fold(first.boxed(), |acc, route| acc.or(route).unify().boxed());
+
+    // Add catch-all route for SPA routing - serves index.html for all non-static paths
+    let index_html = STATIC_FILES
+        .iter()
+        .find(|(path, _)| *path == "index.html")
+        .map(|(_, content)| *content)
+        .expect("index.html must be in static files");
+
+    let spa_fallback = warp::get().and(warp::path::full()).and_then(
+        move |path: warp::path::FullPath| async move {
+            let path_str = path.as_str();
+            // Reject API and static asset paths - let them be handled by specific routes or return 404
+            if path_str.starts_with("/api/")
+                || path_str.starts_with("/css/")
+                || path_str.starts_with("/js/")
+                || path_str.starts_with("/i18n/")
+                || path_str.starts_with("/favicon")
+                || path_str.starts_with("/site.webmanifest")
+            {
+                Err(warp::reject::not_found())
+            } else {
+                // Serve index.html for all other GET requests (SPA routes)
+                Ok::<_, warp::Rejection>(warp::reply::with_header(
+                    index_html,
+                    "content-type",
+                    "text/html",
+                ))
+            }
+        },
+    );
+
+    all_static.or(spa_fallback)
 }

@@ -8,7 +8,7 @@ window.EN_TRANSLATIONS = {
     favorites: 'Favorites',
     videos: 'Videos',
     collages: 'Collages',
-    pending_collages: 'Pending Collages',
+    housekeeping: 'Housekeeping',
     favorite_photos: 'Favorite Photos',
     load_more: 'Load More',
     loading: 'Loading...',
@@ -73,6 +73,9 @@ window.EN_TRANSLATIONS = {
     reject_collage: 'Reject',
     collages_load_failed: 'Failed to load collages',
     collage_for: 'Collage for {{date}}',
+    no_pending_collages: 'No pending collages',
+    pending_collages: 'Pending Collages',
+    collage_photos: '{{count}} photos',
 
     // Values
     unknown: 'Unknown',
@@ -178,14 +181,7 @@ window.EN_TRANSLATIONS = {
 
     // Indexing
     indexing_photos: 'Indexing photos...',
-    indexing_metadata: 'Indexing metadata...',
-    indexing_semantic: 'Computing semantic vectors...',
-    indexing_collages: 'Generating collages...',
-
-    // Collages
-    no_pending_collages: 'No pending collages',
-    collage_date: 'Date:',
-    collage_photos: '{{count}} photos',
+    indexing_housekeeping: 'Identifying housekeeping candidates...',
   },
 
   errors: {

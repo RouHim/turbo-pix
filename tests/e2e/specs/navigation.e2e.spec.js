@@ -116,7 +116,10 @@ test.describe('Navigation', () => {
 });
 
 test.describe('Mobile Navigation', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, browserName }) => {
+    // Skip if not webkit (Mobile Safari)
+    test.skip(browserName !== 'webkit', 'Mobile navigation tests only run on webkit');
+    
     // Setup console monitoring
     TestHelpers.setupConsoleMonitoring(page);
 

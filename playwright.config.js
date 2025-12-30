@@ -49,11 +49,14 @@ export default defineConfig({
         viewport: { width: 1920, height: 1080 },
       },
     },
-    {
-      name: 'Mobile Safari',
-      use: {
-        ...devices['iPhone 13'],
-      },
-    },
+    // Mobile Safari requires system dependencies (webkit)
+    // Run: sudo npx playwright install-deps webkit
+    // Uncomment to enable:
+    // {
+    //   name: 'Mobile Safari',
+    //   use: {
+    //     ...devices['iPhone 13'],
+    //   },
+    // },
   ],
 });

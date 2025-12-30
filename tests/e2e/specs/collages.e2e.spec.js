@@ -299,13 +299,10 @@ test.describe('Collages Management', () => {
 
     // Sort and timeline controls should be hidden for collages view
     const sortSelect = page.locator(TestHelpers.selectors.sortSelect);
-    const timeline = page.locator('.timeline-container, .timeline-input');
+    const timeline = page.locator('.timeline-container');
 
-    const sortVisible = (await sortSelect.count()) > 0 && (await sortSelect.isVisible());
-    const timelineVisible = (await timeline.count()) > 0 && (await timeline.isVisible());
-
-    // Both should be hidden
-    expect(sortVisible).toBe(false);
-    expect(timelineVisible).toBe(false);
+    // Use Playwright's proper assertions for visibility
+    await expect(sortSelect).toBeHidden();
+    await expect(timeline).toBeHidden();
   });
 });

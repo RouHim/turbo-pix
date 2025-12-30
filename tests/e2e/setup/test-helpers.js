@@ -20,7 +20,7 @@ export class TestHelpers {
     toast: '.toast',
     photoGrid: '.photo-grid',
     loadingIndicator: '#loading-indicator',
-    noPhotos: '.no-photos',
+    noPhotos: '.error-state, .empty-state',
     viewTitle: '#current-view-title',
     menuBtn: '.menu-btn',
     sidebar: '.sidebar',

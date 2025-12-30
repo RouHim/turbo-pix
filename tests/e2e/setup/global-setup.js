@@ -132,7 +132,7 @@ async function waitForServer(maxRetries = 30, delayMs = 1000) {
   return false;
 }
 
-async function waitForIndexing(maxRetries = 60, delayMs = 1000) {
+async function waitForIndexing(maxRetries = 180, delayMs = 1000) {
   console.log('⏳ Waiting for photo indexing to complete...');
 
   for (let i = 0; i < maxRetries; i++) {

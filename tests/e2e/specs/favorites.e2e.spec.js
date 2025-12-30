@@ -85,14 +85,14 @@ test.describe('Favorites Management', () => {
     const viewerFavoriteBtn = page.locator('[data-icon="heart"]');
     await viewerFavoriteBtn.click();
 
-    // Wait for unfavorite
-    await page.waitForTimeout(500);
+    // Wait for unfavorite action to complete
+    await page.waitForTimeout(1000);
 
     // Close viewer
     await TestHelpers.closeViewer(page);
 
-    // Photo should be removed from favorites view
-    await page.waitForTimeout(500);
+    // Wait for UI to update and verify photo removed from favorites view
+    await page.waitForTimeout(1000);
     const stillExists = await TestHelpers.elementExists(page, `[data-photo-id="${photoId}"]`);
 
     expect(stillExists).toBe(false);
@@ -239,10 +239,10 @@ test.describe('Favorites Management', () => {
 
       const favoriteBtn = page.locator('[data-icon="heart"]');
       await favoriteBtn.click();
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(1000);
 
       await TestHelpers.closeViewer(page);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(500);
     }
 
     // Check favorites view

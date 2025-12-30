@@ -30,10 +30,10 @@ test.describe('Videos View', () => {
       test.skip('No videos found in test data');
     }
 
-    // All cards should have video icon
+    // All cards should have video icon or play indicator
     for (const card of videoCards.slice(0, 5)) {
-      // Check first 5
-      const videoIcon = card.locator('[data-feather="video"]');
+      // Check first 5 - look for video play icon
+      const videoIcon = card.locator('.video-play-icon');
       const hasIcon = (await videoIcon.count()) > 0;
       expect(hasIcon).toBe(true);
     }
@@ -183,7 +183,7 @@ test.describe('Videos View', () => {
     const firstVideo = videoCards[0];
 
     // Should have video play icon overlay
-    const playIcon = firstVideo.locator('[data-feather="video"]');
+    const playIcon = firstVideo.locator('.video-play-icon');
     await expect(playIcon).toBeVisible();
 
     // Should have thumbnail image

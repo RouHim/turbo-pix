@@ -25,7 +25,7 @@ pub async fn get_photo_thumbnail(
         query.size
     );
 
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {

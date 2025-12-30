@@ -3,7 +3,7 @@ pub mod collage_generator;
 pub mod config;
 pub mod db;
 pub mod db_pool;
-pub mod db_schema;
+// pub mod db_schema; // Replaced by sqlx migrations
 pub mod db_types;
 pub mod file_scanner;
 pub mod handlers_collage;

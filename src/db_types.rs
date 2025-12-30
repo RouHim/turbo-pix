@@ -9,7 +9,7 @@ pub struct SearchQuery {
 }
 
 // Timeline related structs
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, sqlx::FromRow)]
 pub struct TimelineDensity {
     pub year: i32,
     pub month: i32,

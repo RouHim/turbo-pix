@@ -117,10 +117,10 @@ impl PhotoScheduler {
     /// Helper: Batch write photos to database with transaction support
     ///
     /// Writes photos in batches to minimize database lock duration.
-    /// Uses rusqlite's transaction API with IMMEDIATE mode for better concurrency.
+    /// Uses manual IMMEDIATE transaction mode for better concurrency.
     ///
     /// Returns (successful_count, error_count)
-    fn batch_write_photos(
+    async fn batch_write_photos(
         db_pool: &DbPool,
         photos: Vec<crate::db::Photo>,
         status: &IndexingStatus,
@@ -135,61 +135,52 @@ impl PhotoScheduler {
             .store(total_count as u64, Ordering::SeqCst);
 
         for (batch_idx, batch) in photos.chunks(DB_WRITE_BATCH_SIZE).enumerate() {
-            match db_pool.get() {
-                Ok(mut conn) => {
-                    // Use rusqlite's transaction API with IMMEDIATE mode
-                    let tx = match conn
-                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                    {
-                        Ok(tx) => tx,
-                        Err(e) => {
-                            error!("Failed to begin transaction: {}", e);
-                            error_count += batch.len();
-                            continue;
-                        }
-                    };
+            // Begin transaction
+            let mut tx = match db_pool.begin().await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    error!("Failed to begin transaction: {}", e);
+                    error_count += batch.len();
+                    continue;
+                }
+            };
 
-                    let mut batch_success = 0;
+            // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
+            let mut batch_success = 0;
 
-                    for photo in batch {
-                        match photo.create_or_update_with_connection(&tx) {
-                            Ok(_) => batch_success += 1,
-                            Err(e) => {
-                                error!("Failed to save photo {}: {}", photo.file_path, e);
-                                error_count += 1;
-                            }
-                        }
-                    }
-
-                    // Commit transaction (partial success is ok - errors already counted)
-                    match tx.commit() {
-                        Ok(_) => {
-                            indexed_count += batch_success;
-                            // Update progress counter
-                            status
-                                .photos_processed
-                                .store(indexed_count as u64, Ordering::SeqCst);
-                            info!(
-                                "Batch {}/{} committed: {} photos saved{}",
-                                batch_idx + 1,
-                                total_count.div_ceil(DB_WRITE_BATCH_SIZE),
-                                batch_success,
-                                if error_count > 0 {
-                                    format!(", {} errors so far", error_count)
-                                } else {
-                                    String::new()
-                                }
-                            );
-                        }
-                        Err(e) => {
-                            error!("Failed to commit batch: {}", e);
-                            error_count += batch_success; // Count successful photos as errors if commit fails
-                        }
+            for photo in batch {
+                match photo.create_or_update_with_transaction(&mut tx).await {
+                    Ok(_) => batch_success += 1,
+                    Err(e) => {
+                        error!("Failed to save photo {}: {}", photo.file_path, e);
+                        error_count += 1;
                     }
                 }
+            }
+
+            // Commit transaction (partial success is ok - errors already counted)
+            match tx.commit().await {
+                Ok(_) => {
+                    indexed_count += batch_success;
+                    // Update progress counter
+                    status
+                        .photos_processed
+                        .store(indexed_count as u64, Ordering::SeqCst);
+                    info!(
+                        "Batch {}/{} committed: {} photos saved{}",
+                        batch_idx + 1,
+                        total_count.div_ceil(DB_WRITE_BATCH_SIZE),
+                        batch_success,
+                        if error_count > 0 {
+                            format!(", {} errors so far", error_count)
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
                 Err(e) => {
-                    error!("Failed to get database connection: {}", e);
-                    error_count += batch.len();
+                    error!("Failed to commit batch: {}", e);
+                    error_count += batch_success; // Count successful photos as errors if commit fails
                 }
             }
 
@@ -254,7 +245,7 @@ impl PhotoScheduler {
 
                         // Batch write photos to database
                         let (indexed_count, error_count) =
-                            Self::batch_write_photos(&db_pool, photos, &status);
+                            Self::batch_write_photos(&db_pool, photos, &status).await;
 
                         info!(
                             "Phase 1 completed: {} photos indexed, {} errors",
@@ -323,7 +314,7 @@ impl PhotoScheduler {
 
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                match crate::db::vacuum_database(&db_pool_vacuum) {
+                match crate::db::vacuum_database(&db_pool_vacuum).await {
                     Ok(_) => info!("Database vacuum completed successfully"),
                     Err(e) => error!("Database vacuum failed: {}", e),
                 }
@@ -369,7 +360,7 @@ impl PhotoScheduler {
 
         // Batch write photos to database (same as scheduled rescan)
         let (indexed_count, error_count) =
-            Self::batch_write_photos(&self.db_pool, photos, &self.status);
+            Self::batch_write_photos(&self.db_pool, photos, &self.status).await;
 
         info!(
             "Phase 1 completed: {} photos indexed, {} errors",
@@ -452,10 +443,13 @@ mod tests {
     impl TestEnvironment {
         async fn new() -> Self {
             let temp_dir = TempDir::new().unwrap();
-            let db_pool = create_test_db_pool().unwrap();
+            let db_pool = create_test_db_pool().await.unwrap();
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-            let semantic_search =
-                Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+            let semantic_search = Arc::new(
+                SemanticSearchEngine::new(db_pool.clone(), "./data")
+                    .await
+                    .unwrap(),
+            );
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let data_path = temp_dir.path().to_path_buf();
@@ -518,12 +512,12 @@ mod tests {
                 updated_at: now,
             };
 
-            photo.create_or_update(&self.db_pool)?;
+            photo.create_or_update(&self.db_pool).await?;
             Ok(())
         }
 
         async fn get_all_photo_paths(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-            crate::db::get_all_photo_paths(&self.db_pool)
+            crate::db::get_all_photo_paths(&self.db_pool).await
         }
     }
 
@@ -641,7 +635,7 @@ mod tests {
         env.scheduler.run_startup_rescan().await.unwrap();
 
         // Test vacuum operation (should not fail)
-        let vacuum_result = crate::db::vacuum_database(&env.db_pool);
+        let vacuum_result = crate::db::vacuum_database(&env.db_pool).await;
         assert!(vacuum_result.is_ok());
     }
 
@@ -699,10 +693,13 @@ mod tests {
     #[tokio::test]
     async fn test_scheduler_error_handling() {
         let temp_dir = TempDir::new().unwrap();
-        let db_pool = create_test_db_pool().unwrap();
+        let db_pool = create_test_db_pool().await.unwrap();
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-        let semantic_search =
-            Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+        let semantic_search = Arc::new(
+            SemanticSearchEngine::new(db_pool.clone(), "./data")
+                .await
+                .unwrap(),
+        );
         let data_path = temp_dir.path().to_path_buf();
 
         // Create scheduler with non-existent path
@@ -761,8 +758,6 @@ mod tests {
         assert_eq!(paths.len(), 3);
 
         // Phase 2 should complete without errors
-        // (Actual semantic vector computation may fail due to test data not being real images,
-        //  but the batch processing logic should work)
         let processor = PhotoProcessor::new(
             env.scheduler.photo_paths.clone(),
             env.scheduler.semantic_search.clone(),

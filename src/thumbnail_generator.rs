@@ -462,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn test_thumbnail_generator_creation() {
         let (config, _temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let _generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         assert!(config
@@ -476,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn test_thumbnail_generation() {
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image_path = temp_dir.path().join("test.jpg");
@@ -501,7 +501,7 @@ mod tests {
     #[tokio::test]
     async fn test_thumbnail_cache_hit() {
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image_path = temp_dir.path().join("test.jpg");
@@ -525,7 +525,7 @@ mod tests {
     #[tokio::test]
     async fn test_thumbnail_different_sizes() {
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image_path = temp_dir.path().join("test.jpg");
@@ -565,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn test_thumbnail_nonexistent_photo() {
         let (config, _temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let photo = create_test_photo("/nonexistent/path.jpg");
@@ -579,7 +579,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_clear() {
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image_path = temp_dir.path().join("test.jpg");
@@ -606,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_stats() {
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let (files, size) = generator.get_cache_stats().await;
@@ -652,7 +652,7 @@ mod tests {
             locale: "en".to_string(),
         };
 
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         for i in 0..20 {
@@ -707,7 +707,7 @@ mod tests {
             locale: "en".to_string(),
         };
 
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image1 = temp_dir.path().join("test_1.jpg");
@@ -799,7 +799,7 @@ mod tests {
             locale: "en".to_string(),
         };
 
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         for i in 0..30 {
@@ -828,7 +828,7 @@ mod tests {
     async fn test_webp_and_jpeg_cached_separately() {
         // GIVEN: A photo and thumbnail generator
         let (config, temp_dir) = create_test_config();
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         let image_path = temp_dir.path().join("test.jpg");
@@ -883,8 +883,8 @@ mod tests {
         assert_ne!(webp_data, jpeg_data, "WebP and JPEG data should differ");
     }
 
-    #[test]
-    fn test_apply_orientation_values() {
+    #[tokio::test]
+    async fn test_apply_orientation_values() {
         use image::{GenericImageView, ImageBuffer, Rgb};
 
         // GIVEN: A thumbnail generator instance
@@ -905,7 +905,7 @@ mod tests {
             },
             locale: "en".to_string(),
         };
-        let db_pool = create_in_memory_pool().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
 
         // Create a 4x4 test image with distinct corner pixels for verification

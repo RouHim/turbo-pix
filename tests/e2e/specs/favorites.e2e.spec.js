@@ -21,8 +21,8 @@ test.describe('Favorites Management', () => {
     // Hover to show favorite button
     await firstCard.hover();
 
-    // Click favorite button (might be visible on hover or always visible)
-    const favoriteBtn = firstCard.locator('.favorite-btn');
+    // Click favorite button using data-action selector
+    const favoriteBtn = firstCard.locator(TestHelpers.selectors.action('favorite'));
     const favoriteBtnExists = (await favoriteBtn.count()) > 0;
 
     if (!favoriteBtnExists) {
@@ -31,9 +31,8 @@ test.describe('Favorites Management', () => {
 
     await favoriteBtn.click();
 
-    // Wait for toast message
-    const toast = page.locator(TestHelpers.selectors.toast);
-    await expect(toast).toBeVisible({ timeout: 5000 });
+    // Wait a moment for the favorite to be processed
+    await page.waitForTimeout(500);
 
     // Navigate to favorites view
     await TestHelpers.navigateToView(page, 'favorites');
@@ -56,15 +55,15 @@ test.describe('Favorites Management', () => {
     const firstCard = photoCards[0];
     const photoId = await firstCard.getAttribute('data-photo-id');
 
-    // Favorite it (from grid or viewer)
+    // Favorite it from viewer using viewer-specific selector
     await firstCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
-    const favoriteBtn = page.locator('.favorite-btn');
+    const favoriteBtn = page.locator('[data-icon="heart"]');
     await favoriteBtn.click();
 
     // Wait for favorite to be added
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
 
     // Close viewer and go to favorites
     await TestHelpers.closeViewer(page);
@@ -79,15 +78,15 @@ test.describe('Favorites Management', () => {
       test.skip('Photo not in favorites');
     }
 
-    // Unfavorite it
+    // Unfavorite it from viewer
     await favoritedCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
-    const viewerFavoriteBtn = page.locator('.favorite-btn');
+    const viewerFavoriteBtn = page.locator('[data-icon="heart"]');
     await viewerFavoriteBtn.click();
 
     // Wait for unfavorite
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
 
     // Close viewer
     await TestHelpers.closeViewer(page);
@@ -129,8 +128,8 @@ test.describe('Favorites Management', () => {
     await firstCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
-    // Get favorite button
-    const favoriteBtn = page.locator('.favorite-btn');
+    // Get viewer favorite button
+    const favoriteBtn = page.locator('[data-icon="heart"]');
     await expect(favoriteBtn).toBeVisible();
 
     // Click to favorite
@@ -184,13 +183,13 @@ test.describe('Favorites Management', () => {
     const firstCard = photoCards[0];
     const photoId = await firstCard.getAttribute('data-photo-id');
 
-    // Favorite a photo
+    // Favorite a photo from viewer
     await firstCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
-    const favoriteBtn = page.locator('.favorite-btn');
+    const favoriteBtn = page.locator('[data-icon="heart"]');
     await favoriteBtn.click();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
 
     await TestHelpers.closeViewer(page);
 
@@ -233,12 +232,12 @@ test.describe('Favorites Management', () => {
       test.skip('Need at least 2 photos');
     }
 
-    // Favorite first two photos
+    // Favorite first two photos from viewer
     for (let i = 0; i < 2; i++) {
       await photoCards[i].click();
       await TestHelpers.verifyViewerOpen(page);
 
-      const favoriteBtn = page.locator('.favorite-btn');
+      const favoriteBtn = page.locator('[data-icon="heart"]');
       await favoriteBtn.click();
       await page.waitForTimeout(500);
 

@@ -45,6 +45,9 @@ data/
 # E2E test files
 e2e-puppeteer-test.js
 smoke-test.js
+test-e2e-data/
+test-results/
+playwright-report/
 
 # Working notes
 FRONTEND_IMPROVEMENTS.md

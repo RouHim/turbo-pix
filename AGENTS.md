@@ -57,8 +57,41 @@ Development/personal project - breaking changes acceptable, database and cache c
 
 **E2E:**
 
+TurboPix uses Playwright for end-to-end testing with real backend integration.
+
+**Quick Start:**
+```bash
+npm run test:e2e          # Run all tests
+npm run test:e2e:ui       # Interactive UI mode
+npm run test:e2e:headed   # See browser
+npm run test:e2e:debug    # Debug mode
+npm run test:e2e:report   # View test report
+```
+
+**Test Structure:**
+- `tests/e2e/setup/` - Global setup, teardown, test helpers
+- `tests/e2e/specs/` - Test files organized by feature
+- Sequential execution (workers: 1) to avoid DB conflicts
+- Real backend: Auto-builds binary, starts server, waits for indexing
+
+**Test Helpers Available:**
+- `TestHelpers.navigateToView(page, 'favorites')`
+- `TestHelpers.verifyActiveView(page, 'videos')`
+- `TestHelpers.getPhotoCards(page)`
+- `TestHelpers.waitForPhotosToLoad(page)`
+- `TestHelpers.openViewer(page, hash)` / `closeViewer(page)`
+- `TestHelpers.setMobileViewport(page)` / `setDesktopViewport(page)`
+- And 20+ more utilities
+
+**Writing Tests:**
+1. Use `data-*` attribute selectors for stability
+2. Use TestHelpers for common operations
+3. Wait for elements with Playwright's auto-waiting (avoid hard timeouts)
+4. Test should be order-independent
+5. Use `test.skip()` when test data is unavailable
+
+**Manual E2E Testing:**
 - Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
-- Use Playwright MCP (preferred) Tool - don't install as dependency - don't create manual e2e tests
 - Test at `http://localhost:18473`
 - Kill process after testing
 

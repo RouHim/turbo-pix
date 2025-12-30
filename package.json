@@ -31,13 +31,11 @@
     "pre-commit": "npm run format:check && npm run lint"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.1",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
     "simple-git-hooks": "^2.13.1",
     "stylelint": "^16.0.0",
     "stylelint-config-standard": "^39.0.0"
-  },
-  "dependencies": {
-    "@playwright/test": "^1.55.1"
   }
 }

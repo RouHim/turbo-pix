@@ -1,5 +1,4 @@
 use log::{info, warn};
-use rusqlite::params;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -37,18 +36,16 @@ pub async fn run_housekeeping_scan(
 
     // DEBUG: Check if we have any semantic vectors at all
     {
-        let conn = db_pool.get()?;
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM media_semantic_vectors", [], |row| {
-                row.get(0)
-            })
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
+            .fetch_one(db_pool)
+            .await
             .unwrap_or(0);
         info!("DEBUG: media_semantic_vectors count: {}", count);
     }
 
     for &term in HOUSEKEEPING_TERMS {
         // Search for the term
-        match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0) {
+        match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0).await {
             Ok(results) => {
                 info!(
                     "Found {} results for housekeeping term '{}'",
@@ -69,15 +66,16 @@ pub async fn run_housekeeping_scan(
     }
 
     // Now write to database
-    let mut conn = db_pool.get()?;
-    let tx = conn.transaction()?;
+    let mut tx = db_pool.begin().await?;
 
     // 1. Clear existing candidates
     // Always clear table to ensure a fresh list, even if no new candidates are found.
-    tx.execute("DELETE FROM housekeeping_candidates", [])?;
+    sqlx::query("DELETE FROM housekeeping_candidates")
+        .execute(&mut *tx)
+        .await?;
 
     if candidates.is_empty() {
-        tx.commit()?;
+        tx.commit().await?;
         info!("No housekeeping candidates found.");
         return Ok(0);
     }
@@ -85,32 +83,34 @@ pub async fn run_housekeeping_scan(
     let mut inserted_count = 0;
 
     // Resolve paths to hashes and insert
-    // We prepare a statement to look up hash by path
-    {
-        let mut stmt_get_hash = tx.prepare("SELECT hash_sha256 FROM photos WHERE file_path = ?")?;
-        let mut stmt_insert = tx.prepare(
-            "INSERT OR IGNORE INTO housekeeping_candidates (photo_hash, reason, score) VALUES (?, ?, ?)"
-        )?;
+    for (path, reason, score) in candidates {
+        // Find hash for path
+        let hash_result: Result<String, sqlx::Error> =
+            sqlx::query_scalar("SELECT hash_sha256 FROM photos WHERE file_path = ?")
+                .bind(&path)
+                .fetch_one(&mut *tx)
+                .await;
 
-        for (path, reason, score) in candidates {
-            // Find hash for path
-            let hash_result: Result<String, _> =
-                stmt_get_hash.query_row(params![path], |row| row.get(0));
-
-            match hash_result {
-                Ok(hash) => {
-                    stmt_insert.execute(params![hash, reason, score])?;
-                    inserted_count += 1;
-                }
-                Err(_) => {
-                    // Photo might have been deleted or path is stale in vector index?
-                    // Just ignore.
-                }
+        match hash_result {
+            Ok(hash) => {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO housekeeping_candidates (photo_hash, reason, score) VALUES (?, ?, ?)"
+                )
+                .bind(&hash)
+                .bind(&reason)
+                .bind(score)
+                .execute(&mut *tx)
+                .await?;
+                inserted_count += 1;
+            }
+            Err(_) => {
+                // Photo might have been deleted or path is stale in vector index?
+                // Just ignore.
             }
         }
     }
 
-    tx.commit()?;
+    tx.commit().await?;
 
     info!(
         "Housekeeping scan completed. Identified {} candidates.",

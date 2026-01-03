@@ -450,8 +450,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_photo(temp_dir: &TempDir, filename: &str) -> (std::path::PathBuf, Photo) {
-        // Copy test image to temp directory
-        let source_path = Path::new("test-data/sample_with_exif.jpg");
+        let source_path = Path::new("test-data/IMG_9377.jpg");
         let dest_path = temp_dir.path().join(filename);
         fs::copy(source_path, &dest_path).expect("Failed to copy test image");
 

@@ -23,10 +23,11 @@ pub struct IndexingStatusResponse {
 /// Helper function to get the total count of photos in the database
 fn get_total_photo_count(db_pool: &DbPool) -> u64 {
     match db_pool.get() {
-        Ok(conn) => {
-            conn.query_row("SELECT COUNT(*) FROM photos", [], |row| row.get::<_, i64>(0))
-                .unwrap_or(0) as u64
-        }
+        Ok(conn) => conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as u64,
         Err(_) => 0,
     }
 }

@@ -604,8 +604,7 @@ mod tests {
         db_pool: &DbPool,
         temp_dir: &TempDir,
     ) -> (String, std::path::PathBuf) {
-        // Copy test image to temp directory
-        let test_image = Path::new("test-data/sample_with_exif.jpg");
+        let test_image = Path::new("test-data/IMG_9377.jpg");
         let temp_image = temp_dir.path().join("test.jpg");
         fs::copy(test_image, &temp_image).expect("Failed to copy test image");
 

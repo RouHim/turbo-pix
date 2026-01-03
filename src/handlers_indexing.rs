@@ -3,11 +3,15 @@ use std::convert::Infallible;
 use std::sync::atomic::Ordering;
 use warp::Filter;
 
+use crate::db::DbPool;
 use crate::scheduler::IndexingStatus;
+use crate::warp_helpers::with_db;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IndexingStatusResponse {
     pub is_indexing: bool,
+    pub is_complete: bool,
+    pub photos_indexed: u64,
     pub phase: String,
     pub photos_total: u64,
     pub photos_processed: u64,
@@ -16,13 +20,32 @@ pub struct IndexingStatusResponse {
     pub progress_percent: f64,
 }
 
-pub async fn get_indexing_status(status: IndexingStatus) -> Result<impl warp::Reply, Infallible> {
+/// Helper function to get the total count of photos in the database
+fn get_total_photo_count(db_pool: &DbPool) -> u64 {
+    match db_pool.get() {
+        Ok(conn) => conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as u64,
+        Err(_) => 0,
+    }
+}
+
+pub async fn get_indexing_status(
+    status: IndexingStatus,
+    db_pool: DbPool,
+) -> Result<impl warp::Reply, Infallible> {
     let is_indexing = status.is_indexing.load(Ordering::SeqCst);
+    let is_complete = status.is_complete.load(Ordering::SeqCst);
     let phase = status.current_phase.lock().await.clone();
     let photos_total = status.photos_total.load(Ordering::SeqCst);
     let photos_processed = status.photos_processed.load(Ordering::SeqCst);
     let photos_semantic_indexed = status.photos_semantic_indexed.load(Ordering::SeqCst);
     let started_at = status.started_at.lock().await.map(|dt| dt.to_rfc3339());
+
+    // Get total photos in database
+    let photos_indexed = get_total_photo_count(&db_pool);
 
     // Calculate progress percentage
     let progress_percent = if photos_total > 0 {
@@ -46,6 +69,8 @@ pub async fn get_indexing_status(status: IndexingStatus) -> Result<impl warp::Re
 
     let response = IndexingStatusResponse {
         is_indexing,
+        is_complete,
+        photos_indexed,
         phase,
         photos_total,
         photos_processed,
@@ -65,9 +90,11 @@ fn with_indexing_status(
 
 pub fn build_indexing_routes(
     status: IndexingStatus,
+    db_pool: DbPool,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("api" / "indexing" / "status")
         .and(warp::get())
         .and(with_indexing_status(status))
+        .and(with_db(db_pool))
         .and_then(get_indexing_status)
 }

@@ -88,6 +88,17 @@ class Search {
    * @returns {Promise<void>}
    */
   async performSearch(query, addToHistory = false) {
+    // Update URL immediately for explicit searches (Enter key, button click)
+    if (addToHistory) {
+      const url = new URL(window.location);
+      if (query) {
+        url.searchParams.set('q', query);
+      } else {
+        url.searchParams.delete('q');
+      }
+      window.history.replaceState({}, '', url);
+    }
+
     if (!query || query === this.currentQuery) return;
 
     this.currentQuery = query;
@@ -115,14 +126,16 @@ class Search {
       // Always use semantic search (AI search is default)
       await this.performSemanticSearch(query);
 
-      // Update URL without page reload
-      const url = new URL(window.location);
-      if (query) {
-        url.searchParams.set('q', query);
-      } else {
-        url.searchParams.delete('q');
+      // Update URL without page reload (for debounced searches)
+      if (!addToHistory) {
+        const url = new URL(window.location);
+        if (query) {
+          url.searchParams.set('q', query);
+        } else {
+          url.searchParams.delete('q');
+        }
+        window.history.replaceState({}, '', url);
       }
-      window.history.replaceState({}, '', url);
     } catch (error) {
       if (window.logger) {
         window.logger.error('Search error', error, {

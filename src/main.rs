@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search.clone());
-    let indexing_routes = build_indexing_routes(indexing_status);
+    let indexing_routes = build_indexing_routes(indexing_status, db_pool.clone());
     let collage_routes = build_collage_routes(
         db_pool.clone(),
         config.data_path.clone().into(),

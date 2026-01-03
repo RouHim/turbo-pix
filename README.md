@@ -174,4 +174,3 @@ If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.
 > This project is primarily developed using AI-assisted coding, but all code is manually reviewed by me
 > and validated through multiple security gates including vulnerability scanning, linting, static code analysis, and
 > automated testing to ensure quality and security.
-

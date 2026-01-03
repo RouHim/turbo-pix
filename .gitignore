@@ -5,7 +5,6 @@ photos/
 collages/
 flamegraph.svg
 perf.data*
-.playwright*
 
 # Node.js dependencies
 node_modules/
@@ -42,10 +41,13 @@ data/
 # PID files
 *.pid
 
-# E2E test files
-e2e-puppeteer-test.js
-smoke-test.js
-
 # Working notes
 FRONTEND_IMPROVEMENTS.md
 SECURITY_PLAN.md
+
+# Playwright E2E test artifacts
+test-playwright-report/
+playwright-report/
+test-results/
+test-e2e-data/
+test-server.pid

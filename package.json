@@ -19,19 +19,16 @@
     "lint:fix": "npm run lint:js:fix && npm run lint:css:fix && npm run format",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:chrome": "playwright test --project='Desktop Chrome'",
-    "test:e2e:mobile": "playwright test --project='Mobile Safari'",
+    "test:e2e:debug": "playwright test --debug",
     "test:e2e:report": "playwright show-report",
-    "pretest:e2e": "npm run lint && npm run format:check",
     "prepare": "simple-git-hooks"
   },
   "simple-git-hooks": {
     "pre-commit": "npm run format:check && npm run lint"
   },
   "devDependencies": {
-    "@playwright/test": "^1.55.1",
+    "@playwright/test": "^1.57.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
     "simple-git-hooks": "^2.13.1",

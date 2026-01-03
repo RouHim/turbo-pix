@@ -24,6 +24,7 @@ const DB_WRITE_BATCH_SIZE: usize = 250;
 #[derive(Clone)]
 pub struct IndexingStatus {
     pub is_indexing: Arc<AtomicBool>,
+    pub is_complete: Arc<AtomicBool>,
     pub current_phase: Arc<Mutex<String>>,
     pub photos_total: Arc<AtomicU64>,
     pub photos_processed: Arc<AtomicU64>,
@@ -41,6 +42,7 @@ impl IndexingStatus {
     pub fn new() -> Self {
         Self {
             is_indexing: Arc::new(AtomicBool::new(false)),
+            is_complete: Arc::new(AtomicBool::new(false)),
             current_phase: Arc::new(Mutex::new(String::from("idle"))),
             photos_total: Arc::new(AtomicU64::new(0)),
             photos_processed: Arc::new(AtomicU64::new(0)),
@@ -60,6 +62,14 @@ impl IndexingStatus {
     pub async fn stop_indexing(&self) {
         self.is_indexing.store(false, Ordering::SeqCst);
         *self.current_phase.lock().await = String::from("idle");
+    }
+
+    pub fn mark_complete(&self) {
+        self.is_complete.store(true, Ordering::SeqCst);
+    }
+
+    pub fn mark_incomplete(&self) {
+        self.is_complete.store(false, Ordering::SeqCst);
     }
 
     pub async fn set_phase(&self, phase: &str) {
@@ -237,6 +247,7 @@ impl PhotoScheduler {
 
                 // Mark indexing as started
                 status.start_indexing().await;
+                status.mark_incomplete();
                 status.set_phase("metadata").await;
 
                 let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
@@ -306,11 +317,17 @@ impl PhotoScheduler {
                             ),
                             Err(e) => error!("Phase 4 (housekeeping identification) failed: {}", e),
                         }
+
+                        // Mark as complete only if Phase 1 succeeded
+                        status.mark_complete();
                     }
-                    Err(e) => error!("Phase 1 (metadata scan) failed: {}", e),
+                    Err(e) => {
+                        error!("Phase 1 (metadata scan) failed: {}", e);
+                        status.mark_incomplete();
+                    }
                 }
 
-                // Mark indexing as completed
+                // Always mark indexing as stopped, even on error
                 status.stop_indexing().await;
                 drop(lock);
             });
@@ -339,7 +356,7 @@ impl PhotoScheduler {
         handle
     }
 
-    pub async fn run_startup_rescan(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run_startup_rescan(&self) -> Result<(), anyhow::Error> {
         // Try to acquire lock - if another rescan is running, skip this one
         let lock = match self.rescan_lock.try_lock() {
             Ok(lock) => lock,
@@ -353,28 +370,41 @@ impl PhotoScheduler {
 
         // Mark indexing as started
         self.status.start_indexing().await;
+        self.status.mark_incomplete();
         self.status.set_phase("metadata").await;
 
         let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
 
         // Phase 1: Fast metadata-only scan (skip semantic vectors)
         info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
-        let processed_photos = processor
+        let result = processor
             .full_rescan_and_cleanup(&self.db_pool, &self.cache_manager)
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Phase 1 failed: {}", e));
 
-        // Convert ProcessedPhoto to Photo
-        let photos: Vec<crate::db::Photo> =
-            processed_photos.into_iter().map(|p| p.into()).collect();
+        let (indexed_count, error_count) = match result {
+            Ok(processed_photos) => {
+                // Convert ProcessedPhoto to Photo
+                let photos: Vec<crate::db::Photo> =
+                    processed_photos.into_iter().map(|p| p.into()).collect();
 
-        // Batch write photos to database (same as scheduled rescan)
-        let (indexed_count, error_count) =
-            Self::batch_write_photos(&self.db_pool, photos, &self.status);
+                // Batch write photos to database (same as scheduled rescan)
+                let (count, errors) = Self::batch_write_photos(&self.db_pool, photos, &self.status);
 
-        info!(
-            "Phase 1 completed: {} photos indexed, {} errors",
-            indexed_count, error_count
-        );
+                info!(
+                    "Phase 1 completed: {} photos indexed, {} errors",
+                    count, errors
+                );
+                (count, errors)
+            }
+            Err(e) => {
+                error!("{}", e);
+                self.status.mark_incomplete();
+                self.status.stop_indexing().await;
+                drop(lock);
+                return Err(e);
+            }
+        };
 
         // Phase 2: Batch compute semantic vectors
         info!("Phase 2: Computing semantic vectors in batches");
@@ -423,7 +453,10 @@ impl PhotoScheduler {
             indexed_count, error_count
         );
 
-        // Mark indexing as completed
+        // Mark as complete - all phases ran (some may have had errors but the process completed)
+        self.status.mark_complete();
+
+        // Mark indexing as stopped
         self.status.stop_indexing().await;
         drop(lock);
         Ok(())

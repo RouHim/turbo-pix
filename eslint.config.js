@@ -51,7 +51,12 @@ export default [
     },
   },
   {
-    files: ['static/i18n/**/*.js', 'static/js/i18n.js', 'tests/**/*.js'],
+    files: [
+      'static/i18n/**/*.js',
+      'static/js/i18n.js',
+      'tests/**/*.js',
+      'playwright.config.js',
+    ],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
@@ -69,7 +74,7 @@ export default [
         beforeEach: 'readonly',
         afterEach: 'readonly',
         jest: 'readonly',
-        // Node.js globals for E2E tests
+        // Node.js globals for tests
         process: 'readonly',
         __dirname: 'readonly',
         __filename: 'readonly',

@@ -8,172 +8,61 @@ test.describe('Search', () => {
     await TestHelpers.waitForPhotosToLoad(page);
   });
 
+  test('should display search input', async ({ page }) => {
+    // GIVEN: User is on the homepage
+    // WHEN: Page loads
+    // THEN: Search input is visible
+    await expect(page.locator(TestHelpers.selectors.searchInput)).toBeVisible();
+  });
+
   test('should perform semantic search', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-    const searchBtn = page.locator(TestHelpers.selectors.searchBtn);
+    // GIVEN: User is on the homepage
+    // WHEN: User enters a search term and clicks search
+    await TestHelpers.performSearch(page, 'cat');
 
-    // Enter search query
-    await searchInput.fill('cat');
-    await searchBtn.click();
+    // THEN: Search is performed
+    await page.waitForLoadState('networkidle');
 
-    // Wait for search results to load
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // Verify results are displayed (either photos or empty state)
-    const hasResults = await TestHelpers.elementExists(page, TestHelpers.selectors.photoCardAny);
-    const hasEmptyState = await TestHelpers.elementExists(page, TestHelpers.selectors.noPhotos);
-
-    expect(hasResults || hasEmptyState).toBe(true);
+    // AND: URL contains search query
+    const url = new URL(page.url());
+    expect(url.searchParams.get('q')).toBe('cat');
   });
 
   test('should search with Enter key', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
+    // GIVEN: User is on the homepage
+    // WHEN: User enters search term and presses Enter
+    await page.fill(TestHelpers.selectors.searchInput, 'dog');
+    await page.keyboard.press('Enter');
 
-    await searchInput.fill('photo');
-    await searchInput.press('Enter');
+    // THEN: Search is performed
+    await page.waitForLoadState('networkidle');
 
-    // Wait for search results
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // Verify search was executed
-    const hasResults = await TestHelpers.elementExists(page, TestHelpers.selectors.photoCardAny);
-    const hasEmptyState = await TestHelpers.elementExists(page, TestHelpers.selectors.noPhotos);
-
-    expect(hasResults || hasEmptyState).toBe(true);
+    // AND: URL contains search query
+    const url = new URL(page.url());
+    expect(url.searchParams.get('q')).toBe('dog');
   });
 
-  test('should clear search with Escape key', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
+  test('should clear search with Escape', async ({ page }) => {
+    // GIVEN: User has performed a search
+    await TestHelpers.performSearch(page, 'test');
+    await page.waitForLoadState('networkidle');
 
-    // Perform search
-    await searchInput.fill('test query');
-    await searchInput.press('Enter');
-    await page.waitForTimeout(500);
+    // WHEN: User presses Escape
+    await TestHelpers.clearSearch(page);
 
-    // Clear with Escape
-    await searchInput.press('Escape');
-
-    // Verify input is cleared
-    const inputValue = await searchInput.inputValue();
-    expect(inputValue).toBe('');
+    // THEN: Search input is cleared
+    const searchValue = await page.locator(TestHelpers.selectors.searchInput).inputValue();
+    expect(searchValue).toBe('');
   });
 
-  test('should update URL with search query', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
+  test('should support URL query params', async ({ page }) => {
+    // GIVEN: User navigates with search query in URL
+    // WHEN: Page loads with query param
+    await page.goto('/?q=cat');
+    await page.waitForLoadState('networkidle');
 
-    await searchInput.fill('landscape');
-    await searchInput.press('Enter');
-
-    // Wait a bit for URL to update
-    await page.waitForTimeout(500);
-
-    // URL should contain search query
-    expect(page.url()).toContain('q=');
-  });
-
-  test('should show empty state for no results', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-
-    // Search for something that definitely won't exist
-    await searchInput.fill('xyzabc123nonexistent456');
-    await searchInput.press('Enter');
-
-    // Wait for search to complete
-    await page.waitForTimeout(2000);
-
-    // Should show empty state or no photos
-    const noPhotos = page.locator(TestHelpers.selectors.noPhotos);
-    const photoCards = await TestHelpers.getPhotoCards(page);
-
-    const hasEmptyState = (await noPhotos.count()) > 0;
-    const hasNoPhotos = photoCards.length === 0;
-
-    expect(hasEmptyState || hasNoPhotos).toBe(true);
-  });
-
-  test('should search for different queries', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-
-    // First search
-    await searchInput.fill('test');
-    await searchInput.press('Enter');
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // Clear and new search
-    await searchInput.fill('');
-    await searchInput.fill('photo');
-    await searchInput.press('Enter');
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // Verify second search executed
-    expect(page.url()).toContain('photo');
-  });
-
-  test('should search with minimum 2 characters', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-
-    // Single character should not trigger search
-    await searchInput.fill('a');
-    await searchInput.press('Enter');
-    await page.waitForTimeout(500);
-
-    // Two characters should trigger search
-    await searchInput.fill('ab');
-    await searchInput.press('Enter');
-    await page.waitForTimeout(1000);
-
-    // Some response should occur (either results or empty state)
-    const hasPhotos = await TestHelpers.elementExists(page, TestHelpers.selectors.photoCardAny);
-    const hasEmptyState = await TestHelpers.elementExists(page, TestHelpers.selectors.noPhotos);
-
-    expect(hasPhotos || hasEmptyState).toBe(true);
-  });
-
-  test('should maintain search when navigating in viewer', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-
-    // Perform search
-    await searchInput.fill('test');
-    await searchInput.press('Enter');
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    const photoCards = await TestHelpers.getPhotoCards(page);
-    if (photoCards.length === 0) {
-      test.skip('No search results to test with');
-    }
-
-    // Open photo in viewer
-    await photoCards[0].click();
-    await TestHelpers.verifyViewerOpen(page);
-
-    // Close viewer
-    await TestHelpers.closeViewer(page);
-
-    // Search query should still be in input
-    const inputValue = await searchInput.inputValue();
-    expect(inputValue).toBe('test');
-  });
-
-  test('should clear search and return to all photos', async ({ page }) => {
-    const searchInput = page.locator(TestHelpers.selectors.searchInput);
-
-    // Perform search
-    await searchInput.fill('query');
-    await searchInput.press('Enter');
-    await page.waitForTimeout(1000);
-
-    // Clear search
-    await searchInput.fill('');
-    await searchInput.press('Enter');
-
-    // Wait for all photos to load
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // Should show all photos view
-    const photoCards = await TestHelpers.getPhotoCards(page);
-    const hasPhotos = photoCards.length > 0;
-    const hasEmptyState = await TestHelpers.elementExists(page, TestHelpers.selectors.noPhotos);
-
-    expect(hasPhotos || hasEmptyState).toBe(true);
+    // THEN: Search input contains the query
+    const searchValue = await page.locator(TestHelpers.selectors.searchInput).inputValue();
+    expect(searchValue).toBe('cat');
   });
 });

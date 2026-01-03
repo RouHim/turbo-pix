@@ -1,66 +1,57 @@
-import fs from 'fs/promises';
-import path from 'path';
+import { readFile, unlink } from 'fs/promises';
+import { existsSync } from 'fs';
 
-const PROJECT_ROOT = path.resolve(process.cwd());
-const SERVER_PID_FILE = path.join(PROJECT_ROOT, 'test-server.pid');
+const PID_FILE = 'test-server.pid';
+const GRACEFUL_SHUTDOWN_DELAY_MS = 2000;
 
-export default async function globalTeardown() {
-  console.log('🛑 Stopping TurboPix E2E test environment...');
+async function killServer() {
+  console.log('\n=== TurboPix E2E Test Teardown ===\n');
+
+  if (!existsSync(PID_FILE)) {
+    console.log('No PID file found, server may have already stopped');
+    return;
+  }
 
   try {
-    // Read server PID
-    const pid = await fs.readFile(SERVER_PID_FILE, 'utf-8');
-    const pidNumber = parseInt(pid.trim(), 10);
+    const pidContent = await readFile(PID_FILE, 'utf-8');
+    const pid = parseInt(pidContent.trim(), 10);
 
-    if (!pidNumber || isNaN(pidNumber)) {
-      console.warn('⚠️  Invalid PID in file, skipping server shutdown');
+    if (isNaN(pid)) {
+      console.error('Invalid PID in file:', pidContent);
       return;
     }
 
-    console.log(`🔫 Sending SIGTERM to server (PID: ${pidNumber})...`);
+    console.log(`Attempting to stop server (PID: ${pid})...`);
 
-    // Kill the server process
     try {
-      process.kill(pidNumber, 'SIGTERM');
-      console.log('✅ Server shutdown signal sent');
+      process.kill(pid, 'SIGTERM');
+      console.log('Sent SIGTERM signal');
+
+      await new Promise((resolve) => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
+
+      try {
+        process.kill(pid, 0);
+        console.log('Server still running after graceful shutdown, forcing kill...');
+        process.kill(pid, 'SIGKILL');
+        console.log('Sent SIGKILL signal');
+      } catch {
+        console.log('Server stopped gracefully');
+      }
     } catch (error) {
       if (error.code === 'ESRCH') {
-        console.warn('⚠️  Server process not found (already stopped?)');
+        console.log('Server process not found, already stopped');
       } else {
-        console.error('❌ Error killing server process:', error);
+        console.error('Error stopping server:', error.message);
       }
     }
 
-    // Wait for graceful shutdown
-    console.log('⏳ Waiting for graceful shutdown...');
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Force kill if still running
-    try {
-      process.kill(pidNumber, 0); // Check if process exists
-      console.warn('⚠️  Server still running, sending SIGKILL...');
-      process.kill(pidNumber, 'SIGKILL');
-    } catch (error) {
-      if (error.code === 'ESRCH') {
-        // Process is gone, good
-        console.log('✅ Server stopped successfully');
-      }
-    }
-
-    // Remove PID file
-    try {
-      await fs.unlink(SERVER_PID_FILE);
-      console.log('🗑️  Removed PID file');
-    } catch (error) {
-      // File might not exist, that's okay
-    }
-
-    console.log('✅ E2E test environment cleaned up!');
+    await unlink(PID_FILE);
+    console.log('Removed PID file');
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.warn('⚠️  PID file not found - server may not have started properly');
-    } else {
-      console.error('❌ Error during teardown:', error);
-    }
+    console.error('Error during teardown:', error.message);
   }
+
+  console.log('\n=== Teardown Complete ===\n');
 }
+
+export default killServer;

@@ -164,59 +164,6 @@ docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 - **HEIC Support**: Limited due to [image-rs issue #1375](https://github.com/image-rs/image/issues/1375)
 - **Live Photos**: iOS Live Photos are treated as separate image and video files
 
-## Development & Testing
-
-### E2E Tests
-
-TurboPix includes a comprehensive Playwright E2E test suite that tests the application with a real backend server:
-
-**Prerequisites:**
-- Node.js and npm installed
-- Test data available in `test-data/` directory
-
-**Running tests:**
-
-```shell
-# Run all E2E tests
-npm run test:e2e
-
-# Run tests with UI mode (interactive)
-npm run test:e2e:ui
-
-# Run tests in headed mode (see browser)
-npm run test:e2e:headed
-
-# Run tests in debug mode
-npm run test:e2e:debug
-
-# View test report
-npm run test:e2e:report
-```
-
-**Test coverage:**
-- Navigation (5 views: all photos, favorites, videos, collages, housekeeping)
-- Photo viewer (zoom, rotate, navigation, delete)
-- Search (semantic search)
-- Favorites management
-- Video playback
-- Collage management
-- Timeline filtering
-- Metadata viewing and editing
-- Mobile interactions
-- Keyboard shortcuts
-- Critical user journeys
-
-The test suite automatically:
-1. Builds the Rust binary
-2. Starts the server with a test database
-3. Waits for photo indexing to complete
-4. Runs all tests sequentially
-5. Shuts down the server gracefully
-
-**Test Organization:**
-- `tests/e2e/setup/` - Global setup, teardown, and test helpers
-- `tests/e2e/specs/` - Test specifications organized by feature
-
 ## Support
 
 If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.com/rouhim)
@@ -227,4 +174,3 @@ If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.
 > This project is primarily developed using AI-assisted coding, but all code is manually reviewed by me
 > and validated through multiple security gates including vulnerability scanning, linting, static code analysis, and
 > automated testing to ensure quality and security.
-

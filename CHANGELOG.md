@@ -1,3 +1,10 @@
+# [2.11.0](https://github.com/RouHim/turbo-pix/compare/2.10.7...2.11.0) (2026-01-03)
+
+
+### Features
+
+* Add comprehensive E2E testing infrastructure with Playwright ([#21](https://github.com/RouHim/turbo-pix/issues/21)) ([0563e40](https://github.com/RouHim/turbo-pix/commit/0563e40cf7caf51a2ff346e97e87c89ff516e5b3))
+
 ## [2.10.7](https://github.com/RouHim/turbo-pix/compare/2.10.6...2.10.7) (2026-01-03)
 
 ## [2.10.6](https://github.com/RouHim/turbo-pix/compare/2.10.5...2.10.6) (2025-12-31)

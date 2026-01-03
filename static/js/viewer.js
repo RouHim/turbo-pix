@@ -431,16 +431,18 @@ class PhotoViewer {
   }
 
   showImage(src) {
-    if (this.elements.image && this.elements.video) {
+    if (this.elements.image) {
       this.elements.image.src = src;
       this.elements.image.style.display = 'block';
       this.elements.image.classList.add('loaded');
-      this.elements.video.style.display = 'none';
+      if (this.elements.video) {
+        this.elements.video.style.display = 'none';
+      }
     }
   }
 
   async displayVideo(photo, forceTranscode = false) {
-    if (!this.elements.video || !this.elements.image) {
+    if (!this.elements.video) {
       return;
     }
 
@@ -568,7 +570,9 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     this.elements.video.src = videoUrl;
     this.elements.video.style.display = 'block';
     this.elements.video.classList.add('loaded');
-    this.elements.image.style.display = 'none';
+    if (this.elements.image) {
+      this.elements.image.style.display = 'none';
+    }
 
     // Auto-play if user preference allows
     const settings = api.getViewSettings();

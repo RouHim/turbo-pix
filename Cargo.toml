@@ -14,7 +14,7 @@ warp = { version = "0.4.2", features = ["server", "multipart"] }
 # Database
 rusqlite = { version = "0.37", features = ["bundled"] }
 r2d2 = "0.8"
-r2d2_sqlite = "0.31"
+r2d2_sqlite = "0.32"
 
 # Scheduling
 clokwerk = "0.4"

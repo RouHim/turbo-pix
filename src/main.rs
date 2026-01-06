@@ -146,7 +146,6 @@ async fn initialize_services(
     // Initialize semantic search engine
     let semantic_search = Arc::new(
         SemanticSearchEngine::new(db_pool.clone(), &config.data_path)
-            .await
             .map_err(|e| format!("Failed to initialize semantic search: {}", e))?,
     );
     info!("Semantic search initialized");

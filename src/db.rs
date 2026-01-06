@@ -81,18 +81,16 @@ where
 }
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    // Try RFC3339 first (new format)
-    if s.contains('T') {
-        DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
-    } else {
-        // Fallback to legacy SQLite format
-        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-            .ok()
-            .map(|ndt| ndt.and_utc())
-    }
-}
+    // Try RFC3339 first (e.g., "2026-01-04T16:17:10Z")
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| {
+            // Try SQLite datetime format (e.g., "2026-01-04 16:17:10")
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+        })
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
@@ -124,45 +122,36 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
                     log::warn!("Failed to parse metadata JSON for photo: {}", e);
                     json!({})
                 }),
-            date_modified: row
-                .try_get::<String, _>("file_modified")?
-                .parse::<String>()
-                .ok()
-                .and_then(|s| parse_datetime(&s))
-                .ok_or_else(|| sqlx::Error::ColumnDecode {
+            date_modified: parse_datetime(&row.try_get::<String, _>("file_modified")?).ok_or_else(
+                || sqlx::Error::ColumnDecode {
                     index: "file_modified".to_string(),
                     source: Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid datetime",
                     )),
-                })?,
+                },
+            )?,
             date_indexed: row
                 .try_get::<Option<String>, _>("date_indexed")?
                 .and_then(|s| parse_datetime(&s)),
-            created_at: row
-                .try_get::<String, _>("created_at")?
-                .parse::<String>()
-                .ok()
-                .and_then(|s| parse_datetime(&s))
-                .ok_or_else(|| sqlx::Error::ColumnDecode {
+            created_at: parse_datetime(&row.try_get::<String, _>("created_at")?).ok_or_else(
+                || sqlx::Error::ColumnDecode {
                     index: "created_at".to_string(),
                     source: Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid datetime",
                     )),
-                })?,
-            updated_at: row
-                .try_get::<String, _>("updated_at")?
-                .parse::<String>()
-                .ok()
-                .and_then(|s| parse_datetime(&s))
-                .ok_or_else(|| sqlx::Error::ColumnDecode {
+                },
+            )?,
+            updated_at: parse_datetime(&row.try_get::<String, _>("updated_at")?).ok_or_else(
+                || sqlx::Error::ColumnDecode {
                     index: "updated_at".to_string(),
                     source: Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid datetime",
                     )),
-                })?,
+                },
+            )?,
         })
     }
 }

@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     // Initialize engine (loads models)
     println!("Loading models...");
     let start_load = Instant::now();
-    let engine = Arc::new(SemanticSearchEngine::new(pool.clone(), "./data").await?);
+    let engine = Arc::new(SemanticSearchEngine::new(pool.clone(), "./data")?);
     println!("Models loaded in {:.2?}", start_load.elapsed());
 
     let test_data = Path::new("test-data");

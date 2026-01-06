@@ -127,7 +127,7 @@ impl PhotoScheduler {
     /// Helper: Batch write photos to database with transaction support
     ///
     /// Writes photos in batches to minimize database lock duration.
-    /// Uses manual IMMEDIATE transaction mode for better concurrency.
+    /// Uses sqlx transactions for async database operations.
     ///
     /// Returns (successful_count, error_count)
     async fn batch_write_photos(
@@ -155,7 +155,6 @@ impl PhotoScheduler {
                 }
             };
 
-            // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
             let mut batch_success = 0;
 
             for photo in batch {
@@ -479,11 +478,8 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             let db_pool = create_test_db_pool().await.unwrap();
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-            let semantic_search = Arc::new(
-                SemanticSearchEngine::new(db_pool.clone(), "./data")
-                    .await
-                    .unwrap(),
-            );
+            let semantic_search =
+                Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let data_path = temp_dir.path().to_path_buf();
@@ -729,11 +725,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_pool = create_test_db_pool().await.unwrap();
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-        let semantic_search = Arc::new(
-            SemanticSearchEngine::new(db_pool.clone(), "./data")
-                .await
-                .unwrap(),
-        );
+        let semantic_search =
+            Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
         let data_path = temp_dir.path().to_path_buf();
 
         // Create scheduler with non-existent path

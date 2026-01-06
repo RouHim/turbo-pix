@@ -24,12 +24,12 @@ use anyhow::{Context, Error as E, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
-use sqlx::SqlitePool;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use zerocopy::IntoBytes;
 
+use crate::db::DbPool;
 use crate::raw_processor;
 
 // Model configuration
@@ -58,12 +58,12 @@ pub struct SemanticSearchEngine {
     model: Arc<RwLock<clip::ClipModel>>,
     tokenizer: Arc<Tokenizer>,
     device: Arc<Device>,
-    pool: SqlitePool,
+    pool: DbPool,
 }
 
 impl SemanticSearchEngine {
     /// Creates a new semantic search engine with model and database initialization
-    pub async fn new(db_pool: SqlitePool, data_path: &str) -> Result<Self> {
+    pub fn new(db_pool: DbPool, data_path: &str) -> Result<Self> {
         let device = Arc::new(Device::Cpu);
 
         log::info!("Loading semantic search model...");
@@ -82,7 +82,7 @@ impl SemanticSearchEngine {
         model: Arc<RwLock<clip::ClipModel>>,
         tokenizer: Arc<Tokenizer>,
         device: Arc<Device>,
-        pool: SqlitePool,
+        pool: DbPool,
     ) -> Self {
         Self {
             model,
@@ -126,23 +126,27 @@ impl SemanticSearchEngine {
         // vec_distance_cosine returns distance (0 = identical, 2 = opposite)
         // Convert to similarity score (1 = identical, 0 = orthogonal, -1 = opposite)
         let db_start = std::time::Instant::now();
-        let results: Vec<(String, f32)> = sqlx::query_as(
+
+        // Fetch all results at once since sqlx doesn't support streaming parameter binding easily
+        let raw_results = sqlx::query_as::<_, (String, f32)>(
             "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity
              FROM media_semantic_vectors msv
              JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
              ORDER BY vec_distance_cosine(msv.semantic_vector, ?)
              LIMIT ? OFFSET ?",
         )
-        .bind(&vector_bytes[..])
-        .bind(&vector_bytes[..])
+        .bind(&vector_bytes)
+        .bind(&vector_bytes)
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .filter(|(_, score): &(String, f32)| *score >= MIN_SIMILARITY_SCORE)
-        .map(|(path, score)| (path, score * 100.0))
-        .collect();
+        .await?;
+
+        let results: Vec<(String, f32)> = raw_results
+            .into_iter()
+            .filter(|(_, score)| *score >= MIN_SIMILARITY_SCORE)
+            .map(|(path, score)| (path, score * 100.0))
+            .collect();
         log::debug!("Database query took: {:?}", db_start.elapsed());
 
         log::info!("Semantic search results for '{}':", query);
@@ -161,7 +165,7 @@ impl SemanticSearchEngine {
 
     /// Computes and caches semantic vector for a single image
     pub async fn compute_semantic_vector(&self, image_path: &str) -> Result<()> {
-        // OPTIMIZATION: Check existence BEFORE acquiring transaction lock
+        // OPTIMIZATION: Check existence BEFORE expensive computation
         // WAL mode allows concurrent reads without blocking writers
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
@@ -185,8 +189,7 @@ impl SemanticSearchEngine {
             encode_image(&model_read, image_path, &self.device)?
         };
 
-        // OPTIMIZATION: Only hold transaction for minimal write operation
-        // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
+        // Use transaction to prevent race condition where multiple tasks compute same vector
         let mut tx = self.pool.begin().await?;
 
         // Double-check existence after expensive computation (race condition prevention)
@@ -270,7 +273,6 @@ impl SemanticSearchEngine {
                 .model
                 .read()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
-
             encode_image_batch(&model_read, &extracted_frames, &self.device)?
         };
 
@@ -299,19 +301,18 @@ impl SemanticSearchEngine {
         let normalized_embedding = normalize_vector(&video_embedding)?;
 
         // Store embedding and metadata in a transaction (after all async work is done)
-        // Note: sqlx transactions are already IMMEDIATE mode by default in SQLite
         let mut tx = self.pool.begin().await?;
 
         // Double-check it wasn't inserted by another concurrent task
-        let still_missing: bool = sqlx::query_scalar(
-            "SELECT NOT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
         )
         .bind(video_path)
         .fetch_one(&mut *tx)
         .await
-        .unwrap_or(true);
+        .unwrap_or(false);
 
-        if still_missing {
+        if !exists {
             store_semantic_vector_tx(&mut tx, video_path, &normalized_embedding).await?;
             store_video_metadata_tx(
                 &mut tx,
@@ -619,7 +620,7 @@ async fn store_video_metadata_tx(
 
     sqlx::query(
         "INSERT OR REPLACE INTO video_semantic_metadata (path, num_frames_sampled, frame_times, model_version)
-         VALUES (?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?)",
     )
     .bind(path)
     .bind(num_frames as i64)
@@ -691,11 +692,272 @@ mod tests {
 
         // Search for cat - should return cat.jpg first
         let results = engine.search("cat", 10, 0).await.unwrap();
-        assert!(!results.is_empty(), "Should find results for 'cat'");
+
+        assert!(!results.is_empty(), "Search should return results");
         assert!(
             results[0].0.contains("cat"),
-            "First result should be cat.jpg, got: {}",
+            "Top result should be cat.jpg, got: {}",
             results[0].0
         );
+        assert!(
+            results[0].1 >= 61.5,
+            "Similarity score should be >= 61.5, got: {}",
+            results[0].1
+        );
+
+        println!("Cat search results:");
+        for (path, score) in &results {
+            println!("  {}: {:.1}", path, score);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_semantic_search_concept_understanding() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        engine
+            .compute_semantic_vector("test-data/cat.jpg")
+            .await
+            .unwrap();
+        engine
+            .compute_semantic_vector("test-data/car.jpg")
+            .await
+            .unwrap();
+
+        let results = engine.search("car", 10, 0).await.unwrap();
+
+        assert!(!results.is_empty(), "Search should return results");
+        assert!(
+            results[0].0.contains("car"),
+            "Car search should return car first, got: {}",
+            results[0].0
+        );
+        assert!(
+            results[0].1 >= 61.5,
+            "Car score should be >= 61.5, got: {}",
+            results[0].1
+        );
+
+        println!("Car search results:");
+        for (path, score) in &results {
+            println!("  {}: {:.1}", path, score);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_raw_image_embedding() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        let result = engine
+            .compute_semantic_vector("test-data/IMG_9899.CR2")
+            .await;
+        assert!(
+            result.is_ok(),
+            "RAW image should generate CLIP embedding: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_semantic_similarity_synonyms() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool);
+
+        engine
+            .compute_semantic_vector("test-data/cat.jpg")
+            .await
+            .unwrap();
+
+        let queries = ["cat", "kitten", "feline"];
+
+        for query in &queries {
+            let results = engine.search(query, 10, 0).await.unwrap();
+            assert!(
+                !results.is_empty(),
+                "Query '{}' should return results",
+                query
+            );
+            assert!(
+                results[0].0.contains("cat"),
+                "Query '{}' should return cat.jpg",
+                query
+            );
+            assert!(
+                results[0].1 >= 61.5,
+                "Query '{}' score should be >= 61.5, got {}",
+                query,
+                results[0].1
+            );
+
+            println!("Query '{}' score: {:.1}", query, results[0].1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_database() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool);
+
+        let results = engine.search("cat", 10, 0).await.unwrap();
+
+        assert!(
+            results.is_empty(),
+            "Search on empty database should return no results"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_minimum_similarity_threshold() {
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        engine
+            .compute_semantic_vector("test-data/cat.jpg")
+            .await
+            .unwrap();
+        engine
+            .compute_semantic_vector("test-data/car.jpg")
+            .await
+            .unwrap();
+
+        let results = engine.search("cat", 10, 0).await.unwrap();
+
+        for (path, score) in &results {
+            assert!(
+                *score >= 61.5,
+                "All results should have similarity >= 61.5, got {} for {}",
+                score,
+                path
+            );
+        }
+
+        println!("All {} results meet minimum threshold", results.len());
+    }
+
+    #[test]
+    fn test_calculate_frame_positions() {
+        // Test 30s video with 5 frames
+        let positions = calculate_frame_positions(30.0, 5);
+        assert_eq!(positions.len(), 5, "Should generate 5 frame positions");
+        assert_eq!(positions, vec![5.0, 10.0, 15.0, 20.0, 25.0]);
+
+        // Test 60s video with 5 frames
+        let positions = calculate_frame_positions(60.0, 5);
+        assert_eq!(positions.len(), 5);
+        assert_eq!(positions, vec![10.0, 20.0, 30.0, 40.0, 50.0]);
+
+        // Test short video (6s) with 5 frames
+        let positions = calculate_frame_positions(6.0, 5);
+        assert_eq!(positions.len(), 5);
+        assert_eq!(positions, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[tokio::test]
+    async fn test_video_embedding_computation() {
+        let video_filename = "test_video.mp4";
+        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data")
+            .join(video_filename);
+
+        if !video_path.exists() {
+            eprintln!(
+                "Skipping video embedding test: {} not found",
+                video_filename
+            );
+            return;
+        }
+
+        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+            eprintln!("Skipping video embedding test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        let video_path_str = video_path.to_string_lossy().to_string();
+        let result = engine
+            .compute_video_semantic_vector(&video_path_str, None)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Video embedding computation should succeed: {:?}",
+            result.err()
+        );
+
+        // Verify embedding was stored
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM semantic_vector_path_mapping WHERE path = ?)",
+        )
+        .bind(&video_path_str)
+        .fetch_one(&db_pool)
+        .await
+        .unwrap();
+
+        assert!(exists, "Video embedding should be stored in database");
+
+        // Verify metadata was stored
+        let metadata_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM video_semantic_metadata WHERE path = ?)",
+        )
+        .bind(&video_path_str)
+        .fetch_one(&db_pool)
+        .await
+        .unwrap();
+
+        assert!(
+            metadata_exists,
+            "Video metadata should be stored in database"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_video_search_integration() {
+        let video_filename = "test_video.mp4";
+        let video_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data")
+            .join(video_filename);
+
+        if !video_path.exists() {
+            eprintln!("Skipping video search test: {} not found", video_filename);
+            return;
+        }
+
+        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+            eprintln!("Skipping video search test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+
+        let db_pool = create_test_db_pool().await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        // Index image and video
+        engine
+            .compute_semantic_vector("test-data/cat.jpg")
+            .await
+            .unwrap();
+        engine
+            .compute_semantic_vector("test-data/car.jpg")
+            .await
+            .unwrap();
+        let video_path_str = video_path.to_string_lossy().to_string();
+        engine
+            .compute_video_semantic_vector(&video_path_str, None)
+            .await
+            .unwrap();
+
+        // Search should return both images and videos
+        let results = engine.search("cat", 10, 0).await.unwrap();
+
+        assert!(!results.is_empty(), "Search should return results");
+        println!("Mixed search results:");
+        for (path, score) in &results {
+            println!("  {}: {:.1}", path, score);
+        }
     }
 }

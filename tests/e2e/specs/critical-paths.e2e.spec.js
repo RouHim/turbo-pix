@@ -73,6 +73,7 @@ test.describe('Critical User Paths', () => {
   test('should complete video discovery and playback workflow', async ({ page }) => {
     // GIVEN: User navigates to videos view
     await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
 
     // WHEN: Video cards are loaded
     const videoCards = await TestHelpers.getPhotoCards(page);

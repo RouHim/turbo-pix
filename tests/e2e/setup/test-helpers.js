@@ -22,6 +22,7 @@ export class TestHelpers {
 
   static async navigateToView(page, viewName) {
     const selector = this.selectors.navItem(viewName);
+    await page.waitForSelector(selector, { state: 'visible' });
     await page.click(selector);
     await this.verifyActiveView(page, viewName);
   }
@@ -139,6 +140,13 @@ export class TestHelpers {
   static async performSearch(page, searchTerm) {
     await page.fill(this.selectors.searchInput, searchTerm);
     await page.click(this.selectors.searchBtn);
+  }
+
+  static async waitForSearchParam(page, expectedQuery) {
+    await page.waitForFunction((query) => {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('q') === query;
+    }, expectedQuery);
   }
 
   static async clearSearch(page) {

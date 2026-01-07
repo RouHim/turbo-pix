@@ -21,7 +21,7 @@ test.describe('Search', () => {
     await TestHelpers.performSearch(page, 'cat');
 
     // THEN: Search is performed
-    await page.waitForLoadState('networkidle');
+    await TestHelpers.waitForSearchParam(page, 'cat');
 
     // AND: URL contains search query
     const url = new URL(page.url());
@@ -35,7 +35,7 @@ test.describe('Search', () => {
     await page.keyboard.press('Enter');
 
     // THEN: Search is performed
-    await page.waitForLoadState('networkidle');
+    await TestHelpers.waitForSearchParam(page, 'dog');
 
     // AND: URL contains search query
     const url = new URL(page.url());
@@ -45,7 +45,7 @@ test.describe('Search', () => {
   test('should clear search with Escape', async ({ page }) => {
     // GIVEN: User has performed a search
     await TestHelpers.performSearch(page, 'test');
-    await page.waitForLoadState('networkidle');
+    await TestHelpers.waitForSearchParam(page, 'test');
 
     // WHEN: User presses Escape
     await TestHelpers.clearSearch(page);
@@ -59,7 +59,7 @@ test.describe('Search', () => {
     // GIVEN: User navigates with search query in URL
     // WHEN: Page loads with query param
     await page.goto('/?q=cat');
-    await page.waitForLoadState('networkidle');
+    await TestHelpers.waitForSearchParam(page, 'cat');
 
     // THEN: Search input contains the query
     const searchValue = await page.locator(TestHelpers.selectors.searchInput).inputValue();

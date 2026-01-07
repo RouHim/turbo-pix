@@ -123,6 +123,13 @@ class Search {
         });
       }
 
+      if (query.startsWith('type:')) {
+        if (window.photoGrid) {
+          window.photoGrid.search(query);
+        }
+        return;
+      }
+
       // Always use semantic search (AI search is default)
       await this.performSemanticSearch(query);
 

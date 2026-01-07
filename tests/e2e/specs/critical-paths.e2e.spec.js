@@ -47,10 +47,18 @@ test.describe('Critical User Paths', () => {
     await expect(page.locator(TestHelpers.selectors.searchInput)).toBeVisible();
 
     // WHEN: User performs a search
-    await TestHelpers.performSearch(page, 'cat');
+    await TestHelpers.performSearch(page, 'type:video');
 
     // THEN: Search results are displayed
-    await page.waitForLoadState('networkidle');
+    await page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/photos') &&
+        response.url().includes('q=type%3Avideo')
+    );
+    await page.waitForSelector(
+      `${TestHelpers.selectors.photoCardAny}, .empty-state`,
+      { state: 'attached' }
+    );
     const photos = await TestHelpers.getPhotoCards(page);
 
     // Note: If no photos match search, test should still pass
@@ -73,6 +81,12 @@ test.describe('Critical User Paths', () => {
   test('should complete video discovery and playback workflow', async ({ page }) => {
     // GIVEN: User navigates to videos view
     await TestHelpers.navigateToView(page, 'videos');
+    await page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/photos') &&
+        response.url().includes('q=type%3Avideo')
+    );
+    await TestHelpers.waitForPhotosToLoad(page);
 
     // WHEN: Video cards are loaded
     const videoCards = await TestHelpers.getPhotoCards(page);

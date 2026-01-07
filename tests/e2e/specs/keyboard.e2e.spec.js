@@ -58,7 +58,7 @@ test.describe('Keyboard Shortcuts', () => {
     await searchInput.press('Enter');
 
     // THEN: Search is submitted and URL is updated
-    await page.waitForTimeout(1000);
+    await TestHelpers.waitForSearchParam(page, 'test query');
 
     const url = new URL(page.url());
     expect(url.searchParams.get('q')).toBe('test query');

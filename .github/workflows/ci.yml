@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # allow manual execution
 
 jobs:
-  check:
+  lint-format:
     runs-on: ubuntu-latest
 
     steps:
@@ -43,6 +43,19 @@ jobs:
       - name: Run frontend linters
         run: npm run lint
 
+  rust-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
@@ -55,9 +68,46 @@ jobs:
       - name: Build release
         run: cargo build --profile production
 
+  e2e-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '21'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg sqlite3
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Download AI models
+        run: cargo run -- --download-models
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
   create-release:
     name: Create release
-    needs: check
+    needs:
+      - lint-format
+      - rust-tests
+      - e2e-tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -147,7 +197,10 @@ jobs:
 
   build-container:
     runs-on: ${{ matrix.runner }}
-    needs: check
+    needs:
+      - lint-format
+      - rust-tests
+      - e2e-tests
     strategy:
       matrix:
         include:

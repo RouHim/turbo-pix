@@ -1,3 +1,19 @@
+# [2.12.0](https://github.com/RouHim/turbo-pix/compare/2.11.0...2.12.0) (2026-01-08)
+
+
+### Bug Fixes
+
+* **ci:** copy migrations folder to container build context ([939ad44](https://github.com/RouHim/turbo-pix/commit/939ad44dba52bb2b1ed85e90c2244608a844a553))
+* remove unused MetadataExtractor import ([036623d](https://github.com/RouHim/turbo-pix/commit/036623d442faa69198fc7432010d20cf9e1c58bb))
+* update benchmark_video binary to use async sqlx API ([b8577d1](https://github.com/RouHim/turbo-pix/commit/b8577d18bed78dfc01a384399ade641217d72aad))
+
+
+### Features
+
+* Add comprehensive E2E testing infrastructure with Playwright ([#21](https://github.com/RouHim/turbo-pix/issues/21)) ([d8e0eee](https://github.com/RouHim/turbo-pix/commit/d8e0eee90c7666f869e86707aad4b87602df414c))
+* migrate from rusqlite to sqlx for async database operations ([e288214](https://github.com/RouHim/turbo-pix/commit/e2882142315cff45e2d8f5cf50c3aebc000e7ba9))
+* migrate from rusqlite to sqlx for async database operations ([8ebcbec](https://github.com/RouHim/turbo-pix/commit/8ebcbec147c6550954dc04ca73371e7bc0996659))
+
 # [2.11.0](https://github.com/RouHim/turbo-pix/compare/2.10.7...2.11.0) (2026-01-03)
 
 

@@ -12,7 +12,9 @@ async fn main() -> Result<()> {
     // Setup
     let db_path = "benchmark.db";
     let _ = std::fs::remove_file(db_path); // Clean start
-    let pool = create_db_pool(db_path).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let pool = create_db_pool(db_path)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     // Initialize engine (loads models)
     println!("Loading models...");
@@ -55,27 +57,26 @@ async fn main() -> Result<()> {
 
         for &count in &frame_counts {
             // Clear cache for this video to force re-computation
-            let conn = pool.get()?;
-            let id: Option<i64> = conn
-                .query_row(
-                    "SELECT id FROM semantic_vector_path_mapping WHERE path = ?",
-                    [&video_path_str],
-                    |row| row.get(0),
-                )
-                .ok();
+            let id: Option<i64> =
+                sqlx::query_scalar("SELECT id FROM semantic_vector_path_mapping WHERE path = ?")
+                    .bind(&video_path_str)
+                    .fetch_optional(&pool)
+                    .await?;
 
             if let Some(id) = id {
-                conn.execute("DELETE FROM media_semantic_vectors WHERE rowid = ?", [id])?;
-                conn.execute(
-                    "DELETE FROM semantic_vector_path_mapping WHERE id = ?",
-                    [id],
-                )?;
+                sqlx::query("DELETE FROM media_semantic_vectors WHERE rowid = ?")
+                    .bind(id)
+                    .execute(&pool)
+                    .await?;
+                sqlx::query("DELETE FROM semantic_vector_path_mapping WHERE id = ?")
+                    .bind(id)
+                    .execute(&pool)
+                    .await?;
             }
-            conn.execute(
-                "DELETE FROM video_semantic_metadata WHERE path = ?",
-                [&video_path_str],
-            )?;
-            drop(conn);
+            sqlx::query("DELETE FROM video_semantic_metadata WHERE path = ?")
+                .bind(&video_path_str)
+                .execute(&pool)
+                .await?;
 
             let start = Instant::now();
             engine
@@ -87,15 +88,15 @@ async fn main() -> Result<()> {
             println!("{:<10} | {:<15.2} |", count, duration.as_millis());
 
             // Retrieve the computed embedding for comparison
-            let conn = pool.get()?;
-            let embedding_bytes: Vec<u8> = conn.query_row(
-                "SELECT msv.semantic_vector 
+            let embedding_bytes: Vec<u8> = sqlx::query_scalar(
+                "SELECT msv.semantic_vector
                  FROM media_semantic_vectors msv
                  JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
                  WHERE ic.path = ?",
-                [&video_path_str],
-                |row| row.get(0),
-            )?;
+            )
+            .bind(&video_path_str)
+            .fetch_one(&pool)
+            .await?;
 
             // Convert bytes back to tensor (simplified)
             // Note: This is a bit hacky as we don't have direct access to internal tensor conversion from bytes in public API

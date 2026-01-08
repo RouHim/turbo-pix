@@ -244,6 +244,7 @@ async function ensureHousekeepingCandidate(baseURL) {
 
   const sql =
     `PRAGMA busy_timeout=5000; ` +
+    `CREATE TABLE IF NOT EXISTS housekeeping_candidates (photo_hash TEXT NOT NULL, reason TEXT NOT NULL, score REAL NOT NULL, PRIMARY KEY (photo_hash)); ` +
     `INSERT OR IGNORE INTO housekeeping_candidates (photo_hash, reason, score) ` +
     `VALUES ('${targetPhoto.hash_sha256}', 'receipt', 95.0);`;
 

@@ -1,4 +1,4 @@
-// Re-exports for backward compatibility
+// Re-exports for convenience
 pub use crate::photo_processor::{PhotoProcessor, ProcessedPhoto};
 
 #[cfg(test)]

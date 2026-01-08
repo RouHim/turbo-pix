@@ -7,10 +7,10 @@ use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
-use rusqlite::{params, Row};
 use rusttype::{point, Font, Scale};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::{FromRow, Row};
 
 use crate::db::Photo;
 use crate::db_pool::DbPool;
@@ -32,56 +32,56 @@ pub struct Collage {
     pub created_at: DateTime<Utc>,
 }
 
-impl Collage {
-    /// Parse from SQLite row
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let photo_hashes_json: String = row.get(5)?;
+impl FromRow<'_, sqlx::sqlite::SqliteRow> for Collage {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let photo_hashes_json: String = row.try_get("photo_hashes")?;
         let photo_hashes: Vec<String> =
             serde_json::from_str(&photo_hashes_json).unwrap_or_default();
 
         Ok(Collage {
-            id: row.get(0)?,
-            date: row.get(1)?,
-            file_path: row.get(2)?,
-            thumbnail_path: row.get(3)?,
-            photo_count: row.get(4)?,
+            id: row.try_get("id")?,
+            date: row.try_get("date")?,
+            file_path: row.try_get("file_path")?,
+            thumbnail_path: row.try_get("thumbnail_path")?,
+            photo_count: row.try_get("photo_count")?,
             photo_hashes,
             accepted_at: row
-                .get::<_, Option<String>>(6)?
+                .try_get::<Option<String>, _>("accepted_at")?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             rejected_at: row
-                .get::<_, Option<String>>(7)?
+                .try_get::<Option<String>, _>("rejected_at")?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             created_at: row
-                .get::<_, Option<String>>(8)?
+                .try_get::<Option<String>, _>("created_at")?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(Utc::now),
         })
     }
+}
 
+impl Collage {
     /// List all pending collages
-    pub fn list_pending(pool: &DbPool) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare(
+    pub async fn list_pending(pool: &DbPool) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
+        let collages = sqlx::query_as::<_, Collage>(
             "SELECT id, date, file_path, thumbnail_path, photo_count, photo_hashes,
                     accepted_at, rejected_at, created_at
              FROM collages
              WHERE accepted_at IS NULL AND rejected_at IS NULL
              ORDER BY date DESC, created_at DESC, id DESC",
-        )?;
-
-        let collages = stmt
-            .query_map([], Self::from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
+        )
+        .fetch_all(pool)
+        .await?;
 
         Ok(collages)
     }
 
-    pub fn list_pending_cleaned(pool: &DbPool) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
-        let collages = Self::list_pending(pool)?;
+    pub async fn list_pending_cleaned(
+        pool: &DbPool,
+    ) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
+        let collages = Self::list_pending(pool).await?;
         let mut seen_paths = HashSet::new();
         let mut cleaned = Vec::new();
         let mut deleted_count = 0;
@@ -100,7 +100,7 @@ impl Collage {
                         let _ = fs::remove_file(thumb_path);
                     }
                 }
-                Self::delete(pool, collage.id)?;
+                Self::delete(pool, collage.id).await?;
                 deleted_count += 1;
                 continue;
             }
@@ -110,7 +110,7 @@ impl Collage {
                     "Removing duplicate pending collage: {} (id {})",
                     collage.file_path, collage.id
                 );
-                Self::delete(pool, collage.id)?;
+                Self::delete(pool, collage.id).await?;
                 deleted_count += 1;
                 continue;
             }
@@ -126,25 +126,26 @@ impl Collage {
     }
 
     /// Get collage by ID
-    pub fn get_by_id(pool: &DbPool, id: i64) -> Result<Option<Self>, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare(
+    pub async fn get_by_id(
+        pool: &DbPool,
+        id: i64,
+    ) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        let collage = sqlx::query_as::<_, Collage>(
             "SELECT id, date, file_path, thumbnail_path, photo_count, photo_hashes,
                     accepted_at, rejected_at, created_at
              FROM collages
              WHERE id = ?",
-        )?;
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
 
-        match stmt.query_row([id], Self::from_row) {
-            Ok(collage) => Ok(Some(collage)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Box::new(e)),
-        }
+        Ok(collage)
     }
 
     /// Check if collage exists for date
     /// Insert new collage
-    pub fn insert(
+    pub async fn insert(
         pool: &DbPool,
         date: &str,
         file_path: &str,
@@ -153,66 +154,70 @@ impl Collage {
         photo_hashes: &[String],
         signature: &str,
     ) -> Result<i64, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
         let photo_hashes_json = serde_json::to_string(photo_hashes)?;
 
-        conn.execute(
+        let id = sqlx::query_scalar(
             "INSERT INTO collages (date, file_path, thumbnail_path, photo_count, photo_hashes, signature)
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params![
-                date,
-                file_path,
-                thumbnail_path,
-                photo_count,
-                photo_hashes_json,
-                signature
-            ],
-        )?;
+             VALUES (?, ?, ?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(date)
+        .bind(file_path)
+        .bind(thumbnail_path)
+        .bind(photo_count)
+        .bind(photo_hashes_json)
+        .bind(signature)
+        .fetch_one(pool)
+        .await?;
 
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     /// Mark collage as accepted and update file path
-    pub fn accept(
+    pub async fn accept(
         pool: &DbPool,
         id: i64,
         new_file_path: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        conn.execute(
+        sqlx::query(
             "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, rejected_at = NULL, file_path = ? WHERE id = ?",
-            [new_file_path, &id.to_string()],
-        )?;
+        )
+        .bind(new_file_path)
+        .bind(id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 
-    pub fn reject(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        conn.execute(
+    pub async fn reject(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query(
             "UPDATE collages SET rejected_at = CURRENT_TIMESTAMP, accepted_at = NULL WHERE id = ?",
-            [id],
-        )?;
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 
     /// Delete collage
-    pub fn delete(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        conn.execute("DELETE FROM collages WHERE id = ?", [id])?;
+    pub async fn delete(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("DELETE FROM collages WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
         Ok(())
     }
 
-    pub fn exists_by_signature(
+    pub async fn exists_by_signature(
         pool: &DbPool,
         signature: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let conn = pool.get()?;
-        let mut stmt = conn.prepare("SELECT 1 FROM collages WHERE signature = ? LIMIT 1")?;
-        match stmt.query_row([signature], |_| Ok(())) {
-            Ok(_) => Ok(true),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(Box::new(e)),
-        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM collages WHERE signature = ? LIMIT 1)")
+                .bind(signature)
+                .fetch_one(pool)
+                .await?;
+        Ok(exists)
     }
 }
 
@@ -938,26 +943,25 @@ fn draw_text(
 }
 
 /// Find photo clusters (dates with ≥10 photos) in the last 365 days
-fn find_photo_clusters(pool: &DbPool) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
-    let conn = pool.get()?;
-
+async fn find_photo_clusters(
+    pool: &DbPool,
+) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
     // Get cutoff date (365 days ago)
     let cutoff_date = (Utc::now() - Duration::days(365)).to_rfc3339();
 
     // Find dates with ≥10 photos
-    let mut stmt = conn.prepare(
-        "SELECT DATE(taken_at) as photo_date, COUNT(*) as count
+    let dates: Vec<String> = sqlx::query_scalar(
+        "SELECT DATE(taken_at) as photo_date
          FROM photos
          WHERE taken_at IS NOT NULL
            AND taken_at >= ?
          GROUP BY photo_date
-         HAVING count >= 10
+         HAVING COUNT(*) >= 10
          ORDER BY photo_date DESC",
-    )?;
-
-    let dates: Vec<String> = stmt
-        .query_map([&cutoff_date], |row| row.get(0))?
-        .collect::<Result<Vec<_>, _>>()?;
+    )
+    .bind(cutoff_date)
+    .fetch_all(pool)
+    .await?;
 
     let mut clusters = Vec::new();
 
@@ -966,15 +970,14 @@ fn find_photo_clusters(pool: &DbPool) -> Result<Vec<PhotoCluster>, Box<dyn std::
         let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
 
         // Get all photos for this date
-        let mut photo_stmt = conn.prepare(
+        let photos = sqlx::query_as::<_, Photo>(
             "SELECT * FROM photos
              WHERE DATE(taken_at) = ?
              ORDER BY taken_at",
-        )?;
-
-        let photos = photo_stmt
-            .query_map([&date_str], Photo::from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
+        )
+        .bind(&date_str)
+        .fetch_all(pool)
+        .await?;
 
         if photos.len() >= 10 {
             clusters.push(PhotoCluster { date, photos });
@@ -1294,7 +1297,7 @@ pub async fn generate_collages(
     std::fs::create_dir_all(&staging_dir)?;
 
     // Find clusters
-    let clusters = find_photo_clusters(pool)?;
+    let clusters = find_photo_clusters(pool).await?;
     info!("Found {} photo clusters to process", clusters.len());
 
     let mut generated_count = 0;
@@ -1324,7 +1327,7 @@ pub async fn generate_collages(
             let photo_hashes: Vec<String> = chunk.iter().map(|p| p.hash_sha256.clone()).collect();
             let signature = build_collage_signature(&date_str, &photo_hashes);
 
-            if Collage::exists_by_signature(pool, &signature)? {
+            if Collage::exists_by_signature(pool, &signature).await? {
                 info!(
                     "Skipping collage {} for {} because signature already exists",
                     collage_idx + 1,
@@ -1382,7 +1385,9 @@ pub async fn generate_collages(
                 chunk.len() as i32,
                 &photo_hashes,
                 &signature,
-            ) {
+            )
+            .await
+            {
                 Ok(_) => {
                     info!(
                         "Successfully created collage {} for {}",
@@ -1416,7 +1421,9 @@ pub async fn accept_collage(
     semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get collage
-    let collage = Collage::get_by_id(pool, collage_id)?.ok_or("Collage not found")?;
+    let collage = Collage::get_by_id(pool, collage_id)
+        .await?
+        .ok_or("Collage not found")?;
 
     // Create destination directory (separate from staging to avoid premature indexing)
     let dest_dir = data_path.join("collages").join("accepted");
@@ -1441,7 +1448,7 @@ pub async fn accept_collage(
     }
 
     // Mark as accepted and update file path
-    Collage::accept(pool, collage_id, &dest.to_string_lossy())?;
+    Collage::accept(pool, collage_id, &dest.to_string_lossy()).await?;
 
     // Index the collage into photos table immediately
     if let Err(e) = index_collage_file(pool, &dest, semantic_search).await {
@@ -1458,7 +1465,9 @@ pub async fn reject_collage(
     collage_id: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get collage
-    let collage = Collage::get_by_id(pool, collage_id)?.ok_or("Collage not found")?;
+    let collage = Collage::get_by_id(pool, collage_id)
+        .await?
+        .ok_or("Collage not found")?;
 
     // Delete files
     let file_path = PathBuf::from(&collage.file_path);
@@ -1474,7 +1483,7 @@ pub async fn reject_collage(
     }
 
     // Mark as rejected to preserve signature and avoid regeneration
-    Collage::reject(pool, collage_id)?;
+    Collage::reject(pool, collage_id).await?;
 
     Ok(())
 }
@@ -1512,10 +1521,9 @@ async fn index_collage_file(
 
     // Convert to Photo and insert into database
     let photo: Photo = processed_photo.into();
-    let mut conn = pool.get()?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    photo.create_or_update_with_connection(&tx)?;
-    tx.commit()?;
+    let mut tx = pool.begin().await?;
+    photo.create_or_update_with_transaction(&mut tx).await?;
+    tx.commit().await?;
 
     info!("Collage indexed into photos table: {}", file_path.display());
     Ok(())
@@ -1529,7 +1537,6 @@ mod tests {
 
     use chrono::{DateTime, Utc};
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
-    use rusqlite::TransactionBehavior;
     use tempfile::TempDir;
 
     use super::*;
@@ -1570,7 +1577,12 @@ mod tests {
         img.save_with_format(path, ImageFormat::Jpeg).unwrap();
     }
 
-    fn insert_photo(pool: &DbPool, file_path: &Path, hash_seed: u64, taken_at: DateTime<Utc>) {
+    async fn insert_photo(
+        pool: &DbPool,
+        file_path: &Path,
+        hash_seed: u64,
+        taken_at: DateTime<Utc>,
+    ) {
         let hash = format!("{:064x}", hash_seed);
         let filename = file_path
             .file_name()
@@ -1602,12 +1614,12 @@ mod tests {
             updated_at: taken_at,
         };
 
-        let mut conn = pool.get().unwrap();
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+        let mut tx = pool.begin().await.unwrap();
+        photo
+            .create_or_update_with_transaction(&mut tx)
+            .await
             .unwrap();
-        photo.create_or_update_with_connection(&tx).unwrap();
-        tx.commit().unwrap();
+        tx.commit().await.unwrap();
     }
 
     #[test]
@@ -1658,9 +1670,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_list_pending_cleaned_removes_missing_and_duplicates() {
-        let pool = crate::db::create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_list_pending_cleaned_removes_missing_and_duplicates() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
         let temp_dir = TempDir::new().unwrap();
         let staging_dir = temp_dir.path().join("collages").join("staging");
         fs::create_dir_all(&staging_dir).unwrap();
@@ -1681,6 +1693,7 @@ mod tests {
             &hashes_a,
             &signature_a,
         )
+        .await
         .unwrap();
         let hashes_a_alt = vec!["hash2".to_string()];
         let signature_a_alt = build_collage_signature("2025-03-21", &hashes_a_alt);
@@ -1693,6 +1706,7 @@ mod tests {
             &hashes_a_alt,
             &signature_a_alt,
         )
+        .await
         .unwrap();
         let hashes_b = vec!["hash3".to_string()];
         let signature_b = build_collage_signature("2025-03-21", &hashes_b);
@@ -1705,6 +1719,7 @@ mod tests {
             &hashes_b,
             &signature_b,
         )
+        .await
         .unwrap();
         let hashes_missing = vec!["hash4".to_string()];
         let signature_missing = build_collage_signature("2025-03-21", &hashes_missing);
@@ -1718,22 +1733,23 @@ mod tests {
             &hashes_missing,
             &signature_missing,
         )
+        .await
         .unwrap();
 
-        let cleaned = Collage::list_pending_cleaned(&pool).unwrap();
+        let cleaned = Collage::list_pending_cleaned(&pool).await.unwrap();
         let cleaned_paths: HashSet<&str> = cleaned.iter().map(|c| c.file_path.as_str()).collect();
 
         assert_eq!(cleaned.len(), 2);
         assert!(cleaned_paths.contains(file_a.to_string_lossy().as_ref()));
         assert!(cleaned_paths.contains(file_b.to_string_lossy().as_ref()));
 
-        let remaining = Collage::list_pending(&pool).unwrap();
+        let remaining = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(remaining.len(), 2);
     }
 
-    #[test]
-    fn test_generate_collages_keeps_pending_collages() {
-        let pool = crate::db::create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_generate_collages_keeps_pending_collages() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
         let temp_dir = TempDir::new().unwrap();
         let staging_dir = temp_dir.path().join("collages").join("staging");
         fs::create_dir_all(&staging_dir).unwrap();
@@ -1752,24 +1768,22 @@ mod tests {
             &hashes,
             &signature,
         )
+        .await
         .unwrap();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _ = generate_collages(&pool, temp_dir.path(), "en")
-                .await
-                .unwrap();
-        });
+        let _ = generate_collages(&pool, temp_dir.path(), "en")
+            .await
+            .unwrap();
 
-        let remaining = Collage::list_pending(&pool).unwrap();
+        let remaining = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].file_path, file_path.to_string_lossy());
     }
 
-    #[test]
-    fn test_reject_collage_preserves_signature() {
+    #[tokio::test]
+    async fn test_reject_collage_preserves_signature() {
         // Given: A pending collage on disk
-        let pool = crate::db::create_test_db_pool().unwrap();
+        let pool = crate::db::create_test_db_pool().await.unwrap();
         let temp_dir = TempDir::new().unwrap();
         let staging_dir = temp_dir.path().join("collages").join("staging");
         fs::create_dir_all(&staging_dir).unwrap();
@@ -1788,23 +1802,23 @@ mod tests {
             &hashes,
             &signature,
         )
+        .await
         .unwrap();
 
         // When: Rejecting the collage
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            reject_collage(&pool, collage_id).await.unwrap();
-        });
+        reject_collage(&pool, collage_id).await.unwrap();
 
         // Then: It should not be pending, but the signature should remain
-        let pending = Collage::list_pending(&pool).unwrap();
+        let pending = Collage::list_pending(&pool).await.unwrap();
         assert!(pending.is_empty());
-        assert!(Collage::exists_by_signature(&pool, &signature).unwrap());
+        assert!(Collage::exists_by_signature(&pool, &signature)
+            .await
+            .unwrap());
     }
 
-    #[test]
-    fn test_rejected_collage_is_not_regenerated() {
-        let pool = crate::db::create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_rejected_collage_is_not_regenerated() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
         let temp_dir = TempDir::new().unwrap();
         let photos_dir = temp_dir.path().join("photos");
         let staging_dir = temp_dir.path().join("collages").join("staging");
@@ -1817,42 +1831,35 @@ mod tests {
             write_test_image(&photo_path);
             let taken_at = base_time + chrono::Duration::seconds(i as i64);
             let hash_seed = i as u64 + 1;
-            insert_photo(&pool, &photo_path, hash_seed, taken_at);
+            insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
         }
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let generated = rt.block_on(async {
-            generate_collages(&pool, temp_dir.path(), "en")
-                .await
-                .unwrap()
-        });
+        let generated = generate_collages(&pool, temp_dir.path(), "en")
+            .await
+            .unwrap();
         assert_eq!(generated, 2);
 
-        let pending = Collage::list_pending(&pool).unwrap();
+        let pending = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(pending.len(), 2);
         let collage_id = pending[0].id;
         let rejected_file_path = pending[0].file_path.clone();
         assert!(Path::new(&rejected_file_path).exists());
 
-        rt.block_on(async {
-            reject_collage(&pool, collage_id).await.unwrap();
-        });
+        reject_collage(&pool, collage_id).await.unwrap();
         assert!(!Path::new(&rejected_file_path).exists());
 
-        let regenerated = rt.block_on(async {
-            generate_collages(&pool, temp_dir.path(), "en")
-                .await
-                .unwrap()
-        });
+        let regenerated = generate_collages(&pool, temp_dir.path(), "en")
+            .await
+            .unwrap();
         assert_eq!(regenerated, 0);
 
-        let pending_after = Collage::list_pending(&pool).unwrap();
+        let pending_after = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(pending_after.len(), 1);
     }
 
-    #[test]
-    fn test_generate_collages_skips_existing_signature() {
-        let pool = crate::db::create_test_db_pool().unwrap();
+    #[tokio::test]
+    async fn test_generate_collages_skips_existing_signature() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
         let temp_dir = TempDir::new().unwrap();
         let photos_dir = temp_dir.path().join("photos");
         let staging_dir = temp_dir.path().join("collages").join("staging");
@@ -1866,7 +1873,7 @@ mod tests {
             write_test_image(&photo_path);
             let taken_at = base_time + chrono::Duration::seconds(i as i64);
             let hash_seed = i as u64 + 1;
-            insert_photo(&pool, &photo_path, hash_seed, taken_at);
+            insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
             if i < 6 {
                 first_chunk_hashes.push(format!("{:064x}", hash_seed));
             }
@@ -1884,18 +1891,16 @@ mod tests {
             &first_chunk_hashes,
             &signature,
         )
+        .await
         .unwrap();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let generated = rt.block_on(async {
-            generate_collages(&pool, temp_dir.path(), "en")
-                .await
-                .unwrap()
-        });
+        let generated = generate_collages(&pool, temp_dir.path(), "en")
+            .await
+            .unwrap();
 
         assert_eq!(generated, 1);
 
-        let pending = Collage::list_pending(&pool).unwrap();
+        let pending = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(pending.len(), 2);
         let pending_paths: HashSet<&str> = pending.iter().map(|c| c.file_path.as_str()).collect();
         assert!(pending_paths.contains(existing_path.to_string_lossy().as_ref()));

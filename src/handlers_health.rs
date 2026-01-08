@@ -13,8 +13,9 @@ pub async fn health_check() -> Result<impl Reply, Infallible> {
 }
 
 pub async fn ready_check(db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    // Test database connection
-    match db_pool.get() {
+    // Test database connection by acquiring a connection
+    // acquire() checks if the pool can provide a connection
+    match db_pool.acquire().await {
         Ok(_) => Ok(warp::reply::json(&json!({
             "status": "ready",
             "database": "connected",

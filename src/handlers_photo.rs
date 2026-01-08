@@ -10,7 +10,6 @@ use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo, SearchQuery};
 use crate::handlers_video::{get_video_file, VideoQuery};
 use crate::image_editor::{self, RotationAngle};
-use crate::metadata_extractor::MetadataExtractor;
 use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError};
@@ -56,6 +55,7 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
             query.sort.as_deref(),
             query.order.as_deref(),
         )
+        .await
     } else {
         Photo::list_with_pagination(
             &db_pool,
@@ -64,6 +64,7 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
             query.sort.as_deref(),
             query.order.as_deref(),
         )
+        .await
     };
 
     match result {
@@ -105,7 +106,7 @@ fn apply_orientation(img: DynamicImage, orientation: Option<i32>) -> DynamicImag
 }
 
 pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::find_by_hash(&db_pool, &photo_hash) {
+    match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => Ok(warp::reply::json(&photo)),
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -121,7 +122,7 @@ pub async fn get_photo_file(
     photo_hash: String,
     db_pool: DbPool,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -214,7 +215,7 @@ pub async fn toggle_favorite(
     favorite_req: FavoriteRequest,
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
-    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -227,7 +228,7 @@ pub async fn toggle_favorite(
 
     photo.is_favorite = Some(favorite_req.is_favorite);
 
-    match photo.update(&db_pool) {
+    match photo.update(&db_pool).await {
         Ok(_) => Ok(warp::reply::json(&photo)),
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -244,7 +245,7 @@ pub async fn update_photo_metadata(
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
     // Find the photo in database
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -285,22 +286,40 @@ pub async fn update_photo_metadata(
         }));
     }
 
-    // Re-extract metadata from the file to ensure consistency
-    let file_metadata = match std::fs::metadata(file_path) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            log::warn!("Could not read file metadata: {}", e);
-            None
-        }
-    };
-
-    let extracted = MetadataExtractor::extract_with_metadata(file_path, file_metadata.as_ref());
-
-    // Update photo with extracted metadata
+    // Update photo with provided metadata directly
     let mut updated_photo = photo;
-    updated_photo.update_from_extracted(extracted);
 
-    match updated_photo.update(&db_pool) {
+    // Update taken_at if provided
+    if let Some(dt) = taken_at {
+        updated_photo.taken_at = Some(dt);
+    }
+
+    // Update GPS coordinates if provided
+    if metadata_req.latitude.is_some() || metadata_req.longitude.is_some() {
+        let mut location = updated_photo
+            .metadata
+            .get("location")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(lat) = metadata_req.latitude {
+            location.insert("latitude".to_string(), json!(lat));
+        }
+        if let Some(lon) = metadata_req.longitude {
+            location.insert("longitude".to_string(), json!(lon));
+        }
+
+        updated_photo
+            .metadata
+            .as_object_mut()
+            .unwrap()
+            .insert("location".to_string(), json!(location));
+    }
+
+    updated_photo.updated_at = Utc::now();
+
+    match updated_photo.update(&db_pool).await {
         Ok(_) => Ok(warp::reply::json(&updated_photo)),
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -312,7 +331,7 @@ pub async fn update_photo_metadata(
 }
 
 pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::get_timeline_data(&db_pool) {
+    match Photo::get_timeline_data(&db_pool).await {
         Ok(timeline) => Ok(warp::reply::json(&timeline)),
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -326,7 +345,7 @@ pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
 pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     use std::collections::BTreeMap;
 
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -396,7 +415,7 @@ pub async fn rotate_photo(
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
     // Find photo
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -423,7 +442,7 @@ pub async fn rotate_photo(
     };
 
     // Rotate image
-    match image_editor::rotate_image(&photo, angle, &db_pool) {
+    match image_editor::rotate_image(&photo, angle, &db_pool).await {
         Ok(updated_photo) => Ok(warp::reply::json(&updated_photo)),
         Err(e) => {
             log::error!("Failed to rotate image: {}", e);
@@ -440,7 +459,7 @@ pub async fn delete_photo(
     cache_manager: CacheManager,
 ) -> Result<impl Reply, Rejection> {
     // Find photo
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -452,7 +471,7 @@ pub async fn delete_photo(
     };
 
     // Delete photo
-    match image_editor::delete_photo(&photo, &db_pool, &cache_manager) {
+    match image_editor::delete_photo(&photo, &db_pool, &cache_manager).await {
         Ok(()) => Ok(warp::reply::json(
             &json!({"success": true, "message": "Photo deleted successfully"}),
         )),
@@ -614,14 +633,19 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        photo.create(db_pool).expect("Failed to create test photo");
+        photo
+            .create(db_pool)
+            .await
+            .expect("Failed to create test photo");
 
         (photo.hash_sha256.clone(), temp_image)
     }
 
     #[tokio::test]
     async fn test_update_photo_metadata_endpoint() {
-        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
@@ -641,6 +665,7 @@ mod tests {
 
         // Verify the photo was updated in the database
         let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
+            .await
             .expect("Failed to query database")
             .expect("Photo should exist");
 
@@ -672,7 +697,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_invalid_coordinates() {
-        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
@@ -696,7 +723,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_missing_longitude() {
-        let db_pool = create_in_memory_pool().expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;

@@ -23,7 +23,7 @@ pub async fn get_video_file(
     headers: HeaderMap,
     db_pool: DbPool,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash) {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {

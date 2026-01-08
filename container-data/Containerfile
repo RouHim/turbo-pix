@@ -38,6 +38,7 @@ RUN mkdir "/empty_dir"
 COPY ../Cargo.toml ./
 COPY ../Cargo.lock ./
 COPY ../src ./src
+COPY ../migrations ./migrations
 COPY ../static ./static
 
 # Determine the Rust target triple based on architecture

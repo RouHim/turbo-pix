@@ -21,15 +21,11 @@ pub struct IndexingStatusResponse {
 }
 
 /// Helper function to get the total count of photos in the database
-fn get_total_photo_count(db_pool: &DbPool) -> u64 {
-    match db_pool.get() {
-        Ok(conn) => conn
-            .query_row("SELECT COUNT(*) FROM photos", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap_or(0) as u64,
-        Err(_) => 0,
-    }
+async fn get_total_photo_count(db_pool: &DbPool) -> u64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM photos")
+        .fetch_one(db_pool)
+        .await
+        .unwrap_or(0) as u64
 }
 
 pub async fn get_indexing_status(
@@ -45,7 +41,7 @@ pub async fn get_indexing_status(
     let started_at = status.started_at.lock().await.map(|dt| dt.to_rfc3339());
 
     // Get total photos in database
-    let photos_indexed = get_total_photo_count(&db_pool);
+    let photos_indexed = get_total_photo_count(&db_pool).await;
 
     // Calculate progress percentage
     let progress_percent = if photos_total > 0 {

@@ -12,9 +12,8 @@ mimalloc = "0.1.48"
 warp = { version = "0.4.2", features = ["server", "multipart"] }
 
 # Database
-rusqlite = { version = "0.37", features = ["bundled"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.31"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Scheduling
 clokwerk = "0.4"
@@ -25,7 +24,6 @@ kamadak-exif = "0.6"
 img-parts = "0.4" # For JPEG/PNG segment manipulation when writing EXIF
 fast-blurhash = "1.0"
 rawloader = "0.37"
-bayer = "0.1"
 
 # ML model for semantic search
 candle-core = "0.9.1"
@@ -35,7 +33,6 @@ hf-hub = { version = "0.4.3", default-features = false, features = ["ureq", "rus
 tokenizers = "0.22.1"
 sqlite-vec = "0.1.7-alpha.2"
 zerocopy = "0.8"
-anyhow = "1.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -46,6 +43,7 @@ sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde", "unstable-locales"] }
 thiserror = "2.0"
 rusttype = "0.9"
+anyhow = "1.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["fs", "macros", "rt", "rt-multi-thread", "signal"] }

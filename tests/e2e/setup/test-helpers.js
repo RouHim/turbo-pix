@@ -27,6 +27,10 @@ export class TestHelpers {
     await this.verifyActiveView(page, viewName);
   }
 
+  static async goto(page, path = '/') {
+    await page.goto(path, { waitUntil: 'domcontentloaded' });
+  }
+
   static async verifyActiveView(page, viewName) {
     const selector = this.selectors.navItem(viewName);
     await page.waitForSelector(`${selector}.active`, { state: 'attached' });

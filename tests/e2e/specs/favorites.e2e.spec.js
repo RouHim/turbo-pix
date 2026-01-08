@@ -11,7 +11,7 @@ test.describe('Favorites', () => {
 
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
-    await page.goto('/');
+    await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
   });
 

@@ -4,7 +4,7 @@ import { TestHelpers } from '../setup/test-helpers.js';
 test.describe('Search', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
-    await page.goto('/');
+    await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
   });
 
@@ -58,7 +58,7 @@ test.describe('Search', () => {
   test('should support URL query params', async ({ page }) => {
     // GIVEN: User navigates with search query in URL
     // WHEN: Page loads with query param
-    await page.goto('/?q=cat');
+    await TestHelpers.goto(page, '/?q=cat');
     await TestHelpers.waitForSearchParam(page, 'cat');
 
     // THEN: Search input contains the query

@@ -4,7 +4,7 @@ import { TestHelpers } from '../setup/test-helpers.js';
 test.describe('Videos', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
-    await page.goto('/');
+    await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
   });
 

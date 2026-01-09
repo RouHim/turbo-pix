@@ -348,6 +348,14 @@
   -ms-overflow-style: none;
 }
 
+.photo-viewer.collage-mode .favorite-btn,
+.photo-viewer.collage-mode .metadata-btn,
+.photo-viewer.collage-mode .rotate-left-btn,
+.photo-viewer.collage-mode .rotate-right-btn,
+.photo-viewer.collage-mode .delete-photo-btn {
+  display: none;
+}
+
 .viewer-controls::-webkit-scrollbar {
   display: none;
 }

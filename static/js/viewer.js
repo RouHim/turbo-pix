@@ -8,6 +8,7 @@ class PhotoViewer {
     this.currentIndex = 0;
     this.photos = [];
     this.preloadedImages = new Map();
+    this.updateUrlEnabled = true;
 
     this.elements = {
       viewer: utils.$('#photo-viewer'),
@@ -266,6 +267,7 @@ class PhotoViewer {
 
     this.currentPhoto = photo;
     this.isOpen = true;
+    this.updateUrlEnabled = !this.isCollagePhoto(photo);
 
     // Show viewer
     if (this.elements.viewer) {
@@ -279,7 +281,7 @@ class PhotoViewer {
     }
 
     // Update URL with photo hash
-    if (updateUrl) {
+    if (this.updateUrlEnabled) {
       this.updateUrl(photo.hash_sha256);
     }
 
@@ -345,7 +347,7 @@ class PhotoViewer {
     this.currentPhoto = this.photos[index];
 
     // Update URL with new photo hash
-    if (updateUrl) {
+    if (updateUrl && this.updateUrlEnabled) {
       this.updateUrl(this.currentPhoto.hash_sha256);
     }
 
@@ -409,7 +411,11 @@ class PhotoViewer {
   }
 
   async displayImage(photo) {
-    const imageUrl = utils.getPhotoUrl(photo.hash_sha256);
+    const imageUrl = this.getMediaUrl(photo);
+    if (!imageUrl) {
+      this.showError('Failed to load image');
+      return;
+    }
 
     // Check if already preloaded
     if (this.preloadedImages.has(photo.hash_sha256)) {
@@ -597,11 +603,16 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
   updatePhotoInfo() {
     if (!this.currentPhoto) return;
 
+    const isCollage = this.isCollagePhoto(this.currentPhoto);
+    this.applyCollageMode(isCollage);
+
     this.metadata.updatePhotoInfo(this.currentPhoto);
-    this.metadata.updateFavoriteButton(this.currentPhoto);
+    if (!isCollage) {
+      this.metadata.updateFavoriteButton(this.currentPhoto);
+    }
 
     // Update metadata editor with current photo
-    if (window.metadataEditor) {
+    if (window.metadataEditor && !isCollage) {
       window.metadataEditor.setPhoto(this.currentPhoto);
     }
 
@@ -643,10 +654,14 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
         const photo = this.photos[index];
         if (!this.preloadedImages.has(photo.hash_sha256) && !this.isVideoFile(photo.filename)) {
           const img = new Image();
+          const imageUrl = this.getMediaUrl(photo);
+          if (!imageUrl) {
+            return;
+          }
           img.onload = () => {
             this.preloadedImages.set(photo.hash_sha256, img);
           };
-          img.src = utils.getPhotoUrl(photo.hash_sha256);
+          img.src = imageUrl;
         }
       }
     });
@@ -654,6 +669,7 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
   async toggleFavorite() {
     if (!this.currentPhoto) return;
+    if (this.isCollagePhoto(this.currentPhoto)) return;
 
     const photoHash = this.currentPhoto.hash_sha256;
     const isFavorite = api.isFavorite(this.currentPhoto);
@@ -700,8 +716,11 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
   downloadPhoto() {
     if (!this.currentPhoto) return;
 
+    const mediaUrl = this.getMediaUrl(this.currentPhoto);
+    if (!mediaUrl) return;
+
     const link = utils.createElement('a');
-    link.href = utils.getPhotoUrl(this.currentPhoto.hash_sha256);
+    link.href = mediaUrl;
     link.download =
       this.currentPhoto.filename || `photo-${this.currentPhoto.hash_sha256.substring(0, 8)}`;
     link.click();
@@ -722,6 +741,7 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
   async rotatePhoto(angle) {
     if (!this.currentPhoto) return;
+    if (this.isCollagePhoto(this.currentPhoto)) return;
 
     // Block rotation for RAW files (read-only format)
     if (this.isRawFile(this.currentPhoto.filename)) {
@@ -801,6 +821,7 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
   async deletePhoto() {
     if (!this.currentPhoto) return;
+    if (this.isCollagePhoto(this.currentPhoto)) return;
 
     // Show confirmation dialog
     const confirmed = window.confirm(
@@ -876,6 +897,26 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     if (!filename) return false;
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
     return window.APP_CONSTANTS.RAW_EXTENSIONS.includes(ext);
+  }
+
+  isCollagePhoto(photo) {
+    return Boolean(photo?.isCollage || photo?.collageId != null);
+  }
+
+  getMediaUrl(photo) {
+    if (!photo) return null;
+    if (this.isCollagePhoto(photo)) {
+      return photo.path || photo.thumbnail_path || null;
+    }
+    return utils.getPhotoUrl(photo.hash_sha256);
+  }
+
+  applyCollageMode(isCollage) {
+    if (!this.elements.viewer) return;
+    this.elements.viewer.classList.toggle('collage-mode', isCollage);
+    if (isCollage && this.elements.sidebar) {
+      this.elements.sidebar.classList.remove('show');
+    }
   }
 
   /**

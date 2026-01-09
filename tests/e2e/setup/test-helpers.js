@@ -44,6 +44,14 @@ export class TestHelpers {
     });
   }
 
+  static async waitForSearchReady(page) {
+    await this.disableIndexingBanner(page);
+    await page.waitForSelector(this.selectors.searchInput, {
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
   static async disableIndexingBanner(page) {
     await page.addStyleTag({
       content: '#indexing-banner { pointer-events: none !important; }',

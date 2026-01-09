@@ -5,7 +5,7 @@ test.describe('Search', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
     await TestHelpers.goto(page);
-    await TestHelpers.waitForPhotosToLoad(page);
+    await TestHelpers.waitForSearchReady(page);
   });
 
   test('should display search input', async ({ page }) => {

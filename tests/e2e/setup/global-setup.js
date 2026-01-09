@@ -10,6 +10,7 @@ const TEST_DATA_DIR = 'test-e2e-data';
 const SERVER_PORT = '18473';
 const MAX_HEALTH_RETRIES = 30;
 const MAX_INDEXING_RETRIES = 180;
+const MAX_DB_RETRIES = 30;
 const RETRY_DELAY_MS = 1000;
 const RECENT_PHOTO_COUNT = 10;
 const ARCHIVE_PHOTO_COUNT = 4;
@@ -185,6 +186,25 @@ async function updateTestPhotoDates(baseURL) {
   }
 }
 
+async function waitForPhotosTable() {
+  const sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='photos';";
+
+  for (let i = 0; i < MAX_DB_RETRIES; i += 1) {
+    try {
+      const { stdout } = await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);
+      if (stdout.trim() === 'photos') {
+        return;
+      }
+    } catch (error) {
+      console.warn('Failed to check photos table:', error.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  }
+
+  throw new Error('Photos table not ready after retries');
+}
+
 async function verifyTestPhotoDates(baseURL) {
   const response = await fetch(`${baseURL}/api/photos?limit=200`);
   if (!response.ok) {
@@ -330,6 +350,7 @@ export default async function globalSetup() {
     await waitForHealthCheck(baseURL);
 
     await waitForIndexing(baseURL);
+    await waitForPhotosTable();
     await updateTestPhotoDates(baseURL);
     await verifyTestPhotoDates(baseURL);
     await ensureHousekeepingCandidate(baseURL);

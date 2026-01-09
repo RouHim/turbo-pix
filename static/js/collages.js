@@ -4,6 +4,7 @@ class CollagesView {
   constructor() {
     this.container = null;
     this.collages = [];
+    this.photos = [];
   }
 
   initialize(container) {
@@ -25,6 +26,7 @@ class CollagesView {
 
     // Clear existing content
     this.container.innerHTML = '';
+    this.photos = [];
 
     if (this.collages.length === 0) {
       this.renderEmptyState();
@@ -48,6 +50,8 @@ class CollagesView {
         collageDate: collage.date,
         collagePhotoCount: collage.photo_count,
       };
+
+      this.photos.push(collageAsPhoto);
 
       // Create PhotoCard instance
       const photoCard = new window.PhotoCard(collageAsPhoto, this);
@@ -118,6 +122,7 @@ class CollagesView {
       this.container.innerHTML = '';
     }
     this.collages = [];
+    this.photos = [];
   }
 }
 

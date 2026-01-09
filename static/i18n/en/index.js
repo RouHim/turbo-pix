@@ -240,5 +240,6 @@ window.EN_TRANSLATIONS = {
     photo_removed_from_favorites: 'Photo removed from favorites',
     error_updating_favorite: 'Error updating favorite status',
     photo_download_started: 'Download started',
+    confirm_reject_collage: 'Are you sure you want to reject this collage?',
   },
 };

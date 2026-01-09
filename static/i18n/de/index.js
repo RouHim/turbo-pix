@@ -229,5 +229,6 @@ window.DE_TRANSLATIONS = {
     photo_removed_from_favorites: 'Foto von Favoriten entfernt',
     error_updating_favorite: 'Fehler beim Aktualisieren des Favoritenstatus',
     photo_download_started: 'Download gestartet',
+    confirm_reject_collage: 'Möchten Sie diese Collage wirklich ablehnen?',
   },
 };

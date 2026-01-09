@@ -107,14 +107,14 @@ class PhotoCard {
     if (this.photo.isCollage) {
       // Accept Button (Green, check icon)
       const acceptBtn = utils.createElement('button', 'card-action-btn accept-btn');
-      acceptBtn.title = 'Accept Collage';
+      acceptBtn.title = utils.t('ui.accept_collage', 'Accept');
       acceptBtn.dataset.action = 'accept-collage';
       acceptBtn.innerHTML = window.iconHelper.getIcon('check', { size: 18 });
       acceptBtn.style.color = '#10b981'; // Green
 
       // Reject Button (Red, x icon)
       const rejectBtn = utils.createElement('button', 'card-action-btn reject-btn');
-      rejectBtn.title = 'Reject Collage';
+      rejectBtn.title = utils.t('ui.reject_collage', 'Reject');
       rejectBtn.dataset.action = 'reject-collage';
       rejectBtn.innerHTML = window.iconHelper.getIcon('x', { size: 18 });
       rejectBtn.style.color = '#ef4444'; // Red
@@ -162,10 +162,7 @@ class PhotoCard {
   bindEvents(card) {
     utils.on(card, 'click', (e) => {
       if (!e.target.closest('.card-action-btn')) {
-        // Don't open viewer for collages
-        if (!this.photo.isCollage) {
-          this.openViewer();
-        }
+        this.openViewer();
       }
     });
 
@@ -349,7 +346,11 @@ class PhotoCard {
   }
 
   async rejectCollage() {
-    if (!confirm('Are you sure you want to reject this collage?')) return;
+    const confirmMessage = utils.t(
+      'messages.confirm_reject_collage',
+      'Are you sure you want to reject this collage?'
+    );
+    if (!confirm(confirmMessage)) return;
 
     try {
       await api.rejectCollage(this.photo.collageId);
@@ -363,7 +364,8 @@ class PhotoCard {
 
   openViewer() {
     if (window.photoViewer) {
-      window.photoViewer.open(this.photo, this.grid.photos);
+      const shouldUpdateUrl = !this.photo.isCollage;
+      window.photoViewer.open(this.photo, this.grid.photos, shouldUpdateUrl);
     }
   }
 }

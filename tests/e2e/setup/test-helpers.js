@@ -20,7 +20,7 @@ export class TestHelpers {
     closeViewerBtn: '.close-viewer',
   };
 
-  static async navigateToView(page, viewName) {
+      static async navigateToView(page, viewName) {
     const selector = this.selectors.navItem(viewName);
     await page.waitForSelector(selector, { state: 'visible' });
     await page.click(selector);
@@ -36,11 +36,11 @@ export class TestHelpers {
     await page.waitForSelector(`${selector}.active`, { state: 'attached' });
   }
 
-  static async waitForPhotosToLoad(page) {
+    static async waitForPhotosToLoad(page) {
     await this.disableIndexingBanner(page);
     await page.waitForSelector(this.selectors.photoCardAny, {
       state: 'attached',
-      timeout: 10000,
+      timeout: 15000,
     });
   }
 

@@ -257,7 +257,7 @@ class PhotoViewer {
     }
   }
 
-  async open(photo, allPhotos = [], updateUrl = true) {
+  async open(photo, allPhotos = []) {
     this.photos = allPhotos;
     this.currentIndex = this.photos.findIndex((p) => p.hash_sha256 === photo.hash_sha256);
     if (this.currentIndex === -1) {
@@ -949,7 +949,7 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
       if (photo) {
         // Get all photos in current view for navigation
         const allPhotos = window.photoGrid ? window.photoGrid.photos : [];
-        await this.open(photo, allPhotos, false); // Don't update URL since we're loading from URL
+        await this.open(photo, allPhotos);
         return true;
       }
     } catch (error) {

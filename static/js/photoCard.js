@@ -364,8 +364,7 @@ class PhotoCard {
 
   openViewer() {
     if (window.photoViewer) {
-      const shouldUpdateUrl = !this.photo.isCollage;
-      window.photoViewer.open(this.photo, this.grid.photos, shouldUpdateUrl);
+      window.photoViewer.open(this.photo, this.grid.photos);
     }
   }
 }

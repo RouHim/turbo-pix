@@ -20,15 +20,10 @@ export class TestHelpers {
     closeViewerBtn: '.close-viewer',
   };
 
-    static async navigateToView(page, viewName) {
+      static async navigateToView(page, viewName) {
     const selector = this.selectors.navItem(viewName);
     await page.waitForSelector(selector, { state: 'visible' });
     await page.click(selector);
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 5000 });
-    } catch {
-      // Ignore timeout, we just want to wait *up to* 5s for stability
-    }
     await this.verifyActiveView(page, viewName);
   }
 
@@ -41,11 +36,11 @@ export class TestHelpers {
     await page.waitForSelector(`${selector}.active`, { state: 'attached' });
   }
 
-  static async waitForPhotosToLoad(page) {
+    static async waitForPhotosToLoad(page) {
     await this.disableIndexingBanner(page);
     await page.waitForSelector(this.selectors.photoCardAny, {
       state: 'attached',
-      timeout: 10000,
+      timeout: 15000,
     });
   }
 

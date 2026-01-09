@@ -20,18 +20,15 @@ export class TestHelpers {
     closeViewerBtn: '.close-viewer',
   };
 
-  static async navigateToView(page, viewName) {
-    // Wait for any critical pending photo loads to settle to avoid race conditions
-    // where aborting requests might cause server instability
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 2000 });
-    } catch {
-      // Ignore timeout, we just want to wait *up to* 2s for stability
-    }
-
+    static async navigateToView(page, viewName) {
     const selector = this.selectors.navItem(viewName);
     await page.waitForSelector(selector, { state: 'visible' });
     await page.click(selector);
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 5000 });
+    } catch {
+      // Ignore timeout, we just want to wait *up to* 5s for stability
+    }
     await this.verifyActiveView(page, viewName);
   }
 

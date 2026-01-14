@@ -1,3 +1,17 @@
+# [2.13.0](https://github.com/RouHim/turbo-pix/compare/2.12.0...2.13.0) (2026-01-14)
+
+
+### Bug Fixes
+
+* **tests:** increase networkidle timeout to 5000ms for CI stability ([49ede54](https://github.com/RouHim/turbo-pix/commit/49ede543be75e9ff1418a53dacf0a27609e5ad86))
+* **tests:** increase waitForPhotosToLoad timeout to 15s, remove networkidle from navigateToView ([b2924b6](https://github.com/RouHim/turbo-pix/commit/b2924b67a458de1884bbb119ddc0533d03772bb2))
+* **tests:** stabilize collages E2E test navigation ([4335d73](https://github.com/RouHim/turbo-pix/commit/4335d73168d952034be5b2cc30474c009ab2af26))
+
+
+### Features
+
+* **collages:** add viewer support for collage preview ([1edc6d6](https://github.com/RouHim/turbo-pix/commit/1edc6d62417655d706f48d975bb5593f82db0372))
+
 # [2.12.0](https://github.com/RouHim/turbo-pix/compare/2.11.0...2.12.0) (2026-01-08)
 
 

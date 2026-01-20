@@ -1,3 +1,10 @@
+# [2.14.0](https://github.com/RouHim/turbo-pix/compare/2.13.0...2.14.0) (2026-01-20)
+
+
+### Features
+
+* reduce collage generation timeframe to 30 days ([353f731](https://github.com/RouHim/turbo-pix/commit/353f7310178b873ad9ac1cf113e69e51eca891ac))
+
 # [2.13.0](https://github.com/RouHim/turbo-pix/compare/2.12.0...2.13.0) (2026-01-14)
 
 

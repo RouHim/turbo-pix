@@ -133,6 +133,37 @@ html.dark-theme {
   --glass-border: rgb(30 41 59 / 20%);
 }
 
+/* Neon theme variables */
+html.neon-theme {
+  --background-color: #050510;
+  --background-secondary: #0a0a14;
+  --surface-color: rgb(10 10 20 / 85%);
+  --surface-elevated: rgb(20 20 35 / 90%);
+  --text-primary: #e0f7fa;
+  --text-secondary: #00f3ff;
+  --text-muted: #d946ef;
+  --divider-color: rgb(0 243 255 / 30%);
+  --primary-color: #00f3ff;
+  --primary-dark: #00b8cc;
+  --primary-light: #80fbff;
+  --primary-gradient: linear-gradient(135deg, #00f3ff 0%, #d946ef 100%);
+  --accent-color: #d946ef;
+  --color-danger: #f05;
+  --color-success: #00ff9d;
+  --shadow-light: 0 0 10px rgb(0 243 255 / 15%);
+  --shadow-medium: 0 0 15px rgb(0 243 255 / 25%);
+  --shadow-heavy: 0 0 30px rgb(217 70 239 / 30%);
+  --shadow-glow: 0 0 25px #00f3ff;
+  --glass-bg: rgb(5 5 16 / 80%);
+  --glass-border: rgb(0 243 255 / 50%);
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+
+  font-family: 'Courier New', Courier, monospace; /* Tech feel */
+}
+
 * {
   box-sizing: border-box;
 }
@@ -279,6 +310,27 @@ body {
   height: var(--font-2xl);
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23f1f5f9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='5'%3E%3C/circle%3E%3Cline x1='12' y1='1' x2='12' y2='3'%3E%3C/line%3E%3Cline x1='12' y1='21' x2='12' y2='23'%3E%3C/line%3E%3Cline x1='4.22' y1='4.22' x2='5.64' y2='5.64'%3E%3C/line%3E%3Cline x1='18.36' y1='18.36' x2='19.78' y2='19.78'%3E%3C/line%3E%3Cline x1='1' y1='12' x2='3' y2='12'%3E%3C/line%3E%3Cline x1='21' y1='12' x2='23' y2='12'%3E%3C/line%3E%3Cline x1='4.22' y1='19.78' x2='5.64' y2='18.36'%3E%3C/line%3E%3Cline x1='18.36' y1='5.64' x2='19.78' y2='4.22'%3E%3C/line%3E%3C/svg%3E")
     center/contain no-repeat;
+}
+
+.theme-toggle.neon .theme-icon::before {
+  content: '';
+  display: inline-block;
+  width: var(--font-2xl);
+  height: var(--font-2xl);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%2300f3ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='13 2 3 14 12 14 11 22 21 10 12 10 13 2'%3E%3C/polygon%3E%3C/svg%3E")
+    center/contain no-repeat;
+  filter: drop-shadow(0 0 5px #00f3ff);
+  animation: neon-pulse 1.5s infinite alternate;
+}
+
+@keyframes neon-pulse {
+  from {
+    filter: drop-shadow(0 0 2px #00f3ff);
+  }
+
+  to {
+    filter: drop-shadow(0 0 8px #d946ef);
+  }
 }
 
 .sidebar {

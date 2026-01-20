@@ -684,16 +684,30 @@ class TurboPixApp {
   setTheme(theme) {
     document.documentElement.classList.toggle('dark-theme', theme === 'dark');
     document.documentElement.classList.toggle('light-theme', theme === 'light');
+    document.documentElement.classList.toggle('neon-theme', theme === 'neon');
 
     utils.storage.set('theme', theme);
     this.updateThemeToggle(theme);
   }
 
   toggleTheme() {
-    const currentTheme = document.documentElement.classList.contains('dark-theme')
-      ? 'dark'
-      : 'light';
-    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    let currentTheme = 'light';
+    if (document.documentElement.classList.contains('dark-theme')) {
+      currentTheme = 'dark';
+    } else if (document.documentElement.classList.contains('neon-theme')) {
+      currentTheme = 'neon';
+    }
+
+    // Cycle: Light -> Dark -> Neon -> Light
+    let newTheme;
+    if (currentTheme === 'light') {
+      newTheme = 'dark';
+    } else if (currentTheme === 'dark') {
+      newTheme = 'neon';
+    } else {
+      newTheme = 'light';
+    }
+
     this.setTheme(newTheme);
 
     // Visual feedback
@@ -707,12 +721,11 @@ class TurboPixApp {
   updateThemeToggle(theme) {
     const themeToggle = utils.$('#theme-toggle');
     if (themeToggle) {
-      // When in dark mode, button should have 'dark' class to show sun icon
-      // When in light mode, button should NOT have 'dark' class to show moon icon
+      themeToggle.classList.remove('dark', 'neon');
       if (theme === 'dark') {
         themeToggle.classList.add('dark');
-      } else {
-        themeToggle.classList.remove('dark');
+      } else if (theme === 'neon') {
+        themeToggle.classList.add('neon');
       }
     }
   }

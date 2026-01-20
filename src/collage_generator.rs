@@ -942,12 +942,12 @@ fn draw_text(
     }
 }
 
-/// Find photo clusters (dates with ≥10 photos) in the last 365 days
+/// Find photo clusters (dates with ≥10 photos) in the last 30 days
 async fn find_photo_clusters(
     pool: &DbPool,
 ) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
-    // Get cutoff date (365 days ago)
-    let cutoff_date = (Utc::now() - Duration::days(365)).to_rfc3339();
+    // Get cutoff date (30 days ago)
+    let cutoff_date = (Utc::now() - Duration::days(30)).to_rfc3339();
 
     // Find dates with ≥10 photos
     let dates: Vec<String> = sqlx::query_scalar(

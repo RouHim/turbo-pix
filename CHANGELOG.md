@@ -1,3 +1,10 @@
+# [2.15.0](https://github.com/RouHim/turbo-pix/compare/2.14.7...2.15.0) (2026-02-17)
+
+
+### Features
+
+* **ui:** add Neon Tokyo cyberpunk theme ([544e8da](https://github.com/RouHim/turbo-pix/commit/544e8da86d8dd2d5512c878251b0214e239c3182))
+
 ## [2.14.7](https://github.com/RouHim/turbo-pix/compare/2.14.6...2.14.7) (2026-02-13)
 
 ## [2.14.6](https://github.com/RouHim/turbo-pix/compare/2.14.5...2.14.6) (2026-02-13)

@@ -1,3 +1,24 @@
+## [2.14.7](https://github.com/RouHim/turbo-pix/compare/2.14.6...2.14.7) (2026-02-13)
+
+## [2.14.6](https://github.com/RouHim/turbo-pix/compare/2.14.5...2.14.6) (2026-02-13)
+
+## [2.14.5](https://github.com/RouHim/turbo-pix/compare/2.14.4...2.14.5) (2026-02-06)
+
+## [2.14.4](https://github.com/RouHim/turbo-pix/compare/2.14.3...2.14.4) (2026-02-06)
+
+## [2.14.3](https://github.com/RouHim/turbo-pix/compare/2.14.2...2.14.3) (2026-02-06)
+
+## [2.14.2](https://github.com/RouHim/turbo-pix/compare/2.14.1...2.14.2) (2026-01-22)
+
+## [2.14.1](https://github.com/RouHim/turbo-pix/compare/2.14.0...2.14.1) (2026-01-21)
+
+# [2.14.0](https://github.com/RouHim/turbo-pix/compare/2.13.0...2.14.0) (2026-01-20)
+
+
+### Features
+
+* reduce collage generation timeframe to 30 days ([353f731](https://github.com/RouHim/turbo-pix/commit/353f7310178b873ad9ac1cf113e69e51eca891ac))
+
 # [2.13.0](https://github.com/RouHim/turbo-pix/compare/2.12.0...2.13.0) (2026-01-14)
 
 

@@ -1,3 +1,10 @@
+# [2.16.0](https://github.com/RouHim/turbo-pix/compare/2.15.0...2.16.0) (2026-02-18)
+
+
+### Features
+
+* **viewer:** add accept collage action to detail viewer ([bbb5ea0](https://github.com/RouHim/turbo-pix/commit/bbb5ea0b1c5f0feddfa8da5246b83e3b57fe20ef))
+
 # [2.15.0](https://github.com/RouHim/turbo-pix/compare/2.14.7...2.15.0) (2026-02-17)
 
 

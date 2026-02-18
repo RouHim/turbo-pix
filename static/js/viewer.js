@@ -5,6 +5,8 @@ class PhotoViewer {
   constructor() {
     this.isOpen = false;
     this.currentPhoto = null;
+    this.isPendingCollageOpen = false;
+    this.isAcceptingCollage = false;
     this.currentIndex = 0;
     this.photos = [];
     this.preloadedImages = new Map();
@@ -38,6 +40,7 @@ class PhotoViewer {
       rotateLeftBtn: utils.$('.rotate-left-btn'),
       rotateRightBtn: utils.$('.rotate-right-btn'),
       deletePhotoBtn: utils.$('.delete-photo-btn'),
+      acceptCollageBtn: utils.$('[data-action="accept-collage"]'),
     };
 
     this.controls = new ViewerControls(this, this.elements);
@@ -92,6 +95,10 @@ class PhotoViewer {
 
     if (this.elements.deletePhotoBtn) {
       utils.on(this.elements.deletePhotoBtn, 'click', () => this.deletePhoto());
+    }
+
+    if (this.elements.acceptCollageBtn) {
+      utils.on(this.elements.acceptCollageBtn, 'click', () => this.acceptCollageFromViewer());
     }
 
     if (this.elements.main) {
@@ -266,6 +273,8 @@ class PhotoViewer {
     }
 
     this.currentPhoto = photo;
+    this.isPendingCollageOpen = this.isPendingCollagePhoto(photo);
+    this.updateAcceptCollageButtonState();
     this.isOpen = true;
     this.updateUrlEnabled = !this.isCollagePhoto(photo);
 
@@ -299,6 +308,9 @@ class PhotoViewer {
 
   close(updateUrl = true) {
     this.isOpen = false;
+    this.isPendingCollageOpen = false;
+    this.isAcceptingCollage = false;
+    this.updateAcceptCollageButtonState();
 
     if (this.elements.viewer) {
       this.elements.viewer.classList.remove('active', 'fade-in');
@@ -345,6 +357,8 @@ class PhotoViewer {
 
     this.currentIndex = index;
     this.currentPhoto = this.photos[index];
+    this.isPendingCollageOpen = this.isPendingCollagePhoto(this.currentPhoto);
+    this.updateAcceptCollageButtonState();
 
     // Update URL with new photo hash
     if (updateUrl && this.updateUrlEnabled) {
@@ -646,6 +660,21 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
     }
   }
 
+  updateAcceptCollageButtonState() {
+    if (!this.elements.acceptCollageBtn) return;
+
+    const shouldShow = this.isPendingCollageOpen;
+    const shouldDisable = !shouldShow || this.isAcceptingCollage;
+    this.elements.acceptCollageBtn.style.display = shouldShow ? '' : 'none';
+    this.elements.acceptCollageBtn.disabled = shouldDisable;
+    this.elements.acceptCollageBtn.classList.toggle('btn-disabled', shouldDisable);
+  }
+
+  isAlreadyAcceptedCollageError(error) {
+    const errorMessage = `${error?.message || ''}`.toLowerCase();
+    return errorMessage.includes('already accepted') || errorMessage.includes('http 409');
+  }
+
   preloadAdjacentPhotos() {
     const indices = [this.currentIndex - 1, this.currentIndex + 1];
 
@@ -711,6 +740,45 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
         });
       }
     }
+  }
+
+  async acceptCollageFromViewer() {
+    if (this.isAcceptingCollage || !this.isPendingCollageOpen) return;
+
+    const collageId = this.getNormalizedCollageId(this.currentPhoto);
+    if (!collageId) return;
+    const emittedCollageId = this.currentPhoto?.collageId ?? collageId;
+
+    this.isAcceptingCollage = true;
+    this.updateAcceptCollageButtonState();
+
+    const toastTitle = utils.t('ui.accept_collage', 'Accept Collage');
+
+    try {
+      await window.api.acceptCollage(collageId);
+    } catch (error) {
+      if (!this.isAlreadyAcceptedCollageError(error)) {
+        utils.showToast(
+          toastTitle,
+          utils.t('notifications.collageAcceptFailed', 'Failed to accept collage'),
+          'error',
+          3000
+        );
+        this.isAcceptingCollage = false;
+        this.isPendingCollageOpen = this.isPendingCollagePhoto(this.currentPhoto);
+        this.updateAcceptCollageButtonState();
+        return;
+      }
+    }
+
+    utils.showToast(
+      toastTitle,
+      utils.t('notifications.collageAccepted', 'Collage accepted'),
+      'success',
+      2000
+    );
+    utils.emit(window, 'collageAccepted', { collageId: emittedCollageId });
+    this.close();
   }
 
   downloadPhoto() {
@@ -901,6 +969,33 @@ Server Administrator: Install ffmpeg with HEVC decoding support to enable playba
 
   isCollagePhoto(photo) {
     return Boolean(photo?.isCollage || photo?.collageId != null);
+  }
+
+  getNormalizedCollageId(photo) {
+    const collageId = photo?.collageId;
+    if (typeof collageId === 'string' && collageId.length > 0) {
+      return collageId;
+    }
+    if (typeof collageId === 'number' && Number.isFinite(collageId)) {
+      return `${collageId}`;
+    }
+    return null;
+  }
+
+  isPendingCollagePhoto(photo) {
+    if (!photo || typeof photo !== 'object') return false;
+    if (!this.isCollagePhoto(photo)) return false;
+
+    const collageId = this.getNormalizedCollageId(photo);
+    if (!collageId) return false;
+
+    const hasPendingCollageMediaPath = [photo.path, photo.thumbnail_path].some(
+      (value) => typeof value === 'string' && value.includes(`/api/collages/${collageId}/image`)
+    );
+
+    const photoHash = photo.hash_sha256 != null ? `${photo.hash_sha256}` : null;
+
+    return photoHash === collageId && hasPendingCollageMediaPath;
   }
 
   getMediaUrl(photo) {

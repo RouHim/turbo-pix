@@ -413,6 +413,14 @@
   transform: scale(1.1);
 }
 
+.viewer-controls .accept-collage-btn {
+  background: #10b981;
+}
+
+.viewer-controls .accept-collage-btn:hover {
+  background: #059669;
+}
+
 .viewer-main {
   grid-area: main;
   display: flex;

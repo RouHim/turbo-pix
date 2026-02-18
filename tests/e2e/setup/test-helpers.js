@@ -18,6 +18,7 @@ export class TestHelpers {
     sidebar: '.sidebar',
     favoriteBtn: '.favorite-btn',
     closeViewerBtn: '.close-viewer',
+    acceptCollageBtn: '[data-action="accept-collage"]',
   };
 
   static async navigateToView(page, viewName) {

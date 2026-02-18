@@ -4,7 +4,8 @@
 class IndexingStatusManager {
   constructor() {
     this.pollInterval = null;
-    this.pollFrequency = 5000; // 5 seconds
+    this.pollFrequencyIndexing = 1000;
+    this.pollFrequencyIdle = 30000;
     this.banner = null;
     this.messageEl = null;
     this.progressEl = null;
@@ -37,17 +38,26 @@ class IndexingStatusManager {
     // Poll immediately
     this.checkStatus();
 
-    // Then poll every 5 seconds
-    this.pollInterval = setInterval(() => {
-      this.checkStatus();
-    }, this.pollFrequency);
-
     if (window.logger) {
       window.logger.debug('Indexing status polling started', {
         component: 'IndexingStatus',
-        frequency: this.pollFrequency,
       });
     }
+  }
+
+  /**
+   * Schedules the next poll based on current indexing state
+   */
+  scheduleNextPoll() {
+    if (this.pollInterval) {
+      clearTimeout(this.pollInterval);
+    }
+
+    const frequency = this.isIndexing ? this.pollFrequencyIndexing : this.pollFrequencyIdle;
+
+    this.pollInterval = setTimeout(() => {
+      this.checkStatus();
+    }, frequency);
   }
 
   /**
@@ -55,7 +65,7 @@ class IndexingStatusManager {
    */
   stopPolling() {
     if (this.pollInterval) {
-      clearInterval(this.pollInterval);
+      clearTimeout(this.pollInterval);
       this.pollInterval = null;
 
       if (window.logger) {
@@ -86,6 +96,8 @@ class IndexingStatusManager {
           if (window.photoGrid) {
             window.photoGrid.loadPhotos();
           }
+        } else {
+          this.hideBanner();
         }
       }
     } catch (error) {
@@ -95,6 +107,8 @@ class IndexingStatusManager {
         });
       }
       // Don't show error to user, just log it
+    } finally {
+      this.scheduleNextPoll();
     }
   }
 
@@ -105,53 +119,133 @@ class IndexingStatusManager {
   showBanner(status) {
     if (!this.banner) return;
 
-    const { phase, photos_total, photos_processed, photos_semantic_indexed, progress_percent } =
-      status;
+    const steps = this.banner.querySelectorAll('[data-step-id]');
+    steps.forEach((step) => {
+      step.setAttribute('data-step-state', 'pending');
+      const progressBarEl = step.querySelector('.step-progress-bar');
+      if (progressBarEl) {
+        progressBarEl.style.width = '0%';
+        progressBarEl.classList.remove('indeterminate');
+      }
+      const counterEl = step.querySelector('.step-counter');
+      if (counterEl) counterEl.remove();
+    });
 
-    // Update message based on phase
-    let message = '';
-    if (phase === 'metadata') {
-      message = window.i18n?.t('ui.indexing_metadata') || 'Indexing metadata...';
-    } else if (phase === 'semantic_vectors') {
-      message = window.i18n?.t('ui.indexing_semantic') || 'Computing semantic vectors...';
-    } else if (phase === 'collages') {
-      message = window.i18n?.t('ui.indexing_collages') || 'Generating collages...';
-    } else if (phase === 'housekeeping') {
-      message =
-        window.i18n?.t('ui.indexing_housekeeping') || 'Identifying housekeeping candidates...';
-    } else {
-      message = window.i18n?.t('ui.indexing_photos') || 'Indexing photos...';
+    const { phases } = status;
+
+    if (phases && Array.isArray(phases)) {
+      phases.forEach((phase) => {
+        this.updatePhase(phase);
+      });
     }
 
-    // Update progress text
-    let progressText = '';
-    if (phase === 'metadata' && photos_total > 0) {
-      progressText = `${photos_processed} / ${photos_total} (${Math.round(progress_percent)}%)`;
-    } else if (phase === 'semantic_vectors' && photos_total > 0) {
-      progressText = `${photos_semantic_indexed} / ${photos_total} (${Math.round(progress_percent)}%)`;
-    }
-
-    // Emit event for other components
     utils.emit(window, 'indexingStatusChanged', status);
 
-    // Update DOM
-    if (this.messageEl) {
-      this.messageEl.textContent = message;
-    }
-    if (this.progressEl) {
-      this.progressEl.textContent = progressText;
-    }
-    if (this.progressFillEl) {
-      this.progressFillEl.style.width = `${progress_percent}%`;
-    }
-
-    // Show banner
     this.banner.style.display = 'block';
 
-    // Replace Feather icons if available
     if (typeof feather !== 'undefined') {
       feather.replace();
     }
+  }
+
+  updatePhase(phase) {
+    const stepEl = this.banner.querySelector(`[data-step-id="${phase.id}"]`);
+    if (!stepEl) return;
+
+    stepEl.setAttribute('data-step-state', phase.state);
+
+    const labelEl = stepEl.querySelector('.step-label');
+    if (labelEl) {
+      const labelKey = `ui.indexing_phase_${phase.id}`;
+      const labelText = window.i18n?.t(labelKey) || this.capitalize(phase.id);
+
+      if (phase.state === 'active' && phase.current_item) {
+        const truncatedItem = this.truncatePath(phase.current_item);
+        labelEl.textContent = `${labelText}: ${truncatedItem}`;
+        labelEl.title = phase.current_item;
+      } else if (phase.errors > 0) {
+        const errorText =
+          window.i18n?.t('ui.indexing_errors', { count: phase.errors }) || `${phase.errors} errors`;
+        labelEl.textContent = `${labelText} (${errorText})`;
+      } else {
+        labelEl.textContent = labelText;
+        labelEl.removeAttribute('title');
+      }
+    }
+
+    const progressBarEl = stepEl.querySelector('.step-progress-bar');
+
+    if (phase.kind === 'determinate' && phase.total > 0) {
+      const percent = Math.min(100, Math.max(0, (phase.processed / phase.total) * 100));
+
+      if (progressBarEl) {
+        progressBarEl.style.width = `${percent}%`;
+        progressBarEl.style.display = 'block';
+      }
+
+      let counterEl = stepEl.querySelector('.step-counter');
+      if (!counterEl) {
+        counterEl = document.createElement('span');
+        counterEl.className = 'step-counter';
+        if (labelEl) {
+          labelEl.parentNode.insertBefore(counterEl, labelEl.nextSibling);
+        } else {
+          stepEl.appendChild(counterEl);
+        }
+      }
+
+      const counterTemplate = window.i18n?.t('ui.indexing_counter') || '{{processed}} / {{total}}';
+      counterEl.textContent = counterTemplate
+        .replace('{{processed}}', phase.processed)
+        .replace('{{total}}', phase.total);
+    } else if (phase.kind === 'indeterminate') {
+      if (progressBarEl) {
+        if (phase.state === 'active') {
+          progressBarEl.style.width = '100%';
+          progressBarEl.classList.add('indeterminate');
+        } else {
+          progressBarEl.style.width = '0%';
+          progressBarEl.classList.remove('indeterminate');
+        }
+      }
+
+      const counterEl = stepEl.querySelector('.step-counter');
+      if (counterEl) counterEl.remove();
+    } else {
+      if (progressBarEl) {
+        progressBarEl.style.width = '0%';
+      }
+      const counterEl = stepEl.querySelector('.step-counter');
+      if (counterEl) counterEl.remove();
+    }
+  }
+
+  /**
+   * Truncates a file path with ellipsis in the middle
+   * @param {string} path - The path to truncate
+   * @param {number} maxLength - Maximum length
+   * @returns {string} Truncated path
+   */
+  truncatePath(path, maxLength = 30) {
+    if (!path || path.length <= maxLength) return path;
+
+    const parts = path.split('/');
+    const filename = parts.pop();
+
+    if (filename.length > maxLength) {
+      return filename.substring(0, 10) + '...' + filename.substring(filename.length - 10);
+    }
+
+    return '.../' + filename;
+  }
+
+  /**
+   * Capitalizes the first letter of a string
+   * @param {string} str
+   * @returns {string}
+   */
+  capitalize(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
   /**

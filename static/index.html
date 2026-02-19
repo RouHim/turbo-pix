@@ -53,13 +53,62 @@
       <!-- Indexing Progress Banner -->
       <div id="indexing-banner" class="indexing-banner" style="display: none">
         <div class="indexing-banner-content">
-          <i data-feather="camera" class="indexing-icon"></i>
-          <div class="indexing-text">
-            <span id="indexing-message" data-i18n="ui.indexing_photos">Indexing photos...</span>
-            <span id="indexing-progress"></span>
+          <div class="indexing-header">
+            <i data-feather="camera" class="indexing-icon"></i>
+            <div class="indexing-text">
+              <span id="indexing-message" data-i18n="ui.indexing_photos">Indexing photos...</span>
+              <span id="indexing-progress"></span>
+            </div>
           </div>
-          <div class="indexing-progress-bar">
-            <div id="indexing-progress-fill" class="indexing-progress-fill" style="width: 0%"></div>
+
+          <div class="indexing-stepper" data-indexing-stepper>
+            <!-- Step 1: Discovering -->
+            <div class="step-item" data-step-id="discovering" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="search"></i></div>
+                <div class="step-line"></div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.discovering">Discovering</span>
+            </div>
+
+            <!-- Step 2: Metadata -->
+            <div class="step-item" data-step-id="metadata" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="file-text"></i></div>
+                <div class="step-line">
+                  <div class="step-progress-bar"></div>
+                </div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.metadata">Metadata</span>
+            </div>
+
+            <!-- Step 3: Semantic Vectors -->
+            <div class="step-item" data-step-id="semantic_vectors" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="cpu"></i></div>
+                <div class="step-line">
+                  <div class="step-progress-bar"></div>
+                </div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.analysis">Analysis</span>
+            </div>
+
+            <!-- Step 4: Collages -->
+            <div class="step-item" data-step-id="collages" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="grid"></i></div>
+                <div class="step-line"></div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.collages">Collages</span>
+            </div>
+
+            <!-- Step 5: Housekeeping -->
+            <div class="step-item" data-step-id="housekeeping" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="check-circle"></i></div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.housekeeping">Cleanup</span>
+            </div>
           </div>
         </div>
       </div>
@@ -72,7 +121,9 @@
           <button class="nav-item" data-view="favorites" data-i18n="ui.favorites">Favorites</button>
           <button class="nav-item" data-view="videos" data-i18n="ui.videos">Videos</button>
           <button class="nav-item" data-view="collages" data-i18n="ui.collages">Collages</button>
-          <button class="nav-item" data-view="housekeeping" data-i18n="ui.housekeeping">Housekeeping</button>
+          <button class="nav-item" data-view="housekeeping" data-i18n="ui.housekeeping">
+            Housekeeping
+          </button>
         </div>
       </nav>
 
@@ -237,7 +288,7 @@
             title="Delete Photo"
             data-i18n-title="ui.delete_photo"
             data-icon="trash-2"
-            style="margin-left: auto; color: #ef4444;"
+            style="margin-left: auto; color: #ef4444"
           ></button>
         </div>
 
@@ -429,8 +480,6 @@
       <div class="spinner"></div>
       <span data-i18n="ui.loading">Loading...</span>
     </div>
-
-
 
     <!-- Metadata Edit Modal -->
     <div id="metadata-edit-modal" class="modal" style="display: none">

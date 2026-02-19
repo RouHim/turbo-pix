@@ -181,6 +181,23 @@ window.DE_TRANSLATIONS = {
     indexing_photos: 'Fotos werden indexiert...',
     indexing_housekeeping: 'Identifiziere Aufräumkandidaten...',
 
+    // Indexing phases (labels)
+    indexing_phase_discovering: 'Entdecken',
+    indexing_phase_metadata: 'Metadaten',
+    indexing_phase_semantic: 'Semantisch',
+    indexing_phase_collages: 'Collagen',
+    indexing_phase_housekeeping: 'Aufräumen',
+
+    // Indexing status messages
+    indexing_status_discovering: 'Dateien werden entdeckt...',
+    indexing_status_metadata: 'Metadaten werden indexiert...',
+    indexing_status_semantic: 'Semantische Vektoren werden berechnet...',
+    indexing_status_collages: 'Collagen werden erstellt...',
+    indexing_status_housekeeping: 'Aufräumkandidaten werden identifiziert...',
+
+    // Indexing counter template
+    indexing_counter: '{{processed}} / {{total}}',
+
     // Collages
     no_pending_collages: 'Keine ausstehenden Collagen',
     collage_date: 'Datum:',

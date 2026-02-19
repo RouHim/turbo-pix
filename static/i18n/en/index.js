@@ -182,6 +182,23 @@ window.EN_TRANSLATIONS = {
     // Indexing
     indexing_photos: 'Indexing photos...',
     indexing_housekeeping: 'Identifying housekeeping candidates...',
+
+    // Indexing phases (labels)
+    indexing_phase_discovering: 'Discovering',
+    indexing_phase_metadata: 'Metadata',
+    indexing_phase_semantic: 'Semantic',
+    indexing_phase_collages: 'Collages',
+    indexing_phase_housekeeping: 'Housekeeping',
+
+    // Indexing status messages
+    indexing_status_discovering: 'Discovering files...',
+    indexing_status_metadata: 'Indexing metadata...',
+    indexing_status_semantic: 'Computing semantic vectors...',
+    indexing_status_collages: 'Generating collages...',
+    indexing_status_housekeeping: 'Identifying housekeeping candidates...',
+
+    // Indexing counter template
+    indexing_counter: '{{processed}} / {{total}}',
   },
 
   errors: {

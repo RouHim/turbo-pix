@@ -20,15 +20,124 @@ use crate::semantic_search::SemanticSearchEngine;
 /// and benefit from larger transactions to amortize COMMIT costs.
 const DB_WRITE_BATCH_SIZE: usize = 250;
 
+#[derive(Debug, Clone, Default)]
+pub struct PhaseSnapshot {
+    pub processed: u64,
+    pub total: u64,
+    pub errors: u64,
+    pub current_item: Option<String>,
+}
+
+/// Per-phase counters for indexing progress tracking.
+/// All fields are atomic/mutex for thread-safe concurrent access.
+pub struct PhaseCounters {
+    processed: AtomicU64,
+    total: AtomicU64,
+    errors: AtomicU64,
+    current_item: std::sync::Mutex<Option<String>>,
+}
+
+impl PhaseCounters {
+    fn new() -> Self {
+        Self {
+            processed: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            current_item: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn reset(&self) {
+        self.processed.store(0, Ordering::SeqCst);
+        self.total.store(0, Ordering::SeqCst);
+        self.errors.store(0, Ordering::SeqCst);
+        *self.current_item.lock().unwrap() = None;
+    }
+
+    /// Set total monotonically — never decreases within a run.
+    /// Uses `fetch_max` so concurrent or repeated calls cannot lower the total.
+    pub fn set_total(&self, new_total: u64) {
+        self.total.fetch_max(new_total, Ordering::SeqCst);
+    }
+
+    pub fn set_processed(&self, count: u64) {
+        self.processed.store(count, Ordering::SeqCst);
+    }
+
+    pub fn add_processed(&self, count: u64) {
+        self.processed.fetch_add(count, Ordering::SeqCst);
+    }
+
+    pub fn add_errors(&self, count: u64) {
+        self.errors.fetch_add(count, Ordering::SeqCst);
+    }
+
+    pub fn set_current_item(&self, item: Option<String>) {
+        *self.current_item.lock().unwrap() = item;
+    }
+
+    pub fn snapshot(&self) -> PhaseSnapshot {
+        PhaseSnapshot {
+            processed: self.processed.load(Ordering::SeqCst),
+            total: self.total.load(Ordering::SeqCst),
+            errors: self.errors.load(Ordering::SeqCst),
+            current_item: self.current_item.lock().unwrap().clone(),
+        }
+    }
+}
+
+pub struct IndexingPhases {
+    pub discovering: PhaseCounters,
+    pub metadata: PhaseCounters,
+    pub semantic_vectors: PhaseCounters,
+    pub collages: PhaseCounters,
+    pub housekeeping: PhaseCounters,
+}
+
+impl Default for IndexingPhases {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IndexingPhases {
+    pub fn new() -> Self {
+        Self {
+            discovering: PhaseCounters::new(),
+            metadata: PhaseCounters::new(),
+            semantic_vectors: PhaseCounters::new(),
+            collages: PhaseCounters::new(),
+            housekeeping: PhaseCounters::new(),
+        }
+    }
+
+    pub fn reset_all(&self) {
+        self.discovering.reset();
+        self.metadata.reset();
+        self.semantic_vectors.reset();
+        self.collages.reset();
+        self.housekeeping.reset();
+    }
+
+    pub fn get(&self, phase_id: &str) -> Option<&PhaseCounters> {
+        match phase_id {
+            "discovering" => Some(&self.discovering),
+            "metadata" => Some(&self.metadata),
+            "semantic_vectors" => Some(&self.semantic_vectors),
+            "collages" => Some(&self.collages),
+            "housekeeping" => Some(&self.housekeeping),
+            _ => None,
+        }
+    }
+}
+
 /// Indexing status shared across threads
 #[derive(Clone)]
 pub struct IndexingStatus {
     pub is_indexing: Arc<AtomicBool>,
     pub is_complete: Arc<AtomicBool>,
     pub current_phase: Arc<Mutex<String>>,
-    pub photos_total: Arc<AtomicU64>,
-    pub photos_processed: Arc<AtomicU64>,
-    pub photos_semantic_indexed: Arc<AtomicU64>,
+    pub phases: Arc<IndexingPhases>,
     pub started_at: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 }
 
@@ -44,9 +153,7 @@ impl IndexingStatus {
             is_indexing: Arc::new(AtomicBool::new(false)),
             is_complete: Arc::new(AtomicBool::new(false)),
             current_phase: Arc::new(Mutex::new(String::from("idle"))),
-            photos_total: Arc::new(AtomicU64::new(0)),
-            photos_processed: Arc::new(AtomicU64::new(0)),
-            photos_semantic_indexed: Arc::new(AtomicU64::new(0)),
+            phases: Arc::new(IndexingPhases::new()),
             started_at: Arc::new(Mutex::new(None)),
         }
     }
@@ -54,9 +161,7 @@ impl IndexingStatus {
     pub async fn start_indexing(&self) {
         self.is_indexing.store(true, Ordering::SeqCst);
         *self.started_at.lock().await = Some(chrono::Utc::now());
-        self.photos_total.store(0, Ordering::SeqCst);
-        self.photos_processed.store(0, Ordering::SeqCst);
-        self.photos_semantic_indexed.store(0, Ordering::SeqCst);
+        self.phases.reset_all();
     }
 
     pub async fn stop_indexing(&self) {
@@ -139,10 +244,7 @@ impl PhotoScheduler {
         let mut error_count = 0;
         let total_count = photos.len();
 
-        // Update total count
-        status
-            .photos_total
-            .store(total_count as u64, Ordering::SeqCst);
+        status.phases.metadata.set_total(total_count as u64);
 
         for (batch_idx, batch) in photos.chunks(DB_WRITE_BATCH_SIZE).enumerate() {
             // Begin transaction
@@ -171,10 +273,7 @@ impl PhotoScheduler {
             match tx.commit().await {
                 Ok(_) => {
                     indexed_count += batch_success;
-                    // Update progress counter
-                    status
-                        .photos_processed
-                        .store(indexed_count as u64, Ordering::SeqCst);
+                    status.phases.metadata.set_processed(indexed_count as u64);
                     info!(
                         "Batch {}/{} committed: {} photos saved{}",
                         batch_idx + 1,
@@ -204,6 +303,8 @@ impl PhotoScheduler {
                 );
             }
         }
+
+        status.phases.metadata.add_errors(error_count as u64);
 
         (indexed_count, error_count)
     }
@@ -267,9 +368,8 @@ impl PhotoScheduler {
                         status.set_phase("semantic_vectors").await;
                         match processor.batch_compute_semantic_vectors(&db_pool).await {
                             Ok((success, errors)) => {
-                                status
-                                    .photos_semantic_indexed
-                                    .store(success as u64, Ordering::SeqCst);
+                                status.phases.semantic_vectors.set_processed(success as u64);
+                                status.phases.semantic_vectors.add_errors(errors as u64);
                                 info!(
                                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                                     success, errors
@@ -406,8 +506,13 @@ impl PhotoScheduler {
         {
             Ok((success, errors)) => {
                 self.status
-                    .photos_semantic_indexed
-                    .store(success as u64, Ordering::SeqCst);
+                    .phases
+                    .semantic_vectors
+                    .set_processed(success as u64);
+                self.status
+                    .phases
+                    .semantic_vectors
+                    .add_errors(errors as u64);
                 info!(
                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                     success, errors

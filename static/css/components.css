@@ -1540,3 +1540,56 @@ body:has(#indexing-banner[style*='display: block']) .sidebar {
 body:has(#indexing-banner[style*='display: block']) .main-content {
   margin-top: 100px; /* Increased height for stepper */
 }
+
+/* Transcode toast notification */
+.transcode-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: var(--surface-color, #1a1a2e);
+  color: var(--text-primary, #e0e0e0);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 30%);
+  z-index: 10000;
+  opacity: 0;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+  pointer-events: none;
+  font-size: 14px;
+  max-width: 90vw;
+}
+
+.transcode-toast-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+.transcode-toast-error {
+  border-color: var(--error-color, #e74c3c);
+}
+
+.transcode-toast .feather {
+  flex-shrink: 0;
+}
+
+.transcode-toast .feather-loader {
+  animation: transcode-spin 1.5s linear infinite;
+}
+
+@keyframes transcode-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}

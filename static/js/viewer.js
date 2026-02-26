@@ -495,19 +495,34 @@ class PhotoViewer {
     // Get video URL with optional transcoding
     const videoUrl = utils.getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
 
-    // Check if transcoding failed by fetching headers with a minimal range request
-    let transcodingFailed = false;
+    // For videos that need transcoding, check if server returns 202 (async transcoding)
     if (needsTranscode) {
       try {
-        const response = await fetch(videoUrl, {
-          method: 'GET',
-          headers: {
-            Range: 'bytes=0-0', // Request just 1 byte to check headers
-          },
-        });
+        const response = await fetch(videoUrl);
+
+        if (response.status === 202) {
+          // Async transcoding in progress — show toast and start polling
+          const data = await response.json();
+          const pollUrl = data.poll_url;
+
+          if (window.logger) {
+            window.logger.info('HEVC transcoding started (async)', {
+              component: 'PhotoViewer',
+              photoHash: photo.hash_sha256,
+              pollUrl,
+            });
+          }
+
+          this.showTranscodeToast(
+            utils.t('video.transcoding.started', 'Video is being converted for playback...')
+          );
+          await this.pollTranscodeStatus(pollUrl, photo);
+          return;
+        }
+
+        // Check for transcoding warning header (fallback for sync errors)
         const warningHeader = response.headers.get('X-Transcode-Warning');
         if (warningHeader && warningHeader.trim() !== '') {
-          transcodingFailed = true;
           if (window.logger) {
             window.logger.info('HEVC transcoding failed on server', {
               component: 'PhotoViewer',
@@ -515,6 +530,12 @@ class PhotoViewer {
               warning: warningHeader,
             });
           }
+          this.showTranscodeToast(
+            utils.t('video.transcoding.failed', 'Video conversion failed'),
+            true
+          );
+          this.showError(utils.t('video.transcoding.failed', 'Video conversion failed'));
+          return;
         }
       } catch (error) {
         if (window.logger) {
@@ -523,9 +544,157 @@ class PhotoViewer {
       }
     }
 
+    this.setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC);
+  }
+
+  /**
+   * Show or update the transcode toast notification
+   * @param {string} message - Toast message text
+   * @param {boolean} isError - Whether this is an error state
+   */
+  showTranscodeToast(message, isError = false) {
+    let toast = document.querySelector('.transcode-toast');
+
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'transcode-toast';
+      document.body.appendChild(toast);
+    }
+
+    const iconName = isError ? 'alert-triangle' : 'loader';
+    const iconSvg = window.iconHelper ? window.iconHelper.getIcon(iconName, { size: 18 }) : '';
+
+    toast.innerHTML = `${iconSvg}<span class="transcode-toast-message">${message}</span>`;
+    toast.classList.toggle('transcode-toast-error', isError);
+    toast.classList.add('transcode-toast-visible');
+  }
+
+  /**
+   * Hide and remove the transcode toast
+   */
+  hideTranscodeToast() {
+    const toast = document.querySelector('.transcode-toast');
+    if (toast) {
+      toast.classList.remove('transcode-toast-visible');
+      setTimeout(() => toast.remove(), 300);
+    }
+  }
+
+  /**
+   * Poll the transcoding status endpoint until completion, failure, or timeout
+   * @param {string} pollUrl - The status endpoint URL
+   * @param {Object} photo - The photo object
+   */
+  async pollTranscodeStatus(pollUrl, photo) {
+    const POLL_INTERVAL = 2000;
+    const MAX_POLL_DURATION = 5 * 60 * 1000; // 5 minutes
+    const startTime = Date.now();
+
+    const poll = () =>
+      new Promise((resolve) => {
+        const intervalId = setInterval(async () => {
+          const elapsed = Date.now() - startTime;
+
+          if (elapsed >= MAX_POLL_DURATION) {
+            clearInterval(intervalId);
+            this.hideTranscodeToast();
+            this.showTranscodeToast(
+              utils.t('video.transcoding.timeout', 'Video conversion timed out'),
+              true
+            );
+            if (window.logger) {
+              window.logger.warn('Transcoding polling timed out', {
+                component: 'PhotoViewer',
+                photoHash: photo.hash_sha256,
+                elapsedMs: elapsed,
+              });
+            }
+            resolve('Timeout');
+            return;
+          }
+
+          try {
+            const res = await fetch(pollUrl);
+            if (!res.ok) {
+              return; // Retry on next interval
+            }
+
+            const status = await res.json();
+
+            if (status.state === 'Completed') {
+              clearInterval(intervalId);
+              this.hideTranscodeToast();
+
+              if (window.logger) {
+                window.logger.info('Transcoding completed', {
+                  component: 'PhotoViewer',
+                  photoHash: photo.hash_sha256,
+                });
+              }
+
+              // Reload video — the endpoint now serves the cached transcoded file
+              const videoUrl = utils.getVideoUrl(photo.hash_sha256, { transcode: true });
+              this.setVideoSource(photo, videoUrl, true, true, true);
+              resolve('Completed');
+              return;
+            }
+
+            if (status.state === 'Failed') {
+              clearInterval(intervalId);
+              this.hideTranscodeToast();
+              this.showTranscodeToast(
+                utils.t('video.transcoding.failed', 'Video conversion failed'),
+                true
+              );
+              if (window.logger) {
+                window.logger.error('Transcoding failed', null, {
+                  component: 'PhotoViewer',
+                  photoHash: photo.hash_sha256,
+                  error: status.error,
+                });
+              }
+              resolve('Failed');
+              return;
+            }
+
+            if (status.state === 'Timeout') {
+              clearInterval(intervalId);
+              this.hideTranscodeToast();
+              this.showTranscodeToast(
+                utils.t('video.transcoding.timeout', 'Video conversion timed out'),
+                true
+              );
+              resolve('Timeout');
+              return;
+            }
+
+            // InProgress or Pending — continue polling
+          } catch (error) {
+            if (window.logger) {
+              window.logger.warn('Failed to poll transcoding status', error);
+            }
+            // Continue polling on fetch error
+          }
+        }, POLL_INTERVAL);
+      });
+
+    await poll();
+  }
+
+  /**
+   * Set the video element source and configure playback
+   * @param {Object} photo - The photo object
+   * @param {string} videoUrl - Video source URL
+   * @param {boolean} needsTranscode - Whether transcoding was needed
+   * @param {boolean} forceTranscode - Whether transcoding was forced
+   * @param {boolean} isHEVC - Whether the video is HEVC
+   */
+  setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC) {
+    const videoCodec = photo.metadata?.video?.codec || '';
+
     // Force video reload by clearing src first to prevent browser caching issues
     this.elements.video.src = '';
-    this.elements.video.load(); // Trigger reload
+    this.elements.video.load();
 
     // Remove old error handlers to prevent duplicates
     this.elements.video.onerror = null;
@@ -538,7 +707,6 @@ class PhotoViewer {
           photoHash: photo.hash_sha256,
           videoCodec,
           needsTranscode,
-          transcodingFailed,
           forceTranscode,
         });
       }
@@ -552,38 +720,13 @@ class PhotoViewer {
           });
         }
 
-        utils.showToast(
-          'Retrying',
-          'Native HEVC playback failed, attempting transcoded version...',
-          'info',
-          3000
-        );
-
-        // Retry with forced transcoding
         await this.displayVideo(photo, true);
         return;
       }
 
-      // Show clear error message
-      if (transcodingFailed) {
-        // HEVC transcoding failed on server
-        const errorMessage = `⚠️ Video Cannot Play
-
-This video uses HEVC (H.265) encoding, which your browser doesn't support.
-
-The server attempted to convert it to a compatible format, but transcoding failed because ffmpeg with HEVC support is not installed on the server.
-
-Server Administrator: Install ffmpeg with HEVC decoding support to enable playback.`;
-
-        utils.showToast('Video Cannot Play', errorMessage, 'error', 12000);
-        this.showError(errorMessage);
-      } else {
-        // Generic playback error
-        const errorMessage =
-          'Failed to load video. The video file may be corrupted or in an unsupported format.';
-        utils.showToast('Playback Error', errorMessage, 'error', 6000);
-        this.showError(errorMessage);
-      }
+      // Generic playback error
+      const errorMessage = utils.t('video.transcoding.failed', 'Video conversion failed');
+      this.showError(errorMessage);
     };
 
     // Now set the new source

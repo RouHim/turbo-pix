@@ -233,6 +233,7 @@ const getVideoUrl = (photoHash, options = {}) => {
   const queryString = params.toString();
   return `/api/photos/${photoHash}/video${queryString ? `?${queryString}` : ''}`;
 };
+const getVideoStatusUrl = (photoHash) => `/api/photos/${photoHash}/video/status`;
 
 // Local storage helpers
 const storage = {
@@ -524,6 +525,7 @@ window.utils = {
   getPhotoUrl,
   getThumbnailUrl,
   getVideoUrl,
+  getVideoStatusUrl,
   storage,
   videoCodecSupport,
   SimpleState,

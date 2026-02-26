@@ -8,7 +8,7 @@ use warp::{reject, Filter, Rejection, Reply};
 
 use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo, SearchQuery};
-use crate::handlers_video::{get_video_file, VideoQuery};
+use crate::handlers_video::{get_video_file, get_video_status, VideoQuery};
 use crate::image_editor::{self, RotationAngle};
 use crate::metadata_writer;
 use crate::mimetype_detector;
@@ -524,6 +524,15 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(get_video_file);
 
+    let api_photo_video_status = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("video"))
+        .and(warp::path("status"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and_then(get_video_status);
+
     let api_photo_favorite = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -584,6 +593,7 @@ pub fn build_photo_routes(
         .or(api_photo_get)
         .or(api_photo_file)
         .or(api_photo_video)
+        .or(api_photo_video_status)
         .or(api_photo_favorite)
         .or(api_photo_timeline)
         .or(api_photo_exif)

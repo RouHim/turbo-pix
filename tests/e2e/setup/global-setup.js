@@ -138,7 +138,7 @@ async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
         const progress = Math.round(data.progress_percent);
 
         const metadataComplete =
-          data.photos_total > 0 && data.photos_processed >= data.photos_total;
+          data.is_complete === true;
 
         if (metadataComplete) {
           console.log(

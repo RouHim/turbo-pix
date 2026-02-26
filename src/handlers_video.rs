@@ -479,6 +479,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_video_status_transitions() {
+        let hash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        clear_transcode_status(hash);
+
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::InProgress,
+                hash: hash.to_string(),
+                started_at: Some(Utc::now()),
+                error: None,
+            },
+        );
+
+        let response = get_video_status(hash.to_string()).await;
+        assert!(response.is_ok(), "status endpoint should return success");
+
+        let in_progress = get_transcode_status(hash).expect("status should be available in store");
+        assert_eq!(in_progress.state, TranscodeState::InProgress);
+
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::Completed,
+                hash: hash.to_string(),
+                started_at: in_progress.started_at,
+                error: None,
+            },
+        );
+
+        let completed =
+            get_transcode_status(hash).expect("status should still be available in store");
+        assert_eq!(completed.state, TranscodeState::Completed);
+
+        clear_transcode_status(hash);
+    }
+
+    #[tokio::test]
     async fn test_video_cache_hit() {
         let _lock = test_env_lock().lock().unwrap();
         let db_pool = create_in_memory_pool().await.expect("failed to create db");

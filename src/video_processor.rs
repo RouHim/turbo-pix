@@ -1,6 +1,69 @@
 use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+use tokio::process::Command as TokioCommand;
+use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::time::timeout;
+
+// Transcoding status tracking types and in-memory store
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub enum TranscodeState {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+    Timeout,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TranscodeStatus {
+    pub state: TranscodeState,
+    pub hash: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+static TRANSCODE_STATUS_STORE: OnceLock<Mutex<HashMap<String, TranscodeStatus>>> = OnceLock::new();
+static TRANSCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+fn get_status_store() -> &'static Mutex<HashMap<String, TranscodeStatus>> {
+    TRANSCODE_STATUS_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn get_transcode_semaphore() -> &'static Semaphore {
+    TRANSCODE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
+
+pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>> {
+    get_transcode_semaphore().acquire().await.map_err(|e| {
+        CacheError::VideoProcessingError(format!("Failed to acquire transcode permit: {}", e))
+    })
+}
+
+pub fn set_transcode_status(hash: &str, status: TranscodeStatus) {
+    let store = get_status_store();
+    if let Ok(mut map) = store.lock() {
+        map.insert(hash.to_string(), status);
+    }
+}
+
+pub fn get_transcode_status(hash: &str) -> Option<TranscodeStatus> {
+    let store = get_status_store();
+    store.lock().ok().and_then(|map| map.get(hash).cloned())
+}
+
+pub fn clear_transcode_status(hash: &str) {
+    let store = get_status_store();
+    if let Ok(mut map) = store.lock() {
+        map.remove(hash);
+    }
+}
 
 fn get_ffmpeg_path() -> String {
     std::env::var("FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string())
@@ -247,8 +310,114 @@ pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
     Ok(codec == "hevc" || codec == "h265")
 }
 
+fn parse_root_atom_offset(trace: &str, atom: &str) -> Option<u64> {
+    let marker = format!("type:'{}' parent:'root'", atom);
+
+    trace.lines().find_map(|line| {
+        if !line.contains(&marker) {
+            return None;
+        }
+
+        let (_, size_part) = line.split_once("sz:")?;
+        size_part.split_whitespace().nth(1)?.parse::<u64>().ok()
+    })
+}
+
+pub fn has_moov_at_start(path: &Path) -> CacheResult<bool> {
+    let ffprobe_path = get_ffprobe_path();
+    let output = Command::new(ffprobe_path)
+        .args(["-v", "trace", path.to_str().unwrap()])
+        .output()
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffprobe exited with status {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let moov_offset = parse_root_atom_offset(&stderr, "moov");
+    let mdat_offset = parse_root_atom_offset(&stderr, "mdat");
+
+    let is_at_start = match (moov_offset, mdat_offset) {
+        (Some(moov), Some(mdat)) => moov < mdat || moov < 1000,
+        (Some(moov), None) => moov < 1000,
+        (None, _) => true,
+    };
+
+    Ok(is_at_start)
+}
+
+pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
+    if has_moov_at_start(path)? {
+        return Ok(());
+    }
+
+    let ffmpeg_path = get_ffmpeg_path();
+    let parent = path.parent().ok_or_else(|| {
+        CacheError::VideoProcessingError(format!("Path has no parent: {}", path.display()))
+    })?;
+    let file_stem = path.file_stem().and_then(|n| n.to_str()).ok_or_else(|| {
+        CacheError::VideoProcessingError(format!("Invalid file name: {}", path.display()))
+    })?;
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let temp_path = parent.join(format!(
+        "{}.moovfix.{}.{}",
+        file_stem,
+        std::process::id(),
+        extension
+    ));
+
+    let output = Command::new(ffmpeg_path)
+        .args([
+            "-y",
+            "-i",
+            path.to_str().unwrap(),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            temp_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffmpeg faststart remux exited with status {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        CacheError::VideoProcessingError(format!(
+            "Failed to atomically replace video {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
 /// Transcode HEVC video to H.264 for browser compatibility
 pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    transcode_hevc_to_h264_with_timeout(input_path, output_path, Duration::from_secs(300)).await
+}
+
+async fn transcode_hevc_to_h264_with_timeout(
+    input_path: &Path,
+    output_path: &Path,
+    timeout_duration: Duration,
+) -> CacheResult<()> {
+    let _permit = acquire_transcode_permit().await?;
+
     // Create output directory if it doesn't exist
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -256,37 +425,39 @@ pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> Ca
         })?;
     }
 
-    let input_path = input_path.to_path_buf();
-    let output_path = output_path.to_path_buf();
     let ffmpeg_path = get_ffmpeg_path();
 
     // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
     // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new(ffmpeg_path)
-            .args([
-                "-hwaccel",
-                "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
-                "-i",
-                input_path.to_str().unwrap(),
-                "-c:v",
-                "libx264", // Use H.264 encoder (more widely available than libopenh264)
-                "-preset",
-                "fast", // Encoding speed preset (fast is good for real-time transcoding)
-                "-crf",
-                "23", // Constant Rate Factor (18-28, lower = better quality)
-                "-c:a",
-                "copy", // Copy audio stream without re-encoding (faster)
-                "-movflags",
-                "+faststart", // Enable streaming-friendly format
-                "-y",         // Overwrite output file
-                output_path.to_str().unwrap(),
-            ])
-            .output()
-    })
-    .await
-    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
+    let mut command = TokioCommand::new(ffmpeg_path);
+    command.kill_on_drop(true).args([
+        "-hwaccel",
+        "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
+        "-i",
+        input_path.to_str().unwrap(),
+        "-c:v",
+        "libx264", // Use H.264 encoder (more widely available than libopenh264)
+        "-preset",
+        "fast", // Encoding speed preset (fast is good for real-time transcoding)
+        "-crf",
+        "23", // Constant Rate Factor (18-28, lower = better quality)
+        "-c:a",
+        "copy", // Copy audio stream without re-encoding (faster)
+        "-movflags",
+        "+faststart", // Enable streaming-friendly format
+        "-y",         // Overwrite output file
+        output_path.to_str().unwrap(),
+    ]);
+
+    let output = timeout(timeout_duration, command.output())
+        .await
+        .map_err(|_| {
+            CacheError::VideoProcessingError(format!(
+                "Transcoding timed out after {}s",
+                timeout_duration.as_secs()
+            ))
+        })?
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -321,7 +492,12 @@ mod tests {
     use crate::thumbnail_generator::ThumbnailGenerator;
     use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
     use chrono::Utc;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::time::sleep;
 
     fn project_photo_path(filename: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -367,6 +543,90 @@ mod tests {
     }
 
     const TEST_PORT: u16 = 18473;
+
+    fn create_test_video_with_movflags(source: &Path, destination: &Path, movflags: &str) {
+        let output = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                source.to_str().unwrap(),
+                "-c",
+                "copy",
+                "-movflags",
+                movflags,
+                destination.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "Failed to create test video with movflags {}: {}",
+                movflags, stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_moov_detection() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            eprintln!("Skipping MOOV detection test (prereqs missing or RUN_VIDEO_TESTS not set)");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_start = temp_dir.path().join("moov_start.mp4");
+        let moov_end = temp_dir.path().join("moov_end.mp4");
+
+        create_test_video_with_movflags(&source, &moov_start, "+faststart");
+        create_test_video_with_movflags(&source, &moov_end, "-faststart");
+
+        assert!(has_moov_at_start(&moov_start).unwrap());
+        assert!(!has_moov_at_start(&moov_end).unwrap());
+    }
+
+    #[test]
+    fn test_moov_fix() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            eprintln!("Skipping MOOV fix test (prereqs missing or RUN_VIDEO_TESTS not set)");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_end = temp_dir.path().join("moov_end.mp4");
+
+        create_test_video_with_movflags(&source, &moov_end, "-faststart");
+
+        assert!(!has_moov_at_start(&moov_end).unwrap());
+        fix_moov_atom(&moov_end).unwrap();
+        assert!(has_moov_at_start(&moov_end).unwrap());
+    }
+
+    #[test]
+    fn test_moov_skip_if_ok() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            eprintln!("Skipping MOOV skip test (prereqs missing or RUN_VIDEO_TESTS not set)");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_start = temp_dir.path().join("moov_start.mp4");
+
+        create_test_video_with_movflags(&source, &moov_start, "+faststart");
+
+        let before = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
+        fix_moov_atom(&moov_start).unwrap();
+        let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
+
+        assert_eq!(before, after);
+    }
 
     fn create_test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
@@ -561,5 +821,178 @@ mod tests {
 
         assert!(medium.len() >= small.len(), "Medium should be >= small");
         assert!(large.len() >= medium.len(), "Large should be >= medium");
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = &self.original {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transcode_semaphore() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let run = |active: Arc<AtomicUsize>, max_active: Arc<AtomicUsize>| async move {
+            let _permit = acquire_transcode_permit().await.unwrap();
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            loop {
+                let max = max_active.load(Ordering::SeqCst);
+                if current <= max {
+                    break;
+                }
+                if max_active
+                    .compare_exchange(max, current, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+
+            sleep(Duration::from_millis(150)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+        };
+
+        let t1 = tokio::spawn(run(active.clone(), max_active.clone()));
+        let t2 = tokio::spawn(run(active, max_active.clone()));
+        t1.await.unwrap();
+        t2.await.unwrap();
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_transcode_timeout() {
+        let temp_dir = TempDir::new().unwrap();
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_timeout.sh");
+        std::fs::write(&ffmpeg_script, "#!/usr/bin/env sh\nsleep 2\nexit 0\n").unwrap();
+        make_executable(&ffmpeg_script);
+
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+
+        let input = temp_dir.path().join("input.mp4");
+        let output = temp_dir.path().join("output.mp4");
+        std::fs::write(&input, b"not-a-real-video").unwrap();
+
+        let result =
+            transcode_hevc_to_h264_with_timeout(&input, &output, Duration::from_secs(1)).await;
+
+        assert!(result.is_err(), "Expected timeout error");
+        let error = format!("{}", result.unwrap_err());
+        assert!(
+            error.contains("timed out"),
+            "Error should mention timeout, got: {}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transcode_happy_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_ok.sh");
+        std::fs::write(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\ntouch \"$last\"\nexit 0\n",
+        )
+        .unwrap();
+        make_executable(&ffmpeg_script);
+
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+
+        let input = temp_dir.path().join("input.mp4");
+        let output = temp_dir.path().join("nested/output.mp4");
+        std::fs::write(&input, b"not-a-real-video").unwrap();
+
+        let result =
+            transcode_hevc_to_h264_with_timeout(&input, &output, Duration::from_secs(5)).await;
+
+        assert!(
+            result.is_ok(),
+            "Expected transcode to succeed: {:?}",
+            result
+        );
+        assert!(output.exists(), "Expected output file to be created");
+    }
+
+    #[test]
+    fn test_transcode_status_json() {
+        let status = TranscodeStatus {
+            state: TranscodeState::InProgress,
+            hash: "abc".to_string(),
+            started_at: None,
+            error: None,
+        };
+
+        let json = serde_json::to_string(&status).expect("JSON serialization failed");
+        assert!(
+            json.contains("\"state\":\"InProgress\""),
+            "JSON should contain InProgress state, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"hash\":\"abc\""),
+            "JSON should contain hash abc, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_status_tracking() {
+        // Clear any existing state first
+        clear_transcode_status("test_hash");
+
+        // Test set and get
+        let status = TranscodeStatus {
+            state: TranscodeState::Pending,
+            hash: "test_hash".to_string(),
+            started_at: Some(Utc::now()),
+            error: None,
+        };
+        set_transcode_status("test_hash", status.clone());
+
+        let retrieved = get_transcode_status("test_hash");
+        assert!(retrieved.is_some(), "Status should exist after set");
+        let status_ref = retrieved.as_ref().unwrap();
+        assert_eq!(status_ref.hash, "test_hash");
+        assert_eq!(status_ref.state, TranscodeState::Pending);
+
+        // Test clear
+        clear_transcode_status("test_hash");
+        let after_clear = get_transcode_status("test_hash");
+        assert!(after_clear.is_none(), "Status should not exist after clear");
     }
 }

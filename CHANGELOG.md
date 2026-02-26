@@ -1,3 +1,22 @@
+# [2.17.0](https://github.com/RouHim/turbo-pix/compare/2.16.0...2.17.0) (2026-02-26)
+
+
+### Bug Fixes
+
+* **e2e:** increase indexing wait timeout to 600s for video semantic vectors ([decf453](https://github.com/RouHim/turbo-pix/commit/decf4532d809f6aa4dffcccc93db2ea4005a08bd))
+* **e2e:** use correct indexing status field for setup completion check ([ba49662](https://github.com/RouHim/turbo-pix/commit/ba4966252e96854cbd01aa3b51f02dafe1d0f49b))
+
+
+### Features
+
+* **api:** async transcoding endpoint with HTTP 202 + status polling ([117dfb5](https://github.com/RouHim/turbo-pix/commit/117dfb5f5341f84f974d357d0cb08bae6a1f8807))
+* **i18n:** add transcoding-related translation keys ([cad80a1](https://github.com/RouHim/turbo-pix/commit/cad80a1a0de3c627f62d5e526314e7abd213758e))
+* implement dynamic polling and reset UI state for indexing status ([c46ffae](https://github.com/RouHim/turbo-pix/commit/c46ffae692002b7c071de46f0502e74ddc3a7f65))
+* **scanner:** integrate MOOV atom fix into scanning pipeline ([dc085e8](https://github.com/RouHim/turbo-pix/commit/dc085e8ae3c0d5bed2f96fe3c64f6461de766619))
+* **ui:** add transcoding polling and toast feedback ([d1275be](https://github.com/RouHim/turbo-pix/commit/d1275beadf24b50319e6b6d78ba8ef7b1e35f46b))
+* **video:** add transcoding concurrency semaphore and timeout ([66c7e2b](https://github.com/RouHim/turbo-pix/commit/66c7e2b0c356f1cf91e2ce46b44d7c5e0c2b09bd))
+* **video:** add transcoding status types and in-memory tracking ([0dfc9cc](https://github.com/RouHim/turbo-pix/commit/0dfc9cc92636fbf4b02685b73925f9576fc26dca))
+
 # [2.16.0](https://github.com/RouHim/turbo-pix/compare/2.15.0...2.16.0) (2026-02-18)
 
 

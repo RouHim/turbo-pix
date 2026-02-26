@@ -248,4 +248,13 @@ window.DE_TRANSLATIONS = {
     photo_download_started: 'Download gestartet',
     confirm_reject_collage: 'Möchten Sie diese Collage wirklich ablehnen?',
   },
+
+  video: {
+    transcoding: {
+      started: 'Video wird für die Wiedergabe konvertiert...',
+      completed: 'Videokonvertierung abgeschlossen',
+      failed: 'Videokonvertierung fehlgeschlagen',
+      timeout: 'Videokonvertierung: Zeitlimit überschritten',
+    },
+  },
 };

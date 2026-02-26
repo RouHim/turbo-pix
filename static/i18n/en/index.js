@@ -259,4 +259,13 @@ window.EN_TRANSLATIONS = {
     photo_download_started: 'Download started',
     confirm_reject_collage: 'Are you sure you want to reject this collage?',
   },
+
+  video: {
+    transcoding: {
+      started: 'Video is being converted for playback...',
+      completed: 'Video conversion complete',
+      failed: 'Video conversion failed',
+      timeout: 'Video conversion timed out',
+    },
+  },
 };

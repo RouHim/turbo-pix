@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use log::error;
+use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::semantic_search::SemanticSearchEngine;
+use crate::video_processor;
 
 /// Batch size for semantic vector computation (CPU-bound operations)
 /// Smaller batches (100) provide better progress tracking and error isolation.
@@ -85,6 +86,24 @@ pub struct ProcessedPhoto {
 pub struct PhotoProcessor {
     scanner: FileScanner,
     semantic_search: Arc<SemanticSearchEngine>,
+}
+
+/// Attempt to fix MOOV atom placement for video files during scanning.
+/// Only applies to video files (by MIME type). Errors are logged as warnings
+/// and never propagate — scanning continues regardless of MOOV fix outcome.
+fn maybe_fix_moov_for_video(path: &Path) {
+    let is_video = mimetype_detector::from_path(path)
+        .map(|m| m.type_() == "video")
+        .unwrap_or(false);
+
+    if !is_video {
+        return;
+    }
+
+    match video_processor::fix_moov_atom(path) {
+        Ok(()) => info!("Fixed MOOV atom for {}", path.display()),
+        Err(e) => warn!("Failed to fix MOOV atom for {}: {}", path.display(), e),
+    }
 }
 
 impl PhotoProcessor {
@@ -240,6 +259,9 @@ impl PhotoProcessor {
         let blurhash = self.generate_blurhash(path);
 
         // Semantic vectors are skipped in Phase 1 and computed in Phase 2
+
+        // Fix MOOV atom placement for video files (enables fast progressive download)
+        maybe_fix_moov_for_video(path);
 
         Some(ProcessedPhoto {
             file_path: file_path.clone(),
@@ -551,5 +573,131 @@ mod tests {
                 );
             }
         }
+    }
+
+    use crate::video_processor;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn project_photo_path(filename: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data")
+            .join(filename)
+    }
+
+    fn should_run_video_tests(filename: &str) -> bool {
+        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+            eprintln!("RUN_VIDEO_TESTS not set to '1' or 'true'; skipping video tests");
+            return false;
+        }
+
+        let path = project_photo_path(filename);
+        if !path.exists() {
+            eprintln!(
+                "Required test video not found at {}; skipping",
+                path.display()
+            );
+            return false;
+        }
+
+        true
+    }
+
+    fn create_test_video_with_movflags(source: &Path, destination: &Path, movflags: &str) {
+        let output = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                source.to_str().unwrap(),
+                "-c",
+                "copy",
+                "-movflags",
+                movflags,
+                destination.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "Failed to create test video with movflags {}: {}",
+                movflags, stderr
+            );
+        }
+    }
+
+    /// GIVEN a video file with MOOV atom at the end
+    /// WHEN it is processed through the scanning pipeline
+    /// THEN the MOOV atom should be moved to the start
+    #[test]
+    fn test_scan_fixes_moov() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_end = temp_dir.path().join("moov_end.mp4");
+
+        create_test_video_with_movflags(&source, &moov_end, "-faststart");
+        assert!(!video_processor::has_moov_at_start(&moov_end).unwrap());
+
+        // Process through scanning MOOV fix step
+        super::maybe_fix_moov_for_video(&moov_end);
+
+        // MOOV should now be at start
+        assert!(
+            video_processor::has_moov_at_start(&moov_end).unwrap(),
+            "MOOV atom should be at start after scanning fix"
+        );
+    }
+
+    /// GIVEN a video file with MOOV atom already at the start
+    /// WHEN it is processed through the scanning pipeline
+    /// THEN the file should not be modified
+    #[test]
+    fn test_scan_skips_good_moov() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_start = temp_dir.path().join("moov_start.mp4");
+
+        create_test_video_with_movflags(&source, &moov_start, "+faststart");
+        let before = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
+
+        super::maybe_fix_moov_for_video(&moov_start);
+
+        let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
+        assert_eq!(
+            before, after,
+            "File should not be modified when MOOV is already at start"
+        );
+    }
+
+    /// GIVEN a corrupted/invalid file
+    /// WHEN the MOOV fix is attempted during scanning
+    /// THEN scanning should continue without crashing (graceful error handling)
+    #[test]
+    fn test_scan_moov_failure_recovery() {
+        let temp_dir = TempDir::new().unwrap();
+        let corrupted = temp_dir.path().join("corrupted.mp4");
+        std::fs::write(&corrupted, b"this is not a valid video file").unwrap();
+
+        // Should not panic — errors are logged and scanning continues
+        super::maybe_fix_moov_for_video(&corrupted);
+
+        // File should still exist (not deleted or corrupted further)
+        assert!(
+            corrupted.exists(),
+            "Corrupted file should still exist after failed MOOV fix"
+        );
     }
 }

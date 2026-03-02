@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
-    "eslint": "^9.0.0",
+    "eslint": "^10.0.0",
     "prettier": "^3.0.0",
     "simple-git-hooks": "^2.13.1",
     "stylelint": "^16.0.0",

@@ -13,7 +13,7 @@ warp = { version = "0.4.2", features = ["server", "multipart"] }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
-libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+libsqlite3-sys = { version = "0.36", features = ["bundled"] }
 
 # Scheduling
 clokwerk = "0.4"

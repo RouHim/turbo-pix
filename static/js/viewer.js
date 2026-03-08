@@ -22,6 +22,7 @@ class PhotoViewer {
       next: utils.$('.viewer-next'),
       image: utils.$('#viewer-image'),
       video: utils.$('#viewer-video'),
+      viewerImage: utils.$('#viewer-image'),
       viewerLoading: utils.$('.viewer-loading-indicator'),
       sidebar: utils.$('.viewer-sidebar'),
       title: utils.$('#photo-title'),
@@ -278,10 +279,23 @@ class PhotoViewer {
     this.isOpen = true;
     this.updateUrlEnabled = !this.isCollagePhoto(photo);
 
-    // Show viewer
+    // Show viewer with View Transitions API
     if (this.elements.viewer) {
-      this.elements.viewer.classList.add('active', 'fade-in');
-      document.body.style.overflow = 'hidden';
+      // Set view-transition-name on the viewer image
+      if (this.elements.viewerImage) {
+        this.elements.viewerImage.style.viewTransitionName = 'viewer-image';
+      }
+
+      const openAction = () => {
+        this.elements.viewer.classList.add('active', 'fade-in');
+        document.body.style.overflow = 'hidden';
+      };
+
+      if (document.startViewTransition) {
+        document.startViewTransition(openAction);
+      } else {
+        openAction();
+      }
     }
 
     // Ensure sidebar is hidden on open
@@ -313,6 +327,11 @@ class PhotoViewer {
     this.updateAcceptCollageButtonState();
 
     if (this.elements.viewer) {
+      // Clear view-transition-name from the viewer image
+      if (this.elements.viewerImage) {
+        this.elements.viewerImage.style.viewTransitionName = '';
+      }
+
       this.elements.viewer.classList.remove('active', 'fade-in');
       document.body.style.overflow = '';
     }

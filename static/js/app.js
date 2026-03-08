@@ -677,37 +677,24 @@ class TurboPixApp {
   initTheme() {
     const savedTheme = utils.storage.get('theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const theme = savedTheme || (prefersDark ? 'dark' : 'light');
+    const validThemes = ['light', 'dark'];
+    const theme =
+      savedTheme && validThemes.includes(savedTheme) ? savedTheme : prefersDark ? 'dark' : 'light';
     this.setTheme(theme);
   }
 
   setTheme(theme) {
     document.documentElement.classList.toggle('dark-theme', theme === 'dark');
     document.documentElement.classList.toggle('light-theme', theme === 'light');
-    document.documentElement.classList.toggle('neon-theme', theme === 'neon');
-
     utils.storage.set('theme', theme);
     this.updateThemeToggle(theme);
   }
 
   toggleTheme() {
-    let currentTheme = 'light';
-    if (document.documentElement.classList.contains('dark-theme')) {
-      currentTheme = 'dark';
-    } else if (document.documentElement.classList.contains('neon-theme')) {
-      currentTheme = 'neon';
-    }
-
-    // Cycle: Light -> Dark -> Neon -> Light
-    let newTheme;
-    if (currentTheme === 'light') {
-      newTheme = 'dark';
-    } else if (currentTheme === 'dark') {
-      newTheme = 'neon';
-    } else {
-      newTheme = 'light';
-    }
-
+    const currentTheme = document.documentElement.classList.contains('dark-theme')
+      ? 'dark'
+      : 'light';
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
     this.setTheme(newTheme);
 
     // Visual feedback
@@ -721,11 +708,9 @@ class TurboPixApp {
   updateThemeToggle(theme) {
     const themeToggle = utils.$('#theme-toggle');
     if (themeToggle) {
-      themeToggle.classList.remove('dark', 'neon');
+      themeToggle.classList.remove('dark');
       if (theme === 'dark') {
         themeToggle.classList.add('dark');
-      } else if (theme === 'neon') {
-        themeToggle.classList.add('neon');
       }
     }
   }

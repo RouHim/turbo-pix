@@ -1,8 +1,16 @@
+use warp::reply::Reply;
 use warp::Filter;
 
 macro_rules! include_static {
     ($($path:expr),* $(,)?) => {
         &[$(($path, include_str!(concat!("../static/", $path)))),*]
+    };
+}
+
+#[allow(unused_macros)]
+macro_rules! include_static_binary {
+    ($($path:expr),* $(,)?) => {
+        &[$(($path, include_bytes!(concat!("../static/", $path)) as &[u8])),*]
     };
 }
 
@@ -41,12 +49,21 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "i18n/de/index.js",
 ];
 
+const STATIC_BINARY_FILES: &[(&str, &[u8])] = include_static_binary![
+    "fonts/PlayfairDisplay-Bold.woff2",
+    "fonts/PlayfairDisplay-Regular.woff2",
+    "fonts/DMSans-Regular.woff2",
+    "fonts/DMSans-Medium.woff2",
+];
+
 fn content_type_from_path(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("css") => "text/css",
         Some("js") => "application/javascript",
         Some("html") => "text/html",
         Some("svg") => "image/svg+xml",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
         _ => "text/plain",
     }
 }
@@ -54,14 +71,16 @@ fn content_type_from_path(path: &str) -> &'static str {
 fn build_route_for_file(
     path: &'static str,
     content: &'static str,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+) -> warp::filters::BoxedFilter<(warp::reply::Response,)> {
     let segments: Vec<&str> = path.split('/').collect();
     let content_type = content_type_from_path(path);
 
     if segments.len() == 1 && segments[0] == "index.html" {
         return warp::path::end()
             .and(warp::get())
-            .map(move || warp::reply::with_header(content, "content-type", content_type))
+            .map(move || {
+                warp::reply::with_header(content, "content-type", content_type).into_response()
+            })
             .boxed();
     }
 
@@ -73,7 +92,30 @@ fn build_route_for_file(
     filter
         .and(warp::path::end())
         .and(warp::get())
-        .map(move || warp::reply::with_header(content, "content-type", content_type))
+        .map(move || {
+            warp::reply::with_header(content, "content-type", content_type).into_response()
+        })
+        .boxed()
+}
+
+fn build_route_for_binary_file(
+    path: &'static str,
+    content: &'static [u8],
+) -> warp::filters::BoxedFilter<(warp::reply::Response,)> {
+    let segments: Vec<&str> = path.split('/').collect();
+    let content_type = content_type_from_path(path);
+
+    let mut filter = warp::path(segments[0]).boxed();
+    for segment in segments.iter().skip(1) {
+        filter = filter.and(warp::path(*segment)).boxed();
+    }
+
+    filter
+        .and(warp::path::end())
+        .and(warp::get())
+        .map(move || {
+            warp::reply::with_header(content.to_vec(), "content-type", content_type).into_response()
+        })
         .boxed()
 }
 
@@ -87,6 +129,19 @@ pub fn build_static_routes(
         .expect("At least one static file must be defined");
 
     let all_static = iter.fold(first.boxed(), |acc, route| acc.or(route).unify().boxed());
+
+    let all_binary_opt = STATIC_BINARY_FILES
+        .iter()
+        .map(|(path, content)| build_route_for_binary_file(path, content))
+        .fold(
+            None::<warp::filters::BoxedFilter<(warp::reply::Response,)>>,
+            |acc, route| {
+                Some(match acc {
+                    None => route,
+                    Some(a) => a.or(route).unify().boxed(),
+                })
+            },
+        );
 
     // Add catch-all route for SPA routing - serves index.html for all non-static paths
     let index_html = STATIC_FILES
@@ -105,18 +160,26 @@ pub fn build_static_routes(
                 || path_str.starts_with("/i18n/")
                 || path_str.starts_with("/favicon")
                 || path_str.starts_with("/site.webmanifest")
+                || path_str.starts_with("/fonts/")
             {
                 Err(warp::reject::not_found())
             } else {
                 // Serve index.html for all other GET requests (SPA routes)
-                Ok::<_, warp::Rejection>(warp::reply::with_header(
-                    index_html,
-                    "content-type",
-                    "text/html",
-                ))
+                Ok::<_, warp::Rejection>(
+                    warp::reply::with_header(index_html, "content-type", "text/html")
+                        .into_response(),
+                )
             }
         },
     );
 
-    all_static.or(spa_fallback)
+    match all_binary_opt {
+        Some(all_binary) => all_binary
+            .or(all_static)
+            .unify()
+            .or(spa_fallback)
+            .unify()
+            .boxed(),
+        None => all_static.or(spa_fallback).unify().boxed(),
+    }
 }

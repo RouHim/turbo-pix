@@ -3,7 +3,7 @@ window.EN_TRANSLATIONS = {
     appTitle: 'TurboPix',
     search: 'Search',
     search_photos_placeholder: 'Search photos...',
-    search_ai_placeholder: 'AI-powered photo search...',
+    search_ai_placeholder: 'Search photos...',
     all_photos: 'All media',
     favorites: 'Favorites',
     videos: 'Videos',

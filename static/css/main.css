@@ -235,11 +235,20 @@
       align-items: center;
 
       & a {
+        text-decoration: none;
+        color: inherit;
+        display: flex;
+        align-items: center;
         cursor: pointer;
         transition: opacity 0.2s ease;
 
         &:hover {
           opacity: 0.8;
+        }
+
+        & img {
+          height: 2em;
+          margin-right: 0.5em;
         }
       }
     }

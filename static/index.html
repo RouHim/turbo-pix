@@ -6,7 +6,8 @@
     <title>TurboPix</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#4f46e5" />
+    <meta name="theme-color" content="#f5f3ef" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1c1c22" />
     <link
       rel="preload"
       href="/fonts/DMSans-Regular.woff2"
@@ -30,16 +31,7 @@
       <header class="header">
         <div class="header-content">
           <h1 class="logo">
-            <a
-              href="#"
-              id="logo-link"
-              style="text-decoration: none; color: inherit; display: flex; align-items: center"
-              ><img
-                src="/favicon.svg"
-                alt="TurboPix logo"
-                style="height: 2em; margin-right: 0.5em"
-              />TurboPix</a
-            >
+            <a href="#" id="logo-link"><img src="/favicon.svg" alt="TurboPix logo" />TurboPix</a>
           </h1>
           <div class="header-actions">
             <div class="search-container">
@@ -302,7 +294,6 @@
             title="Delete Photo"
             data-i18n-title="ui.delete_photo"
             data-icon="trash-2"
-            style="margin-left: auto; color: #ef4444"
           ></button>
         </div>
 
@@ -316,7 +307,7 @@
 
         <div class="viewer-sidebar">
           <div class="photo-info">
-            <div style="display: flex; justify-content: space-between; align-items: center">
+            <div class="photo-info-header">
               <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
               <button
                 id="metadata-edit-btn"

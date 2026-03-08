@@ -480,7 +480,7 @@
   align-items: center;
   justify-content: center;
   z-index: 100;
-  background: rgb(0 0 0 / 50%);
+  background: var(--glass-bg, oklch(100% 0 0deg / 10%));
   backdrop-filter: blur(8px);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
@@ -712,9 +712,9 @@
 }
 
 .action-btn.active {
-  background: var(--primary-gradient);
-  color: white;
-  box-shadow: var(--shadow-glow);
+  background: oklch(55% 0.08 250deg / 15%);
+  color: var(--primary-color);
+  box-shadow: none;
 }
 
 .download-btn {

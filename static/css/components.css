@@ -19,6 +19,8 @@
   border: 1px solid var(--divider-color);
   animation: fade-in 0.6s ease-out forwards;
   opacity: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
 
   &:hover /* .photo-card:hover */ {
     box-shadow: var(--shadow-heavy);
@@ -545,28 +547,12 @@
   min-height: 0;
   overflow-y: auto;
   padding-right: var(--space-3);
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
 }
 
 .photo-info > div:first-child {
   margin-top: var(--space-12);
-}
-
-.photo-info::-webkit-scrollbar {
-  width: 8px;
-}
-
-.photo-info::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.photo-info::-webkit-scrollbar-thumb {
-  background: var(--divider-color);
-  border-radius: 4px;
-  transition: background var(--transition-fast);
-}
-
-.photo-info::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
 }
 
 .photo-info h3 {

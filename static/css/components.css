@@ -1152,7 +1152,7 @@
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: var(--text-color);
+  color: var(--text-primary);
 }
 
 .close-button {
@@ -1174,7 +1174,7 @@
 
 .close-button:hover {
   background: var(--background-secondary);
-  color: var(--text-color);
+  color: var(--text-primary);
 }
 
 .modal form {
@@ -1189,7 +1189,7 @@
   display: block;
   margin-bottom: 8px;
   font-weight: 500;
-  color: var(--text-color);
+  color: var(--text-primary);
   font-size: 14px;
 }
 
@@ -1199,7 +1199,7 @@
   border: 1px solid var(--divider-color);
   border-radius: var(--radius-sm);
   background: var(--background-secondary);
-  color: var(--text-color);
+  color: var(--text-primary);
   font-size: 14px;
   font-family: inherit;
   transition: var(--transition-fast);
@@ -1208,7 +1208,7 @@
 .modal .form-group input:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgb(var(--primary-rgb) / 10%);
+  box-shadow: 0 0 0 3px oklch(55% 0.08 250deg / 10%);
 }
 
 .error-message {
@@ -1259,7 +1259,7 @@
 
 .btn-secondary {
   background: var(--background-secondary);
-  color: var(--text-color);
+  color: var(--text-primary);
 }
 
 .btn-secondary:hover {
@@ -1283,7 +1283,7 @@
 .btn-icon:hover,
 .modal .btn-icon:hover {
   background: var(--background-secondary);
-  color: var(--text-color);
+  color: var(--text-primary);
 }
 
 .modal .btn-icon svg {
@@ -1441,7 +1441,7 @@
   border-color: var(--primary-color);
   color: var(--primary-color);
   background: var(--surface-color);
-  box-shadow: 0 0 0 4px rgb(var(--primary-rgb) / 10%);
+  box-shadow: 0 0 0 4px oklch(55% 0.08 250deg / 10%);
 }
 
 .step-item[data-step-state='active'] .step-label {

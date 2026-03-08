@@ -416,62 +416,82 @@ async fn transcode_hevc_to_h264_with_timeout(
     output_path: &Path,
     timeout_duration: Duration,
 ) -> CacheResult<()> {
-    let _permit = acquire_transcode_permit().await?;
-
-    // Create output directory if it doesn't exist
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            CacheError::VideoProcessingError(format!("Failed to create output directory: {}", e))
-        })?;
-    }
-
     let ffmpeg_path = get_ffmpeg_path();
+    transcode_hevc_to_h264_with_timeout_and_path(
+        input_path,
+        output_path,
+        timeout_duration,
+        ffmpeg_path,
+    )
+    .await
+}
 
-    // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
-    // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
-    let mut command = TokioCommand::new(ffmpeg_path);
-    command.kill_on_drop(true).args([
-        "-hwaccel",
-        "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
-        "-i",
-        input_path.to_str().unwrap(),
-        "-c:v",
-        "libx264", // Use H.264 encoder (more widely available than libopenh264)
-        "-preset",
-        "fast", // Encoding speed preset (fast is good for real-time transcoding)
-        "-crf",
-        "23", // Constant Rate Factor (18-28, lower = better quality)
-        "-c:a",
-        "copy", // Copy audio stream without re-encoding (faster)
-        "-movflags",
-        "+faststart", // Enable streaming-friendly format
-        "-y",         // Overwrite output file
-        output_path.to_str().unwrap(),
-    ]);
+async fn transcode_hevc_to_h264_with_timeout_and_path(
+    input_path: &Path,
+    output_path: &Path,
+    timeout_duration: Duration,
+    ffmpeg_path: String,
+) -> CacheResult<()> {
+    let inner = async {
+        let _permit = acquire_transcode_permit().await?;
 
-    let output = timeout(timeout_duration, command.output())
-        .await
-        .map_err(|_| {
-            CacheError::VideoProcessingError(format!(
-                "Transcoding timed out after {}s",
-                timeout_duration.as_secs()
-            ))
-        })?
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e)))?;
+        // Create output directory if it doesn't exist
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                CacheError::VideoProcessingError(format!(
+                    "Failed to create output directory: {}",
+                    e
+                ))
+            })?;
+        }
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        log::error!("FFmpeg transcoding failed!");
-        log::error!("FFmpeg stderr: {}", stderr);
-        log::error!("FFmpeg stdout: {}", stdout);
-        return Err(CacheError::VideoProcessingError(format!(
-            "ffmpeg transcode exited with status {}. stderr: {}",
-            output.status, stderr
-        )));
-    }
+        // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
+        // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
+        let mut command = TokioCommand::new(ffmpeg_path);
+        command.kill_on_drop(true).args([
+            "-hwaccel",
+            "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
+            "-i",
+            input_path.to_str().unwrap(),
+            "-c:v",
+            "libx264", // Use H.264 encoder (more widely available than libopenh264)
+            "-preset",
+            "fast", // Encoding speed preset (fast is good for real-time transcoding)
+            "-crf",
+            "23", // Constant Rate Factor (18-28, lower = better quality)
+            "-c:a",
+            "copy", // Copy audio stream without re-encoding (faster)
+            "-movflags",
+            "+faststart", // Enable streaming-friendly format
+            "-y",         // Overwrite output file
+            output_path.to_str().unwrap(),
+        ]);
 
-    Ok(())
+        let output = command.output().await.map_err(|e| {
+            CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            log::error!("FFmpeg transcoding failed!");
+            log::error!("FFmpeg stderr: {}", stderr);
+            log::error!("FFmpeg stdout: {}", stdout);
+            return Err(CacheError::VideoProcessingError(format!(
+                "ffmpeg transcode exited with status {}. stderr: {}",
+                output.status, stderr
+            )));
+        }
+
+        Ok::<(), CacheError>(())
+    };
+
+    timeout(timeout_duration, inner).await.map_err(|_| {
+        CacheError::VideoProcessingError(format!(
+            "Transcoding timed out after {}s",
+            timeout_duration.as_secs()
+        ))
+    })?
 }
 
 /// Get the path for a transcoded video in the cache
@@ -835,33 +855,6 @@ mod tests {
     #[cfg(not(unix))]
     fn make_executable(_path: &Path) {}
 
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(value) = &self.original {
-                    std::env::set_var(self.key, value);
-                } else {
-                    std::env::remove_var(self.key);
-                }
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_transcode_semaphore() {
         let active = Arc::new(AtomicUsize::new(0));
@@ -902,14 +895,17 @@ mod tests {
         std::fs::write(&ffmpeg_script, "#!/usr/bin/env sh\nsleep 2\nexit 0\n").unwrap();
         make_executable(&ffmpeg_script);
 
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
-
         let input = temp_dir.path().join("input.mp4");
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result =
-            transcode_hevc_to_h264_with_timeout(&input, &output, Duration::from_secs(1)).await;
+        let result = transcode_hevc_to_h264_with_timeout_and_path(
+            &input,
+            &output,
+            Duration::from_secs(1),
+            ffmpeg_script.to_str().unwrap().to_string(),
+        )
+        .await;
 
         assert!(result.is_err(), "Expected timeout error");
         let error = format!("{}", result.unwrap_err());
@@ -931,14 +927,17 @@ mod tests {
         .unwrap();
         make_executable(&ffmpeg_script);
 
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
-
         let input = temp_dir.path().join("input.mp4");
         let output = temp_dir.path().join("nested/output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result =
-            transcode_hevc_to_h264_with_timeout(&input, &output, Duration::from_secs(5)).await;
+        let result = transcode_hevc_to_h264_with_timeout_and_path(
+            &input,
+            &output,
+            Duration::from_secs(5),
+            ffmpeg_script.to_str().unwrap().to_string(),
+        )
+        .await;
 
         assert!(
             result.is_ok(),

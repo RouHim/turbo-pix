@@ -338,7 +338,7 @@
   height: var(--button-size-lg);
   border: none;
   border-radius: var(--radius-full);
-  background: var(--glass-bg, oklch(100% 0 0deg / 10%));
+  background: oklch(15% 0.01 260deg / 50%);
   backdrop-filter: blur(8px);
   color: white;
   font-size: var(--font-3xl);
@@ -347,7 +347,7 @@
   z-index: 10;
 
   &:hover {
-    background: oklch(100% 0 0deg / 20%);
+    background: oklch(15% 0.01 260deg / 70%);
   }
 }
 
@@ -358,8 +358,9 @@
   transform: translateX(-50%);
   display: flex;
   gap: var(--space-2);
-  background: var(--glass-bg, oklch(100% 0 0deg / 10%));
-  backdrop-filter: blur(8px);
+  background: oklch(15% 0.01 260deg / 70%);
+  backdrop-filter: blur(12px);
+  border: 1px solid oklch(100% 0 0deg / 10%);
   border-radius: var(--radius-md);
   padding: var(--space-2);
   z-index: 10;
@@ -414,7 +415,7 @@
   height: var(--button-size-sm);
   border: none;
   border-radius: var(--radius-full);
-  background: var(--glass-bg, oklch(100% 0 0deg / 10%));
+  background: oklch(100% 0 0deg / 10%);
   backdrop-filter: blur(8px);
   color: white;
   font-size: var(--font-xl);

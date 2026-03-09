@@ -4,8 +4,8 @@
   "description": "Fast photo gallery with AI-powered search",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1c1c22",
-  "theme_color": "#f5f3ef",
+  "background_color": "#07090d",
+  "theme_color": "#f8f6f3",
   "icons": [
     {
       "src": "/favicon.svg",

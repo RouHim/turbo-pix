@@ -1,3 +1,18 @@
+# [2.18.0](https://github.com/RouHim/turbo-pix/compare/2.17.13...2.18.0) (2026-03-16)
+
+
+### Bug Fixes
+
+* **components:** fix viewer-loading-indicator glass treatment, action-btn active state ([be8688e](https://github.com/RouHim/turbo-pix/commit/be8688ee8a762996628a928c67eed52fb5d56d74))
+* **css:** replace undefined --text-color and --primary-rgb tokens ([aa49e84](https://github.com/RouHim/turbo-pix/commit/aa49e84562152ff7356628b5d6d11d08be782957))
+* **viewer:** use dark glass for action bar to fix icon contrast ([d2c8245](https://github.com/RouHim/turbo-pix/commit/d2c82452c2779a5f4e17129f55a690429b61e754))
+
+
+### Features
+
+* binary font serving, self-hosted fonts, favicon/banner redesign, neon removal ([b08b89c](https://github.com/RouHim/turbo-pix/commit/b08b89ca8fe623171230150860ddb72594e0f421))
+* **transitions:** add View Transitions + [@starting-style](https://github.com/starting-style) for viewer and modals ([f21798f](https://github.com/RouHim/turbo-pix/commit/f21798fbed0a016b691017cb3102d51f03eea1f5))
+
 ## [2.17.13](https://github.com/RouHim/turbo-pix/compare/2.17.12...2.17.13) (2026-03-14)
 
 ## [2.17.12](https://github.com/RouHim/turbo-pix/compare/2.17.11...2.17.12) (2026-03-13)

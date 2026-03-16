@@ -1,3 +1,10 @@
+## [2.18.1](https://github.com/RouHim/turbo-pix/compare/2.18.0...2.18.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* **container:** use reliable GitHub FFmpeg builds for CI ([a38d045](https://github.com/RouHim/turbo-pix/commit/a38d0458ee4d7c51b8323d31354d1af1b016e6e8))
+
 # [2.18.0](https://github.com/RouHim/turbo-pix/compare/2.17.13...2.18.0) (2026-03-16)
 
 

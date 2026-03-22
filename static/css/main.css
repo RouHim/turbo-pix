@@ -664,11 +664,49 @@
     .sidebar {
       background: var(--surface-color);
     }
+
+    .viewer-overlay {
+      background: oklch(0% 0 0deg / 92%);
+    }
+
+    .viewer-close,
+    .viewer-prev,
+    .viewer-next,
+    .zoom-btn {
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+
+    .viewer-controls,
+    .viewer-loading-indicator {
+      background: var(--surface-color);
+    }
   }
 
   @media (prefers-reduced-transparency: reduce) {
     .header,
     .sidebar {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--surface-color);
+    }
+
+    .viewer-overlay {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: oklch(0% 0 0deg / 92%);
+    }
+
+    .viewer-close,
+    .viewer-prev,
+    .viewer-next,
+    .zoom-btn {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+
+    .viewer-controls,
+    .viewer-loading-indicator {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       background: var(--surface-color);

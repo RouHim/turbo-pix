@@ -1,3 +1,10 @@
+## [2.18.5](https://github.com/RouHim/turbo-pix/compare/2.18.4...2.18.5) (2026-03-22)
+
+
+### Bug Fixes
+
+* **ui:** hide favorite and download actions on mobile photo stream ([8d345c4](https://github.com/RouHim/turbo-pix/commit/8d345c4c8d9293f12e96d2b1c67cb1aff369188f))
+
 ## [2.18.4](https://github.com/RouHim/turbo-pix/compare/2.18.3...2.18.4) (2026-03-18)
 
 ## [2.18.3](https://github.com/RouHim/turbo-pix/compare/2.18.2...2.18.3) (2026-03-18)

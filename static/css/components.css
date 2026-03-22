@@ -358,9 +358,9 @@
   transform: translateX(-50%);
   display: flex;
   gap: var(--space-2);
-  background: oklch(15% 0.01 260deg / 70%);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
-  border: 1px solid oklch(100% 0 0deg / 10%);
+  border: 1px solid var(--glass-border, var(--divider-color));
   border-radius: var(--radius-md);
   padding: var(--space-2);
   z-index: 10;
@@ -400,13 +400,13 @@
 
 .viewer-controls::before {
   left: 0;
-  background: linear-gradient(to right, oklch(0% 0 0deg / 80%), transparent);
+  background: linear-gradient(to right, var(--glass-bg), transparent);
   border-radius: var(--radius-md) 0 0 var(--radius-md);
 }
 
 .viewer-controls::after {
   right: 0;
-  background: linear-gradient(to left, oklch(0% 0 0deg / 80%), transparent);
+  background: linear-gradient(to left, var(--glass-bg), transparent);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 

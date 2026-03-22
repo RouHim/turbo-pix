@@ -123,6 +123,9 @@
     /* Glassmorphism */
     --glass-bg: oklch(99% 0.002 80deg / 70%);
     --glass-border: oklch(0% 0 0deg / 6%);
+    --viewer-btn-bg: oklch(20% 0.01 260deg / 45%);
+    --viewer-btn-color: oklch(95% 0.005 80deg);
+    --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
 
     /* Legacy aliases for backward compatibility */
     --border-radius: var(--radius-md);
@@ -145,6 +148,9 @@
     --shadow-glow: 0 0 12px oklch(55% 0.08 250deg / 10%);
     --glass-bg: oklch(99% 0.002 80deg / 70%);
     --glass-border: oklch(0% 0 0deg / 6%);
+    --viewer-btn-bg: oklch(20% 0.01 260deg / 45%);
+    --viewer-btn-color: oklch(95% 0.005 80deg);
+    --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
   }
 
   /* Dark theme variables */
@@ -163,6 +169,9 @@
     --shadow-glow: 0 0 12px oklch(55% 0.08 250deg / 25%);
     --glass-bg: oklch(14% 0.01 260deg / 70%);
     --glass-border: oklch(100% 0 0deg / 8%);
+    --viewer-btn-bg: oklch(15% 0.01 260deg / 50%);
+    --viewer-btn-color: oklch(95% 0.005 80deg);
+    --viewer-btn-hover-bg: oklch(15% 0.01 260deg / 70%);
   }
 } /* end @layer tokens */
 
@@ -207,8 +216,8 @@
   .header {
     grid-area: header;
     background: var(--glass-bg);
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
     border-bottom: 1px solid var(--glass-border, var(--divider-color));
     box-shadow: var(--shadow-light);
     z-index: 100;
@@ -316,29 +325,25 @@
       box-shadow: var(--shadow-light);
       border: 1px solid var(--divider-color);
 
-      &:hover {
-        background: var(--background-secondary);
-        transform: scale(1.05);
-        box-shadow: var(--shadow-medium);
-      }
+      --theme-icon-bg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'%3E%3C/path%3E%3C/svg%3E");
+    }
 
-      & .theme-icon::before {
-        content: '';
-        display: inline-block;
-        width: var(--font-2xl);
-        height: var(--font-2xl);
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'%3E%3C/path%3E%3C/svg%3E")
-          center/contain no-repeat;
-      }
+    & .theme-toggle.dark {
+      --theme-icon-bg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='5'%3E%3C/circle%3E%3Cline x1='12' y1='1' x2='12' y2='3'%3E%3C/line%3E%3Cline x1='12' y1='21' x2='12' y2='23'%3E%3C/line%3E%3Cline x1='4.22' y1='4.22' x2='5.64' y2='5.64'%3E%3C/line%3E%3Cline x1='18.36' y1='18.36' x2='19.78' y2='19.78'%3E%3C/line%3E%3Cline x1='1' y1='12' x2='3' y2='12'%3E%3C/line%3E%3Cline x1='21' y1='12' x2='23' y2='12'%3E%3C/line%3E%3Cline x1='4.22' y1='19.78' x2='5.64' y2='18.36'%3E%3C/line%3E%3Cline x1='18.36' y1='5.64' x2='19.78' y2='4.22'%3E%3C/line%3E%3C/svg%3E");
+    }
 
-      &.dark .theme-icon::before {
-        content: '';
-        display: inline-block;
-        width: var(--font-2xl);
-        height: var(--font-2xl);
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='5'%3E%3C/circle%3E%3Cline x1='12' y1='1' x2='12' y2='3'%3E%3C/line%3E%3Cline x1='12' y1='21' x2='12' y2='23'%3E%3C/line%3E%3Cline x1='4.22' y1='4.22' x2='5.64' y2='5.64'%3E%3C/line%3E%3Cline x1='18.36' y1='18.36' x2='19.78' y2='19.78'%3E%3C/line%3E%3Cline x1='1' y1='12' x2='3' y2='12'%3E%3C/line%3E%3Cline x1='21' y1='12' x2='23' y2='12'%3E%3C/line%3E%3Cline x1='4.22' y1='19.78' x2='5.64' y2='18.36'%3E%3C/line%3E%3Cline x1='18.36' y1='5.64' x2='19.78' y2='4.22'%3E%3C/line%3E%3C/svg%3E")
-          center/contain no-repeat;
-      }
+    & .theme-toggle .theme-icon::before {
+      content: '';
+      display: inline-block;
+      width: var(--font-2xl);
+      height: var(--font-2xl);
+      background: var(--theme-icon-bg) center/contain no-repeat;
+    }
+
+    & .theme-toggle:hover {
+      background: var(--background-secondary);
+      transform: scale(1.05);
+      box-shadow: var(--shadow-medium);
     }
   }
 
@@ -350,8 +355,8 @@
 
     @media (width >= 768px) {
       background: var(--glass-bg);
-      backdrop-filter: blur(16px) saturate(1.2);
-      -webkit-backdrop-filter: blur(16px) saturate(1.2);
+      backdrop-filter: blur(16px) saturate(1.5);
+      -webkit-backdrop-filter: blur(16px) saturate(1.5);
       border-right: 1px solid var(--glass-border, var(--divider-color));
     }
 
@@ -374,17 +379,17 @@
       color: var(--text-secondary);
       border-radius: var(--radius-md);
       margin-bottom: var(--space-1);
+    }
 
-      &:hover {
-        background: var(--background-secondary);
-        color: var(--text-primary);
-      }
+    & .nav-item:hover {
+      background: var(--background-secondary);
+      color: var(--text-primary);
+    }
 
-      &.active {
-        background: oklch(55% 0.08 250deg / 10%);
-        color: var(--primary-color);
-        box-shadow: var(--shadow-light);
-      }
+    & .nav-item.active {
+      background: oklch(55% 0.08 250deg / 10%);
+      color: var(--primary-color);
+      box-shadow: var(--shadow-light);
     }
 
     & .nav-divider {
@@ -629,11 +634,13 @@
     0% {
       opacity: 0;
       backdrop-filter: blur(0);
+      -webkit-backdrop-filter: blur(0);
     }
 
     100% {
       opacity: 1;
-      backdrop-filter: blur(10px);
+      backdrop-filter: blur(12px) saturate(1.5);
+      -webkit-backdrop-filter: blur(12px) saturate(1.5);
     }
   }
 

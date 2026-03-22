@@ -245,6 +245,11 @@
   .fullscreen-btn {
     display: none;
   }
+
+  .photo-card-actions .favorite-btn,
+  .photo-card-actions .download-btn {
+    display: none;
+  }
 }
 
 @media (width <= 480px) {

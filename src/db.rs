@@ -892,7 +892,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             has_thumbnail: Some(false),
             blurhash: processed.blurhash,
             is_favorite: None,
-            semantic_vector_indexed: Some(false), // Phase 1 only indexes metadata
+            semantic_vector_indexed: processed.semantic_vector_indexed,
             metadata: json!(metadata),
             date_modified: processed.date_modified,
             date_indexed: Some(Utc::now()),

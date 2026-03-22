@@ -399,6 +399,24 @@ class PhotoGrid {
       }
     }
   }
+
+  removePhoto(photoHash) {
+    if (!photoHash) return;
+
+    this.photos = this.photos.filter((photo) => photo.hash_sha256 !== photoHash);
+
+    const card = this.container.querySelector(`[data-photo-id="${photoHash}"]`);
+    if (card) {
+      card.remove();
+    }
+
+    if (this.photos.length === 0) {
+      this.hasMore = false;
+      this.showEmptyState();
+    }
+
+    this.infiniteScroll?.updateLoadingIndicator();
+  }
 }
 
 // Make PhotoGrid available globally
@@ -409,5 +427,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const gridContainer = utils.$('#photo-grid');
   if (gridContainer) {
     window.photoGrid = new PhotoGrid(gridContainer);
+
+    window.removePhotoFromGrid = (photoHash) => {
+      window.photoGrid?.removePhoto(photoHash);
+    };
+
+    window.updatePhotoInGrid = (updatedPhoto) => {
+      window.photoGrid?.updatePhotoCard(updatedPhoto);
+    };
   }
 });

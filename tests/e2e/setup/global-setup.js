@@ -128,29 +128,27 @@ async function waitForHealthCheck(baseURL, maxRetries = MAX_HEALTH_RETRIES) {
 }
 
 async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
-  console.log('Waiting for metadata indexing to complete...');
+  console.log('Waiting for metadata phase readiness...');
 
   for (let i = 0; i < maxRetries; i++) {
     try {
       const indexingResponse = await fetch(`${baseURL}/api/indexing/status`);
       if (indexingResponse.ok) {
         const data = await indexingResponse.json();
-        const progress = Math.round(data.progress_percent);
-
-        const metadataComplete =
-          data.is_complete === true;
+        const metadataPhase = Array.isArray(data.phases)
+          ? data.phases.find((phase) => phase.id === 'metadata')
+          : null;
+        const metadataComplete = data.is_complete === true || metadataPhase?.state === 'done';
 
         if (metadataComplete) {
-          console.log(
-            `Metadata indexing complete - ${data.photos_indexed} photos indexed`
-          );
+          console.log(`Metadata phase ready - ${data.photos_indexed} photos indexed`);
           return true;
         }
 
         if (i % 10 === 0) {
-          const progressStr = isNaN(progress) ? 'computing...' : `${progress}%`;
+          const metadataState = metadataPhase?.state || 'unknown';
           console.log(
-            `Indexing progress: ${progressStr} (${data.photos_indexed} photos)`
+            `Indexing progress: metadata=${metadataState}, is_indexing=${data.is_indexing} (${data.photos_indexed} photos)`
           );
         }
       }
@@ -162,7 +160,7 @@ async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
   }
 
   throw new Error(
-    `Metadata indexing did not complete after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
+    `Metadata phase did not become ready after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
   );
 }
 
@@ -220,9 +218,7 @@ async function verifyTestPhotoDates(baseURL) {
 
   const clusterPhotos = photos.filter((photo) => photo.filename?.startsWith('cluster_'));
   const archivePhotos = photos.filter((photo) => photo.filename?.startsWith('archive_'));
-  const matchingRecent = clusterPhotos.filter((photo) =>
-    photo.taken_at?.startsWith(recentPrefix)
-  );
+  const matchingRecent = clusterPhotos.filter((photo) => photo.taken_at?.startsWith(recentPrefix));
   const matchingArchive = archivePhotos.filter((photo) =>
     photo.taken_at?.startsWith(archivePrefix)
   );
@@ -277,12 +273,7 @@ async function ensureHousekeepingCandidate(baseURL) {
 
 async function seedPendingCollages() {
   const collageSource = path.join(TEST_DATA_DIR, 'photos', 'cluster_01.jpg');
-  const collagePath = path.join(
-    TEST_DATA_DIR,
-    'collages',
-    'staging',
-    'collage_seed_01.jpg'
-  );
+  const collagePath = path.join(TEST_DATA_DIR, 'collages', 'staging', 'collage_seed_01.jpg');
 
   if (!existsSync(collageSource)) {
     throw new Error(`Missing collage source image at ${collageSource}`);

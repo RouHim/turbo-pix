@@ -1,5 +1,5 @@
 use libsqlite3_sys::sqlite3_auto_extension;
-use log::info;
+use log::{info, warn};
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use std::str::FromStr;
@@ -85,23 +85,8 @@ pub async fn delete_orphaned_photos(
     existing_paths: &[String],
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     if existing_paths.is_empty() {
-        let deleted_paths: Vec<String> = sqlx::query_scalar("SELECT file_path FROM photos")
-            .fetch_all(pool)
-            .await?;
-
-        sqlx::query("DELETE FROM photos").execute(pool).await?;
-        sqlx::query("DELETE FROM media_semantic_vectors")
-            .execute(pool)
-            .await?;
-        sqlx::query("DELETE FROM semantic_vector_path_mapping")
-            .execute(pool)
-            .await?;
-        sqlx::query("DELETE FROM video_semantic_metadata")
-            .execute(pool)
-            .await?;
-
-        info!("Deleted all photos and semantic vectors from database (no files found)");
-        return Ok(deleted_paths);
+        warn!("No files found on disk — skipping orphan cleanup to prevent accidental data loss");
+        return Ok(Vec::new());
     }
 
     // Build placeholders for IN clause
@@ -292,11 +277,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_all_photos_cleans_all_feature_vectors() {
-        // Create test pool
+    async fn test_empty_paths_preserves_data() {
         let pool = create_in_memory_pool().await.unwrap();
 
-        // Insert test data
         sqlx::query(
             "INSERT INTO semantic_vector_path_mapping (id, path) VALUES (1, '/path/to/photo1.jpg')",
         )
@@ -313,22 +296,21 @@ mod tests {
             .await
             .unwrap();
 
-        // Delete all photos (empty existing_paths)
-        delete_orphaned_photos(&pool, &[]).await.unwrap();
+        let deleted = delete_orphaned_photos(&pool, &[]).await.unwrap();
+        assert!(deleted.is_empty(), "Should not delete anything when no files found on disk");
 
-        // Verify all cleaned up
         let cache_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM semantic_vector_path_mapping")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(cache_count, 0);
+        assert_eq!(cache_count, 1, "Data should be preserved");
 
         let feature_vector_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(feature_vector_count, 0);
+        assert_eq!(feature_vector_count, 1, "Data should be preserved");
     }
 }

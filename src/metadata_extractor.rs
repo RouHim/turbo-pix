@@ -77,6 +77,9 @@ impl MetadataExtractor {
 
         if is_video {
             Self::extract_video_metadata(path, &mut metadata);
+            if metadata.taken_at.is_none() {
+                Self::apply_file_creation_fallback(&mut metadata, file_metadata);
+            }
         } else {
             // Use kamadak-exif for all EXIF reading
             if let Err(e) = Self::extract_exif_metadata(path, &mut metadata, file_metadata) {
@@ -329,6 +332,13 @@ impl MetadataExtractor {
                             metadata.bitrate = bitrate_str.parse::<i32>().ok();
                         }
 
+                        // Extract creation_time from format tags
+                        if let Some(creation_time) =
+                            parsed["format"]["tags"]["creation_time"].as_str()
+                        {
+                            metadata.taken_at = Self::parse_video_creation_time(creation_time);
+                        }
+
                         // Extract video codec and frame rate from streams
                         if let Some(streams) = parsed["streams"].as_array() {
                             for stream in streams {
@@ -405,11 +415,20 @@ impl MetadataExtractor {
 
         None
     }
+
+    fn parse_video_creation_time(creation_time: &str) -> Option<DateTime<Utc>> {
+        creation_time.parse::<DateTime<Utc>>().ok().or_else(|| {
+            NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                .ok()
+                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[test]
     fn test_ffprobe_is_installed() {
@@ -650,8 +669,11 @@ mod tests {
         assert!(metadata.width.is_some(), "Should extract video width");
         assert!(metadata.height.is_some(), "Should extract video height");
 
-        // NOTE: Video metadata extraction doesn't currently apply file timestamp fallback
-        // so taken_at may be None for videos without creation time metadata
+        // THEN: Should have taken_at from file modification fallback
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should have taken_at from file modification date fallback"
+        );
     }
 
     #[test]
@@ -678,5 +700,33 @@ mod tests {
 
             // THEN: If we reach here, no panic occurred
         }
+    }
+
+    #[test]
+    fn test_parse_video_creation_time() {
+        // GIVEN: ISO 8601 creation_time strings from ffprobe
+        let iso_with_tz = "2024-06-15T14:30:00.000000Z";
+        let iso_simple = "2024-06-15T14:30:00Z";
+
+        // WHEN/THEN: Should parse both formats
+        let result = MetadataExtractor::parse_video_creation_time(iso_with_tz);
+        assert!(
+            result.is_some(),
+            "Should parse ISO 8601 with fractional seconds"
+        );
+        assert_eq!(result.unwrap().year(), 2024);
+
+        let result = MetadataExtractor::parse_video_creation_time(iso_simple);
+        assert!(
+            result.is_some(),
+            "Should parse ISO 8601 without fractional seconds"
+        );
+        assert_eq!(result.unwrap().month(), 6);
+
+        // GIVEN: Invalid string
+        let invalid = "not-a-date";
+
+        // WHEN/THEN: Should return None
+        assert!(MetadataExtractor::parse_video_creation_time(invalid).is_none());
     }
 }

@@ -338,6 +338,7 @@ class TurboPixApp {
   async loadInitialData() {
     try {
       utils.showLoading();
+      await this.waitForIndexingCompletion();
 
       // Load photos based on current view
       const currentView = this.state.get('currentView');
@@ -411,13 +412,14 @@ class TurboPixApp {
           await window.photoGrid.loadPhotos(null, filters, true);
           break;
 
-        case 'favorites':
+        case 'favorites': {
           const favoritePhotos = await api.getFavoritePhotos();
           // Only update UI if this is still the current request
           if (currentLoadId === this.viewLoadId) {
             this.displayFavoritePhotos(favoritePhotos);
           }
           break;
+        }
 
         case 'videos':
           // This would need backend support for file type filtering
@@ -713,6 +715,46 @@ class TurboPixApp {
         themeToggle.classList.add('dark');
       }
     }
+  }
+
+  async waitForIndexingCompletion() {
+    const startTime = Date.now();
+    const maxWaitMs = 20000;
+    const pollIntervalMs = 1000;
+
+    return new Promise((resolve) => {
+      const check = async () => {
+        if (Date.now() - startTime >= maxWaitMs) {
+          if (window.logger) {
+            window.logger.warn('Indexing wait timeout reached, continuing with available photos', {
+              component: 'App',
+              method: 'waitForIndexingCompletion',
+              maxWaitMs,
+            });
+          }
+          resolve();
+          return;
+        }
+
+        try {
+          const status = await window.api.getIndexingStatus();
+
+          const metadataPhase = Array.isArray(status?.phases)
+            ? status.phases.find((phase) => phase.id === 'metadata')
+            : null;
+          const metadataReady = metadataPhase?.state === 'done';
+
+          if (!status?.is_indexing || metadataReady) {
+            resolve();
+          } else {
+            setTimeout(check, pollIntervalMs);
+          }
+        } catch {
+          setTimeout(check, pollIntervalMs);
+        }
+      };
+      check();
+    });
   }
 
   // Public API

@@ -126,4 +126,25 @@ test.describe('Photo Viewer', () => {
     // THEN: At least one photo should have loaded successfully
     expect(mediaLoaded).toBe(true);
   });
+
+  test('should remove deleted photo from stream without manual reload', async ({ page }) => {
+    // GIVEN: At least one photo card is visible in stream
+    const cardsBefore = await TestHelpers.getPhotoCards(page);
+    expect(cardsBefore.length).toBeGreaterThan(0);
+
+    const firstCard = cardsBefore[0];
+    const photoHash = await firstCard.getAttribute('data-photo-id');
+    expect(photoHash).toBeTruthy();
+
+    // WHEN: Open viewer and delete photo
+    await firstCard.click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.locator('.delete-photo-btn').click();
+
+    // THEN: Photo card is removed from stream immediately (no reload)
+    await TestHelpers.verifyViewerOpen(page);
+    await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
+  });
 });

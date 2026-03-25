@@ -1,3 +1,12 @@
+## [2.18.6](https://github.com/RouHim/turbo-pix/compare/2.18.5...2.18.6) (2026-03-25)
+
+
+### Bug Fixes
+
+* sync stream state after deletes and stabilize indexing metadata readiness ([711fef3](https://github.com/RouHim/turbo-pix/commit/711fef3d95e7e8b3a335873de7ef1ab0ce289d14))
+* **test:** use correct CSS route path in webkit test ([8d1ce49](https://github.com/RouHim/turbo-pix/commit/8d1ce496f0de2d111830f36cf7c66b699cafc6f9))
+* **viewer:** add .viewer-sidebar to [@supports](https://github.com/supports) and reduced-transparency fallback blocks ([9d3f68f](https://github.com/RouHim/turbo-pix/commit/9d3f68fc20b0b174c16489a954a2f6960976bfd2))
+
 ## [2.18.5](https://github.com/RouHim/turbo-pix/compare/2.18.4...2.18.5) (2026-03-22)
 
 

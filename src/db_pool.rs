@@ -297,7 +297,10 @@ mod tests {
             .unwrap();
 
         let deleted = delete_orphaned_photos(&pool, &[]).await.unwrap();
-        assert!(deleted.is_empty(), "Should not delete anything when no files found on disk");
+        assert!(
+            deleted.is_empty(),
+            "Should not delete anything when no files found on disk"
+        );
 
         let cache_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM semantic_vector_path_mapping")

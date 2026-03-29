@@ -47,6 +47,7 @@ pub enum ImageEditError {
     FileNotFound(String),
     ReadError(String),
     WriteError(String),
+    PermissionDenied(String),
     ExifError(String),
     DatabaseError(String),
 }
@@ -58,6 +59,7 @@ impl std::fmt::Display for ImageEditError {
             Self::FileNotFound(msg) => write!(f, "File not found: {}", msg),
             Self::ReadError(msg) => write!(f, "Read error: {}", msg),
             Self::WriteError(msg) => write!(f, "Write error: {}", msg),
+            Self::PermissionDenied(msg) => write!(f, "Permission denied: {}", msg),
             Self::ExifError(msg) => write!(f, "EXIF error: {}", msg),
             Self::DatabaseError(msg) => write!(f, "Database error: {}", msg),
         }
@@ -371,8 +373,15 @@ pub async fn delete_photo(
 
     // Delete the original file
     if file_path.exists() {
-        std::fs::remove_file(file_path)
-            .map_err(|e| ImageEditError::WriteError(format!("Failed to delete file: {}", e)))?;
+        std::fs::remove_file(file_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(30) {
+                return ImageEditError::PermissionDenied(
+                    "Photo directory is mounted as read-only".to_string(),
+                );
+            }
+
+            ImageEditError::WriteError(format!("Failed to delete file: {}", e))
+        })?;
         log::info!("Deleted file: {}", photo.file_path);
     } else {
         log::warn!(
@@ -439,9 +448,12 @@ async fn invalidate_semantic_vector(pool: &DbPool, file_path: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_manager::CacheManager;
     use crate::db::{create_in_memory_pool, Photo};
     use chrono::Utc;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     fn create_test_photo(temp_dir: &TempDir, filename: &str) -> (std::path::PathBuf, Photo) {
@@ -639,5 +651,76 @@ mod tests {
             result.unwrap_err(),
             ImageEditError::FileNotFound(_)
         ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_delete_photo_read_only_directory_returns_permission_denied() {
+        // GIVEN: A photo file in a read-only directory
+        let temp_dir = TempDir::new().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let cache_manager = CacheManager::new(temp_dir.path().join("cache"));
+
+        let read_only_dir = temp_dir.path().join("read_only");
+        fs::create_dir_all(&read_only_dir).unwrap();
+        let photo_path = read_only_dir.join("test_delete_read_only.jpg");
+        fs::copy(Path::new("test-data/IMG_9377.jpg"), &photo_path).unwrap();
+        fs::set_permissions(&photo_path, fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&read_only_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let photo = Photo {
+            hash_sha256: "delete-read-only-hash".to_string(),
+            file_path: photo_path.to_string_lossy().to_string(),
+            filename: "test_delete_read_only.jpg".to_string(),
+            file_size: 12345,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: None,
+            width: Some(800),
+            height: Some(600),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: serde_json::json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        // WHEN: Attempt to delete
+        let result = delete_photo(&photo, &db_pool, &cache_manager).await;
+
+        // THEN: Should fail with PermissionDenied and sanitized message
+        assert!(matches!(result, Err(ImageEditError::PermissionDenied(_))));
+
+        let message = match result {
+            Err(ImageEditError::PermissionDenied(msg)) => msg,
+            _ => String::new(),
+        };
+        assert_eq!(message, "Photo directory is mounted as read-only");
+        assert!(!message.contains(&photo.file_path));
+
+        fs::set_permissions(&read_only_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_photo_writable_file_succeeds() {
+        // GIVEN: A writable test photo
+        let temp_dir = TempDir::new().unwrap();
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let cache_manager = CacheManager::new(temp_dir.path().join("cache"));
+        let (file_path, mut photo) = create_test_photo(&temp_dir, "test_delete_writable.jpg");
+        photo.hash_sha256 = "delete-writable-hash".to_string();
+
+        // WHEN: Delete photo
+        let result = delete_photo(&photo, &db_pool, &cache_manager).await;
+
+        // THEN: Should succeed and remove file
+        assert!(result.is_ok(), "Delete failed: {:?}", result);
+        assert!(!file_path.exists());
     }
 }

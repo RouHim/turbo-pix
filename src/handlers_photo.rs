@@ -12,7 +12,7 @@ use crate::handlers_video::{get_video_file, get_video_status, VideoQuery};
 use crate::image_editor::{self, RotationAngle};
 use crate::metadata_writer;
 use crate::mimetype_detector;
-use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError};
+use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError, PermissionError};
 
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
@@ -475,6 +475,10 @@ pub async fn delete_photo(
         Ok(()) => Ok(warp::reply::json(
             &json!({"success": true, "message": "Photo deleted successfully"}),
         )),
+        Err(image_editor::ImageEditError::PermissionDenied(msg)) => {
+            log::warn!("Permission denied deleting photo {}: {}", photo_hash, msg);
+            Err(reject::custom(PermissionError { message: msg }))
+        }
         Err(e) => {
             log::error!("Failed to delete photo: {}", e);
             Err(reject::custom(DatabaseError {

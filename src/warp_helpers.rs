@@ -23,6 +23,13 @@ pub struct DatabaseError {
 impl reject::Reject for DatabaseError {}
 
 #[derive(Debug)]
+pub struct PermissionError {
+    pub message: String,
+}
+
+impl reject::Reject for PermissionError {}
+
+#[derive(Debug)]
 pub struct NotFoundError;
 impl reject::Reject for NotFoundError {}
 
@@ -66,6 +73,9 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if let Some(database_error) = err.find::<DatabaseError>() {
         code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
         message = database_error.message.clone();
+    } else if let Some(permission_error) = err.find::<PermissionError>() {
+        code = warp::http::StatusCode::FORBIDDEN;
+        message = permission_error.message.clone();
     } else if err.find::<NotFoundError>().is_some() {
         code = warp::http::StatusCode::NOT_FOUND;
         message = "Photo not found".to_string();

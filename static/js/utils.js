@@ -169,9 +169,50 @@ const hideLoading = () => {
   if (indicator) indicator.classList.remove('show');
 };
 
-// Toast notifications (Disabled)
-const showToast = () => {
-  // Feature removed
+// Toast notifications
+const showToast = (title, message, type = 'info', duration = 3000) => {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+
+  let iconName = 'info';
+  if (type === 'success') iconName = 'check-circle';
+  if (type === 'error') iconName = 'alert-circle';
+
+  const iconSvg = window.iconHelper ? window.iconHelper.getIcon(iconName, { size: 18 }) : '';
+  const closeSvg = window.iconHelper ? window.iconHelper.getIcon('x', { size: 18 }) : '';
+
+  toast.innerHTML = `
+    <div class="toast-icon">${iconSvg}</div>
+    <div class="toast-content">
+      <div class="toast-title">${title}</div>
+      ${message ? `<div class="toast-message">${message}</div>` : ''}
+    </div>
+    <button class="toast-close" aria-label="Close">${closeSvg}</button>
+  `;
+
+  const dismiss = () => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), 300);
+  };
+
+  toast.querySelector('.toast-close').addEventListener('click', dismiss);
+  container.appendChild(toast);
+
+  // Trigger entrance animation
+  window.requestAnimationFrame(() => {
+    toast.classList.add('toast-visible');
+  });
+
+  if (duration > 0) {
+    setTimeout(dismiss, duration);
+  }
 };
 
 // Image lazy loading

@@ -138,6 +138,8 @@ class I18nManager {
       'Failed to read photo file': currentTranslations.errors.failedToReadPhotoFile,
       'Invalid thumbnail size': currentTranslations.errors.invalidThumbnailSize,
       'Server connection lost': currentTranslations.errors.connectionLost,
+      'Photo directory is mounted as read-only': currentTranslations.errors.readOnlyFilesystem,
+      'Insufficient file permissions': currentTranslations.errors.permissionDenied,
     };
 
     const exactMatch = errorMap[errorMessage];

@@ -1098,7 +1098,31 @@ class PhotoViewer {
       }
     } catch (error) {
       console.error('Failed to delete photo:', error);
-      utils.showToast('Error', 'Failed to delete photo', 'error', 3000);
+      let errorMessage =
+        window.i18nManager?.t('notifications.deletionFailed') || 'Failed to delete photo';
+
+      if (error.message) {
+        const match = error.message.match(/HTTP \d+: (.+)/);
+        if (match && match[1]) {
+          try {
+            const errorJson = JSON.parse(match[1]);
+            errorMessage = errorJson.error || match[1];
+          } catch {
+            errorMessage = match[1];
+          }
+        }
+      }
+
+      if (window.i18nManager) {
+        errorMessage = window.i18nManager.translateError(errorMessage);
+      }
+
+      utils.showToast(
+        window.i18nManager?.t('notifications.error') || 'Error',
+        errorMessage,
+        'error',
+        5000
+      );
 
       if (this.elements.viewerLoading) {
         this.elements.viewerLoading.style.display = 'none';

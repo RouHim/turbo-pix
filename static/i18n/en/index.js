@@ -211,6 +211,8 @@ window.EN_TRANSLATIONS = {
     invalidThumbnailSize: 'Invalid thumbnail size',
     unexpectedError: 'An unexpected error occurred',
     connectionLost: 'Server connection lost',
+    readOnlyFilesystem: 'Cannot delete photo — the photo directory is read-only',
+    permissionDenied: 'Cannot delete photo — insufficient file permissions',
   },
 
   notifications: {

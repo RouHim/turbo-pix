@@ -330,7 +330,31 @@ class PhotoCard {
       utils.emit(window, 'housekeepingCandidateRemoved', { hash: this.photo.hash_sha256 });
     } catch (e) {
       console.error('Failed to delete photo:', e);
-      utils.showToast('Error', 'Failed to delete photo', 'error');
+      let errorMessage =
+        window.i18nManager?.t('notifications.deletionFailed') || 'Failed to delete photo';
+
+      if (e.message) {
+        const match = e.message.match(/HTTP \d+: (.+)/);
+        if (match && match[1]) {
+          try {
+            const errorJson = JSON.parse(match[1]);
+            errorMessage = errorJson.error || match[1];
+          } catch {
+            errorMessage = match[1];
+          }
+        }
+      }
+
+      if (window.i18nManager) {
+        errorMessage = window.i18nManager.translateError(errorMessage);
+      }
+
+      utils.showToast(
+        window.i18nManager?.t('notifications.error') || 'Error',
+        errorMessage,
+        'error',
+        5000
+      );
     }
   }
 

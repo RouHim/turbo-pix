@@ -214,6 +214,9 @@ window.DE_TRANSLATIONS = {
     invalidThumbnailSize: 'Ungültige Miniaturbildgröße',
     unexpectedError: 'Ein unerwarteter Fehler ist aufgetreten',
     connectionLost: 'Serververbindung verloren',
+    readOnlyFilesystem:
+      'Foto kann nicht gelöscht werden — das Fotoverzeichnis ist schreibgeschützt',
+    permissionDenied: 'Foto kann nicht gelöscht werden — unzureichende Dateiberechtigungen',
   },
 
   notifications: {

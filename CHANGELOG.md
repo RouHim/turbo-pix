@@ -1,3 +1,16 @@
+# [2.19.0](https://github.com/RouHim/turbo-pix/compare/2.18.7...2.19.0) (2026-04-02)
+
+
+### Bug Fixes
+
+* **backend:** return HTTP 403 for photo deletion on read-only filesystem ([1a6ffd6](https://github.com/RouHim/turbo-pix/commit/1a6ffd6579f15c459e4557d34c19499edf428ad4))
+* **ui:** display meaningful delete error messages with i18n support ([504a9a6](https://github.com/RouHim/turbo-pix/commit/504a9a6190fbc493af0e35806f1ba469355efcd2))
+
+
+### Features
+
+* **ui:** re-enable toast notification system ([f2b49b7](https://github.com/RouHim/turbo-pix/commit/f2b49b7936fa8410df901771e83dd6cd8ef98c48))
+
 ## [2.18.7](https://github.com/RouHim/turbo-pix/compare/2.18.6...2.18.7) (2026-03-31)
 
 ## [2.18.6](https://github.com/RouHim/turbo-pix/compare/2.18.5...2.18.6) (2026-03-25)

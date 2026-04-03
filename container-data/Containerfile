@@ -7,12 +7,7 @@ ARG TARGETARCH
 
 # Download and extract static ffmpeg build for the target architecture
 RUN apk add --no-cache curl tar xz && \
-    if [ "$TARGETARCH" = "arm64" ]; then \
-        FFMPEG_RELEASE_ARCH="linuxarm64"; \
-    else \
-        FFMPEG_RELEASE_ARCH="linux64"; \
-    fi && \
-    FFMPEG_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${FFMPEG_RELEASE_ARCH}-gpl.tar.xz" && \
+    FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${TARGETARCH}-static.tar.xz" && \
     curl \
       --fail \
       --location \
@@ -24,10 +19,10 @@ RUN apk add --no-cache curl tar xz && \
       --output ffmpeg-release.tar.xz \
       "${FFMPEG_URL}" && \
     tar xf ffmpeg-release.tar.xz && \
-    mv ffmpeg-master-latest-${FFMPEG_RELEASE_ARCH}-gpl/bin/ffmpeg /ffmpeg && \
-    mv ffmpeg-master-latest-${FFMPEG_RELEASE_ARCH}-gpl/bin/ffprobe /ffprobe && \
+    mv ffmpeg-*/ffmpeg /ffmpeg && \
+    mv ffmpeg-*/ffprobe /ffprobe && \
     chmod +x /ffmpeg /ffprobe && \
-    rm -rf ffmpeg-master-latest-* ffmpeg-release.tar.xz
+    rm -rf ffmpeg-* ffmpeg-release.tar.xz
 
 # # # # # # # # # # # # # # # # # # # #
 # Application Builder

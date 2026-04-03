@@ -20,6 +20,7 @@ use turbo_pix::handlers_static::build_static_routes;
 use turbo_pix::handlers_thumbnail::build_thumbnail_routes;
 use turbo_pix::scheduler::PhotoScheduler;
 use turbo_pix::semantic_search::{self, SemanticSearchEngine};
+use turbo_pix::video_processor;
 use turbo_pix::thumbnail_generator::ThumbnailGenerator;
 use turbo_pix::warp_helpers::{cors, handle_rejection};
 
@@ -41,6 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         semantic_search::download_models(&config.data_path)?;
         info!("Download complete. You can now run tests.");
         return Ok(());
+    }
+
+    // Fail fast if ffmpeg or ffprobe binaries are not available
+    if let Err(e) = video_processor::verify_ffmpeg_available() {
+        error!("{}", e);
+        return Err(e.into());
     }
 
     let port = config.port;

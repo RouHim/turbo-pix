@@ -305,7 +305,7 @@ impl MetadataExtractor {
 
     fn extract_video_metadata(path: &Path, metadata: &mut PhotoMetadata) {
         // Use ffprobe to extract actual video codec information
-        let ffprobe_path = std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string());
+        let ffprobe_path = crate::video_processor::get_ffprobe_path();
 
         match std::process::Command::new(&ffprobe_path)
             .args([
@@ -379,7 +379,15 @@ impl MetadataExtractor {
                 debug!("ffprobe command failed for {}", path.display());
             }
             Err(e) => {
-                debug!("Failed to run ffprobe for {}: {}", path.display(), e);
+                debug!(
+                    "{}",
+                    crate::video_processor::format_binary_error(
+                        "ffprobe",
+                        &crate::video_processor::get_ffprobe_path(),
+                        &e,
+                    )
+                );
+                debug!("  while extracting metadata for: {}", path.display());
             }
         }
     }
@@ -433,7 +441,7 @@ mod tests {
     #[test]
     fn test_ffprobe_is_installed() {
         // GIVEN: System environment
-        let ffprobe_path = std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string());
+        let ffprobe_path = crate::video_processor::get_ffprobe_path();
 
         // WHEN: Check if ffprobe is available
         let result = std::process::Command::new(&ffprobe_path)

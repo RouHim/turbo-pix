@@ -116,6 +116,7 @@ pub fn verify_ffmpeg_available() -> Result<(), String> {
 pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
     let video_path = video_path.to_path_buf();
     let ffprobe_path = get_ffprobe_path();
+    let ffprobe_path_for_err = ffprobe_path.clone();
 
     let output = tokio::task::spawn_blocking(move || {
         Command::new(ffprobe_path)
@@ -132,7 +133,7 @@ pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetad
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -204,6 +205,7 @@ pub async fn extract_frame_at_time(
     let video_path = video_path.to_path_buf();
     let output_path = output_path.to_path_buf();
     let ffmpeg_path = get_ffmpeg_path();
+    let ffmpeg_path_for_err = ffmpeg_path.clone();
     let time_str = time_seconds.to_string();
 
     let output = tokio::task::spawn_blocking(move || {
@@ -224,7 +226,7 @@ pub async fn extract_frame_at_time(
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
+    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -253,6 +255,7 @@ pub async fn extract_frames_batch(
     let output_dir_path = output_dir.to_path_buf();
     let output_dir_clone = output_dir_path.clone();
     let ffmpeg_path = get_ffmpeg_path();
+    let ffmpeg_path_for_err = ffmpeg_path.clone();
     let frame_times = frame_times.to_vec();
     let frame_count = frame_times.len();
 
@@ -294,7 +297,7 @@ pub async fn extract_frames_batch(
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg batch failed: {}", e)))?;
+    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -315,6 +318,7 @@ pub async fn extract_frames_batch(
 pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
     let video_path = video_path.to_path_buf();
     let ffprobe_path = get_ffprobe_path();
+    let ffprobe_path_for_err = ffprobe_path.clone();
 
     let output = tokio::task::spawn_blocking(move || {
         Command::new(ffprobe_path)
@@ -333,7 +337,7 @@ pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e)))?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -365,10 +369,10 @@ fn parse_root_atom_offset(trace: &str, atom: &str) -> Option<u64> {
 
 pub fn has_moov_at_start(path: &Path) -> CacheResult<bool> {
     let ffprobe_path = get_ffprobe_path();
-    let output = Command::new(ffprobe_path)
+    let output = Command::new(&ffprobe_path)
         .args(["-v", "trace", path.to_str().unwrap()])
         .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe failed: {}", e)))?;
+        .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path, &e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -411,7 +415,7 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
         extension
     ));
 
-    let output = Command::new(ffmpeg_path)
+    let output = Command::new(&ffmpeg_path)
         .args([
             "-y",
             "-i",
@@ -423,7 +427,7 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
             temp_path.to_str().unwrap(),
         ])
         .output()
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffmpeg failed: {}", e)))?;
+    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path, &e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -487,6 +491,7 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
 
         // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
         // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
+        let ffmpeg_path_for_err = ffmpeg_path.clone();
         let mut command = TokioCommand::new(ffmpeg_path);
         command.kill_on_drop(true).args([
             "-hwaccel",
@@ -508,7 +513,7 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
         ]);
 
         let output = command.output().await.map_err(|e| {
-            CacheError::VideoProcessingError(format!("ffmpeg transcode failed: {}", e))
+            CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
         })?;
 
         if !output.status.success() {
@@ -1110,6 +1115,132 @@ mod tests {
             json.contains("\"hash\":\"abc\""),
             "JSON should contain hash abc, got: {}",
             json
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_message_not_found_ffprobe_extract_metadata() {
+        // GIVEN a nonexistent ffprobe path
+        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+
+        // WHEN extract_video_metadata is called
+        let result = extract_video_metadata(Path::new("/any/path")).await;
+
+        // THEN the error message reports "not found at" with the path
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("not found at"),
+            "expected 'not found at' in: {err_str}"
+        );
+        assert!(
+            err_str.contains("/nonexistent/ffprobe"),
+            "expected path in: {err_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_message_not_found_ffmpeg_extract_frame() {
+        // GIVEN a nonexistent ffmpeg path
+        let _guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+
+        // WHEN extract_frame_at_time is called
+        let result = extract_frame_at_time(Path::new("/any/video"), 1.0, Path::new("/any/out")).await;
+
+        // THEN the error message reports "not found at" with the path
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("not found at"),
+            "expected 'not found at' in: {err_str}"
+        );
+        assert!(
+            err_str.contains("/nonexistent/ffmpeg"),
+            "expected path in: {err_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_message_not_found_ffprobe_is_hevc() {
+        // GIVEN a nonexistent ffprobe path
+        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+
+        // WHEN is_hevc_video is called
+        let result = is_hevc_video(Path::new("/any/video")).await;
+
+        // THEN the error message reports "not found at" with the path
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("not found at"),
+            "expected 'not found at' in: {err_str}"
+        );
+        assert!(
+            err_str.contains("/nonexistent/ffprobe"),
+            "expected path in: {err_str}"
+        );
+    }
+
+    #[test]
+    fn test_error_message_not_found_ffprobe_has_moov() {
+        // GIVEN a nonexistent ffprobe path
+        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+
+        // WHEN has_moov_at_start is called
+        let result = has_moov_at_start(Path::new("/any/video"));
+
+        // THEN the error message reports "not found at" with the path
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("not found at"),
+            "expected 'not found at' in: {err_str}"
+        );
+        assert!(
+            err_str.contains("/nonexistent/ffprobe"),
+            "expected path in: {err_str}"
+        );
+    }
+
+    #[test]
+    fn test_error_message_not_found_ffmpeg_fix_moov() {
+        // GIVEN a nonexistent ffprobe path (has_moov_at_start is called first)
+        // We need to make has_moov_at_start return Ok(false) so fix_moov_atom proceeds to ffmpeg
+        // Actually, fix_moov_atom calls has_moov_at_start first, which also needs ffprobe.
+        // So we test with valid ffprobe but invalid ffmpeg. Use a fake ffprobe that returns success.
+        let temp_dir = TempDir::new().unwrap();
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        // Fake ffprobe outputs trace lines where moov offset > mdat offset
+        std::fs::write(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\n\
+             echo \"type:'mdat' parent:'root' sz: 5000 100\" >&2\n\
+             echo \"type:'moov' parent:'root' sz: 3000 6000\" >&2\n\
+             exit 0\n",
+        )
+        .unwrap();
+        make_executable(&ffprobe_script);
+
+        let _ffprobe_guard =
+            EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+
+        let temp_video = temp_dir.path().join("test.mp4");
+        std::fs::write(&temp_video, b"fake-video").unwrap();
+
+        // WHEN fix_moov_atom is called
+        let result = fix_moov_atom(&temp_video);
+
+        // THEN the error message reports "not found at" with the ffmpeg path
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("not found at"),
+            "expected 'not found at' in: {err_str}"
+        );
+        assert!(
+            err_str.contains("/nonexistent/ffmpeg"),
+            "expected path in: {err_str}"
         );
     }
 

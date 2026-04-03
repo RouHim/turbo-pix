@@ -65,12 +65,52 @@ pub fn clear_transcode_status(hash: &str) {
     }
 }
 
-fn get_ffmpeg_path() -> String {
+pub fn get_ffmpeg_path() -> String {
     std::env::var("FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string())
 }
 
-fn get_ffprobe_path() -> String {
+pub fn get_ffprobe_path() -> String {
     std::env::var("FFPROBE_PATH").unwrap_or_else(|_| "ffprobe".to_string())
+}
+
+pub fn format_binary_error(binary_name: &str, path: &str, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return format!("{binary_name} binary not found at '{path}'.");
+    }
+
+    format!("{binary_name} failed to execute at '{path}': {error}")
+}
+
+fn verify_binary_available(binary_name: &str, path: &str) -> Result<(), String> {
+    let output = std::process::Command::new(path)
+        .arg("-version")
+        .output()
+        .map_err(|error| format_binary_error(binary_name, path, &error))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    if detail.is_empty() {
+        return Err(format!(
+            "{binary_name} failed to execute at '{path}': exited with status {}",
+            output.status
+        ));
+    }
+
+    Err(format!(
+        "{binary_name} failed to execute at '{path}': {detail}"
+    ))
+}
+
+pub fn verify_ffmpeg_available() -> Result<(), String> {
+    let ffmpeg_path = get_ffmpeg_path();
+    verify_binary_available("ffmpeg", &ffmpeg_path)?;
+
+    let ffprobe_path = get_ffprobe_path();
+    verify_binary_available("ffprobe", &ffprobe_path)
 }
 
 pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
@@ -512,12 +552,40 @@ mod tests {
     use crate::thumbnail_generator::ThumbnailGenerator;
     use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
     use chrono::Utc;
+    use std::io::{Error, ErrorKind};
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::time::sleep;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = &self.original {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn project_photo_path(filename: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -563,6 +631,82 @@ mod tests {
     }
 
     const TEST_PORT: u16 = 18473;
+
+    #[test]
+    fn test_verify_ffmpeg_available_fails_not_found() {
+        // GIVEN missing ffmpeg and ffprobe paths
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+
+        // WHEN ffmpeg availability is verified
+        let result = verify_ffmpeg_available();
+
+        // THEN the error reports the missing ffmpeg binary path
+        let error = result.expect_err("expected ffmpeg verification to fail");
+        assert!(error.contains("not found at"), "unexpected error: {error}");
+        assert!(
+            error.contains("/nonexistent/ffmpeg"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_verify_ffmpeg_available_fails_bad_ffprobe() {
+        // GIVEN a valid ffmpeg binary and a missing ffprobe path
+        let temp_dir = TempDir::new().unwrap();
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_ok.sh");
+        std::fs::write(&ffmpeg_script, "#!/usr/bin/env sh\nexit 0\n").unwrap();
+        make_executable(&ffmpeg_script);
+
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+
+        // WHEN ffmpeg availability is verified
+        let result = verify_ffmpeg_available();
+
+        // THEN the error reports the missing ffprobe binary path
+        let error = result.expect_err("expected ffprobe verification to fail");
+        assert!(error.contains("ffprobe"), "unexpected error: {error}");
+        assert!(error.contains("not found"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn test_format_binary_error_not_found() {
+        // GIVEN a not found IO error
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+
+        // WHEN the binary error is formatted
+        let message = format_binary_error("ffprobe", "/bad/path", &error);
+
+        // THEN the message reports the missing binary path
+        assert!(
+            message.contains("not found at"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("/bad/path"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn test_format_binary_error_other_error() {
+        // GIVEN a non-not-found IO error
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+
+        // WHEN the binary error is formatted
+        let message = format_binary_error("ffmpeg", "/bad/path", &error);
+
+        // THEN the message reports execution failure details
+        assert!(
+            message.contains("failed to execute"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("/bad/path"),
+            "unexpected message: {message}"
+        );
+    }
 
     fn create_test_video_with_movflags(source: &Path, destination: &Path, movflags: &str) {
         let output = Command::new("ffmpeg")

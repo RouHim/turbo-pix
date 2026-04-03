@@ -75,7 +75,10 @@ pub fn get_ffprobe_path() -> String {
 
 pub fn format_binary_error(binary_name: &str, path: &str, error: &std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::NotFound {
-        return format!("{binary_name} binary not found at '{path}'.");
+        let env_var = format!("{}_PATH", binary_name.to_uppercase());
+        return format!(
+            "{binary_name} binary not found at '{path}'. Set {env_var} environment variable to the correct path."
+        );
     }
 
     format!("{binary_name} failed to execute at '{path}': {error}")
@@ -133,7 +136,9 @@ pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetad
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e)))?;
+    .map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e))
+    })?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -226,7 +231,9 @@ pub async fn extract_frame_at_time(
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e)))?;
+    .map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
+    })?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -297,7 +304,9 @@ pub async fn extract_frames_batch(
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e)))?;
+    .map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -337,7 +346,9 @@ pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
     })
     .await
     .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e)))?;
+    .map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e))
+    })?;
 
     if !output.status.success() {
         return Err(CacheError::VideoProcessingError(format!(
@@ -372,7 +383,9 @@ pub fn has_moov_at_start(path: &Path) -> CacheResult<bool> {
     let output = Command::new(&ffprobe_path)
         .args(["-v", "trace", path.to_str().unwrap()])
         .output()
-        .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path, &e)))?;
+        .map_err(|e| {
+            CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path, &e))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -427,7 +440,9 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
             temp_path.to_str().unwrap(),
         ])
         .output()
-    .map_err(|e| CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path, &e)))?;
+        .map_err(|e| {
+            CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path, &e))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -513,7 +528,11 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
         ]);
 
         let output = command.output().await.map_err(|e| {
-            CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
+            CacheError::VideoProcessingError(format_binary_error(
+                "ffmpeg",
+                &ffmpeg_path_for_err,
+                &e,
+            ))
         })?;
 
         if !output.status.success() {
@@ -557,26 +576,61 @@ mod tests {
     use crate::thumbnail_generator::ThumbnailGenerator;
     use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
     use chrono::Utc;
+    use std::cell::Cell;
     use std::io::{Error, ErrorKind};
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::time::sleep;
 
+    thread_local! {
+        static TEST_ENV_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn acquire_test_env_lock() -> Option<MutexGuard<'static, ()>> {
+        TEST_ENV_LOCK_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+
+            if current == 0 {
+                Some(test_env_lock().lock().unwrap())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn release_test_env_lock() {
+        TEST_ENV_LOCK_DEPTH.with(|depth| {
+            depth.set(depth.get() - 1);
+        });
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
+        _lock: Option<MutexGuard<'static, ()>>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
+            let lock = acquire_test_env_lock();
             let original = std::env::var(key).ok();
             unsafe {
                 std::env::set_var(key, value);
             }
-            Self { key, original }
+            Self {
+                key,
+                original,
+                _lock: lock,
+            }
         }
     }
 
@@ -589,6 +643,7 @@ mod tests {
                     std::env::remove_var(self.key);
                 }
             }
+            release_test_env_lock();
         }
     }
 
@@ -1145,7 +1200,8 @@ mod tests {
         let _guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
 
         // WHEN extract_frame_at_time is called
-        let result = extract_frame_at_time(Path::new("/any/video"), 1.0, Path::new("/any/out")).await;
+        let result =
+            extract_frame_at_time(Path::new("/any/video"), 1.0, Path::new("/any/out")).await;
 
         // THEN the error message reports "not found at" with the path
         let err = result.unwrap_err();
@@ -1221,8 +1277,7 @@ mod tests {
         .unwrap();
         make_executable(&ffprobe_script);
 
-        let _ffprobe_guard =
-            EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
 
         let temp_video = temp_dir.path().join("test.mp4");

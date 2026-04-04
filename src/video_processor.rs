@@ -873,6 +873,7 @@ mod tests {
                 max_cache_size_mb: 1024,
             },
             locale: "en".to_string(),
+            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
 
         (config, temp_dir)

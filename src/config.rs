@@ -14,6 +14,7 @@ pub struct Config {
     pub db_path: String,
     pub cache: CacheConfig,
     pub locale: String,
+    pub nominatim_url: String,
 }
 
 impl Config {
@@ -39,6 +40,9 @@ impl Config {
         let locale =
             parse_locale(env::var("TURBO_PIX_LOCALE").unwrap_or_else(|_| "en".to_string()));
 
+        let nominatim_url = env::var("TURBO_PIX_NOMINATIM_URL")
+            .unwrap_or_else(|_| "https://nominatim.openstreetmap.org".to_string());
+
         let cache = CacheConfig {
             thumbnail_cache_path,
             max_cache_size_mb,
@@ -51,6 +55,7 @@ impl Config {
             db_path,
             cache,
             locale,
+            nominatim_url,
         })
     }
 }
@@ -107,6 +112,38 @@ mod tests {
                 env::set_var("TURBO_PIX_LOCALE", value);
             } else {
                 env::remove_var("TURBO_PIX_LOCALE");
+            }
+        });
+    }
+
+    #[test]
+    fn uses_default_nominatim_url_when_env_var_is_missing() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_NOMINATIM_URL").ok();
+            env::remove_var("TURBO_PIX_NOMINATIM_URL");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.nominatim_url, "https://nominatim.openstreetmap.org");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_NOMINATIM_URL", value);
+            }
+        });
+    }
+
+    #[test]
+    fn reads_custom_nominatim_url_from_env() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_NOMINATIM_URL").ok();
+            env::set_var("TURBO_PIX_NOMINATIM_URL", "http://my-nominatim:8080");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.nominatim_url, "http://my-nominatim:8080");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_NOMINATIM_URL", value);
+            } else {
+                env::remove_var("TURBO_PIX_NOMINATIM_URL");
             }
         });
     }

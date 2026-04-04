@@ -89,6 +89,7 @@ impl PhaseCounters {
 pub struct IndexingPhases {
     pub discovering: PhaseCounters,
     pub metadata: PhaseCounters,
+    pub geo_resolution: PhaseCounters,
     pub semantic_vectors: PhaseCounters,
     pub collages: PhaseCounters,
     pub housekeeping: PhaseCounters,
@@ -105,6 +106,7 @@ impl IndexingPhases {
         Self {
             discovering: PhaseCounters::new(),
             metadata: PhaseCounters::new(),
+            geo_resolution: PhaseCounters::new(),
             semantic_vectors: PhaseCounters::new(),
             collages: PhaseCounters::new(),
             housekeeping: PhaseCounters::new(),
@@ -114,6 +116,7 @@ impl IndexingPhases {
     pub fn reset_all(&self) {
         self.discovering.reset();
         self.metadata.reset();
+        self.geo_resolution.reset();
         self.semantic_vectors.reset();
         self.collages.reset();
         self.housekeeping.reset();
@@ -123,6 +126,7 @@ impl IndexingPhases {
         match phase_id {
             "discovering" => Some(&self.discovering),
             "metadata" => Some(&self.metadata),
+            "geo_resolution" => Some(&self.geo_resolution),
             "semantic_vectors" => Some(&self.semantic_vectors),
             "collages" => Some(&self.collages),
             "housekeeping" => Some(&self.housekeeping),

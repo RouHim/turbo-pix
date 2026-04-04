@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '21'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install npm dependencies
@@ -56,7 +56,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '21'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install npm dependencies
@@ -107,7 +107,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '21'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install npm dependencies

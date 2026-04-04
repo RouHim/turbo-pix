@@ -6,6 +6,7 @@ pub mod db_pool;
 // pub mod db_schema; // Replaced by sqlx migrations
 pub mod db_types;
 pub mod file_scanner;
+pub mod geo_location;
 pub mod handlers_collage;
 pub mod handlers_config;
 pub mod handlers_health;

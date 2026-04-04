@@ -346,7 +346,7 @@ fn compute_file_hash(file_path: &Path) -> Result<String, ImageEditError> {
     hasher.update(&file_bytes);
     let hash = hasher.finalize();
 
-    Ok(format!("{:x}", hash))
+    Ok(hash.iter().map(|b| format!("{:02x}", b)).collect::<String>())
 }
 
 /// Deletes a photo file and all associated data
@@ -465,7 +465,11 @@ mod tests {
         let file_bytes = fs::read(&dest_path).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(&file_bytes);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
 
         // Get dimensions
         let img = image::open(&dest_path).unwrap();

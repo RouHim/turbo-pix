@@ -233,7 +233,11 @@ fn build_collage_signature(date: &str, photo_hashes: &[String]) -> String {
         hasher.update(b",");
     }
 
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 /// Photo cluster representing photos taken on the same day

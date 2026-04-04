@@ -284,7 +284,11 @@ impl PhotoProcessor {
     fn calculate_file_hash(&self, path: &Path) -> Result<String, Box<dyn std::error::Error>> {
         let mut hasher = Sha256::new();
         hasher.update(path.to_string_lossy().as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>())
     }
 
     fn generate_blurhash(&self, path: &Path) -> Option<String> {

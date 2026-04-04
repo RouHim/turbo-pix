@@ -346,7 +346,10 @@ fn compute_file_hash(file_path: &Path) -> Result<String, ImageEditError> {
     hasher.update(&file_bytes);
     let hash = hasher.finalize();
 
-    Ok(hash.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+    Ok(hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>())
 }
 
 /// Deletes a photo file and all associated data

@@ -1,3 +1,18 @@
+# [2.20.0](https://github.com/RouHim/turbo-pix/compare/2.19.0...2.20.0) (2026-04-04)
+
+
+### Bug Fixes
+
+* **container:** switch to JVS static ffmpeg builds ([bb0cb8c](https://github.com/RouHim/turbo-pix/commit/bb0cb8c91f394435957f5a97b413298817659c46))
+* **ui:** ensure video play icon renders on video thumbnails ([0e529d8](https://github.com/RouHim/turbo-pix/commit/0e529d8220a3fbd5071dc8c03f4b8fcbd44812c4))
+* **video:** add env-var hint to format_binary_error, fix test race with mutex guard, apply cargo fmt ([6debbd7](https://github.com/RouHim/turbo-pix/commit/6debbd76f44dd71a46f2124cffad84a5ab006a82))
+* **video:** improve error messages and use centralized ffprobe path ([ec3491c](https://github.com/RouHim/turbo-pix/commit/ec3491cf7942f9cec223eb7c65e2d78af103c495))
+
+
+### Features
+
+* **startup:** fail-fast check for ffmpeg/ffprobe binaries ([95169a8](https://github.com/RouHim/turbo-pix/commit/95169a8a0ffee0dabb1c3cfa1549ddd9ef6db3b0))
+
 # [2.19.0](https://github.com/RouHim/turbo-pix/compare/2.18.7...2.19.0) (2026-04-02)
 
 

@@ -128,27 +128,32 @@ async function waitForHealthCheck(baseURL, maxRetries = MAX_HEALTH_RETRIES) {
 }
 
 async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
-  console.log('Waiting for metadata phase readiness...');
+  console.log('Waiting for indexing phases to complete (metadata + geo_resolution)...');
 
   for (let i = 0; i < maxRetries; i++) {
     try {
       const indexingResponse = await fetch(`${baseURL}/api/indexing/status`);
       if (indexingResponse.ok) {
         const data = await indexingResponse.json();
-        const metadataPhase = Array.isArray(data.phases)
-          ? data.phases.find((phase) => phase.id === 'metadata')
-          : null;
-        const metadataComplete = data.is_complete === true || metadataPhase?.state === 'done';
+        const phases = Array.isArray(data.phases) ? data.phases : [];
+        const metadataPhase = phases.find((phase) => phase.id === 'metadata');
+        const geoPhase = phases.find((phase) => phase.id === 'geo_resolution');
 
-        if (metadataComplete) {
-          console.log(`Metadata phase ready - ${data.photos_indexed} photos indexed`);
+        const metadataComplete = data.is_complete === true || metadataPhase?.state === 'done';
+        const geoComplete = data.is_complete === true || geoPhase?.state === 'done';
+
+        if (metadataComplete && geoComplete) {
+          console.log(
+            `All indexing phases ready - ${data.photos_indexed} photos indexed (metadata=done, geo_resolution=done)`
+          );
           return true;
         }
 
         if (i % 10 === 0) {
           const metadataState = metadataPhase?.state || 'unknown';
+          const geoState = geoPhase?.state || 'unknown';
           console.log(
-            `Indexing progress: metadata=${metadataState}, is_indexing=${data.is_indexing} (${data.photos_indexed} photos)`
+            `Indexing progress: metadata=${metadataState}, geo_resolution=${geoState}, is_indexing=${data.is_indexing} (${data.photos_indexed} photos)`
           );
         }
       }
@@ -160,7 +165,7 @@ async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
   }
 
   throw new Error(
-    `Metadata phase did not become ready after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
+    `Indexing phases did not complete after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
   );
 }
 

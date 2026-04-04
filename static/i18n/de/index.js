@@ -163,6 +163,7 @@ window.DE_TRANSLATIONS = {
     },
 
     // Search
+    search_hint: 'Versuche: type:video · location:stadt · is_favorite:true',
     search_results: 'Suche: "{{query}}"',
     recent_search: 'Letzte Suche',
     filter_by_camera: 'Nach Kamera filtern',

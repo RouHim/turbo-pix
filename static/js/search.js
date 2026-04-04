@@ -45,12 +45,28 @@ class Search {
           e.preventDefault();
           this.clearSearch();
           this.hideSearchSuggestions();
+          if (this.searchHint) {
+            this.searchHint.style.opacity = '0';
+          }
         }
       });
 
       utils.on(this.searchInput, 'blur', () => {
         // Delay hiding to allow clicking on suggestions
-        setTimeout(() => this.hideSearchSuggestions(), 150);
+        setTimeout(() => {
+          this.hideSearchSuggestions();
+          if (this.searchHint) {
+            this.searchHint.style.opacity = '0';
+          }
+        }, 150);
+      });
+
+      utils.on(this.searchInput, 'focus', () => {
+        this.updateSearchHintVisibility();
+      });
+
+      utils.on(this.searchInput, 'input', () => {
+        this.updateSearchHintVisibility();
       });
     }
 
@@ -77,6 +93,64 @@ class Search {
       const suggestions = utils.createElement('div', 'search-suggestions');
       suggestions.id = 'search-suggestions';
       this.searchInput.parentNode.appendChild(suggestions);
+    }
+
+    if (this.searchInput && !utils.$('.search-hint')) {
+      this.searchHint = utils.createElement('div', 'search-hint');
+      this.searchHint.setAttribute('data-search-hint', 'true');
+
+      const t = window.i18nManager
+        ? window.i18nManager.t(
+            'ui.search_hint',
+            'Try: type:video · location:city · is_favorite:true'
+          )
+        : 'Try: type:video · location:city · is_favorite:true';
+
+      this.searchHint.innerHTML = `
+        <i data-feather="info" style="width: 14px; height: 14px; margin-right: var(--space-2); flex-shrink: 0;"></i>
+        <span>${t}</span>
+      `;
+
+      Object.assign(this.searchHint.style, {
+        position: 'absolute',
+        top: '100%',
+        left: '0',
+        right: '0',
+        padding: 'var(--space-3) var(--space-4)',
+        marginTop: 'var(--space-2)',
+        fontSize: 'var(--font-sm, 13px)',
+        color: 'var(--text-muted)',
+        backgroundColor: 'var(--surface-color)',
+        border: '1px solid var(--glass-border, var(--divider-color))',
+        borderRadius: 'var(--radius-md, 8px)',
+        boxShadow: 'var(--shadow-light)',
+        display: 'flex',
+        alignItems: 'center',
+        zIndex: 'var(--z-modal, 100)',
+        pointerEvents: 'none',
+        opacity: '0',
+        transition: 'opacity var(--transition-fast, 0.2s) ease',
+      });
+
+      if (window.getComputedStyle(this.searchInput.parentNode).position === 'static') {
+        this.searchInput.parentNode.style.position = 'relative';
+      }
+
+      this.searchInput.parentNode.appendChild(this.searchHint);
+
+      if (window.feather) {
+        window.feather.replace();
+      }
+    }
+  }
+
+  updateSearchHintVisibility() {
+    if (!this.searchHint || !this.searchInput) return;
+    const query = this.searchInput.value.trim();
+    if (document.activeElement === this.searchInput && query === '') {
+      this.searchHint.style.opacity = '1';
+    } else {
+      this.searchHint.style.opacity = '0';
     }
   }
 
@@ -123,7 +197,11 @@ class Search {
         });
       }
 
-      if (query.startsWith('type:')) {
+      if (
+        query.startsWith('type:') ||
+        query.startsWith('location:') ||
+        query.startsWith('is_favorite:')
+      ) {
         if (window.photoGrid) {
           window.photoGrid.search(query);
         }
@@ -219,7 +297,9 @@ class Search {
 
     // Update active nav item
     const navItems = utils.$$('.nav-item');
-    navItems.forEach((item) => item.classList.remove('active'));
+    navItems.forEach((item) => {
+      item.classList.remove('active');
+    });
 
     if (!query) {
       const allPhotosItem = utils.$('.nav-item[data-view="all"]');

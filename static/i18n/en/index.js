@@ -165,6 +165,7 @@ window.EN_TRANSLATIONS = {
     },
 
     // Search
+    search_hint: 'Try: type:video · location:city · is_favorite:true',
     search_results: 'Search: "{{query}}"',
     recent_search: 'Recent search',
     filter_by_camera: 'Filter by camera',

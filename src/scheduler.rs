@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use crate::cache_manager::CacheManager;
 use crate::collage_generator;
 use crate::db::DbPool;
+use crate::geo_location::NominatimClient;
 use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearchEngine;
@@ -194,6 +195,7 @@ pub struct PhotoScheduler {
     semantic_search: Arc<SemanticSearchEngine>,
     data_path: PathBuf,
     locale: String,
+    nominatim_url: String,
     rescan_lock: Arc<Mutex<()>>,
     pub status: IndexingStatus,
 }
@@ -206,6 +208,7 @@ impl PhotoScheduler {
         semantic_search: Arc<SemanticSearchEngine>,
         data_path: PathBuf,
         locale: String,
+        nominatim_url: String,
     ) -> Self {
         let mut photo_paths = photo_paths;
         let collages_path = data_path.join("collages").join("accepted");
@@ -228,6 +231,7 @@ impl PhotoScheduler {
             semantic_search,
             data_path,
             locale,
+            nominatim_url,
             rescan_lock: Arc::new(Mutex::new(())),
             status: IndexingStatus::new(),
         }
@@ -324,6 +328,7 @@ impl PhotoScheduler {
         let rescan_lock = self.rescan_lock.clone();
         let status = self.status.clone();
         let locale = self.locale.clone();
+        let nominatim_url = self.nominatim_url.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -382,8 +387,13 @@ impl PhotoScheduler {
                             Err(e) => error!("Phase 2 failed: {}", e),
                         }
 
-                        // Phase 3: Generate collages
-                        info!("Phase 3: Generating collages");
+                        // Phase 3: Geo resolution
+                        info!("Phase 3: Resolving photo geo locations");
+                        status.set_phase("geo_resolution").await;
+                        Self::run_geo_resolution_phase(&db_pool, &nominatim_url, &status).await;
+
+                        // Phase 4: Generate collages
+                        info!("Phase 4: Generating collages");
                         status.set_phase("collages").await;
                         match collage_generator::generate_collages(
                             &db_pool,
@@ -392,12 +402,12 @@ impl PhotoScheduler {
                         )
                         .await
                         {
-                            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
-                            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
+                            Ok(count) => info!("Phase 4 completed: {} collages generated", count),
+                            Err(e) => error!("Phase 4 (collage generation) failed: {}", e),
                         }
 
-                        // Phase 4: Housekeeping Identification
-                        info!("Phase 4: Identifying housekeeping candidates");
+                        // Phase 5: Housekeeping Identification
+                        info!("Phase 5: Identifying housekeeping candidates");
                         status.set_phase("housekeeping").await;
                         match housekeeping_manager::run_housekeeping_scan(
                             &db_pool,
@@ -406,10 +416,10 @@ impl PhotoScheduler {
                         .await
                         {
                             Ok(count) => info!(
-                                "Phase 4 completed: {} housekeeping candidates identified",
+                                "Phase 5 completed: {} housekeeping candidates identified",
                                 count
                             ),
-                            Err(e) => error!("Phase 4 (housekeeping identification) failed: {}", e),
+                            Err(e) => error!("Phase 5 (housekeeping identification) failed: {}", e),
                         }
 
                         // Mark as complete only if Phase 1 succeeded
@@ -448,6 +458,46 @@ impl PhotoScheduler {
 
         info!("Photo scheduler started - Full rescan at 00:00, vacuum at 00:05");
         handle
+    }
+
+    async fn run_geo_resolution_phase(
+        db_pool: &DbPool,
+        nominatim_url: &str,
+        status: &IndexingStatus,
+    ) {
+        let photos = match crate::db::get_photos_needing_geo_resolution(db_pool).await {
+            Ok(photos) => photos,
+            Err(e) => {
+                error!("Failed to query photos needing geo resolution: {}", e);
+                return;
+            }
+        };
+
+        if photos.is_empty() {
+            info!("No photos need geo resolution");
+            return;
+        }
+
+        let total = photos.len();
+        info!("Geo resolution: {} photos to resolve", total);
+        status.phases.geo_resolution.set_total(total as u64);
+
+        let mut client = NominatimClient::new(nominatim_url);
+        if let Err(e) = client
+            .resolve_batch(photos, db_pool, |current, total| {
+                status.phases.geo_resolution.set_processed(current as u64);
+                if current % 10 == 0 || current == total {
+                    info!("Geo resolved {}/{}", current, total);
+                }
+            })
+            .await
+        {
+            error!("Geo resolution failed: {}", e);
+            status.phases.geo_resolution.add_errors(1);
+            return;
+        }
+
+        info!("Phase 3 completed: {} photos geo resolved", total);
     }
 
     pub async fn run_startup_rescan(&self) -> Result<(), anyhow::Error> {
@@ -525,31 +575,36 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 2 failed: {}", e),
         }
 
-        // Phase 3: Generate collages
-        info!("Phase 3: Generating collages");
+        // Phase 3: Geo resolution
+        info!("Phase 3: Resolving photo geo locations");
+        self.status.set_phase("geo_resolution").await;
+        Self::run_geo_resolution_phase(&self.db_pool, &self.nominatim_url, &self.status).await;
+
+        // Phase 4: Generate collages
+        info!("Phase 4: Generating collages");
         self.status.set_phase("collages").await;
         match collage_generator::generate_collages(&self.db_pool, &self.data_path, &self.locale)
             .await
         {
-            Ok(count) => info!("Phase 3 completed: {} collages generated", count),
-            Err(e) => error!("Phase 3 (collage generation) failed: {}", e),
+            Ok(count) => info!("Phase 4 completed: {} collages generated", count),
+            Err(e) => error!("Phase 4 (collage generation) failed: {}", e),
         }
 
-        // Phase 4: Housekeeping Identification
-        info!("Phase 4: Identifying housekeeping candidates");
+        // Phase 5: Housekeeping Identification
+        info!("Phase 5: Identifying housekeeping candidates");
         self.status.set_phase("housekeeping").await;
         match housekeeping_manager::run_housekeeping_scan(&self.db_pool, &self.semantic_search)
             .await
         {
             Ok(count) => info!(
-                "Phase 4 completed: {} housekeeping candidates identified",
+                "Phase 5 completed: {} housekeeping candidates identified",
                 count
             ),
-            Err(e) => error!("Phase 4 (housekeeping identification) failed: {}", e),
+            Err(e) => error!("Phase 5 (housekeeping identification) failed: {}", e),
         }
 
         info!(
-            "Startup rescan completed (four-phase): {} photos indexed, {} errors",
+            "Startup rescan completed (five-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
 
@@ -600,6 +655,7 @@ mod tests {
                 semantic_search,
                 data_path,
                 "en".to_string(),
+                "https://nominatim.openstreetmap.org".to_string(),
             );
 
             Self {
@@ -847,6 +903,7 @@ mod tests {
             semantic_search,
             data_path,
             "en".to_string(),
+            "https://nominatim.openstreetmap.org".to_string(),
         );
 
         // Should handle errors gracefully

@@ -1,3 +1,10 @@
+## [2.21.3](https://github.com/RouHim/turbo-pix/compare/2.21.2...2.21.3) (2026-04-04)
+
+
+### Bug Fixes
+
+* bump stylelint to 17 and stylelint-config-standard to 40, regenerate lockfile ([#28](https://github.com/RouHim/turbo-pix/issues/28)) ([9c9cce2](https://github.com/RouHim/turbo-pix/commit/9c9cce2bec377b8ce4b92ef851907c2c563769ba)), closes [#29](https://github.com/RouHim/turbo-pix/issues/29)
+
 ## [2.21.2](https://github.com/RouHim/turbo-pix/compare/2.21.1...2.21.2) (2026-04-04)
 
 ## [2.21.1](https://github.com/RouHim/turbo-pix/compare/2.21.0...2.21.1) (2026-04-04)

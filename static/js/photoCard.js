@@ -81,6 +81,18 @@ class PhotoCard {
 
     if (isVideo) {
       const playIcon = utils.createElement('div', 'video-play-icon');
+      playIcon.innerHTML = window.iconHelper.getSemanticIcon('play', {
+        size: 20,
+        strokeWidth: 2.5,
+      });
+
+      const playIconSvg = playIcon.querySelector('svg');
+      if (playIconSvg) {
+        playIconSvg.setAttribute('fill', 'white');
+        playIconSvg.setAttribute('stroke', 'white');
+        playIconSvg.setAttribute('aria-hidden', 'true');
+      }
+
       imageContainer.appendChild(playIcon);
     }
 

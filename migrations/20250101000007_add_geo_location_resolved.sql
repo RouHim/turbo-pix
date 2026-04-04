@@ -1,0 +1,1 @@
+ALTER TABLE photos ADD COLUMN geo_location_resolved BOOLEAN NOT NULL DEFAULT 0;

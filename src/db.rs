@@ -1252,4 +1252,60 @@ mod tests {
         let count: i64 = count.get("count");
         assert_eq!(count, 100, "All 100 photos should be created");
     }
+
+    #[tokio::test]
+    async fn test_geo_location_resolved_defaults_to_false_and_persists_true() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo("geo-default.jpg".to_string(), "geo-default-hash".to_string());
+
+        photo.create(&pool).await.unwrap();
+
+        let initial_value: i64 = sqlx::query_scalar(
+            "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?",
+        )
+        .bind(&photo.hash_sha256)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(initial_value, 0);
+
+        sqlx::query("UPDATE photos SET geo_location_resolved = 1 WHERE hash_sha256 = ?")
+            .bind(&photo.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let updated_value: i64 = sqlx::query_scalar(
+            "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?",
+        )
+        .bind(&photo.hash_sha256)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(updated_value, 1);
+    }
+
+    #[tokio::test]
+    async fn test_geo_location_resolved_defaults_false_for_multiple_rows() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        for index in 0..3 {
+            let photo = create_test_photo(
+                format!("geo-default-{}.jpg", index),
+                format!("geo-default-hash-{}", index),
+            );
+            photo.create(&pool).await.unwrap();
+        }
+
+        let resolved_values: Vec<i64> = sqlx::query_scalar(
+            "SELECT geo_location_resolved FROM photos ORDER BY file_path",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(resolved_values, [0, 0, 0]);
+    }
 }

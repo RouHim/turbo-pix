@@ -93,6 +93,18 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
         })
 }
 
+fn build_general_search_condition() -> &'static str {
+    "(filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ? OR json_extract(metadata, '$.location.city') LIKE ?)"
+}
+
+fn add_general_search_params(params: &mut Vec<String>, query: &str) {
+    let pattern = format!("%{}%", query);
+    params.push(pattern.clone());
+    params.push(pattern.clone());
+    params.push(pattern.clone());
+    params.push(pattern);
+}
+
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
@@ -678,13 +690,15 @@ impl Photo {
                     }
                     _ => {
                         // Unknown type, fall back to general search
-                        where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
-                        let pattern = format!("%{}%", q);
-                        params.push(pattern.clone());
-                        params.push(pattern.clone());
-                        params.push(pattern);
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(build_general_search_condition());
+                        add_general_search_params(&mut params, q);
                     }
                 }
+            } else if q.starts_with("location:") {
+                let city = q.strip_prefix("location:").unwrap_or("");
+                where_clause.push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
+                params.push(format!("%{}%", city));
             } else if q.starts_with("is_favorite:") {
                 let favorite_value = q.strip_prefix("is_favorite:").unwrap_or("");
                 match favorite_value {
@@ -696,20 +710,16 @@ impl Photo {
                     }
                     _ => {
                         // Unknown value, fall back to general search
-                        where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
-                        let pattern = format!("%{}%", q);
-                        params.push(pattern.clone());
-                        params.push(pattern.clone());
-                        params.push(pattern);
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(build_general_search_condition());
+                        add_general_search_params(&mut params, q);
                     }
                 }
             } else {
                 // General search across multiple fields (filename + JSON metadata)
-                where_clause.push_str(" AND (filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ?)");
-                let pattern = format!("%{}%", q);
-                params.push(pattern.clone());
-                params.push(pattern.clone());
-                params.push(pattern);
+                where_clause.push_str(" AND ");
+                where_clause.push_str(build_general_search_condition());
+                add_general_search_params(&mut params, q);
             }
         }
 
@@ -948,6 +958,51 @@ pub async fn mark_photo_as_semantically_indexed(
     Ok(())
 }
 
+pub async fn get_photos_needing_geo_resolution(
+    pool: &DbPool,
+) -> Result<Vec<(String, f64, f64)>, Box<dyn std::error::Error>> {
+    let photos: Vec<(String, f64, f64)> = sqlx::query_as(
+        "SELECT
+            file_path,
+            json_extract(metadata, '$.location.latitude') AS latitude,
+            json_extract(metadata, '$.location.longitude') AS longitude
+         FROM photos
+         WHERE geo_location_resolved = 0
+           AND json_extract(metadata, '$.location.latitude') IS NOT NULL
+         ORDER BY file_path",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(photos)
+}
+
+pub async fn mark_photo_geo_resolved(
+    pool: &DbPool,
+    file_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    sqlx::query("UPDATE photos SET geo_location_resolved = 1 WHERE file_path = ?")
+        .bind(file_path)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_photo_city(
+    pool: &DbPool,
+    file_path: &str,
+    city: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(city) = city {
+        sqlx::query("UPDATE photos SET metadata = json_set(metadata, '$.location.city', ?) WHERE file_path = ?")
+            .bind(city)
+            .bind(file_path)
+            .execute(pool)
+            .await?;
+    }
+
+    mark_photo_geo_resolved(pool, file_path).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,6 +1041,35 @@ mod tests {
             hash
         };
         create_test_photo_with_date(&hash_64, &filename, Utc::now())
+    }
+
+    fn create_test_photo_with_metadata(
+        filename: &str,
+        hash: &str,
+        metadata: serde_json::Value,
+    ) -> Photo {
+        let mut photo = create_test_photo(filename.to_string(), hash.to_string());
+        photo.metadata = metadata;
+        photo
+    }
+
+    async fn read_photo_metadata(pool: &DbPool, file_path: &str) -> serde_json::Value {
+        let metadata: String =
+            sqlx::query_scalar("SELECT metadata FROM photos WHERE file_path = ?")
+                .bind(file_path)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+
+        serde_json::from_str(&metadata).unwrap()
+    }
+
+    fn create_search_query(query: &str) -> SearchQuery {
+        SearchQuery {
+            q: Some(query.to_string()),
+            year: None,
+            month: None,
+        }
     }
     #[tokio::test]
     async fn test_get_timeline_data() {
@@ -1256,17 +1340,19 @@ mod tests {
     #[tokio::test]
     async fn test_geo_location_resolved_defaults_to_false_and_persists_true() {
         let pool = create_test_db_pool().await.unwrap();
-        let photo = create_test_photo("geo-default.jpg".to_string(), "geo-default-hash".to_string());
+        let photo = create_test_photo(
+            "geo-default.jpg".to_string(),
+            "geo-default-hash".to_string(),
+        );
 
         photo.create(&pool).await.unwrap();
 
-        let initial_value: i64 = sqlx::query_scalar(
-            "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?",
-        )
-        .bind(&photo.hash_sha256)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let initial_value: i64 =
+            sqlx::query_scalar("SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?")
+                .bind(&photo.hash_sha256)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(initial_value, 0);
 
@@ -1276,13 +1362,12 @@ mod tests {
             .await
             .unwrap();
 
-        let updated_value: i64 = sqlx::query_scalar(
-            "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?",
-        )
-        .bind(&photo.hash_sha256)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let updated_value: i64 =
+            sqlx::query_scalar("SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?")
+                .bind(&photo.hash_sha256)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(updated_value, 1);
     }
@@ -1299,13 +1384,223 @@ mod tests {
             photo.create(&pool).await.unwrap();
         }
 
-        let resolved_values: Vec<i64> = sqlx::query_scalar(
-            "SELECT geo_location_resolved FROM photos ORDER BY file_path",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+        let resolved_values: Vec<i64> =
+            sqlx::query_scalar("SELECT geo_location_resolved FROM photos ORDER BY file_path")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(resolved_values, [0, 0, 0]);
+    }
+
+    #[tokio::test]
+    async fn test_get_photos_needing_geo_resolution() {
+        let pool = create_test_db_pool().await.unwrap();
+        let unresolved_photo = create_test_photo_with_metadata(
+            "needs-geo.jpg",
+            "needs-geo-hash",
+            json!({
+                "location": {
+                    "latitude": 52.52,
+                    "longitude": 13.405
+                }
+            }),
+        );
+        let resolved_photo = create_test_photo_with_metadata(
+            "resolved-geo.jpg",
+            "resolved-geo-hash",
+            json!({
+                "location": {
+                    "latitude": 48.137,
+                    "longitude": 11.575
+                }
+            }),
+        );
+        let no_gps_photo = create_test_photo_with_metadata(
+            "no-gps.jpg",
+            "no-gps-hash",
+            json!({
+                "camera": {
+                    "make": "Canon"
+                }
+            }),
+        );
+
+        unresolved_photo.create(&pool).await.unwrap();
+        resolved_photo.create(&pool).await.unwrap();
+        no_gps_photo.create(&pool).await.unwrap();
+
+        sqlx::query("UPDATE photos SET geo_location_resolved = 1 WHERE file_path = ?")
+            .bind(&resolved_photo.file_path)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
+
+        assert_eq!(
+            photos,
+            vec![(unresolved_photo.file_path.clone(), 52.52, 13.405)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mark_photo_geo_resolved() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_metadata(
+            "mark-resolved.jpg",
+            "mark-resolved-hash",
+            json!({
+                "location": {
+                    "latitude": 52.52,
+                    "longitude": 13.405
+                }
+            }),
+        );
+
+        photo.create(&pool).await.unwrap();
+        mark_photo_geo_resolved(&pool, &photo.file_path)
+            .await
+            .unwrap();
+
+        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
+
+        assert!(photos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_photo_city() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_metadata(
+            "city-update.jpg",
+            "city-update-hash",
+            json!({
+                "location": {
+                    "latitude": 52.52,
+                    "longitude": 13.405
+                }
+            }),
+        );
+
+        photo.create(&pool).await.unwrap();
+        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
+            .await
+            .unwrap();
+
+        let metadata = read_photo_metadata(&pool, &photo.file_path).await;
+        let resolved_value: i64 =
+            sqlx::query_scalar("SELECT geo_location_resolved FROM photos WHERE file_path = ?")
+                .bind(&photo.file_path)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(metadata["location"]["city"], json!("Berlin"));
+        assert_eq!(resolved_value, 1);
+    }
+
+    #[tokio::test]
+    async fn test_update_photo_city_null() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_metadata(
+            "city-update-null.jpg",
+            "city-update-null-hash",
+            json!({
+                "location": {
+                    "latitude": 52.52,
+                    "longitude": 13.405
+                }
+            }),
+        );
+
+        photo.create(&pool).await.unwrap();
+        update_photo_city(&pool, &photo.file_path, None)
+            .await
+            .unwrap();
+
+        let metadata = read_photo_metadata(&pool, &photo.file_path).await;
+        let resolved_value: i64 =
+            sqlx::query_scalar("SELECT geo_location_resolved FROM photos WHERE file_path = ?")
+                .bind(&photo.file_path)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(metadata["location"].get("city"), None);
+        assert_eq!(resolved_value, 1);
+    }
+
+    #[tokio::test]
+    async fn test_search_photos_by_city() {
+        let pool = create_test_db_pool().await.unwrap();
+        let berlin_photo = create_test_photo_with_metadata(
+            "berlin.jpg",
+            "berlin-hash",
+            json!({
+                "location": {
+                    "city": "Berlin"
+                }
+            }),
+        );
+
+        berlin_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("location:Berlin");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, berlin_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_general_includes_city() {
+        let pool = create_test_db_pool().await.unwrap();
+        let berlin_photo = create_test_photo_with_metadata(
+            "berlin-general.jpg",
+            "berlin-general-hash",
+            json!({
+                "location": {
+                    "city": "Berlin"
+                }
+            }),
+        );
+
+        berlin_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("Berlin");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, berlin_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_photos_by_city_no_match() {
+        let pool = create_test_db_pool().await.unwrap();
+        let berlin_photo = create_test_photo_with_metadata(
+            "berlin-no-match.jpg",
+            "berlin-no-match-hash",
+            json!({
+                "location": {
+                    "city": "Berlin"
+                }
+            }),
+        );
+
+        berlin_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("location:Paris");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 0);
+        assert!(photos.is_empty());
     }
 }

@@ -1,3 +1,16 @@
+# [2.21.0](https://github.com/RouHim/turbo-pix/compare/2.20.0...2.21.0) (2026-04-04)
+
+
+### Features
+
+* **config:** add TURBO_PIX_NOMINATIM_URL env var ([e6c225c](https://github.com/RouHim/turbo-pix/commit/e6c225c6e59e0ebc776f9fd11b3e7f4452262f1d))
+* **db:** add geo resolution helpers and extend search with location prefix ([dd514ae](https://github.com/RouHim/turbo-pix/commit/dd514ae63d1d6188356d545260868a8329e74b50))
+* **db:** add geo_location_resolved migration ([77d8af8](https://github.com/RouHim/turbo-pix/commit/77d8af8eee71b1b69905e058a0f3a04df4be4acb))
+* **geo:** add Nominatim reverse geocoding module ([cbe4049](https://github.com/RouHim/turbo-pix/commit/cbe4049602f566b53fcfc5248a3021b41efd3bba))
+* **scheduler:** add geo_resolution to IndexingPhases ([cda3c28](https://github.com/RouHim/turbo-pix/commit/cda3c28fe889be6b321cafbd148ea8ae860c7f7f))
+* **scheduler:** integrate geo resolution phase into startup and midnight rescan ([8f58850](https://github.com/RouHim/turbo-pix/commit/8f588502a4f63476389f59ce462af2063bb003e1))
+* **ui:** add location: prefix search and hint tooltip ([90b0c14](https://github.com/RouHim/turbo-pix/commit/90b0c14b1f4be9bf1e55e343fe3384d55bcdc4f5))
+
 # [2.20.0](https://github.com/RouHim/turbo-pix/compare/2.19.0...2.20.0) (2026-04-04)
 
 

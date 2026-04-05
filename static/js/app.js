@@ -105,6 +105,27 @@ class TurboPixApp {
         }
       }
 
+      // Handle search state from popstate (Back/Forward)
+      if (window.search) {
+        const currentQuery = window.search.getSearchQuery();
+        if (current.query && current.query !== currentQuery) {
+          window.search.setSearchQuery(current.query);
+          window.search.performSearch(current.query, false);
+        } else if (!current.query && currentQuery) {
+          window.search.clearSearch(false);
+        }
+      }
+
+      // Handle sort state from popstate (Back/Forward)
+      if (current.sort !== this.state.get('sortBy')) {
+        this.state.set('sortBy', current.sort);
+        const sortSelect = utils.$('#sort-select');
+        if (sortSelect) {
+          sortSelect.value = current.sort;
+        }
+        this.loadViewData(this.state.get('currentView'));
+      }
+
       // Handle view switching
       if (current.view !== this.state.get('currentView')) {
         this.switchView(current.view, false); // false = don't push to history
@@ -339,9 +360,14 @@ class TurboPixApp {
       this.updateTimelineVisibility(currentView);
       await this.loadViewData(currentView);
 
-      const { photo } = window.router.getState();
+      const { photo, query } = window.router.getState();
       if (photo && window.photoViewer) {
         await window.photoViewer.openByHash(photo);
+      }
+
+      if (query && window.search) {
+        window.search.setSearchQuery(query);
+        await window.search.performSearch(query, false);
       }
     } catch (error) {
       if (window.logger) {
@@ -512,6 +538,7 @@ class TurboPixApp {
 
   async setSortBy(sortBy) {
     this.state.set('sortBy', sortBy);
+    window.router.pushState({ sort: sortBy });
 
     // Update UI select element to reflect new sort
     const sortSelect = document.getElementById('sort-select');

@@ -128,36 +128,40 @@ test.describe('Layout Glassmorphism', () => {
   });
 
   test('layout should render correctly in light theme', async ({ page }) => {
-    // GIVEN: Light theme is active
+    // GIVEN: Light theme is active and indexing banner is visible
     await page.evaluate(() => {
       document.documentElement.classList.add('light-theme');
       document.documentElement.classList.remove('dark-theme');
+      document.querySelector('#indexing-banner').style.display = 'block';
     });
 
-    // WHEN: The layout is visible
+    // WHEN: Desktop viewport is set
     await TestHelpers.setDesktopViewport(page);
 
-    // THEN: The layout renders without errors
+    // THEN: Header, sidebar, and banner all render without errors
     await expect(page.locator('.header')).toBeVisible();
     await expect(page.locator('.sidebar')).toBeVisible();
+    await expect(page.locator('#indexing-banner')).toBeVisible();
 
     mkdirSync(EVIDENCE_DIR, { recursive: true });
     await page.screenshot({ path: `${EVIDENCE_DIR}/task-1-light-theme.png` });
   });
 
   test('layout should render correctly in dark theme', async ({ page }) => {
-    // GIVEN: Dark theme is active
+    // GIVEN: Dark theme is active and indexing banner is visible
     await page.evaluate(() => {
       document.documentElement.classList.add('dark-theme');
       document.documentElement.classList.remove('light-theme');
+      document.querySelector('#indexing-banner').style.display = 'block';
     });
 
-    // WHEN: The layout is visible
+    // WHEN: Desktop viewport is set
     await TestHelpers.setDesktopViewport(page);
 
-    // THEN: The layout renders without errors
+    // THEN: Header, sidebar, and banner all render without errors
     await expect(page.locator('.header')).toBeVisible();
     await expect(page.locator('.sidebar')).toBeVisible();
+    await expect(page.locator('#indexing-banner')).toBeVisible();
 
     mkdirSync(EVIDENCE_DIR, { recursive: true });
     await page.screenshot({ path: `${EVIDENCE_DIR}/task-1-dark-theme.png` });

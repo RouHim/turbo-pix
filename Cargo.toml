@@ -45,6 +45,9 @@ chrono = { version = "0.4", features = ["serde", "unstable-locales"] }
 thiserror = "2.0"
 rusttype = "0.9"
 anyhow = "1.0"
+num_cpus = "1.17.0"
+rand = "0.10.0"
+rayon = "1.11.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["fs", "macros", "process", "rt", "rt-multi-thread", "signal"] }
@@ -52,9 +55,6 @@ tokio = { version = "1.0", features = ["fs", "macros", "process", "rt", "rt-mult
 # Logging
 log = "0.4"
 env_logger = "0.11"
-num_cpus = "1.17.0"
-rand = "0.10.0"
-rayon = "1.11.0"
 
 [dev-dependencies]
 tempfile = "3.0"

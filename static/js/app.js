@@ -94,33 +94,26 @@ class TurboPixApp {
    * Sets up browser history management and handles initial route
    */
   initRouting() {
-    // Handle browser back/forward buttons
-    utils.on(window, 'popstate', () => {
-      const view = this.getViewFromPath() || 'all';
-      const photoHash = this.getPhotoFromUrl();
-
+    // Register state change handler before init() sets up popstate
+    window.router.onStateChange(({ current }) => {
       // Handle viewer state
       if (window.photoViewer) {
-        if (photoHash && !window.photoViewer.isOpen) {
-          // Photo in URL but viewer closed - open it
-          window.photoViewer.openByHash(photoHash);
-        } else if (!photoHash && window.photoViewer.isOpen) {
-          // No photo in URL but viewer open - close it
+        if (current.photo && !window.photoViewer.isOpen) {
+          window.photoViewer.openByHash(current.photo);
+        } else if (!current.photo && window.photoViewer.isOpen) {
           window.photoViewer.close(false); // false = don't update URL
         }
       }
 
       // Handle view switching
-      if (view !== this.state.get('currentView')) {
-        this.switchView(view, false); // false = don't push to history
+      if (current.view !== this.state.get('currentView')) {
+        this.switchView(current.view, false); // false = don't push to history
       }
     });
 
-    // Get initial view from URL
-    const initialView = this.getViewFromPath();
-    if (initialView) {
-      this.state.set('currentView', initialView);
-    }
+    // Initialize router — sets up popstate listener and returns initial state
+    const initialState = window.router.init();
+    this.state.set('currentView', initialState.view);
   }
 
   /**
@@ -227,11 +220,12 @@ class TurboPixApp {
   }
 
   setupViewControls() {
-    // Set initial sort
-    const sortBy = this.state.get('sortBy');
+    const { sort } = window.router.getState();
+    this.state.set('sortBy', sort);
+
     const sortSelect = utils.$('#sort-select');
     if (sortSelect) {
-      sortSelect.value = sortBy;
+      sortSelect.value = sort;
     }
   }
 
@@ -340,16 +334,14 @@ class TurboPixApp {
       utils.showLoading();
       await this.waitForIndexingCompletion();
 
-      // Load photos based on current view
       const currentView = this.state.get('currentView');
       this.updateSortVisibility(currentView);
       this.updateTimelineVisibility(currentView);
       await this.loadViewData(currentView);
 
-      // Check if there's a photo hash in the URL and open viewer
-      const photoHash = this.getPhotoFromUrl();
-      if (photoHash && window.photoViewer) {
-        await window.photoViewer.openByHash(photoHash);
+      const { photo } = window.router.getState();
+      if (photo && window.photoViewer) {
+        await window.photoViewer.openByHash(photo);
       }
     } catch (error) {
       if (window.logger) {
@@ -379,10 +371,8 @@ class TurboPixApp {
     this.updateSortVisibility(view);
     this.updateTimelineVisibility(view);
 
-    // Update URL using History API
     if (pushState) {
-      const path = view === 'all' ? '/' : `/${view}`;
-      window.history.pushState({ view }, '', path);
+      window.router.pushState({ view });
     }
 
     await this.loadViewData(view);

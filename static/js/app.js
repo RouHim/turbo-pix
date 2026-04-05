@@ -155,28 +155,6 @@ class TurboPixApp {
     this.state.set('currentView', initialState.view);
   }
 
-  /**
-   * Extract view name from current URL path
-   * @returns {string|null} View name or null if root path
-   */
-  getViewFromPath() {
-    const path = window.location.pathname;
-    // Remove leading slash
-    const view = path.replace(/^\//, '').replace(/\/$/, '');
-    // Only return if it's a valid view
-    const validViews = ['all', 'favorites', 'videos', 'collages', 'housekeeping'];
-    return validViews.includes(view) ? view : null;
-  }
-
-  /**
-   * Extract photo hash from URL query parameters
-   * @returns {string|null} Photo hash or null if not present
-   */
-  getPhotoFromUrl() {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('photo');
-  }
-
   bindEvents() {
     // Logo link - navigate to home
     const logoLink = utils.$('#logo-link');
@@ -233,10 +211,6 @@ class TurboPixApp {
         this.handleResize();
       }, 250)
     );
-
-    utils.on(window, 'beforeunload', () => {
-      this.saveState();
-    });
 
     // Custom events
     utils.on(window, 'favoriteToggled', (e) => {
@@ -701,23 +675,6 @@ class TurboPixApp {
         }
       }
     }, 60000); // Every minute
-  }
-
-  saveState() {
-    // Save important state to localStorage
-    const stateToSave = {
-      currentView: this.state.get('currentView'),
-      sortBy: this.state.get('sortBy'),
-    };
-
-    utils.storage.set('appState', stateToSave);
-  }
-
-  loadSavedState() {
-    const savedState = utils.storage.get('appState');
-    if (savedState) {
-      this.state.update(savedState);
-    }
   }
 
   initTheme() {

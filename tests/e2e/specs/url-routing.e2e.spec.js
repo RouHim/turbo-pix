@@ -21,7 +21,7 @@ test.describe('URL Routing', () => {
     });
 
     for (const view of ['favorites', 'videos', 'collages', 'housekeeping']) {
-      test.fixme(`should navigate directly to /${view}`, async ({ page }) => {
+      test(`should navigate directly to /${view}`, async ({ page }) => {
         // GIVEN: User enters a direct view URL
         // WHEN: Page loads
         await TestHelpers.goto(page, `/${view}`);
@@ -33,7 +33,7 @@ test.describe('URL Routing', () => {
       });
     }
 
-    test.fixme('should preserve view on page refresh', async ({ page }) => {
+    test('should preserve view on page refresh', async ({ page }) => {
       // GIVEN: User is on the favorites view
       await TestHelpers.goto(page, '/favorites');
       await TestHelpers.verifyActiveView(page, 'favorites');
@@ -47,7 +47,7 @@ test.describe('URL Routing', () => {
       expect(state.view).toBe('favorites');
     });
 
-    test.fixme('should update URL when switching views via nav', async ({ page }) => {
+    test('should update URL when switching views via nav', async ({ page }) => {
       // GIVEN: User is on the homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
@@ -62,7 +62,7 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Search URL', () => {
-    test.fixme('should write ?q= to URL on search', async ({ page }) => {
+    test('should write ?q= to URL on search', async ({ page }) => {
       // GIVEN: User is on the homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForSearchReady(page);
@@ -76,7 +76,7 @@ test.describe('URL Routing', () => {
       expect(state.query).toBe('car');
     });
 
-    test.fixme('should restore search from ?q= on page load', async ({ page }) => {
+    test('should restore search from ?q= on page load', async ({ page }) => {
       // GIVEN: URL contains a search query
       // WHEN: User navigates directly
       await TestHelpers.goto(page, '/?q=car');
@@ -91,7 +91,7 @@ test.describe('URL Routing', () => {
       expect(state.query).toBe('car');
     });
 
-    test.fixme('should remove ?q= when search is cleared', async ({ page }) => {
+    test('should remove ?q= when search is cleared', async ({ page }) => {
       // GIVEN: User has an active search
       await TestHelpers.goto(page, '/?q=car');
       await TestHelpers.waitForSearchReady(page);
@@ -107,44 +107,44 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Sort URL', () => {
-    test.fixme('should write ?sort= to URL when sort changes', async ({ page }) => {
+    test('should write ?sort= to URL when sort changes', async ({ page }) => {
       // GIVEN: User is on the homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
 
       // WHEN: User changes sort order
-      await page.selectOption(TestHelpers.selectors.sortSelect, 'oldest');
+      await page.selectOption(TestHelpers.selectors.sortSelect, 'date_asc');
 
-      // THEN: URL contains ?sort=oldest
-      await TestHelpers.waitForUrlParam(page, 'sort', 'oldest');
+      // THEN: URL contains ?sort=date_asc
+      await TestHelpers.waitForUrlParam(page, 'sort', 'date_asc');
       const state = TestHelpers.getUrlState(page);
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
     });
 
-    test.fixme('should restore sort from ?sort= on page load', async ({ page }) => {
+    test('should restore sort from ?sort= on page load', async ({ page }) => {
       // GIVEN: URL contains a sort param
       // WHEN: User navigates directly
-      await TestHelpers.goto(page, '/?sort=oldest');
+      await TestHelpers.goto(page, '/?sort=date_asc');
       await TestHelpers.waitForPhotosToLoad(page);
 
       // THEN: Sort select reflects the URL param
       const sortValue = await page.locator(TestHelpers.selectors.sortSelect).inputValue();
-      expect(sortValue).toBe('oldest');
+      expect(sortValue).toBe('date_asc');
 
       // AND: URL still has the param
       const state = TestHelpers.getUrlState(page);
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
     });
 
-    test.fixme('should remove ?sort= when reset to default', async ({ page }) => {
+    test('should remove ?sort= when reset to default', async ({ page }) => {
       // GIVEN: User has a custom sort active
-      await TestHelpers.goto(page, '/?sort=oldest');
+      await TestHelpers.goto(page, '/?sort=date_asc');
       await TestHelpers.waitForPhotosToLoad(page);
 
-      // WHEN: User resets sort to default (newest)
-      await page.selectOption(TestHelpers.selectors.sortSelect, 'newest');
+      // WHEN: User resets sort to default (date_desc)
+      await page.selectOption(TestHelpers.selectors.sortSelect, 'date_desc');
 
-      // THEN: ?sort= is removed (newest is default)
+      // THEN: ?sort= is removed (date_desc is default)
       await TestHelpers.waitForUrlParam(page, 'sort', null);
       const state = TestHelpers.getUrlState(page);
       expect(state.sort).toBeNull();
@@ -159,7 +159,7 @@ test.describe('URL Routing', () => {
     const archiveYear = archiveDate.getFullYear();
     const archiveMonth = archiveDate.getMonth() + 1;
 
-    test.fixme('should write ?year= and ?month= on timeline selection', async ({ page }) => {
+    test('should write ?year= and ?month= on timeline selection', async ({ page }) => {
       // GIVEN: User is on the homepage with timeline visible
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
@@ -175,7 +175,7 @@ test.describe('URL Routing', () => {
       expect(state.month).toBe(archiveMonth);
     });
 
-    test.fixme('should restore timeline from URL on page load', async ({ page }) => {
+    test('should restore timeline from URL on page load', async ({ page }) => {
       // GIVEN: URL contains year and month params
       // WHEN: User navigates directly
       await TestHelpers.goto(page, `/?year=${recentYear}&month=${recentMonth}`);
@@ -187,7 +187,7 @@ test.describe('URL Routing', () => {
       expect(state.month).toBe(recentMonth);
     });
 
-    test.fixme('should clear timeline params when reset', async ({ page }) => {
+    test('should clear timeline params when reset', async ({ page }) => {
       // GIVEN: User has timeline filter active
       await TestHelpers.goto(page, `/?year=${recentYear}&month=${recentMonth}`);
       await TestHelpers.waitForPhotosToLoad(page);
@@ -204,7 +204,7 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Back/Forward', () => {
-    test.fixme('should create history entry when switching views', async ({ page }) => {
+    test('should create history entry when switching views', async ({ page }) => {
       // GIVEN: User starts on homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
@@ -220,7 +220,7 @@ test.describe('URL Routing', () => {
       expect(state.view).toBe('all');
     });
 
-    test.fixme('should create history entry on search', async ({ page }) => {
+    test('should create history entry on search', async ({ page }) => {
       // GIVEN: User starts on homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForSearchReady(page);
@@ -237,7 +237,7 @@ test.describe('URL Routing', () => {
       expect(state.query).toBeNull();
     });
 
-    test.fixme('should support Forward after Back', async ({ page }) => {
+    test('should support Forward after Back', async ({ page }) => {
       // GIVEN: User navigated and went back
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
@@ -254,7 +254,7 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Param preservation', () => {
-    test.fixme('should preserve ?q= when switching views', async ({ page }) => {
+    test('should preserve ?q= when switching views', async ({ page }) => {
       // GIVEN: User has an active search
       await TestHelpers.goto(page, '/?q=car');
       await TestHelpers.waitForSearchReady(page);
@@ -268,9 +268,9 @@ test.describe('URL Routing', () => {
       expect(state.view).toBe('favorites');
     });
 
-    test.fixme('should preserve ?sort= when switching views', async ({ page }) => {
+    test('should preserve ?sort= when switching views', async ({ page }) => {
       // GIVEN: User has a custom sort
-      await TestHelpers.goto(page, '/?sort=oldest');
+      await TestHelpers.goto(page, '/?sort=date_asc');
       await TestHelpers.waitForPhotosToLoad(page);
 
       // WHEN: User switches to videos view
@@ -278,11 +278,11 @@ test.describe('URL Routing', () => {
 
       // THEN: Sort param is preserved in URL
       const state = TestHelpers.getUrlState(page);
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
       expect(state.view).toBe('videos');
     });
 
-    test.fixme('should preserve timeline params when switching views', async ({ page }) => {
+    test('should preserve timeline params when switching views', async ({ page }) => {
       const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
       const year = recentDate.getFullYear();
       const month = recentDate.getMonth() + 1;
@@ -303,7 +303,7 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Deep linking', () => {
-    test.fixme('should handle view + search combined URL', async ({ page }) => {
+    test('should handle view + search combined URL', async ({ page }) => {
       // GIVEN: A deep link with view and search
       // WHEN: User navigates to combined URL
       await TestHelpers.goto(page, '/favorites?q=car');
@@ -319,10 +319,10 @@ test.describe('URL Routing', () => {
       expect(state.query).toBe('car');
     });
 
-    test.fixme('should handle view + sort + search combined URL', async ({ page }) => {
+    test('should handle view + sort + search combined URL', async ({ page }) => {
       // GIVEN: A deep link with view, sort, and search
       // WHEN: User navigates to combined URL
-      await TestHelpers.goto(page, '/videos?q=car&sort=oldest');
+      await TestHelpers.goto(page, '/videos?q=car&sort=date_asc');
       await TestHelpers.waitForSearchReady(page);
 
       // THEN: All params are active
@@ -331,17 +331,17 @@ test.describe('URL Routing', () => {
       const state = TestHelpers.getUrlState(page);
       expect(state.view).toBe('videos');
       expect(state.query).toBe('car');
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
     });
 
-    test.fixme('should handle full URL with all params', async ({ page }) => {
+    test('should handle full URL with all params', async ({ page }) => {
       const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
       const year = recentDate.getFullYear();
       const month = recentDate.getMonth() + 1;
 
       // GIVEN: A deep link with every param
       // WHEN: User navigates to full URL
-      await TestHelpers.goto(page, `/favorites?q=car&sort=oldest&year=${year}&month=${month}`);
+      await TestHelpers.goto(page, `/favorites?q=car&sort=date_asc&year=${year}&month=${month}`);
       await TestHelpers.waitForSearchReady(page);
 
       // THEN: All state is restored
@@ -350,14 +350,14 @@ test.describe('URL Routing', () => {
       const state = TestHelpers.getUrlState(page);
       expect(state.view).toBe('favorites');
       expect(state.query).toBe('car');
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
       expect(state.year).toBe(year);
       expect(state.month).toBe(month);
     });
   });
 
   test.describe('Invalid params', () => {
-    test.fixme('should fallback to "all" for invalid view path', async ({ page }) => {
+    test('should fallback to "all" for invalid view path', async ({ page }) => {
       // GIVEN: URL has an invalid view
       // WHEN: User navigates to invalid path
       await TestHelpers.goto(page, '/nonexistent');
@@ -366,7 +366,7 @@ test.describe('URL Routing', () => {
       await TestHelpers.verifyActiveView(page, 'all');
     });
 
-    test.fixme('should ignore invalid ?year= value', async ({ page }) => {
+    test('should ignore invalid ?year= value', async ({ page }) => {
       // GIVEN: URL has a non-numeric year
       // WHEN: User navigates with invalid param
       await TestHelpers.goto(page, '/?year=abc');
@@ -377,7 +377,7 @@ test.describe('URL Routing', () => {
       expect(photos.length).toBeGreaterThan(0);
     });
 
-    test.fixme('should ignore invalid ?month= value', async ({ page }) => {
+    test('should ignore invalid ?month= value', async ({ page }) => {
       // GIVEN: URL has an out-of-range month
       // WHEN: User navigates with invalid param
       await TestHelpers.goto(page, '/?month=13');
@@ -388,7 +388,7 @@ test.describe('URL Routing', () => {
       expect(photos.length).toBeGreaterThan(0);
     });
 
-    test.fixme('should ignore invalid ?sort= value', async ({ page }) => {
+    test('should ignore invalid ?sort= value', async ({ page }) => {
       // GIVEN: URL has an unrecognized sort value
       // WHEN: User navigates with invalid param
       await TestHelpers.goto(page, '/?sort=random');
@@ -401,7 +401,7 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Combined params', () => {
-    test.fixme('should handle search + sort together', async ({ page }) => {
+    test('should handle search + sort together', async ({ page }) => {
       // GIVEN: User is on the homepage
       await TestHelpers.goto(page);
       await TestHelpers.waitForSearchReady(page);
@@ -409,16 +409,16 @@ test.describe('URL Routing', () => {
       // WHEN: User searches and sorts
       await TestHelpers.performSearch(page, 'car');
       await TestHelpers.waitForUrlParam(page, 'q', 'car');
-      await page.selectOption(TestHelpers.selectors.sortSelect, 'oldest');
-      await TestHelpers.waitForUrlParam(page, 'sort', 'oldest');
+      await page.selectOption(TestHelpers.selectors.sortSelect, 'date_asc');
+      await TestHelpers.waitForUrlParam(page, 'sort', 'date_asc');
 
       // THEN: Both params are in URL
       const state = TestHelpers.getUrlState(page);
       expect(state.query).toBe('car');
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
     });
 
-    test.fixme('should handle search + timeline together', async ({ page }) => {
+    test('should handle search + timeline together', async ({ page }) => {
       const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
       const year = recentDate.getFullYear();
       const month = recentDate.getMonth() + 1;
@@ -435,26 +435,26 @@ test.describe('URL Routing', () => {
       expect(state.month).toBe(month);
     });
 
-    test.fixme('should handle sort + timeline together', async ({ page }) => {
+    test('should handle sort + timeline together', async ({ page }) => {
       const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
       const year = archiveDate.getFullYear();
       const month = archiveDate.getMonth() + 1;
 
       // GIVEN: URL has both sort and timeline
       // WHEN: User navigates with combined params
-      await TestHelpers.goto(page, `/?sort=oldest&year=${year}&month=${month}`);
+      await TestHelpers.goto(page, `/?sort=date_asc&year=${year}&month=${month}`);
       await TestHelpers.waitForPhotosToLoad(page);
 
       // THEN: Both params are active
       const state = TestHelpers.getUrlState(page);
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
       expect(state.year).toBe(year);
       expect(state.month).toBe(month);
     });
 
-    test.fixme('should clear one param without affecting others', async ({ page }) => {
+    test('should clear one param without affecting others', async ({ page }) => {
       // GIVEN: Multiple params are active
-      await TestHelpers.goto(page, '/?q=car&sort=oldest');
+      await TestHelpers.goto(page, '/?q=car&sort=date_asc');
       await TestHelpers.waitForSearchReady(page);
 
       // WHEN: User clears search
@@ -464,7 +464,7 @@ test.describe('URL Routing', () => {
       // THEN: Sort param is still present
       const state = TestHelpers.getUrlState(page);
       expect(state.query).toBeNull();
-      expect(state.sort).toBe('oldest');
+      expect(state.sort).toBe('date_asc');
     });
   });
 });

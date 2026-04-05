@@ -19,7 +19,11 @@ impl NominatimClient {
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            agent: ureq::AgentBuilder::new().user_agent(USER_AGENT).build(),
+            agent: ureq::Agent::config_builder()
+                .user_agent(USER_AGENT)
+                .build()
+                .new_agent(),
+
             coordinate_cache: HashMap::new(),
         }
     }
@@ -46,11 +50,11 @@ impl NominatimClient {
         std::thread::sleep(Duration::from_secs(1));
 
         let city = match request_result {
-            Ok(response) => {
-                let response_body = response.into_string()?;
+            Ok(mut response) => {
+                let response_body = response.body_mut().read_to_string()?;
                 parse_city_from_response(&response_body)
             }
-            Err(ureq::Error::Status(404, _response)) => None,
+            Err(ureq::Error::StatusCode(404)) => None,
             Err(error) => return Err(Box::new(error)),
         };
 

@@ -1,0 +1,156 @@
+import { test, expect } from '@playwright/test';
+import { mkdirSync } from 'fs';
+import { TestHelpers } from '../setup/test-helpers.js';
+
+const EVIDENCE_DIR = '.sisyphus/evidence';
+
+test.describe('Layout Glassmorphism', () => {
+  test.beforeEach(async ({ page }) => {
+    TestHelpers.setupConsoleMonitoring(page);
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+  });
+
+  test('header should have saturate and blur in backdrop-filter', async ({ page }) => {
+    // GIVEN: The app shell is loaded
+
+    // WHEN: We check computed styles on .header
+    const backdropFilter = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.header')).backdropFilter
+    );
+
+    // THEN: backdrop-filter includes both saturate and blur
+    expect(backdropFilter).toContain('saturate');
+    expect(backdropFilter).toContain('blur');
+  });
+
+  test('sidebar should have saturate and blur in backdrop-filter on desktop', async ({ page }) => {
+    // GIVEN: Desktop viewport is active
+    await TestHelpers.setDesktopViewport(page);
+
+    // WHEN: We check computed styles on .sidebar
+    const backdropFilter = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.sidebar')).backdropFilter
+    );
+
+    // THEN: backdrop-filter includes both saturate and blur
+    expect(backdropFilter).toContain('saturate');
+    expect(backdropFilter).toContain('blur');
+  });
+
+  test('indexing-banner should have saturate and blur in backdrop-filter', async ({ page }) => {
+    // GIVEN: The indexing banner is visible
+    await page.evaluate(() => {
+      document.querySelector('#indexing-banner').style.display = 'block';
+    });
+
+    // WHEN: We check computed styles on #indexing-banner
+    const backdropFilter = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('#indexing-banner')).backdropFilter
+    );
+
+    // THEN: backdrop-filter includes both saturate and blur
+    expect(backdropFilter).toContain('saturate');
+    expect(backdropFilter).toContain('blur');
+  });
+
+  test('indexing-banner should be positioned at bottom-right', async ({ page }) => {
+    // GIVEN: The indexing banner is visible
+    await page.evaluate(() => {
+      document.querySelector('#indexing-banner').style.display = 'block';
+    });
+
+    // WHEN: We measure the banner position against the viewport
+    const metrics = await page.evaluate(() => {
+      const banner = document.querySelector('#indexing-banner');
+      const rect = banner.getBoundingClientRect();
+
+      return {
+        bottom: rect.bottom,
+        right: rect.right,
+        viewportBottom: window.innerHeight,
+        viewportRight: window.innerWidth,
+      };
+    });
+
+    // THEN: The banner sits near the bottom-right corner
+    expect(metrics.viewportBottom - metrics.bottom).toBeLessThanOrEqual(100);
+    expect(metrics.viewportRight - metrics.right).toBeLessThanOrEqual(100);
+  });
+
+  test('sidebar should NOT be offset when indexing banner is visible', async ({ page }) => {
+    // GIVEN: The indexing banner is visible
+    await page.evaluate(() => {
+      document.querySelector('#indexing-banner').style.display = 'block';
+    });
+
+    // WHEN: We check the sidebar top offset
+    const sidebarTop = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.sidebar')).top
+    );
+
+    // THEN: Sidebar remains aligned to the header height only
+    expect(parseFloat(sidebarTop)).toBeLessThan(100);
+  });
+
+  test('header and sidebar CSS should declare -webkit-backdrop-filter', async ({ page }) => {
+    // GIVEN: The app shell is loaded
+
+    // WHEN: We fetch the raw CSS source file
+    const cssResponse = await page.request.get('/css/main.css');
+    const cssText = await cssResponse.text();
+
+    // THEN: The CSS source includes both selectors and -webkit-backdrop-filter
+    expect(cssText).toContain('.header');
+    expect(cssText).toContain('.sidebar');
+    expect(cssText).toContain('-webkit-backdrop-filter');
+  });
+
+  test('indexing-banner CSS should declare -webkit-backdrop-filter', async ({ page }) => {
+    // GIVEN: The app shell is loaded
+
+    // WHEN: We fetch the raw CSS source file
+    const cssResponse = await page.request.get('/css/components.css');
+    const cssText = await cssResponse.text();
+
+    // THEN: The CSS source includes the indexing banner selector and -webkit-backdrop-filter
+    expect(cssText).toContain('.indexing-banner');
+    expect(cssText).toContain('-webkit-backdrop-filter');
+  });
+
+  test('layout should render correctly in light theme', async ({ page }) => {
+    // GIVEN: Light theme is active
+    await page.evaluate(() => {
+      document.documentElement.classList.add('light-theme');
+      document.documentElement.classList.remove('dark-theme');
+    });
+
+    // WHEN: The layout is visible
+    await TestHelpers.setDesktopViewport(page);
+
+    // THEN: The layout renders without errors
+    await expect(page.locator('.header')).toBeVisible();
+    await expect(page.locator('.sidebar')).toBeVisible();
+
+    mkdirSync(EVIDENCE_DIR, { recursive: true });
+    await page.screenshot({ path: `${EVIDENCE_DIR}/task-1-light-theme.png` });
+  });
+
+  test('layout should render correctly in dark theme', async ({ page }) => {
+    // GIVEN: Dark theme is active
+    await page.evaluate(() => {
+      document.documentElement.classList.add('dark-theme');
+      document.documentElement.classList.remove('light-theme');
+    });
+
+    // WHEN: The layout is visible
+    await TestHelpers.setDesktopViewport(page);
+
+    // THEN: The layout renders without errors
+    await expect(page.locator('.header')).toBeVisible();
+    await expect(page.locator('.sidebar')).toBeVisible();
+
+    mkdirSync(EVIDENCE_DIR, { recursive: true });
+    await page.screenshot({ path: `${EVIDENCE_DIR}/task-1-dark-theme.png` });
+  });
+});

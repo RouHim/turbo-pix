@@ -671,6 +671,10 @@
       background: var(--surface-color);
     }
 
+    .indexing-banner {
+      background: var(--surface-color);
+    }
+
     .viewer-overlay {
       background: oklch(0% 0 0deg / 92%);
     }
@@ -692,6 +696,12 @@
   @media (prefers-reduced-transparency: reduce) {
     .header,
     .sidebar {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--surface-color);
+    }
+
+    .indexing-banner {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       background: var(--surface-color);

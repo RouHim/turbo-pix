@@ -186,6 +186,7 @@ window.DE_TRANSLATIONS = {
     indexing_phase_discovering: 'Entdecken',
     indexing_phase_metadata: 'Metadaten',
     indexing_phase_semantic: 'Semantisch',
+    indexing_phase_geo_resolution: 'Standort',
     indexing_phase_collages: 'Collagen',
     indexing_phase_housekeeping: 'Aufräumen',
 

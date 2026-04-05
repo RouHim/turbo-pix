@@ -42,9 +42,9 @@
                 data-i18n-placeholder="ui.search_ai_placeholder"
                 class="search-input"
               />
-              <button id="search-btn" class="search-btn" data-i18n="ui.search">Search</button>
+              <button type="button" id="search-btn" class="search-btn" data-i18n="ui.search">Search</button>
             </div>
-            <button
+            <button type="button"
               id="theme-toggle"
               class="theme-toggle"
               title="Toggle theme"
@@ -99,7 +99,16 @@
               <span class="step-label" data-i18n="ui.indexing.analysis">Analysis</span>
             </div>
 
-            <!-- Step 4: Collages -->
+            <div class="step-item" data-step-id="geo_resolution" data-step-state="pending">
+              <div class="step-indicator">
+                <div class="step-icon"><i data-feather="map-pin"></i></div>
+                <div class="step-line">
+                  <div class="step-progress-bar"></div>
+                </div>
+              </div>
+              <span class="step-label" data-i18n="ui.indexing.geo_resolution">Location</span>
+            </div>
+
             <div class="step-item" data-step-id="collages" data-step-state="pending">
               <div class="step-indicator">
                 <div class="step-icon"><i data-feather="grid"></i></div>
@@ -108,7 +117,6 @@
               <span class="step-label" data-i18n="ui.indexing.collages">Collages</span>
             </div>
 
-            <!-- Step 5: Housekeeping -->
             <div class="step-item" data-step-id="housekeeping" data-step-state="pending">
               <div class="step-indicator">
                 <div class="step-icon"><i data-feather="check-circle"></i></div>
@@ -121,13 +129,13 @@
 
       <nav class="sidebar">
         <div class="sidebar-content">
-          <button class="nav-item active" data-view="all" data-i18n="ui.all_photos">
+          <button type="button" class="nav-item active" data-view="all" data-i18n="ui.all_photos">
             All Photos
           </button>
-          <button class="nav-item" data-view="favorites" data-i18n="ui.favorites">Favorites</button>
-          <button class="nav-item" data-view="videos" data-i18n="ui.videos">Videos</button>
-          <button class="nav-item" data-view="collages" data-i18n="ui.collages">Collages</button>
-          <button class="nav-item" data-view="housekeeping" data-i18n="ui.housekeeping">
+          <button type="button" class="nav-item" data-view="favorites" data-i18n="ui.favorites">Favorites</button>
+          <button type="button" class="nav-item" data-view="videos" data-i18n="ui.videos">Videos</button>
+          <button type="button" class="nav-item" data-view="collages" data-i18n="ui.collages">Collages</button>
+          <button type="button" class="nav-item" data-view="housekeeping" data-i18n="ui.housekeeping">
             Housekeeping
           </button>
         </div>
@@ -152,7 +160,7 @@
         <div class="timeline-container">
           <!-- Desktop: Slider -->
           <div class="timeline-slider desktop-only">
-            <button
+            <button type="button"
               class="timeline-reset"
               title="Clear timeline filter"
               data-i18n-title="ui.clear_timeline_filter"
@@ -174,7 +182,7 @@
             <select class="timeline-month-select">
               <option value="" data-i18n="ui.all_months">All Months</option>
             </select>
-            <button
+            <button type="button"
               class="timeline-reset"
               title="Clear timeline filter"
               data-i18n-title="ui.clear_timeline_filter"
@@ -196,7 +204,7 @@
         </div>
 
         <div id="load-more-container" class="load-more-container">
-          <button id="load-more-btn" class="load-more-btn" data-i18n="ui.load_more">
+          <button type="button" id="load-more-btn" class="load-more-btn" data-i18n="ui.load_more">
             Load More
           </button>
         </div>
@@ -207,19 +215,19 @@
     <div id="photo-viewer" class="photo-viewer">
       <div class="viewer-overlay"></div>
       <div class="viewer-content">
-        <button
+        <button type="button"
           class="viewer-close"
           title="Close"
           data-i18n-title="ui.close"
           data-icon="x"
         ></button>
-        <button
+        <button type="button"
           class="viewer-prev"
           title="Previous"
           data-i18n-title="ui.previous"
           data-icon="chevron-left"
         ></button>
-        <button
+        <button type="button"
           class="viewer-next"
           title="Next"
           data-i18n-title="ui.next"
@@ -227,61 +235,61 @@
         ></button>
 
         <div class="viewer-controls">
-          <button
+          <button type="button"
             class="zoom-btn zoom-out"
             title="Zoom Out"
             data-i18n-title="ui.zoom_out"
             data-icon="minus"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn zoom-in"
             title="Zoom In"
             data-i18n-title="ui.zoom_in"
             data-icon="plus"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn zoom-fit"
             title="Fit to Screen"
             data-i18n-title="ui.fit_to_screen"
             data-icon="minimize"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn fullscreen-btn"
             title="Fullscreen"
             data-i18n-title="ui.fullscreen"
             data-icon="maximize"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn favorite-btn"
             title="Add to Favorites"
             data-i18n-title="ui.add_to_favorites"
             data-icon="heart"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn download-btn"
             title="Download"
             data-i18n-title="ui.download"
             data-icon="download"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn metadata-btn"
             title="View Details"
             data-i18n-title="ui.view_details"
             data-icon="info"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn rotate-left-btn"
             title="Rotate Left 90°"
             data-i18n-title="ui.rotate_left"
             data-icon="rotate-ccw"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn rotate-right-btn"
             title="Rotate Right 90°"
             data-i18n-title="ui.rotate_right"
             data-icon="rotate-cw"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn accept-collage-btn"
             title="Accept Collage"
             data-action="accept-collage"
@@ -289,7 +297,7 @@
             data-icon="check"
             style="display: none"
           ></button>
-          <button
+          <button type="button"
             class="zoom-btn delete-photo-btn"
             title="Delete Photo"
             data-i18n-title="ui.delete_photo"
@@ -309,7 +317,7 @@
           <div class="photo-info">
             <div class="photo-info-header">
               <h3 id="photo-title" data-i18n="ui.photo_title">Photo Title</h3>
-              <button
+              <button type="button"
                 id="metadata-edit-btn"
                 class="btn-icon"
                 title="Edit Metadata"
@@ -491,7 +499,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h2 data-i18n="ui.metadata.edit_modal_title">Edit Photo Metadata</h2>
-          <button id="metadata-edit-close" class="close-button" aria-label="Close">&times;</button>
+          <button type="button" id="metadata-edit-close" class="close-button" aria-label="Close">&times;</button>
         </div>
         <form id="metadata-edit-form">
           <div class="form-group">

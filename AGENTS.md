@@ -49,17 +49,20 @@ Development/personal project - breaking changes acceptable, database and cache c
 - E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
 - when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
 - **Avoid:** Hardcoded paths and fallback logic mask bugs
-- When troubleshooting bugs, try to reproduce the bug first writing a test 
+- When troubleshooting bugs, try to reproduce the bug first writing a test
+- After finishing a Task (feature, bug fix, etc) extract relevant learnings from the session/task (if there are ones),
+  and merge them with the Learnings section in the Agents.md file. Also verify all entry in the learnings section are still valid.
 
 ## Testing
 
-* Test images and videos are located in `test-data/`
+- Test images and videos are located in `test-data/`
 
 **E2E:**
 
 TurboPix uses Playwright for end-to-end testing with real backend integration.
 
 **Quick Start:**
+
 ```bash
 npm run test:e2e          # Run all tests
 npm run test:e2e:ui       # Interactive UI mode
@@ -69,12 +72,14 @@ npm run test:e2e:report   # View test report
 ```
 
 **Test Structure:**
+
 - `tests/e2e/setup/` - Global setup, teardown, test helpers
 - `tests/e2e/specs/` - Test files organized by feature
 - Sequential execution (workers: 1) to avoid DB conflicts
 - Real backend: Auto-builds binary, starts server, waits for indexing
 
 **Test Helpers Available:**
+
 - `TestHelpers.navigateToView(page, 'favorites')`
 - `TestHelpers.verifyActiveView(page, 'videos')`
 - `TestHelpers.getPhotoCards(page)`
@@ -84,6 +89,7 @@ npm run test:e2e:report   # View test report
 - And 20+ more utilities
 
 **Writing Tests:**
+
 1. Use `data-*` attribute selectors for stability
 2. Use TestHelpers for common operations
 3. Wait for elements with Playwright's auto-waiting (avoid hard timeouts)
@@ -91,13 +97,16 @@ npm run test:e2e:report   # View test report
 5. Use `test.skip()` when test data is unavailable
 
 **Manual E2E Testing:**
+
 - Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
 - Test at `http://localhost:18473`
 - Kill process after testing
 
-## Common Issues
+## Learnings
 
 **UI state desync:** Update both: `appState.value = x; domElement.value = x;`
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
+
 - Do not use emojis , use feather icons instead
+- [INCOMPLETE_FEATURE] When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) step div in static/index.html, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase. (2026-04-05)

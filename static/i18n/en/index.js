@@ -188,6 +188,7 @@ window.EN_TRANSLATIONS = {
     indexing_phase_discovering: 'Discovering',
     indexing_phase_metadata: 'Metadata',
     indexing_phase_semantic: 'Semantic',
+    indexing_phase_geo_resolution: 'Location',
     indexing_phase_collages: 'Collages',
     indexing_phase_housekeeping: 'Housekeeping',
 

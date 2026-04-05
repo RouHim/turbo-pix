@@ -164,13 +164,7 @@ class Search {
   async performSearch(query, addToHistory = false) {
     // Update URL immediately for explicit searches (Enter key, button click)
     if (addToHistory) {
-      const url = new URL(window.location);
-      if (query) {
-        url.searchParams.set('q', query);
-      } else {
-        url.searchParams.delete('q');
-      }
-      window.history.replaceState({}, '', url);
+      window.router.pushState({ query: query || null });
     }
 
     if (!query || query === this.currentQuery) return;
@@ -213,13 +207,7 @@ class Search {
 
       // Update URL without page reload (for debounced searches)
       if (!addToHistory) {
-        const url = new URL(window.location);
-        if (query) {
-          url.searchParams.set('q', query);
-        } else {
-          url.searchParams.delete('q');
-        }
-        window.history.replaceState({}, '', url);
+        window.router.replaceState({ query: query || null });
       }
     } catch (error) {
       if (window.logger) {
@@ -255,7 +243,7 @@ class Search {
     }
   }
 
-  clearSearch() {
+  clearSearch(updateUrl = true) {
     this.currentQuery = '';
     this.setSearchQuery('');
     this.updateSearchState('');
@@ -267,10 +255,9 @@ class Search {
       window.photoGrid.search('');
     }
 
-    // Update URL
-    const url = new URL(window.location);
-    url.searchParams.delete('q');
-    window.history.replaceState({}, '', url);
+    if (updateUrl) {
+      window.router.pushState({ query: null });
+    }
   }
 
   setSearchQuery(query) {
@@ -295,13 +282,12 @@ class Search {
       }
     }
 
-    // Update active nav item
-    const navItems = utils.$$('.nav-item');
-    navItems.forEach((item) => {
-      item.classList.remove('active');
-    });
-
     if (!query) {
+      const navItems = utils.$$('.nav-item');
+      navItems.forEach((item) => {
+        item.classList.remove('active');
+      });
+
       const allPhotosItem = utils.$('.nav-item[data-view="all"]');
       if (allPhotosItem) allPhotosItem.classList.add('active');
     }
@@ -591,12 +577,4 @@ class Search {
 // Initialize global search when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   window.search = new Search();
-
-  // Handle initial search from URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const initialQuery = urlParams.get('q');
-  if (initialQuery) {
-    window.search.setSearchQuery(initialQuery);
-    window.search.performSearch(initialQuery, false);
-  }
 });

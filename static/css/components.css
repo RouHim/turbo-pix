@@ -1303,20 +1303,24 @@
 /* Indexing Banner */
 .indexing-banner {
   position: fixed;
-  top: var(--header-height);
-  left: 0;
-  right: 0;
-  background: var(--surface-color);
-  border-bottom: 1px solid var(--divider-color);
+  bottom: var(--space-6);
+  right: var(--space-6);
+  width: 420px;
+  max-width: calc(100vw - 2 * var(--space-6));
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid var(--glass-border, var(--divider-color));
+  border-radius: var(--radius-lg);
   padding: 0;
   box-shadow: var(--shadow-medium);
   z-index: 900;
-  animation: slide-down 0.3s ease-out;
+  animation: slide-up 0.3s ease-out;
 }
 
-@keyframes slide-down {
+@keyframes slide-up {
   from {
-    transform: translateY(-100%);
+    transform: translateY(100%);
     opacity: 0;
   }
 
@@ -1329,10 +1333,10 @@
 .indexing-banner-content {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 16px 24px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .indexing-header {
@@ -1490,6 +1494,14 @@
 /* Mobile Adjustments */
 
 @media (width <= 768px) {
+  #indexing-banner,
+  .indexing-banner {
+    left: var(--space-4);
+    right: var(--space-4);
+    width: auto;
+    bottom: var(--space-4);
+  }
+
   .step-label {
     display: none; /* Hide labels on mobile to save space */
   }
@@ -1511,15 +1523,6 @@
   .step-indicator {
     height: 24px;
   }
-}
-
-/* Adjust main content when banner is visible */
-body:has(#indexing-banner[style*='display: block']) .sidebar {
-  top: calc(var(--header-height) + 100px); /* Increased height for stepper */
-}
-
-body:has(#indexing-banner[style*='display: block']) .main-content {
-  margin-top: 100px; /* Increased height for stepper */
 }
 
 /* Transcode toast notification */

@@ -42,8 +42,9 @@
 }
 
 @media (width <= 768px) {
-  #app {
-    grid-template: 'header' var(--header-height) 'main' 1fr / 1fr;
+  .main-content {
+    margin-top: var(--header-height);
+    margin-left: 0;
   }
 
   .sidebar {

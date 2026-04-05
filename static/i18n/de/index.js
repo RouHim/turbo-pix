@@ -44,6 +44,7 @@ window.DE_TRANSLATIONS = {
     // Photo viewer
     photo_title: 'Foto Titel',
     photo: 'Foto',
+    selected_media: 'Ausgewähltes Medium',
     date: 'Datum:',
     size: 'Größe:',
     camera: 'Kamera:',

@@ -44,6 +44,7 @@ window.EN_TRANSLATIONS = {
     // Photo viewer
     photo_title: 'Photo Title',
     photo: 'Photo',
+    selected_media: 'Selected media',
     date: 'Date:',
     size: 'Size:',
     camera: 'Camera:',

@@ -35,6 +35,7 @@ const STATIC_FILES: &[(&str, &str)] = include_static![
     "js/viewer.js",
     "js/search.js",
     "js/timeline.js",
+    "js/router.js",
     "js/i18n.js",
     "js/app.js",
     "js/collages.js",

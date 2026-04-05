@@ -132,7 +132,7 @@ class TurboPixApp {
     // Remove leading slash
     const view = path.replace(/^\//, '').replace(/\/$/, '');
     // Only return if it's a valid view
-    const validViews = ['all', 'favorites', 'videos', 'collages'];
+    const validViews = ['all', 'favorites', 'videos', 'collages', 'housekeeping'];
     return validViews.includes(view) ? view : null;
   }
 

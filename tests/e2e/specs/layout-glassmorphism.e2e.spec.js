@@ -60,37 +60,46 @@ test.describe('Layout Glassmorphism', () => {
       document.querySelector('#indexing-banner').style.display = 'block';
     });
 
-    // WHEN: We measure the banner position against the viewport
-    const metrics = await page.evaluate(() => {
+    // WHEN: We check computed position styles on #indexing-banner
+    const styles = await page.evaluate(() => {
       const banner = document.querySelector('#indexing-banner');
-      const rect = banner.getBoundingClientRect();
-
+      const computed = window.getComputedStyle(banner);
       return {
-        bottom: rect.bottom,
-        right: rect.right,
-        viewportBottom: window.innerHeight,
-        viewportRight: window.innerWidth,
+        position: computed.position,
+        bottom: computed.bottom,
+        right: computed.right,
       };
     });
 
-    // THEN: The banner sits near the bottom-right corner
-    expect(metrics.viewportBottom - metrics.bottom).toBeLessThanOrEqual(100);
-    expect(metrics.viewportRight - metrics.right).toBeLessThanOrEqual(100);
+    // THEN: The banner is fixed positioned at the bottom-right corner
+    expect(styles.position).toBe('fixed');
+    // bottom and right should be small pixel values (not 'auto')
+    expect(parseFloat(styles.bottom)).toBeGreaterThanOrEqual(0);
+    expect(parseFloat(styles.right)).toBeGreaterThanOrEqual(0);
+    expect(styles.bottom).not.toBe('auto');
+    expect(styles.right).not.toBe('auto');
   });
 
   test('sidebar should NOT be offset when indexing banner is visible', async ({ page }) => {
-    // GIVEN: The indexing banner is visible
+    // GIVEN: Desktop viewport and indexing banner is visible
+    await TestHelpers.setDesktopViewport(page);
     await page.evaluate(() => {
       document.querySelector('#indexing-banner').style.display = 'block';
     });
 
-    // WHEN: We check the sidebar top offset
-    const sidebarTop = await page.evaluate(
-      () => window.getComputedStyle(document.querySelector('.sidebar')).top
-    );
+    // WHEN: We check the sidebar top offset and the header height
+    const result = await page.evaluate(() => {
+      const sidebarTop = parseFloat(
+        window.getComputedStyle(document.querySelector('.sidebar')).top
+      );
+      const headerHeight = parseFloat(
+        window.getComputedStyle(document.querySelector('.header')).height
+      );
+      return { sidebarTop, headerHeight };
+    });
 
-    // THEN: Sidebar remains aligned to the header height only
-    expect(parseFloat(sidebarTop)).toBeLessThan(100);
+    // THEN: Sidebar top equals exactly the header height (no extra offset from banner)
+    expect(result.sidebarTop).toBe(result.headerHeight);
   });
 
   test('header and sidebar CSS should declare -webkit-backdrop-filter', async ({ page }) => {

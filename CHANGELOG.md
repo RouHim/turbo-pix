@@ -1,3 +1,16 @@
+# [2.22.0](https://github.com/RouHim/turbo-pix/compare/2.21.7...2.22.0) (2026-04-05)
+
+
+### Bug Fixes
+
+* add missing geo_resolution phase to indexing progress UI ([2d8bca5](https://github.com/RouHim/turbo-pix/commit/2d8bca5727e94803968009f308532d38328d7639))
+
+
+### Features
+
+* make header and sidebar glass effects visible via fixed positioning ([2dd3802](https://github.com/RouHim/turbo-pix/commit/2dd3802b18757f42d3259eea10a617730705b70d))
+* redesign indexing banner as bottom-right floating glass card ([9d690f2](https://github.com/RouHim/turbo-pix/commit/9d690f209f9a36c2198aeb11de3d3e6d3a7b5838))
+
 ## [2.21.7](https://github.com/RouHim/turbo-pix/compare/2.21.6...2.21.7) (2026-04-05)
 
 ## [2.21.6](https://github.com/RouHim/turbo-pix/compare/2.21.5...2.21.6) (2026-04-05)

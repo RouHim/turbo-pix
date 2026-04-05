@@ -193,4 +193,38 @@ export class TestHelpers {
     const favoriteBtn = await card.locator(this.selectors.favoriteBtn).first();
     await favoriteBtn.click();
   }
+
+  static getUrlState(page) {
+    const url = new URL(page.url());
+    const pathname = url.pathname.replace(/^\//, '') || 'all';
+    const yearRaw = url.searchParams.get('year');
+    const monthRaw = url.searchParams.get('month');
+    return {
+      view: pathname,
+      query: url.searchParams.get('q') || null,
+      sort: url.searchParams.get('sort') || null,
+      year: yearRaw !== null ? parseInt(yearRaw, 10) : null,
+      month: monthRaw !== null ? parseInt(monthRaw, 10) : null,
+      photo: url.searchParams.get('photo') || null,
+    };
+  }
+
+  static async waitForUrlParam(page, param, value) {
+    await page.waitForFunction(
+      ({ param: p, value: v }) => {
+        const url = new URL(window.location.href);
+        const current = url.searchParams.get(p);
+        return v === null ? current === null : current === v;
+      },
+      { param, value }
+    );
+  }
+
+  static async assertUrlState(page, expected) {
+    const { expect } = await import('@playwright/test');
+    const state = this.getUrlState(page);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(state[key], `URL state mismatch for "${key}"`).toBe(value);
+    }
+  }
 }

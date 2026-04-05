@@ -128,7 +128,13 @@ class TimelineSlider {
     this.applyFilter();
   }
 
-  applyFilter() {
+  applyFilter(updateUrl = true) {
+    if (updateUrl && window.router) {
+      const year = this.currentFilter?.year ?? null;
+      const month = this.currentFilter?.month ?? null;
+      window.router.pushState({ year, month });
+    }
+
     if (window.turboPixApp && typeof window.turboPixApp.applyTimelineFilter === 'function') {
       window.turboPixApp.applyTimelineFilter(this.currentFilter);
     }
@@ -154,6 +160,48 @@ class TimelineSlider {
     this.renderHeatmap();
 
     this.applyFilter();
+  }
+
+  /**
+   * Set timeline filter from external state (URL restore / popstate).
+   * Updates UI only — does not push URL or trigger applyFilter.
+   * @param {number|null} year
+   * @param {number|null} month
+   */
+  setFilterFromState(year, month) {
+    if (!year && !month) {
+      this.currentFilter = null;
+      this.selectedIndex = null;
+
+      if (this.slider && this.positions.length > 0) {
+        this.slider.value = this.positions.length - 1;
+      }
+      if (this.yearSelect) this.yearSelect.value = '';
+      if (this.monthSelect) this.monthSelect.value = '';
+
+      const allDatesText = window.i18nManager ? window.i18nManager.t('ui.all_dates') : 'All Dates';
+      this.updateLabel(allDatesText);
+    } else {
+      this.currentFilter = { year: year || null, month: month || null };
+
+      const matchIndex = this.positions.findIndex((p) => p.year === year && p.month === month);
+      this.selectedIndex = matchIndex >= 0 ? matchIndex : null;
+
+      if (this.slider && matchIndex >= 0) {
+        this.slider.value = matchIndex;
+      }
+
+      if (this.yearSelect && year) this.yearSelect.value = String(year);
+      if (this.monthSelect && month) this.monthSelect.value = String(month);
+
+      if (year && month) {
+        this.updateLabel(this.formatDate(year, month));
+      } else if (year) {
+        this.updateLabel(String(year));
+      }
+    }
+
+    this.renderHeatmap();
   }
 
   updateLabel(text) {

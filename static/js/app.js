@@ -126,6 +126,24 @@ class TurboPixApp {
         this.loadViewData(this.state.get('currentView'));
       }
 
+      // Handle timeline filter from popstate (Back/Forward)
+      const currentTimelineFilter = this.state.get('timelineFilter');
+      const urlYear = current.year;
+      const urlMonth = current.month;
+      const stateYear = currentTimelineFilter?.year ?? null;
+      const stateMonth = currentTimelineFilter?.month ?? null;
+
+      if (urlYear !== stateYear || urlMonth !== stateMonth) {
+        const newFilter = urlYear ? { year: urlYear, month: urlMonth } : null;
+        this.state.set('timelineFilter', newFilter);
+
+        if (window.timelineSlider) {
+          window.timelineSlider.setFilterFromState(urlYear, urlMonth);
+        }
+
+        this.loadViewData(this.state.get('currentView'));
+      }
+
       // Handle view switching
       if (current.view !== this.state.get('currentView')) {
         this.switchView(current.view, false); // false = don't push to history
@@ -358,9 +376,18 @@ class TurboPixApp {
       const currentView = this.state.get('currentView');
       this.updateSortVisibility(currentView);
       this.updateTimelineVisibility(currentView);
+
+      const { photo, query, year, month } = window.router.getState();
+
+      if (year) {
+        this.state.set('timelineFilter', { year, month });
+        if (window.timelineSlider) {
+          window.timelineSlider.setFilterFromState(year, month);
+        }
+      }
+
       await this.loadViewData(currentView);
 
-      const { photo, query } = window.router.getState();
       if (photo && window.photoViewer) {
         await window.photoViewer.openByHash(photo);
       }

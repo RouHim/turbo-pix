@@ -1205,15 +1205,7 @@ class PhotoViewer {
    * @param {string|null} photoHash - Photo hash to add to URL, or null to remove
    */
   updateUrl(photoHash) {
-    const url = new URL(window.location);
-
-    if (photoHash) {
-      url.searchParams.set('photo', photoHash);
-    } else {
-      url.searchParams.delete('photo');
-    }
-
-    window.history.replaceState({ photo: photoHash }, '', url);
+    window.router.replaceState({ photo: photoHash || null });
   }
 
   /**

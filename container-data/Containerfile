@@ -54,11 +54,9 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         echo "x86_64-unknown-linux-musl" > /tmp/rust-target; \
     fi
 
-# Build application with musl compatibility
-# Pre-fetch dependencies and patch sqlite-vec for musl (https://github.com/asg017/sqlite-vec/pull/199)
+# Pre-fetch dependencies and build application with musl compatibility
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
-    cargo fetch --target ${RUST_TARGET} && \
-    find /root/.cargo/registry/src -name "sqlite-vec.c" -exec sed -i '/^typedef u_int8_t uint8_t;$/d; /^typedef u_int16_t uint16_t;$/d; /^typedef u_int64_t uint64_t;$/d' {} \;
+    cargo fetch --target ${RUST_TARGET}
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     cargo build --profile production --target ${RUST_TARGET}

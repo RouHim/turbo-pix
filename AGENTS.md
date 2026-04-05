@@ -108,5 +108,8 @@ npm run test:e2e:report   # View test report
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
-- Do not use emojis , use feather icons instead
-- [INCOMPLETE_FEATURE] When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) step div in static/index.html, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase. (2026-04-05)
+**Icons:** Do not use emojis, use feather icons instead
+
+**Indexing phases:** When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) step div in static/index.html, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase.
+
+**sqlite-vec:** Uses the vlasky/sqlite-vec community fork (git dep, not crates.io). Drop-in replacement API — same `sqlite3_vec_init`, `vec_distance_cosine`, `vec0` virtual table. Fork includes native musl fix, so no build-time sed patches needed in the Containerfile.

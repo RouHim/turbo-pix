@@ -183,9 +183,15 @@ async fn initialize_services(
 
 fn start_background_tasks(photo_scheduler: PhotoScheduler) {
     info!("Running startup photo rescan and housekeeping...");
-    tokio::spawn(async move {
-        if let Err(e) = photo_scheduler.run_startup_rescan().await {
-            log::error!("Startup rescan failed: {}", e);
-        }
-    });
+    std::thread::Builder::new()
+        .name("indexing-startup".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create indexing runtime");
+            rt.block_on(async move {
+                if let Err(e) = photo_scheduler.run_startup_rescan().await {
+                    log::error!("Startup rescan failed: {}", e);
+                }
+            });
+        })
+        .expect("Failed to spawn indexing thread");
 }

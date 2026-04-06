@@ -715,6 +715,18 @@ mod tests {
         assert!(!env.scheduler.photo_paths.is_empty());
     }
 
+    #[test]
+    fn test_run_startup_rescan_executes_in_dedicated_runtime() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let result = rt.block_on(async {
+            let env = TestEnvironment::new().await;
+            env.scheduler.run_startup_rescan().await
+        });
+
+        assert!(result.is_ok());
+    }
+
     #[tokio::test]
     async fn test_startup_rescan_empty_directory() {
         let env = TestEnvironment::new().await;

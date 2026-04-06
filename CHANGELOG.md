@@ -1,3 +1,11 @@
+## [2.23.1](https://github.com/RouHim/turbo-pix/compare/2.23.0...2.23.1) (2026-04-06)
+
+
+### Bug Fixes
+
+* **i18n:** wire indexing banner and housekeeping to i18n system ([044d6c4](https://github.com/RouHim/turbo-pix/commit/044d6c4b1ea0282876252c02d240d8e3d275c6d3))
+* **ui:** align indexing step icons and connectors ([0c1a91f](https://github.com/RouHim/turbo-pix/commit/0c1a91fe58005ae8ce99043c51caa6aff8f9bf4c))
+
 # [2.23.0](https://github.com/RouHim/turbo-pix/compare/2.22.0...2.23.0) (2026-04-06)
 
 

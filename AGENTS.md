@@ -117,3 +117,11 @@ npm run test:e2e:report   # View test report
 **Glassmorphism visibility:** `backdrop-filter` on CSS Grid children has no visible blur effect — the element must be `position: fixed` overlaying scrollable content for the blur to actually show. Header and sidebar need fixed positioning with content scrolling behind them.
 
 **InfiniteScroll layout dependency:** `infiniteScroll.js:9` binds to `.main-content` as the scroll container (`scrollTop`, `scrollHeight`, `clientHeight`). Any layout refactor must keep `.main-content` as a scrollable element with `overflow-y: auto` — removing this breaks infinite scroll silently.
+
+**Router static file order:** `router.js` must be listed in `handlers_static.rs` STATIC_FILES and loaded in `index.html` BEFORE `app.js` — `window.router` must exist when app.js initializes.
+
+**Router month-without-year guard:** In `router.js buildUrl()`, `?month=` must be nested inside the `year !== null` check. Writing `?month=3` without `?year=` is semantically invalid and the restore path already ignores it.
+
+**Router anti-loop pattern:** Components called from `onStateChange` (popstate) must accept `updateUrl=false` to skip re-pushing to history. Pattern: `applyFilter(updateUrl=true)` normally, `applyFilter(updateUrl=false)` from popstate handler — prevents infinite push loops.
+
+**E2E port collision:** `npm run test:e2e` global-setup may pass health check against a stale dev server on 18473, then `cargo run` fails with "port in use". Always run `pkill -9 -f turbo-pix` before the test suite to ensure a clean port.

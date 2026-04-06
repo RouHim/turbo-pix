@@ -311,6 +311,70 @@ test.describe('Indexing orbit', () => {
     );
   });
 
+  test('automatically updates the ring on poll without manual refresh', async ({ page }) => {
+    // GIVEN the API advances to the next phase on a later polling cycle
+    await mockIndexingStatusSequence(page, [
+      {
+        body: buildStatus({
+          active_phase_id: 'metadata',
+          phases: [
+            buildPhase({ id: 'discovering', state: 'done' }),
+            buildPhase({
+              id: 'metadata',
+              state: 'active',
+              kind: 'determinate',
+              processed: 20,
+              total: 100,
+            }),
+            buildPhase({ id: 'semantic_vectors', kind: 'determinate', total: 100 }),
+            buildPhase({ id: 'geo_resolution' }),
+            buildPhase({ id: 'collages' }),
+            buildPhase({ id: 'housekeeping' }),
+          ],
+        }),
+      },
+      {
+        body: buildStatus({
+          active_phase_id: 'semantic_vectors',
+          phases: [
+            buildPhase({ id: 'discovering', state: 'done' }),
+            buildPhase({
+              id: 'metadata',
+              state: 'done',
+              kind: 'determinate',
+              processed: 100,
+              total: 100,
+            }),
+            buildPhase({
+              id: 'semantic_vectors',
+              state: 'active',
+              kind: 'determinate',
+              processed: 10,
+              total: 100,
+            }),
+            buildPhase({ id: 'geo_resolution' }),
+            buildPhase({ id: 'collages' }),
+            buildPhase({ id: 'housekeeping' }),
+          ],
+        }),
+      },
+    ]);
+
+    // WHEN the page stays open long enough for the next polling cycle
+    await TestHelpers.goto(page);
+    await expect(ringSegment(page, 'metadata')).toHaveAttribute('data-phase-state', 'active');
+
+    // THEN the UI should refresh itself without a manual checkStatus() call or page reload
+    await expect(ringSegment(page, 'semantic_vectors')).toHaveAttribute(
+      'data-phase-state',
+      'active',
+      {
+        timeout: 4000,
+      }
+    );
+    await expect(ringSegment(page, 'metadata')).toHaveAttribute('data-phase-state', 'done');
+  });
+
   test('uses large mode on the first indexing run', async ({ page }) => {
     // GIVEN this is the first indexing run
     await mockIndexingStatus(

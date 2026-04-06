@@ -11,6 +11,7 @@ use crate::file_scanner::{FileScanner, PhotoFile};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
+use crate::scheduler::IndexingStatus;
 use crate::semantic_search::SemanticSearchEngine;
 use crate::video_processor;
 
@@ -343,16 +344,21 @@ impl PhotoProcessor {
     pub async fn batch_compute_semantic_vectors(
         &self,
         db_pool: &DbPool,
+        status: &IndexingStatus,
     ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
         use log::info;
 
         info!("Phase 2: Starting batch semantic vector computation");
 
+        status.phases.semantic_vectors.reset();
+
         // Get only photos that need semantic indexing
         let photo_paths = crate::db::get_paths_needing_semantic_indexing(db_pool).await?;
         let total_count = photo_paths.len();
+        status.phases.semantic_vectors.set_total(total_count as u64);
 
         if total_count == 0 {
+            status.phases.semantic_vectors.set_current_item(None);
             info!("No photos found needing semantic vector computation");
             return Ok((0, 0));
         }
@@ -385,6 +391,7 @@ impl PhotoProcessor {
                 let semantic_search = self.semantic_search.clone();
                 let db_pool = db_pool.clone();
                 let semaphore = semaphore.clone();
+                let status = status.clone();
 
                 batch_tasks.spawn(async move {
                     // Acquire semaphore permit to limit concurrency
@@ -398,6 +405,11 @@ impl PhotoProcessor {
                     let is_video = mimetype_detector::from_path(&path_buf)
                         .map(|m| m.type_() == "video")
                         .unwrap_or(false);
+
+                    status
+                        .phases
+                        .semantic_vectors
+                        .set_current_item(Some(path.clone()));
 
                     // Compute semantic vector
                     let result = if is_video {
@@ -424,14 +436,19 @@ impl PhotoProcessor {
             // Wait for all tasks in this batch to complete
             while let Some(result) = batch_tasks.join_next().await {
                 match result {
-                    Ok(Ok(_)) => processed_count += 1,
+                    Ok(Ok(_)) => {
+                        processed_count += 1;
+                        status.phases.semantic_vectors.add_processed(1);
+                    }
                     Ok(Err(e)) => {
                         error!("Failed to compute semantic vector: {}", e);
                         error_count += 1;
+                        status.phases.semantic_vectors.add_errors(1);
                     }
                     Err(e) => {
                         error!("Task panicked: {}", e);
                         error_count += 1;
+                        status.phases.semantic_vectors.add_errors(1);
                     }
                 }
             }
@@ -452,6 +469,8 @@ impl PhotoProcessor {
             "Phase 2 completed: {} semantic vectors computed, {} errors",
             processed_count, error_count
         );
+
+        status.phases.semantic_vectors.set_current_item(None);
 
         Ok((processed_count, error_count))
     }

@@ -375,10 +375,11 @@ impl PhotoScheduler {
                         // Phase 2: Batch compute semantic vectors
                         info!("Phase 2: Computing semantic vectors in batches");
                         status.set_phase("semantic_vectors").await;
-                        match processor.batch_compute_semantic_vectors(&db_pool).await {
+                        match processor
+                            .batch_compute_semantic_vectors(&db_pool, &status)
+                            .await
+                        {
                             Ok((success, errors)) => {
-                                status.phases.semantic_vectors.set_processed(success as u64);
-                                status.phases.semantic_vectors.add_errors(errors as u64);
                                 info!(
                                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                                     success, errors
@@ -555,18 +556,10 @@ impl PhotoScheduler {
         info!("Phase 2: Computing semantic vectors in batches");
         self.status.set_phase("semantic_vectors").await;
         match processor
-            .batch_compute_semantic_vectors(&self.db_pool)
+            .batch_compute_semantic_vectors(&self.db_pool, &self.status)
             .await
         {
             Ok((success, errors)) => {
-                self.status
-                    .phases
-                    .semantic_vectors
-                    .set_processed(success as u64);
-                self.status
-                    .phases
-                    .semantic_vectors
-                    .add_errors(errors as u64);
                 info!(
                     "Phase 2 completed: {} semantic vectors computed, {} errors",
                     success, errors
@@ -955,7 +948,9 @@ mod tests {
             env.scheduler.photo_paths.clone(),
             env.scheduler.semantic_search.clone(),
         );
-        let result = processor.batch_compute_semantic_vectors(&env.db_pool).await;
+        let result = processor
+            .batch_compute_semantic_vectors(&env.db_pool, &env.scheduler.status)
+            .await;
 
         // Should complete - returns (success_count, error_count)
         assert!(result.is_ok());
@@ -967,6 +962,11 @@ mod tests {
             success,
             errors
         );
+
+        let snapshot = env.scheduler.status.phases.semantic_vectors.snapshot();
+        assert_eq!(snapshot.total, 3);
+        assert_eq!(snapshot.processed + snapshot.errors, 3);
+        assert!(snapshot.current_item.is_none());
     }
 
     #[tokio::test]

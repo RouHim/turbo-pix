@@ -144,7 +144,13 @@ class TurboPixAPI {
 
   // Indexing status
   async getIndexingStatus() {
-    return this.request('/api/indexing/status');
+    return this.request('/api/indexing/status', {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+    });
   }
 
   // Collections and cameras features removed

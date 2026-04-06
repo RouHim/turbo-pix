@@ -135,7 +135,15 @@ pub async fn get_indexing_status(
         photos_indexed,
     };
 
-    Ok(warp::reply::json(&response))
+    let reply = warp::reply::json(&response);
+    let reply = warp::reply::with_header(
+        reply,
+        "cache-control",
+        "no-store, no-cache, must-revalidate",
+    );
+    let reply = warp::reply::with_header(reply, "pragma", "no-cache");
+
+    Ok(reply)
 }
 
 fn with_indexing_status(

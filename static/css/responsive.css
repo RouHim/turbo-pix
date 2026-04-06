@@ -252,6 +252,17 @@
   .photo-card-actions .download-btn {
     display: none;
   }
+
+  [data-phase-ring] {
+    --indexing-ring-large-size: 200px;
+    --indexing-ring-compact-size: 48px;
+  }
+
+  [data-phase-ring][data-ring-mode='compact'] {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
 }
 
 @media (width <= 480px) {
@@ -336,6 +347,29 @@
   .nav-item {
     padding: 14px var(--space-5);
     font-size: var(--font-md);
+  }
+
+  [data-phase-ring] {
+    --indexing-ring-compact-size: 40px;
+  }
+
+  [data-sheet-current-item] {
+    display: none;
+  }
+
+  [data-bottom-sheet] .indexing-sheet-header,
+  [data-bottom-sheet] .indexing-sheet-summary,
+  [data-bottom-sheet] .indexing-sheet-phase {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  [data-bottom-sheet] button,
+  [data-bottom-sheet] a,
+  [data-bottom-sheet] [role='button'] {
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
   }
 }
 

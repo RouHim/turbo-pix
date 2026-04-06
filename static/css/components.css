@@ -1323,7 +1323,7 @@
   border-radius: 50%;
   box-shadow: var(--shadow-medium);
   opacity: 1;
-  pointer-events: none;
+  pointer-events: auto;
   transform: translate(-50%, -50%);
   transition:
     width 0.5s var(--ease-spring),
@@ -1352,6 +1352,7 @@
   height: var(--indexing-ring-compact-size);
   opacity: 1;
   transform: translate(0, 0);
+  cursor: pointer;
 }
 
 [data-ring-mode='hidden'] {
@@ -1939,6 +1940,21 @@
 }
 
 /* === Indexing Bottom Sheet === */
+.indexing-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 949;
+  background: oklch(0% 0 0deg / 30%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-medium);
+}
+
+.indexing-sheet-backdrop.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .indexing-bottom-sheet {
   position: fixed;
   bottom: 0;
@@ -2012,8 +2028,17 @@
   transition: background 0.2s ease;
 }
 
-.indexing-sheet-phase[data-phase-state='active'] {
+.indexing-sheet-phase.is-active {
   background: oklch(from var(--primary-color) l c h / 8%);
+  color: var(--primary-color);
+}
+
+.indexing-sheet-phase.is-done {
+  opacity: 0.7;
+}
+
+.indexing-sheet-phase.is-error {
+  color: var(--color-danger, oklch(55% 0.2 25deg));
 }
 
 .phase-icon {
@@ -2023,11 +2048,11 @@
   color: var(--text-secondary);
 }
 
-.indexing-sheet-phase[data-phase-state='active'] .phase-icon {
+.indexing-sheet-phase.is-active .phase-icon {
   color: var(--primary-color);
 }
 
-.indexing-sheet-phase[data-phase-state='done'] .phase-icon {
+.indexing-sheet-phase.is-done .phase-icon {
   color: var(--primary-color);
 }
 
@@ -2053,7 +2078,7 @@
 .phase-progress-fill {
   height: 100%;
   background: var(--primary-color);
-  border-radius: 2px;
+  border-radius: inherit;
   width: 0%;
   transition: width 0.3s ease;
 }

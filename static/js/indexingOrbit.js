@@ -23,6 +23,24 @@ class IndexingOrbitManager {
       return;
     }
 
+    this.backdrop = document.createElement('div');
+    this.backdrop.className = 'indexing-sheet-backdrop';
+    document.body.appendChild(this.backdrop);
+
+    this.ring.addEventListener('click', () => this.toggleSheet());
+    this.backdrop.addEventListener('click', () => this.closeSheet());
+
+    if (this.bottomSheet) {
+      const closeBtn = this.bottomSheet.querySelector('[data-sheet-close]');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => this.closeSheet());
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.closeSheet();
+    });
+
     this.renderOrbit();
     this.startPolling();
   }
@@ -113,6 +131,108 @@ class IndexingOrbitManager {
     };
   }
 
+  toggleSheet() {
+    if (!this.ring || this.ring.getAttribute('data-ring-mode') !== 'compact') return;
+
+    if (!this.bottomSheet) return;
+    const isHidden = this.bottomSheet.getAttribute('aria-hidden') === 'true';
+
+    if (isHidden) {
+      this.openSheet();
+    } else {
+      this.closeSheet();
+    }
+  }
+
+  openSheet() {
+    if (!this.ring || this.ring.getAttribute('data-ring-mode') !== 'compact') return;
+    if (!this.bottomSheet) return;
+
+    this.bottomSheet.setAttribute('aria-hidden', 'false');
+    this.ring.setAttribute('aria-expanded', 'true');
+    if (this.backdrop) {
+      this.backdrop.classList.add('is-visible');
+    }
+  }
+
+  closeSheet() {
+    if (!this.bottomSheet) return;
+
+    this.bottomSheet.setAttribute('aria-hidden', 'true');
+    if (this.ring) {
+      this.ring.setAttribute('aria-expanded', 'false');
+    }
+    if (this.backdrop) {
+      this.backdrop.classList.remove('is-visible');
+    }
+  }
+
+  updateSheet(status) {
+    if (!this.bottomSheet) return;
+
+    const countEl = this.bottomSheet.querySelector('[data-sheet-photos-count]');
+    if (countEl) {
+      countEl.textContent = status.photos_indexed ?? 0;
+    }
+
+    let activePhaseName = '';
+    let activePhaseProcessed = 0;
+    let activePhaseTotal = 0;
+    let currentItem = '';
+
+    status.phases.forEach((phase) => {
+      const row = this.bottomSheet.querySelector(`[data-phase-id="${phase.id}"]`);
+      if (!row) return;
+
+      const countSpan = row.querySelector('[data-phase-count]');
+      const fillDiv = row.querySelector('[data-phase-fill]');
+
+      row.classList.remove('is-active', 'is-done', 'is-error');
+
+      if (phase.state === 'active') {
+        row.classList.add('is-active');
+        activePhaseName = this.getTranslation(`ui.indexing_phase_${phase.id}`, phase.id);
+        activePhaseProcessed = phase.processed || 0;
+        activePhaseTotal = phase.total || 0;
+        currentItem = phase.current_item || '';
+      } else if (phase.state === 'done') {
+        row.classList.add('is-done');
+      } else if (phase.state === 'error') {
+        row.classList.add('is-error');
+      }
+
+      if (phase.kind === 'determinate') {
+        const total = phase.total || 0;
+        const processed = phase.processed || 0;
+        if (countSpan) {
+          countSpan.textContent = `${processed}/${total}`;
+        }
+        if (fillDiv) {
+          const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+          fillDiv.style.width = `${percent}%`;
+        }
+      } else {
+        if (countSpan) {
+          countSpan.textContent = '—';
+        }
+        if (fillDiv) {
+          fillDiv.style.width = '0%';
+        }
+      }
+    });
+
+    const currentItemEl = this.bottomSheet.querySelector('[data-sheet-current-item]');
+    if (currentItemEl) {
+      currentItemEl.textContent = currentItem;
+    }
+
+    if (this.ring && this.ring.getAttribute('data-ring-mode') === 'compact' && activePhaseName) {
+      this.ring.title = `${activePhaseName} — ${activePhaseProcessed}/${activePhaseTotal}`;
+    } else if (this.ring) {
+      this.ring.removeAttribute('title');
+    }
+  }
+
   renderOrbit() {
     this.ring.innerHTML = '';
     this.phaseElements.clear();
@@ -194,6 +314,7 @@ class IndexingOrbitManager {
     });
 
     this.updateCenterIcon(status.phase);
+    this.updateSheet(status);
   }
 
   determineMode(status) {
@@ -297,11 +418,13 @@ class IndexingOrbitManager {
       this.markSegmentsDone();
       this.updateCenterIcon('housekeeping');
       this.hideTimeout = setTimeout(() => {
+        this.closeSheet();
         this.applyHiddenState();
       }, this.hideDelay);
       return;
     }
 
+    this.closeSheet();
     this.applyHiddenState();
   }
 

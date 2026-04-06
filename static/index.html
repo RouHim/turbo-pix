@@ -59,87 +59,104 @@
         </div>
       </header>
 
-      <!-- Indexing Progress Banner -->
-      <div id="indexing-banner" class="indexing-banner" style="display: none">
-        <div class="indexing-banner-content">
-          <div class="indexing-header">
-            <i data-feather="camera" class="indexing-icon"></i>
-            <div class="indexing-text">
-              <span id="indexing-message" data-i18n="ui.indexing_photos"
-                >Processing your photos...</span
-              >
-              <span id="indexing-progress"></span>
+      <div
+        data-phase-ring
+        data-ring-mode="hidden"
+        class="indexing-orbit-ring"
+        aria-live="polite"
+        aria-label="Indexing progress"
+      ></div>
+      <div
+        data-bottom-sheet
+        class="indexing-bottom-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+      >
+        <div class="indexing-sheet-handle"></div>
+        <div class="indexing-sheet-header">
+          <span class="indexing-sheet-title" data-i18n="ui.indexing_sheet_title"
+            >Indexing Progress</span
+          >
+          <button type="button" class="indexing-sheet-close" data-sheet-close aria-label="Close">
+            <i data-feather="x"></i>
+          </button>
+        </div>
+        <div class="indexing-sheet-summary">
+          <span data-sheet-photos-count>0</span>
+          <span data-i18n="ui.indexing_sheet_photos_indexed">photos indexed</span>
+        </div>
+        <div class="indexing-sheet-phases">
+          <div class="indexing-sheet-phase" data-phase-id="discovering">
+            <i data-feather="camera" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_discovering">Discovering</span>
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
+              </div>
             </div>
+            <span class="phase-count" data-phase-count>—</span>
           </div>
-
-          <div class="indexing-stepper" data-indexing-stepper>
-            <!-- Step 1: Discovering -->
-            <div class="step-item" data-step-id="discovering" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="search"></i></div>
-                <div class="step-line"></div>
+          <div class="indexing-sheet-phase" data-phase-id="metadata">
+            <i data-feather="file-text" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_metadata">Reading details</span>
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
               </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_discovering"
-                >Finding photos</span
-              >
             </div>
-
-            <!-- Step 2: Metadata -->
-            <div class="step-item" data-step-id="metadata" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="file-text"></i></div>
-                <div class="step-line">
-                  <div class="step-progress-bar"></div>
-                </div>
-              </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_metadata">Reading details</span>
-            </div>
-
-            <!-- Step 3: Semantic Vectors -->
-            <div class="step-item" data-step-id="semantic_vectors" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="cpu"></i></div>
-                <div class="step-line">
-                  <div class="step-progress-bar"></div>
-                </div>
-              </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_semantic_vectors"
+            <span class="phase-count" data-phase-count>—</span>
+          </div>
+          <div class="indexing-sheet-phase" data-phase-id="semantic_vectors">
+            <i data-feather="cpu" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_semantic_vectors"
                 >Recognizing content</span
               >
-            </div>
-
-            <div class="step-item" data-step-id="geo_resolution" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="map-pin"></i></div>
-                <div class="step-line">
-                  <div class="step-progress-bar"></div>
-                </div>
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
               </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_geo_resolution"
+            </div>
+            <span class="phase-count" data-phase-count>—</span>
+          </div>
+          <div class="indexing-sheet-phase" data-phase-id="geo_resolution">
+            <i data-feather="map-pin" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_geo_resolution"
                 >Finding locations</span
               >
-            </div>
-
-            <div class="step-item" data-step-id="collages" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="grid"></i></div>
-                <div class="step-line"></div>
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
               </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_collages"
+            </div>
+            <span class="phase-count" data-phase-count>—</span>
+          </div>
+          <div class="indexing-sheet-phase" data-phase-id="collages">
+            <i data-feather="grid" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_collages"
                 >Creating collages</span
               >
-            </div>
-
-            <div class="step-item" data-step-id="housekeeping" data-step-state="pending">
-              <div class="step-indicator">
-                <div class="step-icon"><i data-feather="check-circle"></i></div>
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
               </div>
-              <span class="step-label" data-i18n="ui.indexing_phase_housekeeping"
+            </div>
+            <span class="phase-count" data-phase-count>—</span>
+          </div>
+          <div class="indexing-sheet-phase" data-phase-id="housekeeping">
+            <i data-feather="check-circle" class="phase-icon"></i>
+            <div class="phase-info">
+              <span class="phase-name" data-i18n="ui.indexing_phase_housekeeping"
                 >Checking quality</span
               >
+              <div class="phase-progress-bar">
+                <div class="phase-progress-fill" data-phase-fill></div>
+              </div>
             </div>
+            <span class="phase-count" data-phase-count>—</span>
           </div>
         </div>
+        <div class="indexing-sheet-current-item" data-sheet-current-item></div>
       </div>
 
       <nav class="sidebar">
@@ -621,7 +638,7 @@
     <script src="/i18n/en/index.js"></script>
     <script src="/i18n/de/index.js"></script>
     <script src="/js/api.js"></script>
-    <script src="/js/indexingStatus.js"></script>
+    <script src="/js/indexingOrbit.js"></script>
     <script src="/js/gestureRecognizers.js"></script>
     <script src="/js/gestureManager.js"></script>
     <script src="/js/viewerControls.js"></script>

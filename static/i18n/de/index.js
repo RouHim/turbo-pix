@@ -207,6 +207,11 @@ window.DE_TRANSLATIONS = {
     // Indexing counter template
     indexing_counter: '{{processed}} / {{total}}',
 
+    // Indexing Bottom Sheet
+    indexing_sheet_title: 'Indexierungs-Fortschritt',
+    indexing_sheet_photos_indexed: 'Fotos indexiert',
+    indexing_sheet_errors: '{{count}} Fehler',
+
     // Collages
     no_pending_collages: 'Keine ausstehenden Collagen',
     collage_date: 'Datum:',

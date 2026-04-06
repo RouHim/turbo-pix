@@ -208,6 +208,11 @@ window.EN_TRANSLATIONS = {
 
     // Indexing counter template
     indexing_counter: '{{processed}} / {{total}}',
+
+    // Indexing Bottom Sheet
+    indexing_sheet_title: 'Indexing Progress',
+    indexing_sheet_photos_indexed: 'photos indexed',
+    indexing_sheet_errors: '{{count}} error(s)',
   },
 
   errors: {

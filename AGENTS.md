@@ -125,3 +125,7 @@ npm run test:e2e:report   # View test report
 **Router anti-loop pattern:** Components called from `onStateChange` (popstate) must accept `updateUrl=false` to skip re-pushing to history. Pattern: `applyFilter(updateUrl=true)` normally, `applyFilter(updateUrl=false)` from popstate handler — prevents infinite push loops.
 
 **E2E port collision:** `npm run test:e2e` global-setup may pass health check against a stale dev server on 18473, then `cargo run` fails with "port in use". Always run `pkill -9 -f turbo-pix` before the test suite to ensure a clean port.
+
+**i18n global name:** The app creates its translation manager as `window.i18nManager` (via `new window.I18nManager()` in `app.js`). `window.i18n` is never assigned — calling `window.i18n?.t()` silently falls back to hardcoded strings. Always use `window.i18nManager.t()` or `utils.t('key', 'fallback')`.
+
+**i18n key format:** Translation keys in `data-i18n` HTML attributes must use the exact flat key from the dictionary (e.g., `ui.indexing_phase_discovering`), not dot-path sub-objects (e.g., `ui.indexing.discovering`). The i18nManager does flat lookup, not nested object traversal.

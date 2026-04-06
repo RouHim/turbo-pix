@@ -180,23 +180,29 @@ window.DE_TRANSLATIONS = {
     photos_with_gps: 'Fotos mit GPS',
 
     // Indexing
-    indexing_photos: 'Fotos werden indexiert...',
-    indexing_housekeeping: 'Identifiziere Aufräumkandidaten...',
+    indexing_photos: 'Deine Fotos werden verarbeitet...',
+    indexing_housekeeping: 'Suche nach Duplikaten und Problemen...',
+    indexing_housekeeping_note: 'Das kann einen Moment dauern...',
+    no_housekeeping_candidates: 'Keine Probleme gefunden. Deine Bibliothek ist sauber!',
+    housekeeping_load_failed: 'Probleme konnten nicht geprüft werden',
 
     // Indexing phases (labels)
-    indexing_phase_discovering: 'Entdecken',
-    indexing_phase_metadata: 'Metadaten',
-    indexing_phase_semantic: 'Semantisch',
-    indexing_phase_geo_resolution: 'Standort',
-    indexing_phase_collages: 'Collagen',
-    indexing_phase_housekeeping: 'Aufräumen',
+    indexing_phase_discovering: 'Fotos finden',
+    indexing_phase_metadata: 'Details lesen',
+    indexing_phase_semantic: 'Inhalte erkennen',
+    indexing_phase_semantic_vectors: 'Inhalte erkennen',
+    indexing_phase_geo_resolution: 'Aufnahmeorte finden',
+    indexing_phase_collages: 'Collagen erstellen',
+    indexing_phase_housekeeping: 'Qualität prüfen',
 
     // Indexing status messages
-    indexing_status_discovering: 'Dateien werden entdeckt...',
-    indexing_status_metadata: 'Metadaten werden indexiert...',
-    indexing_status_semantic: 'Semantische Vektoren werden berechnet...',
-    indexing_status_collages: 'Collagen werden erstellt...',
-    indexing_status_housekeeping: 'Aufräumkandidaten werden identifiziert...',
+    indexing_status_discovering: 'Ordner werden nach Fotos und Videos durchsucht...',
+    indexing_status_metadata: 'Fotodetails wie Datum und Kamera werden gelesen...',
+    indexing_status_semantic: 'Fotoinhalte werden für die Suche analysiert...',
+    indexing_status_semantic_vectors: 'Fotoinhalte werden für die Suche analysiert...',
+    indexing_status_geo_resolution: 'Aufnahmeorte deiner Fotos werden ermittelt...',
+    indexing_status_collages: 'Collagen aus deinen Fotos werden erstellt...',
+    indexing_status_housekeeping: 'Suche nach Duplikaten und Problemen...',
 
     // Indexing counter template
     indexing_counter: '{{processed}} / {{total}}',

@@ -39,7 +39,7 @@ class HousekeepingManager {
       this.render();
     } catch (e) {
       console.error('Failed to load housekeeping candidates:', e);
-      this.container.innerHTML = `<div class="error-message">Failed to load housekeeping candidates: ${e.message}</div>`;
+      this.container.innerHTML = `<div class="error-message">${utils.t('ui.housekeeping_load_failed', 'Could not check for issues')}: ${e.message}</div>`;
     }
   }
 
@@ -48,8 +48,7 @@ class HousekeepingManager {
     this.container.innerHTML = '';
 
     if (this.candidates.length === 0) {
-      this.container.innerHTML =
-        '<div class="no-photos">No housekeeping candidates found. Your library is clean!</div>';
+      this.container.innerHTML = `<div class="no-photos">${utils.t('ui.no_housekeeping_candidates', 'No issues found. Your library is clean!')}</div>`;
       return;
     }
 
@@ -99,8 +98,8 @@ class HousekeepingManager {
       this.container.innerHTML = `
               <div class="indexing-message-container" style="text-align: center; padding: 40px; color: var(--text-secondary);">
                   <div class="spinner" style="margin: 0 auto 20px;"></div>
-                  <h3>${window.i18nManager.t('ui.indexing_housekeeping')}</h3>
-                  <p>This may take a moment...</p>
+                  <h3>${utils.t('ui.indexing_housekeeping', 'Looking for duplicates and issues...')}</h3>
+                  <p>${utils.t('ui.indexing_housekeeping_note', 'This may take a moment...')}</p>
               </div>
           `;
     } else if (this.wasIndexingHousekeeping && !status.is_indexing) {
@@ -118,8 +117,7 @@ class HousekeepingManager {
     }
     this.candidates = this.candidates.filter((c) => c.photo.hash_sha256 !== hash);
     if (this.candidates.length === 0) {
-      this.container.innerHTML =
-        '<div class="no-photos">No housekeeping candidates found. Your library is clean!</div>';
+      this.container.innerHTML = `<div class="no-photos">${utils.t('ui.no_housekeeping_candidates', 'No issues found. Your library is clean!')}</div>`;
     }
   }
 

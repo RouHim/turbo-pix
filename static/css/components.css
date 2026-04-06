@@ -1305,7 +1305,7 @@
   position: fixed;
   bottom: var(--space-6);
   right: var(--space-6);
-  width: 420px;
+  width: 560px;
   max-width: calc(100vw - 2 * var(--space-6));
   background: var(--glass-bg);
   backdrop-filter: blur(16px) saturate(1.5);
@@ -1354,8 +1354,11 @@
 
 .indexing-text {
   display: flex;
-  gap: 8px;
-  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
   font-size: 14px;
 }
 
@@ -1364,6 +1367,13 @@
 }
 
 #indexing-progress {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
@@ -1372,6 +1382,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: 6px;
   width: 100%;
   position: relative;
 }
@@ -1381,6 +1392,7 @@
   flex-direction: column;
   align-items: center;
   flex: 1;
+  min-width: 0;
   position: relative;
   z-index: 1;
 }
@@ -1431,10 +1443,16 @@
 
 .step-label {
   margin-top: 8px;
+  display: block;
+  width: 100%;
+  max-width: 84px;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.2;
   color: var(--text-muted);
   text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color 0.3s ease;
 }
 
@@ -1449,8 +1467,42 @@
 }
 
 .step-item[data-step-state='active'] .step-label {
+  max-width: 92px;
   color: var(--primary-color);
   font-weight: 600;
+}
+
+@media (width <= 680px) {
+  .indexing-stepper {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px 10px;
+  }
+
+  .step-item,
+  .step-item:last-child {
+    flex: initial;
+    min-width: 0;
+  }
+
+  .step-indicator,
+  .step-item:last-child .step-indicator {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .step-line {
+    display: none;
+  }
+
+  .step-label,
+  .step-item[data-step-state='active'] .step-label {
+    max-width: none;
+    min-height: 2.4em;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* Done State */
@@ -1508,6 +1560,10 @@
 
   .indexing-banner-content {
     padding: 12px 16px;
+  }
+
+  .indexing-text {
+    gap: 0;
   }
 
   .step-icon {

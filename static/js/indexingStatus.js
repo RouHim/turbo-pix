@@ -132,12 +132,17 @@ class IndexingStatusManager {
     });
 
     const { phases } = status;
+    const activePhase = Array.isArray(phases)
+      ? phases.find((phase) => phase.state === 'active') || null
+      : null;
 
     if (phases && Array.isArray(phases)) {
       phases.forEach((phase) => {
         this.updatePhase(phase);
       });
     }
+
+    this.updateHeader(activePhase);
 
     utils.emit(window, 'indexingStatusChanged', status);
 
@@ -156,21 +161,9 @@ class IndexingStatusManager {
 
     const labelEl = stepEl.querySelector('.step-label');
     if (labelEl) {
-      const labelKey = `ui.indexing_phase_${phase.id}`;
-      const labelText = window.i18n?.t(labelKey) || this.capitalize(phase.id);
-
-      if (phase.state === 'active' && phase.current_item) {
-        const truncatedItem = this.truncatePath(phase.current_item);
-        labelEl.textContent = `${labelText}: ${truncatedItem}`;
-        labelEl.title = phase.current_item;
-      } else if (phase.errors > 0) {
-        const errorText =
-          window.i18n?.t('ui.indexing_errors', { count: phase.errors }) || `${phase.errors} errors`;
-        labelEl.textContent = `${labelText} (${errorText})`;
-      } else {
-        labelEl.textContent = labelText;
-        labelEl.removeAttribute('title');
-      }
+      const labelKey = `ui.indexing_phase_${this.getPhaseTranslationKey(phase.id)}`;
+      labelEl.textContent = this.getTranslation(labelKey, this.humanizePhaseId(phase.id));
+      labelEl.removeAttribute('title');
     }
 
     const progressBarEl = stepEl.querySelector('.step-progress-bar');
@@ -182,22 +175,6 @@ class IndexingStatusManager {
         progressBarEl.style.width = `${percent}%`;
         progressBarEl.style.display = 'block';
       }
-
-      let counterEl = stepEl.querySelector('.step-counter');
-      if (!counterEl) {
-        counterEl = document.createElement('span');
-        counterEl.className = 'step-counter';
-        if (labelEl) {
-          labelEl.parentNode.insertBefore(counterEl, labelEl.nextSibling);
-        } else {
-          stepEl.appendChild(counterEl);
-        }
-      }
-
-      const counterTemplate = window.i18n?.t('ui.indexing_counter') || '{{processed}} / {{total}}';
-      counterEl.textContent = counterTemplate
-        .replace('{{processed}}', phase.processed)
-        .replace('{{total}}', phase.total);
     } else if (phase.kind === 'indeterminate') {
       if (progressBarEl) {
         if (phase.state === 'active') {
@@ -218,6 +195,63 @@ class IndexingStatusManager {
       const counterEl = stepEl.querySelector('.step-counter');
       if (counterEl) counterEl.remove();
     }
+  }
+
+  updateHeader(activePhase) {
+    if (!this.messageEl || !this.progressEl) return;
+
+    if (!activePhase) {
+      this.messageEl.textContent = this.getTranslation('ui.indexing_photos', 'Indexing photos...');
+      this.progressEl.textContent = '';
+      this.progressEl.removeAttribute('title');
+      return;
+    }
+
+    const phaseKey = this.getPhaseTranslationKey(activePhase.id);
+    const messageKey = `ui.indexing_status_${phaseKey}`;
+    this.messageEl.textContent = this.getTranslation(
+      messageKey,
+      this.getTranslation('ui.indexing_photos', 'Indexing photos...')
+    );
+
+    const details = [];
+
+    if (activePhase.kind === 'determinate' && activePhase.total > 0) {
+      const counterTemplate = this.getTranslation(
+        'ui.indexing_counter',
+        '{{processed}} / {{total}}'
+      );
+      details.push(
+        counterTemplate
+          .replace('{{processed}}', activePhase.processed)
+          .replace('{{total}}', activePhase.total)
+      );
+    }
+
+    if (activePhase.current_item) {
+      details.push(this.truncatePath(activePhase.current_item, 44));
+      this.progressEl.title = activePhase.current_item;
+    } else {
+      this.progressEl.removeAttribute('title');
+    }
+
+    this.progressEl.textContent = details.join(' • ');
+  }
+
+  getPhaseTranslationKey(phaseId) {
+    return phaseId;
+  }
+
+  getTranslation(key, fallback) {
+    const translation = window.i18nManager?.getTranslationByKey?.(key);
+    return translation || fallback;
+  }
+
+  humanizePhaseId(phaseId) {
+    return phaseId
+      .split('_')
+      .map((part) => this.capitalize(part))
+      .join(' ');
   }
 
   /**

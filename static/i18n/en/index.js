@@ -182,23 +182,29 @@ window.EN_TRANSLATIONS = {
     photos_with_gps: 'Photos with GPS',
 
     // Indexing
-    indexing_photos: 'Indexing photos...',
-    indexing_housekeeping: 'Identifying housekeeping candidates...',
+    indexing_photos: 'Processing your photos...',
+    indexing_housekeeping: 'Looking for duplicates and issues...',
+    indexing_housekeeping_note: 'This may take a moment...',
+    no_housekeeping_candidates: 'No issues found. Your library is clean!',
+    housekeeping_load_failed: 'Could not check for issues',
 
     // Indexing phases (labels)
-    indexing_phase_discovering: 'Discovering',
-    indexing_phase_metadata: 'Metadata',
-    indexing_phase_semantic: 'Semantic',
-    indexing_phase_geo_resolution: 'Location',
-    indexing_phase_collages: 'Collages',
-    indexing_phase_housekeeping: 'Housekeeping',
+    indexing_phase_discovering: 'Finding photos',
+    indexing_phase_metadata: 'Reading details',
+    indexing_phase_semantic: 'Recognizing content',
+    indexing_phase_semantic_vectors: 'Recognizing content',
+    indexing_phase_geo_resolution: 'Finding locations',
+    indexing_phase_collages: 'Creating collages',
+    indexing_phase_housekeeping: 'Checking quality',
 
     // Indexing status messages
-    indexing_status_discovering: 'Discovering files...',
-    indexing_status_metadata: 'Indexing metadata...',
-    indexing_status_semantic: 'Computing semantic vectors...',
-    indexing_status_collages: 'Generating collages...',
-    indexing_status_housekeeping: 'Identifying housekeeping candidates...',
+    indexing_status_discovering: 'Scanning folders for photos and videos...',
+    indexing_status_metadata: 'Reading photo details like date and camera...',
+    indexing_status_semantic: 'Analyzing photo content for search...',
+    indexing_status_semantic_vectors: 'Analyzing photo content for search...',
+    indexing_status_geo_resolution: 'Looking up where your photos were taken...',
+    indexing_status_collages: 'Creating collages from your photos...',
+    indexing_status_housekeeping: 'Looking for duplicates and issues...',
 
     // Indexing counter template
     indexing_counter: '{{processed}} / {{total}}',

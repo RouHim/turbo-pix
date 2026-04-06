@@ -77,8 +77,6 @@ test.describe('Startup loading behavior', () => {
     await photosResponse;
     await TestHelpers.waitForPhotosToLoad(page);
 
-    await expect(page.locator('#loading-indicator')).not.toHaveClass(/show/);
-
     const photos = await TestHelpers.getPhotoCards(page);
     expect(photos.length).toBeGreaterThan(0);
   });

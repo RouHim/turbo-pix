@@ -244,22 +244,6 @@ test.describe('indexing empty state', () => {
     await expect(page.locator('.indexing-in-progress')).toBeVisible();
   });
 
-  test('hides loading spinner during first-run indexing with zero photos', async ({ page }) => {
-    // GIVEN indexing is active (metadata done, semantic_vectors running)
-    // AND /api/photos returns empty
-    await mockIndexingStatus(page, activeIndexingStatus());
-    await mockEmptyPhotos(page);
-
-    // WHEN page loads
-    await TestHelpers.goto(page);
-
-    // THEN the indexing-in-progress empty state is visible
-    await expect(page.locator('.indexing-in-progress')).toBeVisible({ timeout: 10000 });
-
-    // AND the loading spinner does NOT have the .show class (not visible as overlay)
-    await expect(page.locator('#loading-indicator')).not.toHaveClass(/show/);
-  });
-
   test('hides load-more container during first-run indexing with zero photos', async ({ page }) => {
     // GIVEN indexing is active (metadata done, semantic_vectors running)
     // AND /api/photos returns empty

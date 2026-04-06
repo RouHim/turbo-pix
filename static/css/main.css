@@ -670,7 +670,7 @@
       background: var(--surface-color);
     }
 
-    .indexing-banner {
+    [data-phase-ring] {
       background: var(--surface-color);
     }
 
@@ -695,12 +695,6 @@
   @media (prefers-reduced-transparency: reduce) {
     .header,
     .sidebar {
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      background: var(--surface-color);
-    }
-
-    .indexing-banner {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       background: var(--surface-color);

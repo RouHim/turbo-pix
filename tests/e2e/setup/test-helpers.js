@@ -55,7 +55,7 @@ export class TestHelpers {
 
   static async disableIndexingBanner(page) {
     await page.addStyleTag({
-      content: '#indexing-banner { pointer-events: none !important; }',
+      content: '[data-phase-ring] { pointer-events: none !important; }',
     });
   }
 

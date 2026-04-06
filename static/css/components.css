@@ -1474,44 +1474,6 @@
   }
 }
 
-.indexing-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--text-primary);
-}
-
-.indexing-icon {
-  width: 20px;
-  height: 20px;
-  color: var(--primary-color);
-}
-
-.indexing-text {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-  align-items: flex-start;
-  font-size: 14px;
-}
-
-#indexing-message {
-  font-weight: 600;
-}
-
-#indexing-progress {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
 /* Transcode toast notification */
 .transcode-toast {
   position: fixed;

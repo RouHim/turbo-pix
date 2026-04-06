@@ -186,6 +186,7 @@ class IndexingOrbitManager {
 
       const countSpan = row.querySelector('[data-phase-count]');
       const fillDiv = row.querySelector('[data-phase-fill]');
+      const errorsSpan = row.querySelector('[data-phase-errors]');
 
       row.classList.remove('is-active', 'is-done', 'is-error');
 
@@ -217,6 +218,15 @@ class IndexingOrbitManager {
         }
         if (fillDiv) {
           fillDiv.style.width = '0%';
+        }
+      }
+
+      if (errorsSpan) {
+        if (phase.errors && phase.errors > 0) {
+          const tpl = this.getTranslation('ui.indexing_sheet_errors', `${phase.errors} error(s)`);
+          errorsSpan.textContent = tpl.replace('{{count}}', phase.errors);
+        } else {
+          errorsSpan.textContent = '';
         }
       }
     });

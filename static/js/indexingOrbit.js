@@ -3,6 +3,9 @@ class IndexingOrbitManager {
     this.pollInterval = null;
     this.pollFrequencyIndexing = 1000;
     this.pollFrequencyIdle = 30000;
+    this.hideDelay = 2000;
+    this.hideTimeout = null;
+    this.hasIndexedStorageKey = 'turbopix_has_indexed';
     this.ring = null;
     this.bottomSheet = null;
     this.svg = null;
@@ -63,26 +66,29 @@ class IndexingOrbitManager {
     try {
       const status = await window.api.getIndexingStatus();
       const normalizedStatus = this.normalizeStatus(status);
-
-      this.updateOrbit(normalizedStatus);
-      window.dispatchEvent(
-        new CustomEvent('indexingStatusChanged', {
-          detail: normalizedStatus,
-        })
-      );
+      const wasIndexing = this.isIndexing;
 
       if (normalizedStatus.is_indexing) {
         this.isIndexing = true;
-      } else if (this.isIndexing) {
-        this.hideRing();
+        this.updateOrbit(normalizedStatus);
+      } else if (wasIndexing) {
+        this.markIndexingCompleted();
         this.isIndexing = false;
+        this.hideRing({ showCompletionPulse: true });
 
         if (window.photoGrid) {
           window.photoGrid.loadPhotos();
         }
       } else {
+        this.isIndexing = false;
         this.hideRing();
       }
+
+      window.dispatchEvent(
+        new CustomEvent('indexingStatusChanged', {
+          detail: normalizedStatus,
+        })
+      );
     } catch (error) {
       if (window.logger) {
         window.logger.error('Failed to check indexing status', error, {
@@ -149,12 +155,15 @@ class IndexingOrbitManager {
       return;
     }
 
+    this.cancelPendingHide();
+
+    const mode = this.determineMode(status);
+    this.ring.setAttribute('data-ring-mode', mode);
     if (!status.is_indexing) {
-      this.resetSegments();
+      this.updateCenterIcon('discovering');
       return;
     }
 
-    this.ring.setAttribute('data-ring-mode', 'large');
     this.ring.setAttribute(
       'aria-label',
       this.getTranslation('ui.indexing_photos', 'Processing your photos...')
@@ -172,7 +181,6 @@ class IndexingOrbitManager {
 
       segment.setAttribute('data-phase-state', phase.state || 'pending');
 
-      // Update dash offset
       if (phase.state === 'done') {
         segment.style.strokeDashoffset = '0';
       } else if (phase.state === 'active' && phase.kind === 'determinate' && phase.total > 0) {
@@ -182,11 +190,28 @@ class IndexingOrbitManager {
         segment.style.strokeDashoffset = arcLength.toString();
       }
 
-      // Update orbit dot
       this.updateOrbitDot(phase);
     });
 
     this.updateCenterIcon(status.phase);
+  }
+
+  determineMode(status) {
+    if (!status.is_indexing) {
+      return 'hidden';
+    }
+
+    if (this.hasIndexedBefore()) {
+      return 'compact';
+    }
+
+    const photosIndexed = Number(status.photos_indexed ?? 0);
+
+    if (photosIndexed === 0) {
+      return 'large';
+    }
+
+    return 'compact';
   }
 
   updateCenterIcon(activePhaseId) {
@@ -208,8 +233,17 @@ class IndexingOrbitManager {
       if (resetAll) {
         segment.setAttribute('data-phase-state', 'pending');
         segment.style.strokeDashoffset = arcLength.toString();
-        this.removeOrbitDot(phaseId);
       }
+
+      this.removeOrbitDot(phaseId);
+    });
+  }
+
+  markSegmentsDone() {
+    this.phaseElements.forEach((segment, phaseId) => {
+      segment.setAttribute('data-phase-state', 'done');
+      segment.style.strokeDashoffset = '0';
+      this.removeOrbitDot(phaseId);
     });
   }
 
@@ -223,7 +257,9 @@ class IndexingOrbitManager {
         group.setAttribute('data-orbit-phase', phase.id);
         group.style.transformOrigin = '140px 140px';
         group.style.transformBox = 'fill-box';
-        group.style.animation = 'orbit-segment 2s ease-in-out infinite';
+        group.style.animation = this.prefersReducedMotion()
+          ? 'none'
+          : 'orbit-segment 2s ease-in-out infinite';
 
         const circle = document.createElementNS(svgNamespace, 'circle');
         const index = this.getPhases().findIndex((p) => p.id === phase.id);
@@ -250,14 +286,62 @@ class IndexingOrbitManager {
     }
   }
 
-  hideRing() {
+  hideRing({ showCompletionPulse = false } = {}) {
     if (!this.ring) {
       return;
     }
 
-    this.resetSegments();
-    this.ring.setAttribute('data-ring-mode', 'hidden');
+    this.cancelPendingHide();
+
+    if (showCompletionPulse) {
+      this.markSegmentsDone();
+      this.updateCenterIcon('housekeeping');
+      this.hideTimeout = setTimeout(() => {
+        this.applyHiddenState();
+      }, this.hideDelay);
+      return;
+    }
+
+    this.applyHiddenState();
+  }
+
+  applyHiddenState() {
+    if (!this.ring) {
+      return;
+    }
+
+    this.ring.setAttribute('data-ring-mode', this.determineMode({ is_indexing: false }));
     this.updateCenterIcon('discovering');
+    this.resetSegments();
+  }
+
+  cancelPendingHide() {
+    if (!this.hideTimeout) {
+      return;
+    }
+
+    clearTimeout(this.hideTimeout);
+    this.hideTimeout = null;
+  }
+
+  hasIndexedBefore() {
+    try {
+      return window.localStorage.getItem(this.hasIndexedStorageKey) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  prefersReducedMotion() {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+  }
+
+  markIndexingCompleted() {
+    try {
+      window.localStorage.setItem(this.hasIndexedStorageKey, 'true');
+    } catch {
+      return;
+    }
   }
 
   getPhases() {
@@ -301,6 +385,7 @@ class IndexingOrbitManager {
   }
 
   destroy() {
+    this.cancelPendingHide();
     this.stopPolling();
   }
 }

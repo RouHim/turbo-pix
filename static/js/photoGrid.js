@@ -279,6 +279,8 @@ class PhotoGrid {
       errorState.appendChild(iconDiv);
       errorState.appendChild(title);
       errorState.appendChild(message);
+      const loadMoreEl = utils.$('#load-more-container');
+      if (loadMoreEl) loadMoreEl.style.display = 'none';
       this.container.appendChild(errorState);
       return;
     }

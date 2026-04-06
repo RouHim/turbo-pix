@@ -344,7 +344,10 @@ class TurboPixApp {
 
   async loadInitialData() {
     try {
-      utils.showLoading();
+      const isFirstRunIndexing = window.indexingStatus && window.indexingStatus.isIndexing;
+      if (!isFirstRunIndexing) {
+        utils.showLoading();
+      }
       await this.waitForIndexingCompletion();
 
       const currentView = this.state.get('currentView');

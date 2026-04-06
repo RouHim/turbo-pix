@@ -129,3 +129,7 @@ npm run test:e2e:report   # View test report
 **i18n global name:** The app creates its translation manager as `window.i18nManager` (via `new window.I18nManager()` in `app.js`). `window.i18n` is never assigned — calling `window.i18n?.t()` silently falls back to hardcoded strings. Always use `window.i18nManager.t()` or `utils.t('key', 'fallback')`.
 
 **i18n key format:** Translation keys in `data-i18n` HTML attributes must use the exact flat key from the dictionary (e.g., `ui.indexing_phase_discovering`), not dot-path sub-objects (e.g., `ui.indexing.discovering`). The i18nManager does flat lookup, not nested object traversal.
+
+**Startup indexing isolation:** `src/main.rs:start_background_tasks()` must keep `run_startup_rescan()` on a dedicated `std::thread` with its own `tokio::runtime::Runtime`; moving startup indexing back onto the main async runtime starves HTTP requests and makes `/api/indexing/status` look hung.
+
+**Indexing empty-state contract:** `static/js/photoGrid.js:showEmptyState()` must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.

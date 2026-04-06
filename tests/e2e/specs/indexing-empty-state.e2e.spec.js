@@ -259,4 +259,116 @@ test.describe('indexing empty state', () => {
     // AND the load-more container is NOT visible
     await expect(page.locator('#load-more-container')).not.toBeVisible();
   });
+
+  test('auto-opens bottom sheet during first-run indexing with zero photos', async ({ page }) => {
+    // GIVEN first-run indexing with zero photos
+    await page.addInitScript(() => {
+      window.localStorage.removeItem('turbopix_has_indexed');
+    });
+    await mockIndexingStatus(page, activeIndexingStatus());
+    await mockEmptyPhotos(page);
+
+    // WHEN the page loads and indexing starts polling
+    await TestHelpers.goto(page);
+
+    // THEN the large first-run ring is shown
+    await expect(page.locator('[data-phase-ring][data-ring-mode="large"]')).toBeVisible({
+      timeout: 10000,
+    });
+
+    // AND the bottom sheet opens without any user click
+    await expect(page.locator('[data-bottom-sheet]')).toHaveAttribute('aria-hidden', 'false', {
+      timeout: 5000,
+    });
+  });
+
+  test('auto-open fires only once after user closes the sheet during first-run indexing', async ({
+    page,
+  }) => {
+    // GIVEN first-run indexing keeps returning zero-photo status across multiple polls
+    await page.addInitScript(() => {
+      window.localStorage.removeItem('turbopix_has_indexed');
+    });
+
+    const firstRunStatus = activeIndexingStatus();
+    await mockIndexingStatusSequence(page, [
+      { body: firstRunStatus },
+      { body: firstRunStatus },
+      { body: firstRunStatus },
+      { body: firstRunStatus },
+    ]);
+    await mockEmptyPhotos(page);
+
+    // WHEN the page loads and the sheet auto-opens once
+    await TestHelpers.goto(page);
+
+    // THEN the large first-run ring is shown
+    await expect(page.locator('[data-phase-ring][data-ring-mode="large"]')).toBeVisible({
+      timeout: 10000,
+    });
+
+    // AND the bottom sheet auto-opens on the first poll
+    const bottomSheet = page.locator('[data-bottom-sheet]');
+    await expect(bottomSheet).toHaveAttribute('aria-hidden', 'false', { timeout: 5000 });
+
+    // WHEN the user closes the sheet
+    await page.locator('[data-sheet-close]').click();
+    await expect(bottomSheet).toHaveAttribute('aria-hidden', 'true');
+
+    // AND multiple later poll cycles complete
+    for (let pollIndex = 0; pollIndex < 3; pollIndex += 1) {
+      await page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/indexing/status') && response.request().method() === 'GET',
+        { timeout: 5000 }
+      );
+    }
+
+    // THEN the sheet stays closed
+    await expect(bottomSheet).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  test('does not auto-open bottom sheet in compact mode when photos already exist', async ({
+    page,
+  }) => {
+    // GIVEN indexing is active after photos have already been indexed
+    await page.addInitScript(() => {
+      window.localStorage.setItem('turbopix_has_indexed', 'true');
+    });
+    await mockIndexingStatus(
+      page,
+      buildStatus({
+        active_phase_id: 'semantic_vectors',
+        photos_indexed: 50,
+        phases: [
+          buildPhase({ id: 'discovering', state: 'done' }),
+          buildPhase({ id: 'metadata', state: 'done' }),
+          buildPhase({
+            id: 'semantic_vectors',
+            state: 'running',
+            kind: 'determinate',
+            processed: 10,
+            total: 100,
+          }),
+          buildPhase({ id: 'geo_resolution' }),
+          buildPhase({ id: 'collages' }),
+          buildPhase({ id: 'housekeeping' }),
+        ],
+      })
+    );
+    await mockEmptyPhotos(page);
+
+    // WHEN the page loads in compact indexing mode
+    await TestHelpers.goto(page);
+
+    // THEN compact mode is shown instead of the first-run large ring
+    await expect(page.locator('[data-phase-ring][data-ring-mode="compact"]')).toBeVisible({
+      timeout: 10000,
+    });
+
+    // AND the bottom sheet remains closed until the user opens it
+    await expect(page.locator('[data-bottom-sheet]')).toHaveAttribute('aria-hidden', 'true', {
+      timeout: 5000,
+    });
+  });
 });

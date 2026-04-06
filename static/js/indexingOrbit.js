@@ -12,6 +12,7 @@ class IndexingOrbitManager {
     this.centerIcon = null;
     this.phaseElements = new Map();
     this.isIndexing = false;
+    this.autoOpened = false;
   }
 
   init() {
@@ -158,12 +159,14 @@ class IndexingOrbitManager {
     }
   }
 
-  openSheet() {
-    if (!this.ring || this.ring.getAttribute('data-ring-mode') !== 'compact') return;
+  openSheet(force = false) {
+    if (!force && (!this.ring || this.ring.getAttribute('data-ring-mode') !== 'compact')) return;
     if (!this.bottomSheet) return;
 
     this.bottomSheet.setAttribute('aria-hidden', 'false');
-    this.ring.setAttribute('aria-expanded', 'true');
+    if (this.ring) {
+      this.ring.setAttribute('aria-expanded', 'true');
+    }
     if (this.backdrop) {
       this.backdrop.classList.add('is-visible');
     }
@@ -310,6 +313,10 @@ class IndexingOrbitManager {
 
     const mode = this.determineMode(status);
     this.ring.setAttribute('data-ring-mode', mode);
+    if (mode === 'large' && !this.autoOpened) {
+      this.autoOpened = true;
+      window.requestAnimationFrame(() => this.openSheet(true));
+    }
     if (!status.is_indexing) {
       this.updateCenterIcon('discovering');
       return;

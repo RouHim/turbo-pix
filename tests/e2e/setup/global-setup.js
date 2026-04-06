@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { copyFile, mkdir, rm, utimes, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -311,7 +311,10 @@ async function startServer() {
     RUST_LOG: 'info',
   };
 
-  const serverProcess = exec('cargo run --bin turbo-pix', { env });
+  const serverProcess = spawn('cargo', ['run', '--bin', 'turbo-pix'], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
   serverProcess.stdout?.on('data', (data) => {
     console.log(`[server] ${data.toString().trim()}`);

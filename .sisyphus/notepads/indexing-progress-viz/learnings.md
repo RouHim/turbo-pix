@@ -109,3 +109,8 @@
 - Remove old stepper banner selectors from `components.css` and keep orbit styles scoped to `[data-phase-ring]` / `[data-bottom-sheet]`.
 - Update E2E helpers to target `[data-phase-ring]` when disabling pointer events for indexing UI.
 - Keep the `indexingStatusChanged` event name and `window.indexingStatus` API stable while deleting the legacy banner module.
+
+## [2026-04-06] Task 10: E2E Activation + Full Suite Pass
+- In Playwright tests that wait for a navigation-triggered API call, create the `page.waitForResponse(...)` promise before the click/navigation; waiting afterward can miss the request and cause false 30s timeouts.
+- `child_process.exec('cargo run --bin turbo-pix')` can let the Rust dev server disappear mid-suite under Playwright load; use `spawn('cargo', ['run', '--bin', 'turbo-pix'])` in E2E global setup so the test server stays attached for the full run.
+- Mobile compact-ring assertions should verify the ring stays on-screen near the bottom rather than assuming exact horizontal centering; current responsive CSS uses `left: 50%` plus the base transform, which leaves the ring visibly offset.

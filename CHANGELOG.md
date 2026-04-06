@@ -1,3 +1,19 @@
+# [2.23.0](https://github.com/RouHim/turbo-pix/compare/2.22.0...2.23.0) (2026-04-06)
+
+
+### Bug Fixes
+
+* **routing:** add housekeeping to valid views ([ea4b03f](https://github.com/RouHim/turbo-pix/commit/ea4b03fa4ad95878bc5266a9c71b7424fa4fe78e))
+* **routing:** preserve nav active state when search is active ([b3dcd43](https://github.com/RouHim/turbo-pix/commit/b3dcd43f2611cb20ab512328769f8f7374bf92a5))
+* **ui:** apply glassmorphism to search hint popup ([03e112e](https://github.com/RouHim/turbo-pix/commit/03e112ec2584f3918d3e012e5b7fa65664fb9568))
+
+
+### Features
+
+* **routing:** add Router module, serve static file, and integrate HTML ([95dbaa8](https://github.com/RouHim/turbo-pix/commit/95dbaa8e5cb55ceeac4eed5f8e457a4f8eee5f9d))
+* **routing:** add sort order URL parameter ([2df6cd0](https://github.com/RouHim/turbo-pix/commit/2df6cd061621c37bb1791ad7a45ab0a0a5ca0454))
+* **routing:** add timeline filter URL parameters ([3ff816c](https://github.com/RouHim/turbo-pix/commit/3ff816cce2395d377fdc03cec780e16f32f55db7))
+
 # [2.22.0](https://github.com/RouHim/turbo-pix/compare/2.21.7...2.22.0) (2026-04-05)
 
 

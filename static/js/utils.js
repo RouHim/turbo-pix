@@ -158,17 +158,6 @@ const throttle = (func, limit) => {
   };
 };
 
-// Loading indicator
-const showLoading = () => {
-  const indicator = $('#loading-indicator');
-  if (indicator) indicator.classList.add('show');
-};
-
-const hideLoading = () => {
-  const indicator = $('#loading-indicator');
-  if (indicator) indicator.classList.remove('show');
-};
-
 // Toast notifications
 const showToast = (title, message, type = 'info', duration = 3000) => {
   let container = document.getElementById('toast-container');
@@ -558,8 +547,6 @@ window.utils = {
   formatCollageDate,
   debounce,
   throttle,
-  showLoading,
-  hideLoading,
   showToast,
   createLazyImage,
   handleError,

@@ -573,34 +573,6 @@
     }
   }
 
-  .loading-indicator {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--surface-color);
-    padding: var(--space-6);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-heavy);
-    display: none;
-    align-items: center;
-    gap: var(--space-4);
-    z-index: var(--z-modal);
-
-    &.show {
-      display: flex;
-    }
-
-    & .spinner {
-      width: var(--space-6);
-      height: var(--space-6);
-      border: 3px solid var(--divider-color);
-      border-top: 3px solid var(--primary-color);
-      border-radius: var(--radius-full);
-      animation: spin 1s linear infinite;
-    }
-  }
-
   @keyframes skeleton-loading {
     0% {
       background-position: 100% 50%;
@@ -622,16 +594,6 @@
     30% {
       transform: translateY(-15px);
       opacity: 1;
-    }
-  }
-
-  @keyframes spin {
-    0% {
-      transform: rotate(0deg);
-    }
-
-    100% {
-      transform: rotate(360deg);
     }
   }
 

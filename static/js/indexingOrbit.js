@@ -88,6 +88,8 @@ class IndexingOrbitManager {
         window.logger.error('Failed to check indexing status', error, {
           component: 'IndexingOrbit',
         });
+      } else {
+        console.error('IndexingOrbit: Failed to check status', error);
       }
     } finally {
       this.scheduleNextPoll();
@@ -158,7 +160,10 @@ class IndexingOrbitManager {
       this.getTranslation('ui.indexing_photos', 'Processing your photos...')
     );
 
-    this.resetSegments();
+    this.resetSegments(false);
+
+    const arcLength = 125.66;
+
     status.phases.forEach((phase) => {
       const segment = this.phaseElements.get(phase.id);
       if (!segment) {
@@ -166,6 +171,19 @@ class IndexingOrbitManager {
       }
 
       segment.setAttribute('data-phase-state', phase.state || 'pending');
+
+      // Update dash offset
+      if (phase.state === 'done') {
+        segment.style.strokeDashoffset = '0';
+      } else if (phase.state === 'active' && phase.kind === 'determinate' && phase.total > 0) {
+        const progress = Math.min(Math.max(phase.processed / phase.total, 0), 1);
+        segment.style.strokeDashoffset = (arcLength * (1 - progress)).toString();
+      } else {
+        segment.style.strokeDashoffset = arcLength.toString();
+      }
+
+      // Update orbit dot
+      this.updateOrbitDot(phase);
     });
 
     this.updateCenterIcon(status.phase);
@@ -184,10 +202,52 @@ class IndexingOrbitManager {
     }
   }
 
-  resetSegments() {
-    this.phaseElements.forEach((segment) => {
-      segment.setAttribute('data-phase-state', 'pending');
+  resetSegments(resetAll = true) {
+    const arcLength = 125.66;
+    this.phaseElements.forEach((segment, phaseId) => {
+      if (resetAll) {
+        segment.setAttribute('data-phase-state', 'pending');
+        segment.style.strokeDashoffset = arcLength.toString();
+        this.removeOrbitDot(phaseId);
+      }
     });
+  }
+
+  updateOrbitDot(phase) {
+    const svgNamespace = 'http://www.w3.org/2000/svg';
+    let group = this.svg.querySelector(`g[data-orbit-phase="${phase.id}"]`);
+
+    if (phase.state === 'active' && phase.kind === 'indeterminate') {
+      if (!group) {
+        group = document.createElementNS(svgNamespace, 'g');
+        group.setAttribute('data-orbit-phase', phase.id);
+        group.style.transformOrigin = '140px 140px';
+        group.style.transformBox = 'fill-box';
+        group.style.animation = 'orbit-segment 2s ease-in-out infinite';
+
+        const circle = document.createElementNS(svgNamespace, 'circle');
+        const index = this.getPhases().findIndex((p) => p.id === phase.id);
+        const midpointAngle = -90 + index * 60 + 30;
+        const pos = this.polarToCartesian(140, 140, 120, midpointAngle);
+
+        circle.setAttribute('cx', pos.x);
+        circle.setAttribute('cy', pos.y);
+        circle.setAttribute('class', 'orbit-dot');
+        circle.setAttribute('data-orbit-dot', 'true');
+
+        group.appendChild(circle);
+        this.svg.appendChild(group);
+      }
+    } else if (group) {
+      group.remove();
+    }
+  }
+
+  removeOrbitDot(phaseId) {
+    const group = this.svg.querySelector(`g[data-orbit-phase="${phaseId}"]`);
+    if (group) {
+      group.remove();
+    }
   }
 
   hideRing() {

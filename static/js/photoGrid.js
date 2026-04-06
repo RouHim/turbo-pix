@@ -41,6 +41,12 @@ class PhotoGrid {
         this.updateGridLayout();
       }, 250)
     );
+
+    utils.on(window, 'indexingStatusChanged', () => {
+      if (this.container.querySelector('.indexing-in-progress') || this.photos.length === 0) {
+        this.showEmptyState();
+      }
+    });
   }
 
   /**
@@ -245,6 +251,37 @@ class PhotoGrid {
   showEmptyState() {
     // Clear first
     this.container.innerHTML = '';
+
+    const isIndexing = window.indexingStatus && window.indexingStatus.isIndexing;
+
+    if (isIndexing && !this.currentQuery) {
+      const errorState = utils.createElement('div', 'error-state');
+      errorState.classList.add('indexing-in-progress');
+
+      const iconDiv = utils.createElement('div', 'error-state-icon');
+      iconDiv.innerHTML = window.iconHelper.getSemanticIcon('photo', { size: 64 });
+
+      const title = utils.createElement(
+        'div',
+        'error-state-title',
+        utils.t('messages.indexing_in_progress_title', 'Indexing Your Photos')
+      );
+
+      const message = utils.createElement(
+        'div',
+        'error-state-message',
+        utils.t(
+          'messages.indexing_in_progress_message',
+          'Photos will appear as they are indexed. This may take a while for large collections.'
+        )
+      );
+
+      errorState.appendChild(iconDiv);
+      errorState.appendChild(title);
+      errorState.appendChild(message);
+      this.container.appendChild(errorState);
+      return;
+    }
 
     const errorState = utils.createElement('div', 'error-state');
 

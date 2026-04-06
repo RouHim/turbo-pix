@@ -269,6 +269,9 @@ window.EN_TRANSLATIONS = {
   },
 
   messages: {
+    indexing_in_progress_title: 'Indexing Your Photos',
+    indexing_in_progress_message:
+      'Photos will appear as they are indexed. This may take a while for large collections.',
     no_photos_indexed: 'No photos have been indexed yet',
     no_photos_match_search: 'No photos match your search for "{{query}}"',
     photo_added_to_favorites: 'Photo added to favorites',

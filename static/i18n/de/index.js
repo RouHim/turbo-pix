@@ -259,6 +259,9 @@ window.DE_TRANSLATIONS = {
   },
 
   messages: {
+    indexing_in_progress_title: 'Fotos werden indiziert',
+    indexing_in_progress_message:
+      'Fotos werden angezeigt, sobald sie indiziert wurden. Dies kann bei großen Sammlungen eine Weile dauern.',
     no_photos_indexed: 'Es wurden noch keine Fotos indiziert',
     no_photos_match_search: 'Keine Fotos entsprechen Ihrer Suche nach "{{query}}"',
     photo_added_to_favorites: 'Foto zu Favoriten hinzugefügt',

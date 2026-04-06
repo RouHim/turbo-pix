@@ -37,6 +37,20 @@ class IndexingOrbitManager {
       }
     }
 
+    if (this.ring) {
+      this.ring.setAttribute(
+        'aria-label',
+        this.getTranslation('ui.indexing_sheet_title', 'Indexing progress')
+      );
+    }
+
+    if (this.bottomSheet) {
+      const closeBtn = this.bottomSheet.querySelector('[data-sheet-close]');
+      if (closeBtn) {
+        closeBtn.setAttribute('aria-label', this.getTranslation('ui.close', 'Close'));
+      }
+    }
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.closeSheet();
     });
@@ -237,7 +251,14 @@ class IndexingOrbitManager {
     }
 
     if (this.ring && this.ring.getAttribute('data-ring-mode') === 'compact' && activePhaseName) {
-      this.ring.title = `${activePhaseName} — ${activePhaseProcessed}/${activePhaseTotal}`;
+      const tpl = this.getTranslation(
+        'ui.indexing_ring_tooltip',
+        `${activePhaseName} — ${activePhaseProcessed}/${activePhaseTotal}`
+      );
+      this.ring.title = tpl
+        .replace('{{phase}}', activePhaseName)
+        .replace('{{processed}}', activePhaseProcessed)
+        .replace('{{total}}', activePhaseTotal);
     } else if (this.ring) {
       this.ring.removeAttribute('title');
     }

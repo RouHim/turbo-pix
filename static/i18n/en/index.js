@@ -163,6 +163,7 @@ window.EN_TRANSLATIONS = {
       edit_validation_gps_pair: 'Both latitude and longitude must be provided together',
       edit_unsupported_format:
         'Editing {{format}} files is not supported. Only JPEG and PNG formats are supported for metadata editing.',
+      close: 'Close',
     },
 
     // Search
@@ -213,6 +214,7 @@ window.EN_TRANSLATIONS = {
     indexing_sheet_title: 'Indexing Progress',
     indexing_sheet_photos_indexed: 'photos indexed',
     indexing_sheet_errors: '{{count}} error(s)',
+    indexing_ring_tooltip: '{{phase}} — {{processed}}/{{total}}',
   },
 
   errors: {

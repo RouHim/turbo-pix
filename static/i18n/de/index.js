@@ -161,6 +161,7 @@ window.DE_TRANSLATIONS = {
       edit_validation_gps_pair: 'Breitengrad und Längengrad müssen zusammen angegeben werden',
       edit_unsupported_format:
         'Die Bearbeitung von {{format}}-Dateien wird nicht unterstützt. Nur JPEG- und PNG-Formate werden für die Metadatenbearbeitung unterstützt.',
+      close: 'Schließen',
     },
 
     // Search
@@ -211,6 +212,7 @@ window.DE_TRANSLATIONS = {
     indexing_sheet_title: 'Indexierungs-Fortschritt',
     indexing_sheet_photos_indexed: 'Fotos indexiert',
     indexing_sheet_errors: '{{count}} Fehler',
+    indexing_ring_tooltip: '{{phase}} — {{processed}}/{{total}}',
 
     // Collages
     no_pending_collages: 'Keine ausstehenden Collagen',

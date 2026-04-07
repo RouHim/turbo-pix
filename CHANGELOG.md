@@ -1,3 +1,29 @@
+# [2.24.0](https://github.com/RouHim/turbo-pix/compare/2.23.1...2.24.0) (2026-04-07)
+
+
+### Bug Fixes
+
+* **indexing-orbit:** correct arc direction so progress fills clockwise ([a04549d](https://github.com/RouHim/turbo-pix/commit/a04549dd4de81abaabcb9630f5794cef985a9c82))
+* **indexing:** add cache-busting for live polling and live semantic vector progress ([c25eeb1](https://github.com/RouHim/turbo-pix/commit/c25eeb12f222803188c240040e1873a109a81c7a))
+* **indexing:** remove dead CSS selector, add i18n for aria-labels and ring tooltip ([fcc7721](https://github.com/RouHim/turbo-pix/commit/fcc77214758376875aef02fddd90cf9c077c712b))
+* **indexing:** remove legacy CSS and add per-phase error count display ([557d476](https://github.com/RouHim/turbo-pix/commit/557d47671bbbec568e43c25427fb9311637da440))
+* **scheduler:** update call sites for refactored semantic indexing API ([9a9ef6d](https://github.com/RouHim/turbo-pix/commit/9a9ef6d283534778e0be3fa93c6bac6d6dbd2c2a))
+* **semantic:** batch DB writes and reduce concurrency to eliminate SQLite lock contention ([d503a69](https://github.com/RouHim/turbo-pix/commit/d503a69ca28dead74199c10fcd8d3871c458344f))
+* **server:** isolate startup indexing on dedicated thread to prevent HTTP starvation ([67f3f3d](https://github.com/RouHim/turbo-pix/commit/67f3f3d2d7869a93ba150de37e6676866368b6a6))
+* **ui:** hide loading spinner and load-more button during first-run indexing ([901292c](https://github.com/RouHim/turbo-pix/commit/901292c6757783792aef19669d24c84d0ce5164f))
+
+
+### Features
+
+* auto-open bottom sheet during first-run indexing with zero photos ([4e3febe](https://github.com/RouHim/turbo-pix/commit/4e3febe290146c72fb1faaac52c135365fbdc853))
+* **indexing:** add adaptive sizing with first-run detection ([0b5b90a](https://github.com/RouHim/turbo-pix/commit/0b5b90a646c651dd50dc8056c843c2a9d24d62d9))
+* **indexing:** add bottom sheet interaction and live data population ([fff1319](https://github.com/RouHim/turbo-pix/commit/fff1319b6ad08230f2cf50e86d60337d37a7e400))
+* **indexing:** add phase animations and polling wiring ([f95c274](https://github.com/RouHim/turbo-pix/commit/f95c274e8ff5f4d4292242730343a71fd218947d))
+* **indexing:** add phase orbit ring component, E2E skeleton, and bottom sheet scaffold ([f4e532e](https://github.com/RouHim/turbo-pix/commit/f4e532ed09f6ad4ddca6770ff0bb1fd74aa495c6))
+* **indexing:** optimize ring and sheet for mobile viewports ([4cd4a63](https://github.com/RouHim/turbo-pix/commit/4cd4a63cc6ae803428d9e34561b818f5338379db))
+* remove loading spinner overlay entirely ([0c2a837](https://github.com/RouHim/turbo-pix/commit/0c2a8378e7adba6884eb1c0c14a9e08235e70cb6))
+* **ui:** show indexing progress instead of error when no photos during indexing ([2108442](https://github.com/RouHim/turbo-pix/commit/210844220efa255857d9b7674385366577bfe9e6))
+
 ## [2.23.1](https://github.com/RouHim/turbo-pix/compare/2.23.0...2.23.1) (2026-04-06)
 
 

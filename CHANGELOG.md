@@ -1,3 +1,10 @@
+## [2.24.1](https://github.com/RouHim/turbo-pix/compare/2.24.0...2.24.1) (2026-04-07)
+
+
+### Bug Fixes
+
+* **ci:** expose sqlite3.h include path and deduplicate E2E tests ([ff7781d](https://github.com/RouHim/turbo-pix/commit/ff7781dd91d2290a76cf72138fa5fc0f2af8463c))
+
 # [2.24.0](https://github.com/RouHim/turbo-pix/compare/2.23.1...2.24.0) (2026-04-07)
 
 

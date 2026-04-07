@@ -167,6 +167,7 @@ impl IndexingStatus {
         self.is_indexing.store(true, Ordering::SeqCst);
         *self.started_at.lock().await = Some(chrono::Utc::now());
         self.phases.reset_all();
+        *self.current_phase.lock().await = String::from("discovering");
     }
 
     pub async fn stop_indexing(&self) {
@@ -348,14 +349,13 @@ impl PhotoScheduler {
                 // Mark indexing as started
                 status.start_indexing().await;
                 status.mark_incomplete();
-                status.set_phase("metadata").await;
 
                 let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
 
                 // Phase 1: Fast metadata-only scan (skip semantic vectors)
                 info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
                 match processor
-                    .full_rescan_and_cleanup(&db_pool, &cache_manager)
+                    .full_rescan_and_cleanup(&db_pool, &cache_manager, &status)
                     .await
                 {
                     Ok(processed_photos) => {
@@ -516,14 +516,13 @@ impl PhotoScheduler {
         // Mark indexing as started
         self.status.start_indexing().await;
         self.status.mark_incomplete();
-        self.status.set_phase("metadata").await;
 
         let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
 
         // Phase 1: Fast metadata-only scan (skip semantic vectors)
         info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
         let result = processor
-            .full_rescan_and_cleanup(&self.db_pool, &self.cache_manager)
+            .full_rescan_and_cleanup(&self.db_pool, &self.cache_manager, &self.status)
             .await
             .map_err(|e| anyhow::anyhow!("Phase 1 failed: {}", e));
 

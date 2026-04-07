@@ -1519,7 +1519,7 @@ async fn index_collage_file(
     // Process the file
     let processor = PhotoProcessor::new(Vec::new(), semantic_search);
     let processed_photo = processor
-        .process_file_metadata_only(&photo_file)
+        .process_file_metadata_only(&photo_file, None)
         .await
         .ok_or("Failed to process collage file")?;
 

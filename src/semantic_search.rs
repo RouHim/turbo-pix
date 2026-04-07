@@ -53,6 +53,24 @@ const MIN_SIMILARITY_SCORE: f32 = 0.615;
 const VIDEO_FRAME_COUNT: usize = 3;
 const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
 
+pub struct VideoSemanticMeta {
+    pub num_frames: usize,
+    pub frame_times: Vec<f64>,
+    pub model_version: String,
+}
+
+pub enum SemanticBatchItem {
+    Image {
+        path: String,
+        vector: Tensor,
+    },
+    Video {
+        path: String,
+        vector: Tensor,
+        meta: VideoSemanticMeta,
+    },
+}
+
 /// Semantic search engine for image search
 pub struct SemanticSearchEngine {
     model: Arc<RwLock<clip::ClipModel>>,
@@ -214,6 +232,18 @@ impl SemanticSearchEngine {
         Ok(())
     }
 
+    pub async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)> {
+        let semantic_vector = {
+            let model_read = self
+                .model
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+            encode_image(&model_read, image_path, &self.device)?
+        };
+
+        Ok((image_path.to_string(), semantic_vector))
+    }
+
     /// Computes and caches semantic vector for a video by sampling frames
     pub async fn compute_video_semantic_vector(
         &self,
@@ -339,6 +369,158 @@ impl SemanticSearchEngine {
 
         Ok(())
     }
+
+    pub async fn encode_video_vector(
+        &self,
+        video_path: &str,
+        frame_count: Option<usize>,
+    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+        use crate::video_processor::{extract_frames_batch, extract_video_metadata};
+
+        log::info!("Computing semantic vector for video: {}", video_path);
+        let start_time = std::time::Instant::now();
+        let frames_to_sample = frame_count.unwrap_or(VIDEO_FRAME_COUNT);
+
+        let metadata = extract_video_metadata(Path::new(video_path)).await?;
+        let frame_times = calculate_frame_positions(metadata.duration, frames_to_sample);
+
+        log::debug!(
+            "Sampling {} frames at positions: {:?}",
+            frame_times.len(),
+            frame_times
+        );
+
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir =
+            std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id));
+
+        let extraction_start = std::time::Instant::now();
+        let extracted_frames =
+            extract_frames_batch(Path::new(video_path), &frame_times, &temp_dir).await?;
+        log::debug!(
+            "Extracted {} frames in {:?}",
+            extracted_frames.len(),
+            extraction_start.elapsed()
+        );
+
+        let batch_embeddings = {
+            let model_read = self
+                .model
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire model lock: {}", e))?;
+            encode_image_batch(&model_read, &extracted_frames, &self.device)?
+        };
+
+        for temp_frame_path in &extracted_frames {
+            if let Err(e) = std::fs::remove_file(temp_frame_path) {
+                log::warn!(
+                    "Failed to cleanup temp frame {}: {}",
+                    temp_frame_path.display(),
+                    e
+                );
+            }
+        }
+
+        if let Err(e) = std::fs::remove_dir(&temp_dir) {
+            log::warn!(
+                "Failed to cleanup temp directory {}: {}",
+                temp_dir.display(),
+                e
+            );
+        }
+
+        let video_embedding = batch_embeddings.mean(0)?;
+        let normalized_embedding = normalize_vector(&video_embedding)?;
+
+        log::info!(
+            "Video semantic vector computed in {:?}: {}",
+            start_time.elapsed(),
+            video_path
+        );
+
+        Ok((
+            video_path.to_string(),
+            normalized_embedding,
+            VideoSemanticMeta {
+                num_frames: frames_to_sample,
+                frame_times,
+                model_version: MODEL_VERSION.to_string(),
+            },
+        ))
+    }
+}
+
+pub async fn batch_store_semantic_vectors(
+    pool: &DbPool,
+    items: Vec<SemanticBatchItem>,
+) -> Result<(usize, usize)> {
+    let mut tx = pool.begin().await?;
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    for item in items {
+        match item {
+            SemanticBatchItem::Image { path, vector } => {
+                if let Err(e) = store_semantic_vector_tx(&mut tx, &path, &vector).await {
+                    log::error!("Failed to store semantic vector {}: {}", path, e);
+                    error_count += 1;
+                    continue;
+                }
+
+                if let Err(e) =
+                    sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
+                        .bind(&path)
+                        .execute(&mut *tx)
+                        .await
+                {
+                    log::error!("Failed to mark photo as indexed {}: {}", path, e);
+                    error_count += 1;
+                    continue;
+                }
+
+                success_count += 1;
+            }
+            SemanticBatchItem::Video { path, vector, meta } => {
+                if let Err(e) = store_semantic_vector_tx(&mut tx, &path, &vector).await {
+                    log::error!("Failed to store semantic vector {}: {}", path, e);
+                    error_count += 1;
+                    continue;
+                }
+
+                if let Err(e) = store_video_metadata_tx(
+                    &mut tx,
+                    &path,
+                    meta.num_frames,
+                    &meta.frame_times,
+                    &meta.model_version,
+                )
+                .await
+                {
+                    log::error!("Failed to store video metadata {}: {}", path, e);
+                    error_count += 1;
+                    continue;
+                }
+
+                if let Err(e) =
+                    sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
+                        .bind(&path)
+                        .execute(&mut *tx)
+                        .await
+                {
+                    log::error!("Failed to mark photo as indexed {}: {}", path, e);
+                    error_count += 1;
+                    continue;
+                }
+
+                success_count += 1;
+            }
+        }
+    }
+
+    tx.commit().await?;
+    Ok((success_count, error_count))
 }
 
 /// Downloads CLIP model files to the cache directory
@@ -636,6 +818,9 @@ async fn store_video_metadata_tx(
 mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
+    use crate::db::Photo;
+    use chrono::Utc;
+    use serde_json::json;
     use std::sync::OnceLock;
 
     type CachedModel = (Arc<RwLock<clip::ClipModel>>, Arc<Tokenizer>, Arc<Device>);
@@ -658,6 +843,125 @@ mod tests {
     fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
         let (model, tokenizer, device) = get_cached_model();
         SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+    }
+
+    fn create_test_photo(path: &str) -> Photo {
+        let now = Utc::now();
+        let hash_seed = path.bytes().fold(0_u64, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(byte as u64)
+        });
+
+        Photo {
+            hash_sha256: format!("{hash_seed:064x}"),
+            file_path: path.to_string(),
+            filename: std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path)
+                .to_string(),
+            file_size: 123,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: None,
+            width: Some(100),
+            height: Some(100),
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified: now,
+            date_indexed: Some(now),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn create_dummy_tensor(value: f32) -> Tensor {
+        Tensor::from_vec(vec![value; 512], (512,), &Device::Cpu).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_batch_store_semantic_vectors_writes_all_items() {
+        // GIVEN a database with photos waiting for semantic indexing
+        let db_pool = create_test_db_pool().await.unwrap();
+        for path in [
+            "test-data/batch-one.jpg",
+            "test-data/batch-two.jpg",
+            "test-data/batch-three.jpg",
+        ] {
+            create_test_photo(path).create(&db_pool).await.unwrap();
+        }
+
+        let items = vec![
+            SemanticBatchItem::Image {
+                path: "test-data/batch-one.jpg".to_string(),
+                vector: create_dummy_tensor(0.1),
+            },
+            SemanticBatchItem::Image {
+                path: "test-data/batch-two.jpg".to_string(),
+                vector: create_dummy_tensor(0.2),
+            },
+            SemanticBatchItem::Image {
+                path: "test-data/batch-three.jpg".to_string(),
+                vector: create_dummy_tensor(0.3),
+            },
+        ];
+
+        // WHEN the batch store writes all vectors in one transaction
+        let result = batch_store_semantic_vectors(&db_pool, items).await.unwrap();
+
+        // THEN all semantic rows and indexed flags are persisted
+        let mapping_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM semantic_vector_path_mapping")
+                .fetch_one(&db_pool)
+                .await
+                .unwrap();
+        assert_eq!(mapping_count, 3);
+
+        let vector_count: i64 = sqlx::query_scalar("SELECT count(*) FROM media_semantic_vectors")
+            .fetch_one(&db_pool)
+            .await
+            .unwrap();
+        assert_eq!(vector_count, 3);
+
+        let indexed_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM photos WHERE semantic_vector_indexed = 1")
+                .fetch_one(&db_pool)
+                .await
+                .unwrap();
+        assert_eq!(indexed_count, 3);
+
+        assert_eq!(result, (3, 0));
+    }
+
+    #[tokio::test]
+    async fn test_batch_store_empty_batch_succeeds() {
+        // GIVEN an empty semantic batch
+        let db_pool = create_test_db_pool().await.unwrap();
+
+        // WHEN the batch store runs
+        let result = batch_store_semantic_vectors(&db_pool, vec![])
+            .await
+            .unwrap();
+
+        // THEN it succeeds without writing semantic rows
+        assert_eq!(result, (0, 0));
+
+        let mapping_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM semantic_vector_path_mapping")
+                .fetch_one(&db_pool)
+                .await
+                .unwrap();
+        assert_eq!(mapping_count, 0);
+
+        let vector_count: i64 = sqlx::query_scalar("SELECT count(*) FROM media_semantic_vectors")
+            .fetch_one(&db_pool)
+            .await
+            .unwrap();
+        assert_eq!(vector_count, 0);
     }
 
     #[tokio::test]

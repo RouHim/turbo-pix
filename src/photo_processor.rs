@@ -12,7 +12,9 @@ use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::scheduler::IndexingStatus;
-use crate::semantic_search::SemanticSearchEngine;
+use crate::semantic_search::{
+    batch_store_semantic_vectors, SemanticBatchItem, SemanticSearchEngine,
+};
 use crate::video_processor;
 
 /// Batch size for semantic vector computation (CPU-bound operations)
@@ -23,10 +25,10 @@ const SEMANTIC_BATCH_SIZE: usize = 20;
 
 /// Calculate optimal concurrency for semantic vector computation
 /// Balances CPU utilization with memory pressure from loading full-resolution images
-/// Capped at 4 to prevent OOM from concurrent large image loads during CLIP inference
+/// Capped at 2 to reduce SQLite write contention and prevent OOM from concurrent large image loads during CLIP inference
 fn calculate_optimal_semantic_concurrency() -> usize {
     let cpu_cores = num_cpus::get();
-    cpu_cores.min(4)
+    cpu_cores.min(2)
 }
 
 #[derive(Debug)]
@@ -104,9 +106,18 @@ impl PhotoProcessor {
         &self,
         db_pool: &DbPool,
         cache_manager: &CacheManager,
+        status: &IndexingStatus,
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
         // Step 1: Get all photo files on disk
         let photo_files = self.scanner.scan();
+        let total_files = photo_files.len() as u64;
+        status.phases.discovering.set_total(total_files);
+        status.phases.discovering.set_processed(total_files);
+        status.phases.discovering.set_current_item(None);
+        status.set_phase("metadata").await;
+        status.phases.metadata.set_total(total_files);
+        status.phases.metadata.set_processed(0);
+        status.phases.metadata.set_current_item(None);
 
         // Step 2: Create list of existing paths for cleanup
         let existing_paths: Vec<String> = photo_files
@@ -145,6 +156,7 @@ impl PhotoProcessor {
                 let file_path = photo_file.path.to_string_lossy().to_string();
                 let semantic_search = self.semantic_search.clone();
                 let db_pool_clone = db_pool.clone();
+                let status_clone = status.clone();
                 let modified = photo_file.modified;
                 let file_size = photo_file.size;
 
@@ -161,6 +173,11 @@ impl PhotoProcessor {
                         .await
                         {
                             log::debug!("Skipping unchanged file: {}", file_path);
+                            status_clone
+                                .phases
+                                .metadata
+                                .set_current_item(Some(file_path.clone()));
+                            status_clone.phases.metadata.add_processed(1);
 
                             // Convert existing Photo to ProcessedPhoto
                             return Some(ProcessedPhoto {
@@ -205,7 +222,9 @@ impl PhotoProcessor {
                         scanner: FileScanner::new(Vec::new()), // Empty scanner, not used
                         semantic_search,
                     };
-                    processor.process_file_metadata_only(&photo_file).await
+                    processor
+                        .process_file_metadata_only(&photo_file, Some(&status_clone))
+                        .await
                 });
             }
 
@@ -230,12 +249,19 @@ impl PhotoProcessor {
     pub async fn process_file_metadata_only(
         &self,
         photo_file: &PhotoFile,
+        status: Option<&IndexingStatus>,
     ) -> Option<ProcessedPhoto> {
         log::info!("Processing file: {}", photo_file.path.display());
 
         let path = &photo_file.path;
         let filename = path.file_name()?.to_string_lossy().to_string();
         let file_path = path.to_string_lossy().to_string();
+        if let Some(status) = status {
+            status
+                .phases
+                .metadata
+                .set_current_item(Some(file_path.clone()));
+        }
         let mime_type = mimetype_detector::from_path(path).map(|m| m.to_string());
         let metadata = MetadataExtractor::extract_with_metadata(path, Some(&photo_file.metadata));
         let hash_sha256 = self.calculate_file_hash(path).ok();
@@ -246,7 +272,7 @@ impl PhotoProcessor {
         // Fix MOOV atom placement for video files (enables fast progressive download)
         maybe_fix_moov_for_video(path);
 
-        Some(ProcessedPhoto {
+        let processed_photo = ProcessedPhoto {
             file_path: file_path.clone(),
             filename,
             file_size: photo_file.size as i64,
@@ -279,7 +305,13 @@ impl PhotoProcessor {
             bitrate: metadata.bitrate,
             frame_rate: metadata.frame_rate,
             semantic_vector_indexed: Some(false),
-        })
+        };
+
+        if let Some(status) = status {
+            status.phases.metadata.add_processed(1);
+        }
+
+        Some(processed_photo)
     }
 
     fn calculate_file_hash(&self, path: &Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -389,7 +421,6 @@ impl PhotoProcessor {
             for path in batch_paths {
                 let path = path.clone();
                 let semantic_search = self.semantic_search.clone();
-                let db_pool = db_pool.clone();
                 let semaphore = semaphore.clone();
                 let status = status.clone();
 
@@ -412,33 +443,25 @@ impl PhotoProcessor {
                         .set_current_item(Some(path.clone()));
 
                     // Compute semantic vector
-                    let result = if is_video {
-                        semantic_search
-                            .compute_video_semantic_vector(&path, None)
-                            .await
+                    if is_video {
+                        semantic_search.encode_video_vector(&path, None).await.map(
+                            |(path, vector, meta)| SemanticBatchItem::Video { path, vector, meta },
+                        )
                     } else {
-                        semantic_search.compute_semantic_vector(&path).await
-                    };
-
-                    // Mark as indexed if successful
-                    if result.is_ok() {
-                        if let Err(e) =
-                            crate::db::mark_photo_as_semantically_indexed(&db_pool, &path).await
-                        {
-                            error!("Failed to mark photo as indexed {}: {}", path, e);
-                        }
+                        semantic_search
+                            .encode_image_vector(&path)
+                            .await
+                            .map(|(path, vector)| SemanticBatchItem::Image { path, vector })
                     }
-
-                    result.map(|_| path.clone())
                 });
             }
 
             // Wait for all tasks in this batch to complete
+            let mut batch_items = Vec::with_capacity(batch_paths.len());
             while let Some(result) = batch_tasks.join_next().await {
                 match result {
-                    Ok(Ok(_)) => {
-                        processed_count += 1;
-                        status.phases.semantic_vectors.add_processed(1);
+                    Ok(Ok(item)) => {
+                        batch_items.push(item);
                     }
                     Ok(Err(e)) => {
                         error!("Failed to compute semantic vector: {}", e);
@@ -450,6 +473,29 @@ impl PhotoProcessor {
                         error_count += 1;
                         status.phases.semantic_vectors.add_errors(1);
                     }
+                }
+            }
+
+            match batch_store_semantic_vectors(db_pool, batch_items).await {
+                Ok((batch_success_count, batch_error_count)) => {
+                    processed_count += batch_success_count;
+                    error_count += batch_error_count;
+                    status
+                        .phases
+                        .semantic_vectors
+                        .add_processed(batch_success_count as u64);
+                    status
+                        .phases
+                        .semantic_vectors
+                        .add_errors(batch_error_count as u64);
+                }
+                Err(e) => {
+                    error!("Failed to commit semantic vector batch: {}", e);
+                    error_count += batch_paths.len();
+                    status
+                        .phases
+                        .semantic_vectors
+                        .add_errors(batch_paths.len() as u64);
                 }
             }
 
@@ -483,15 +529,15 @@ mod tests {
         let test_cases = [
             (1, 1, "Single core"),
             (2, 2, "Dual core"),
-            (3, 3, "Triple core"),
-            (4, 4, "Quad core: capped"),
-            (8, 4, "8 cores: capped at 4"),
-            (16, 4, "16 cores: capped at 4"),
-            (64, 4, "64 cores: capped at 4"),
+            (3, 2, "Triple core: capped"),
+            (4, 2, "Quad core: capped"),
+            (8, 2, "8 cores: capped at 2"),
+            (16, 2, "16 cores: capped at 2"),
+            (64, 2, "64 cores: capped at 2"),
         ];
 
         for (simulated_cores, expected, description) in test_cases {
-            let actual = simulated_cores.min(4);
+            let actual = simulated_cores.min(2);
             assert_eq!(
                 actual, expected,
                 "Failed: {} (cores={}, expected={}, got={})",
@@ -503,7 +549,7 @@ mod tests {
     #[test]
     fn test_concurrency_never_exceeds_cores() {
         for cores in 1..=128 {
-            let tasks = cores.min(4);
+            let tasks = cores.min(2);
             assert!(
                 tasks <= cores,
                 "Concurrency {} exceeds cores {} (invalid!)",
@@ -525,8 +571,8 @@ mod tests {
     fn test_concurrency_scaling_ratio() {
         let cores_to_test = [1, 2, 4, 8, 16, 64];
         for &cores in &cores_to_test {
-            let tasks = cores.min(4);
-            assert!(tasks <= 4, "Tasks should be capped at 4, got {}", tasks);
+            let tasks = cores.min(2);
+            assert!(tasks <= 2, "Tasks should be capped at 2, got {}", tasks);
             assert!(tasks >= 1, "Tasks should be at least 1, got {}", tasks);
         }
     }

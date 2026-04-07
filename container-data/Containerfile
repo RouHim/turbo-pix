@@ -59,7 +59,8 @@ RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     cargo fetch --target ${RUST_TARGET}
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
-    cargo build --profile production --target ${RUST_TARGET}
+    SQLITE3_INCLUDE=$(find /root/.cargo -path "*/libsqlite3-sys-*/sqlite3" -type d 2>/dev/null | head -n1) && \
+    CFLAGS="-I${SQLITE3_INCLUDE}" cargo build --profile production --target ${RUST_TARGET}
 
 # # # # # # # # # # # # # # # # # # # #
 # Run image

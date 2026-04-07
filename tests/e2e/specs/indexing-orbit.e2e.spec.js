@@ -173,6 +173,48 @@ test.describe('Indexing orbit', () => {
     await expect(page.locator('[data-orbit-dot]')).toBeVisible();
   });
 
+  test('renders compact determinate progress from hidden to growing', async ({ page }) => {
+    // GIVEN a determinate active phase is rendered in compact mode
+    await page.addInitScript(() => {
+      window.localStorage.setItem('turbopix_has_indexed', 'true');
+    });
+
+    await mockIndexingStatus(
+      page,
+      buildStatus({
+        photos_indexed: 100,
+        active_phase_id: 'metadata',
+        phases: [
+          buildPhase({ id: 'discovering', state: 'done' }),
+          buildPhase({
+            id: 'metadata',
+            state: 'active',
+            kind: 'determinate',
+            processed: 25,
+            total: 100,
+          }),
+          buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'geo_resolution' }),
+          buildPhase({ id: 'collages' }),
+          buildPhase({ id: 'housekeeping' }),
+        ],
+      })
+    );
+
+    // WHEN the compact ring renders the metadata segment
+    await TestHelpers.goto(page);
+
+    await expect(page.locator('[data-phase-ring]')).toHaveAttribute('data-ring-mode', 'compact');
+
+    await expect
+      .poll(async () => {
+        return await ringSegment(page, 'metadata').evaluate((element) => {
+          return Number.parseFloat(element.style.strokeDashoffset);
+        });
+      })
+      .toBeCloseTo(94.25, 1);
+  });
+
   test('marks each phase with the expected state attribute', async ({ page }) => {
     // GIVEN phases are in mixed states
     await mockIndexingStatus(

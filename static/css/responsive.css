@@ -263,6 +263,12 @@
     right: auto;
     transform: translateX(-50%);
   }
+
+  [data-phase-ring][data-ring-mode='hidden'] {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%) scale(0.8);
+  }
 }
 
 @media (width <= 480px) {

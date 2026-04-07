@@ -530,10 +530,10 @@ class IndexingOrbitManager {
     const segmentDegrees = 60;
     const startAngle = -90 + index * segmentDegrees + gapDegrees / 2;
     const endAngle = startAngle + segmentDegrees - gapDegrees;
-    const start = this.polarToCartesian(centerX, centerY, radius, endAngle);
-    const end = this.polarToCartesian(centerX, centerY, radius, startAngle);
+    const start = this.polarToCartesian(centerX, centerY, radius, startAngle);
+    const end = this.polarToCartesian(centerX, centerY, radius, endAngle);
 
-    return ['M', start.x, start.y, 'A', radius, radius, 0, 0, 0, end.x, end.y].join(' ');
+    return ['M', start.x, start.y, 'A', radius, radius, 0, 0, 1, end.x, end.y].join(' ');
   }
 
   polarToCartesian(centerX, centerY, radius, angleInDegrees) {

@@ -186,40 +186,10 @@ class PanRecognizer {
   }
 }
 
-class LongPressRecognizer {
-  constructor() {
-    this.minDuration = 500; // ms
-    this.maxMovement = 10; // px
-  }
-
-  recognize(touch, isStillActive = true) {
-    if (!touch || !isStillActive) return null;
-
-    const deltaX = touch.currentX - touch.startX;
-    const deltaY = touch.currentY - touch.startY;
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    const duration = Date.now() - touch.startTime;
-
-    if (distance > this.maxMovement) return null;
-    if (duration < this.minDuration) return null;
-
-    return {
-      type: 'longPress',
-      confidence: 1.0,
-      data: {
-        x: touch.currentX,
-        y: touch.currentY,
-        duration,
-      },
-    };
-  }
-}
-
 // Export recognizers
 window.GestureRecognizers = {
   PinchRecognizer,
   SwipeRecognizer,
   DoubleTapRecognizer,
   PanRecognizer,
-  LongPressRecognizer,
 };

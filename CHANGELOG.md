@@ -1,3 +1,18 @@
+# [2.25.0](https://github.com/RouHim/turbo-pix/compare/2.24.2...2.25.0) (2026-04-08)
+
+
+### Bug Fixes
+
+* **css:** add touch-action and overscroll-behavior for viewer gestures ([5012d8b](https://github.com/RouHim/turbo-pix/commit/5012d8bbdd371f6e0c3f72d17ee113d8491e7e9f))
+* **test:** use stable locator for swipe right e2e test ([444c578](https://github.com/RouHim/turbo-pix/commit/444c578d0b2f770436f366d114108d5fda2879d7))
+
+
+### Features
+
+* **viewer:** card-follows-finger swipe navigation ([301b98e](https://github.com/RouHim/turbo-pix/commit/301b98e6a073db8422025997311d7a9702b8d955))
+* **viewer:** rubber-band scale effect and spring-back refinement ([d00d92a](https://github.com/RouHim/turbo-pix/commit/d00d92ac0650c1cf48e544174c09b0b73dbfd6cd))
+* **viewer:** visual drag-down-to-close dismiss ([0b9836f](https://github.com/RouHim/turbo-pix/commit/0b9836fa578c62e6e9c3c30069ba71bc47a51fcc))
+
 ## [2.24.2](https://github.com/RouHim/turbo-pix/compare/2.24.1...2.24.2) (2026-04-08)
 
 ## [2.24.1](https://github.com/RouHim/turbo-pix/compare/2.24.0...2.24.1) (2026-04-07)

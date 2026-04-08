@@ -227,4 +227,136 @@ export class TestHelpers {
       expect(state[key], `URL state mismatch for "${key}"`).toBe(value);
     }
   }
+
+  static async swipeLeft(page, options = {}) {
+    const viewport = page.viewportSize();
+    const startX = options.startX ?? Math.floor(viewport.width / 2);
+    const startY = options.startY ?? Math.floor(viewport.height / 2);
+    const distance = options.distance ?? Math.floor(viewport.width * 0.4);
+    await this.performSwipe(page, startX, startY, startX - distance, startY, options.stepDelay);
+  }
+
+  static async swipeRight(page, options = {}) {
+    const viewport = page.viewportSize();
+    const startX = options.startX ?? Math.floor(viewport.width / 2);
+    const startY = options.startY ?? Math.floor(viewport.height / 2);
+    const distance = options.distance ?? Math.floor(viewport.width * 0.4);
+    await this.performSwipe(page, startX, startY, startX + distance, startY, options.stepDelay);
+  }
+
+  static async swipeDown(page, options = {}) {
+    const viewport = page.viewportSize();
+    const startX = options.startX ?? Math.floor(viewport.width / 2);
+    const startY = options.startY ?? Math.floor(viewport.height / 2);
+    const distance = options.distance ?? 200;
+    await this.performSwipe(page, startX, startY, startX, startY + distance, options.stepDelay);
+  }
+
+  static async doubleTap(page, x, y) {
+    await page.evaluate(
+      ({ tx, ty }) => {
+        const target = document.querySelector('.viewer-main') || document.body;
+
+        const createTouch = (id, cx, cy) =>
+          new Touch({
+            identifier: id,
+            target,
+            clientX: cx,
+            clientY: cy,
+            pageX: cx,
+            pageY: cy,
+            radiusX: 2,
+            radiusY: 2,
+            rotationAngle: 0,
+            force: 0.5,
+          });
+
+        const tap = (id) => {
+          const touch = createTouch(id, tx, ty);
+          target.dispatchEvent(
+            new TouchEvent('touchstart', {
+              bubbles: true,
+              cancelable: true,
+              touches: [touch],
+              changedTouches: [touch],
+            })
+          );
+          target.dispatchEvent(
+            new TouchEvent('touchend', {
+              bubbles: true,
+              cancelable: true,
+              touches: [],
+              changedTouches: [touch],
+            })
+          );
+        };
+
+        tap(1);
+        setTimeout(() => tap(2), 50);
+      },
+      { tx: x, ty: y }
+    );
+    // Wait for the setTimeout + gesture processing
+    await page.waitForTimeout(200);
+  }
+
+  // Target .viewer-main so events bubble: .viewer-main (SwipeableViewer enablePan) → #photo-viewer (GestureManager)
+  // Uses setTimeout spacing between touchmove events so GestureManager
+  // computes realistic velocity via Date.now() deltas.
+  static async performSwipe(page, startX, startY, endX, endY, stepDelay = 16) {
+    await page.evaluate(
+      ({ sx, sy, ex, ey, delay }) =>
+        new Promise((resolve) => {
+          const target = document.querySelector('.viewer-main') || document.body;
+
+          const createTouch = (id, x, y) =>
+            new Touch({
+              identifier: id,
+              target,
+              clientX: x,
+              clientY: y,
+              pageX: x,
+              pageY: y,
+              radiusX: 2,
+              radiusY: 2,
+              rotationAngle: 0,
+              force: 0.5,
+            });
+
+          const dispatch = (type, touches, changed) =>
+            target.dispatchEvent(
+              new TouchEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                touches,
+                changedTouches: changed,
+              })
+            );
+
+          const startTouch = createTouch(1, sx, sy);
+          dispatch('touchstart', [startTouch], [startTouch]);
+
+          const steps = 10;
+          let step = 1;
+
+          const nextStep = () => {
+            if (step <= steps) {
+              const x = sx + ((ex - sx) * step) / steps;
+              const y = sy + ((ey - sy) * step) / steps;
+              const moveTouch = createTouch(1, x, y);
+              dispatch('touchmove', [moveTouch], [moveTouch]);
+              step++;
+              setTimeout(nextStep, delay);
+            } else {
+              const endTouch = createTouch(1, ex, ey);
+              dispatch('touchend', [], [endTouch]);
+              resolve();
+            }
+          };
+
+          setTimeout(nextStep, delay);
+        }),
+      { sx: startX, sy: startY, ex: endX, ey: endY, delay: stepDelay }
+    );
+  }
 }

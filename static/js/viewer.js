@@ -16,6 +16,7 @@ class SwipeableViewer {
     this.isDraggingDown = false;
     this.currentScale = 1;
     this.currentOpacity = 1;
+    this.rubberBandScale = 1;
 
     this.adjacent = {
       previous: this.createAdjacentImage('previous'),
@@ -98,6 +99,7 @@ class SwipeableViewer {
     this.currentTranslateY = 0;
     this.currentScale = 1;
     this.currentOpacity = 1;
+    this.rubberBandScale = 1;
     this.render(0);
     this.hideAdjacent();
     this.updateAdjacentSources();
@@ -263,6 +265,7 @@ class SwipeableViewer {
     this.currentTranslateY = 0;
     this.currentScale = 1;
     this.currentOpacity = 1;
+    this.rubberBandScale = 1;
     this.renderVertical();
   }
 
@@ -272,7 +275,8 @@ class SwipeableViewer {
       return;
     }
 
-    activeMedia.style.transform = `translateX(${this.currentTranslateX}px) translateY(${this.currentTranslateY}px) scale(${this.currentScale})`;
+    const combinedScale = this.currentScale * this.rubberBandScale;
+    activeMedia.style.transform = `translateX(${this.currentTranslateX}px) translateY(${this.currentTranslateY}px) scale(${combinedScale})`;
     activeMedia.style.opacity = `${this.currentOpacity}`;
   }
 
@@ -299,13 +303,18 @@ class SwipeableViewer {
     const translateX = this.dragBaseTranslateX + deltaX;
 
     if (translateX > 0 && !this.canNavigate('previous')) {
-      return translateX * 0.3;
+      const resistedX = translateX * 0.3;
+      this.rubberBandScale = Math.max(0.9, 1 - Math.abs(resistedX) * 0.0005);
+      return resistedX;
     }
 
     if (translateX < 0 && !this.canNavigate('next')) {
-      return translateX * 0.3;
+      const resistedX = translateX * 0.3;
+      this.rubberBandScale = Math.max(0.9, 1 - Math.abs(resistedX) * 0.0005);
+      return resistedX;
     }
 
+    this.rubberBandScale = 1;
     return translateX;
   }
 
@@ -338,14 +347,16 @@ class SwipeableViewer {
   }
 
   snapBack() {
-    this.animateTo(0, () => this.finishInteraction());
+    const isRubberBand = this.rubberBandScale !== 1;
+    const duration = isRubberBand ? 400 : 300;
+    this.animateTo(0, () => this.finishInteraction(), duration);
   }
 
-  animateTo(targetX, onComplete = null) {
+  animateTo(targetX, onComplete = null, duration = 300) {
     this.interruptAnimation();
 
     const startX = this.currentTranslateX;
-    const duration = 300;
+    const startRubberBandScale = this.rubberBandScale;
     const startTime = Date.now();
     this.isAnimating = true;
 
@@ -355,6 +366,7 @@ class SwipeableViewer {
       const eased = 1 - Math.pow(1 - progress, 3);
       const translateX = startX + (targetX - startX) * eased;
 
+      this.rubberBandScale = startRubberBandScale + (1 - startRubberBandScale) * eased;
       this.render(translateX);
 
       if (progress < 1) {
@@ -407,6 +419,7 @@ class SwipeableViewer {
     this.currentTranslateY = 0;
     this.currentScale = 1;
     this.currentOpacity = 1;
+    this.rubberBandScale = 1;
     this.toggleSwipeClass(false);
     this.hideAdjacent();
   }
@@ -416,7 +429,8 @@ class SwipeableViewer {
 
     const activeMedia = this.getActiveMediaElement();
     if (activeMedia) {
-      activeMedia.style.transform = `translateX(${translateX}px) translateY(${this.currentTranslateY}px) scale(${this.currentScale})`;
+      const combinedScale = this.currentScale * this.rubberBandScale;
+      activeMedia.style.transform = `translateX(${translateX}px) translateY(${this.currentTranslateY}px) scale(${combinedScale})`;
       activeMedia.style.opacity = `${this.currentOpacity}`;
     }
 

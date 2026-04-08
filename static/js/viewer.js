@@ -12,6 +12,11 @@ class SwipeableViewer {
     this.isAnimating = false;
     this.touchStartPoint = null;
 
+    this.currentTranslateY = 0;
+    this.isDraggingDown = false;
+    this.currentScale = 1;
+    this.currentOpacity = 1;
+
     this.adjacent = {
       previous: this.createAdjacentImage('previous'),
       next: this.createAdjacentImage('next'),
@@ -55,6 +60,8 @@ class SwipeableViewer {
 
       if (this.viewer.controls.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
         this.viewer.gestureManager.enablePan();
+      } else if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > 0) {
+        this.viewer.gestureManager.enablePan();
       }
     });
 
@@ -64,6 +71,10 @@ class SwipeableViewer {
 
     utils.on(this.elements.main, 'touchcancel', () => {
       this.touchStartPoint = null;
+      if (this.isDraggingDown) {
+        this.snapBackVertical();
+        return;
+      }
       this.handleTouchCancel();
     });
   }
@@ -83,6 +94,10 @@ class SwipeableViewer {
     this.isDragging = false;
     this.isAnimating = false;
     this.dragBaseTranslateX = 0;
+    this.isDraggingDown = false;
+    this.currentTranslateY = 0;
+    this.currentScale = 1;
+    this.currentOpacity = 1;
     this.render(0);
     this.hideAdjacent();
     this.updateAdjacentSources();
@@ -135,6 +150,130 @@ class SwipeableViewer {
     this.toggleSwipeClass(false);
     this.finishInteraction();
     this.render(0);
+  }
+
+  handleVerticalPan(data) {
+    if (!this.viewer.isOpen || !this.viewer.getCurrentPhoto()) {
+      return false;
+    }
+
+    if (this.viewer.gestureManager?.gestureAxis !== 'vertical') {
+      return false;
+    }
+
+    if (data.deltaY <= 0) {
+      return false;
+    }
+
+    this.isDraggingDown = true;
+    this.currentTranslateY = data.deltaY;
+    this.currentScale = Math.max(0.7, 1 - Math.abs(data.deltaY) / 1000);
+    this.currentOpacity = Math.max(0.5, 1 - Math.abs(data.deltaY) / 800);
+    this.renderVertical();
+    return true;
+  }
+
+  handleVerticalPanEnd(data) {
+    if (!this.isDraggingDown) {
+      return false;
+    }
+
+    const shouldDismiss = this.currentTranslateY >= 150 || data.velocityY > 0.5;
+
+    if (shouldDismiss) {
+      this.animateDismiss();
+    } else {
+      this.snapBackVertical();
+    }
+
+    return true;
+  }
+
+  animateDismiss() {
+    this.interruptAnimation();
+
+    const startY = this.currentTranslateY;
+    const startScale = this.currentScale;
+    const startOpacity = this.currentOpacity;
+    const targetY = window.innerHeight;
+    const duration = 250;
+    const startTime = Date.now();
+    this.isAnimating = true;
+
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = progress * progress;
+
+      this.currentTranslateY = startY + (targetY - startY) * eased;
+      this.currentScale = startScale + (0.7 - startScale) * eased;
+      this.currentOpacity = startOpacity + (0 - startOpacity) * eased;
+      this.renderVertical();
+
+      if (progress < 1) {
+        this.animationFrame = requestAnimationFrame(animate);
+        return;
+      }
+
+      this.animationFrame = null;
+      this.isAnimating = false;
+      this.resetVerticalState();
+      this.viewer.triggerHapticFeedback('medium');
+      this.viewer.close();
+    };
+
+    animate();
+  }
+
+  snapBackVertical() {
+    this.interruptAnimation();
+
+    const startY = this.currentTranslateY;
+    const startScale = this.currentScale;
+    const startOpacity = this.currentOpacity;
+    const duration = 300;
+    const startTime = Date.now();
+    this.isAnimating = true;
+
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+
+      this.currentTranslateY = startY + (0 - startY) * eased;
+      this.currentScale = startScale + (1 - startScale) * eased;
+      this.currentOpacity = startOpacity + (1 - startOpacity) * eased;
+      this.renderVertical();
+
+      if (progress < 1) {
+        this.animationFrame = requestAnimationFrame(animate);
+        return;
+      }
+
+      this.animationFrame = null;
+      this.isAnimating = false;
+      this.resetVerticalState();
+    };
+
+    animate();
+  }
+
+  resetVerticalState() {
+    this.isDraggingDown = false;
+    this.currentTranslateY = 0;
+    this.currentScale = 1;
+    this.currentOpacity = 1;
+    this.renderVertical();
+  }
+
+  renderVertical() {
+    const activeMedia = this.getActiveMediaElement();
+    if (!activeMedia) {
+      return;
+    }
+
+    activeMedia.style.transform = `translateX(${this.currentTranslateX}px) translateY(${this.currentTranslateY}px) scale(${this.currentScale})`;
+    activeMedia.style.opacity = `${this.currentOpacity}`;
   }
 
   startZoomEdgeSwipe(data) {
@@ -264,6 +403,10 @@ class SwipeableViewer {
     this.isDragging = false;
     this.dragBaseTranslateX = 0;
     this.isAnimating = false;
+    this.isDraggingDown = false;
+    this.currentTranslateY = 0;
+    this.currentScale = 1;
+    this.currentOpacity = 1;
     this.toggleSwipeClass(false);
     this.hideAdjacent();
   }
@@ -273,7 +416,8 @@ class SwipeableViewer {
 
     const activeMedia = this.getActiveMediaElement();
     if (activeMedia) {
-      activeMedia.style.transform = `translateX(${translateX}px)`;
+      activeMedia.style.transform = `translateX(${translateX}px) translateY(${this.currentTranslateY}px) scale(${this.currentScale})`;
+      activeMedia.style.opacity = `${this.currentOpacity}`;
     }
 
     this.renderAdjacent(translateX);
@@ -547,18 +691,10 @@ class PhotoViewer {
 
     // Swipe navigation
     this.gestureManager.on('swipe', (data) => {
-      const { direction, velocity } = data;
+      const { direction } = data;
 
       if (direction === 'up') {
         // Swipe up could toggle info in the future
-      }
-
-      if (direction === 'down') {
-        // Swipe down to close (with threshold)
-        if (velocity > 0.5) {
-          this.close();
-          this.triggerHapticFeedback('medium');
-        }
       }
     });
 
@@ -587,14 +723,21 @@ class PhotoViewer {
         return;
       }
 
+      if (this.swipeableViewer.handleVerticalPan(data)) {
+        return;
+      }
+
       this.swipeableViewer.handlePan(data);
     });
 
     this.gestureManager.on('panEnd', (data) => {
       const { velocityX, velocityY } = data;
 
-      // Re-enable transitions
       if (this.elements.image) this.elements.image.classList.remove('gesture-active');
+
+      if (this.swipeableViewer.handleVerticalPanEnd(data)) {
+        return;
+      }
 
       if (this.swipeableViewer.handlePanEnd(data)) {
         return;
@@ -826,11 +969,13 @@ class PhotoViewer {
   showImage(src) {
     if (this.elements.image) {
       this.elements.image.src = src;
-      this.elements.image.style.transform = 'translateX(0)';
+      this.elements.image.style.transform = '';
+      this.elements.image.style.opacity = '';
       this.elements.image.style.display = 'block';
       this.elements.image.classList.add('loaded');
       if (this.elements.video) {
-        this.elements.video.style.transform = 'translateX(0)';
+        this.elements.video.style.transform = '';
+        this.elements.video.style.opacity = '';
         this.elements.video.style.display = 'none';
       }
     }
@@ -1108,11 +1253,13 @@ class PhotoViewer {
 
     // Now set the new source
     this.elements.video.src = videoUrl;
-    this.elements.video.style.transform = 'translateX(0)';
+    this.elements.video.style.transform = '';
+    this.elements.video.style.opacity = '';
     this.elements.video.style.display = 'block';
     this.elements.video.classList.add('loaded');
     if (this.elements.image) {
-      this.elements.image.style.transform = 'translateX(0)';
+      this.elements.image.style.transform = '';
+      this.elements.image.style.opacity = '';
       this.elements.image.style.display = 'none';
     }
 
@@ -1494,11 +1641,13 @@ class PhotoViewer {
 
   showError(message) {
     if (this.elements.image) {
-      this.elements.image.style.transform = 'translateX(0)';
+      this.elements.image.style.transform = '';
+      this.elements.image.style.opacity = '';
       this.elements.image.style.display = 'none';
     }
     if (this.elements.video) {
-      this.elements.video.style.transform = 'translateX(0)';
+      this.elements.video.style.transform = '';
+      this.elements.video.style.opacity = '';
       this.elements.video.style.display = 'none';
     }
 

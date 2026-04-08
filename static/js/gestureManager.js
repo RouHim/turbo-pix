@@ -15,12 +15,12 @@ class GestureManager {
     // Touch tracking
     this.touches = new Map();
     this.touchStartTime = 0;
-    this.lastTapTime = 0;
-    this.tapCount = 0;
+    this.velocityFrames = [];
 
     // Gesture state
     this.activeGesture = null;
     this.gestureState = 'idle'; // idle, recognizing, active
+    this.gestureAxis = null;
 
     // Callbacks
     this.callbacks = {
@@ -73,6 +73,11 @@ class GestureManager {
 
   handleTouchStart(e) {
     const timestamp = Date.now();
+
+    if (this.touches.size === 0) {
+      this.resetGestureTracking();
+    }
+
     this.touchStartTime = timestamp;
 
     // Track all touches
@@ -120,6 +125,12 @@ class GestureManager {
       tracked.lastTime = timestamp;
     });
 
+    if (this.touches.size === 1) {
+      const touch = Array.from(this.touches.values())[0];
+      this.updateGestureAxis(touch);
+      this.recordVelocityFrame(touch, timestamp);
+    }
+
     // Process active gesture or recognize new one
     if (this.activeGesture === 'pinch' && this.touches.size === 2) {
       e.preventDefault();
@@ -162,6 +173,8 @@ class GestureManager {
       const touch = this.touches.get(endedTouches[0]);
       if (!touch) return;
 
+      touch.lastTime = timestamp;
+
       const deltaX = touch.currentX - touch.startX;
       const deltaY = touch.currentY - touch.startY;
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
@@ -173,46 +186,36 @@ class GestureManager {
       }
       // Check for swipe
       else if (this.options.enableSwipe) {
-        this.recognizeSwipe(touch);
+        const swipeTouch = this.createTouchWithSmoothedVelocity(touch);
+        const swipe = this.recognizers.swipe.recognize(swipeTouch, this.getSwipeOptions());
+
+        if (swipe?.type === 'swipe' && this.callbacks.onSwipe) {
+          this.callbacks.onSwipe(swipe.data);
+        }
       }
     }
 
     // Clean up ended touches
-    endedTouches.forEach((id) => this.touches.delete(id));
+    endedTouches.forEach((id) => {
+      this.touches.delete(id);
+    });
 
     // Reset state if no touches remain
     if (this.touches.size === 0) {
-      this.activeGesture = null;
-      this.gestureState = 'idle';
+      this.resetGestureTracking();
     }
   }
 
   handleTouchCancel() {
     // Clean up on cancel
     this.touches.clear();
-    this.activeGesture = null;
-    this.gestureState = 'idle';
+    this.resetGestureTracking();
   }
 
   handleTap(touch) {
-    const now = Date.now();
-    const timeSinceLastTap = now - this.lastTapTime;
-
-    if (timeSinceLastTap < 300 && this.options.enableDoubleTap) {
-      // Double tap detected
-      this.tapCount = 0;
-      this.lastTapTime = 0;
-
-      if (this.callbacks.onDoubleTap) {
-        this.callbacks.onDoubleTap({
-          x: touch.currentX,
-          y: touch.currentY,
-        });
-      }
-    } else {
-      // Single tap
-      this.tapCount = 1;
-      this.lastTapTime = now;
+    const tap = this.recognizers.doubleTap.recognize(touch);
+    if (tap?.type === 'doubleTap' && this.options.enableDoubleTap && this.callbacks.onDoubleTap) {
+      this.callbacks.onDoubleTap(tap.data);
     }
   }
 
@@ -269,78 +272,146 @@ class GestureManager {
     const touch = Array.from(this.touches.values())[0];
     if (!touch) return;
 
-    const deltaX = touch.currentX - touch.startX;
-    const deltaY = touch.currentY - touch.startY;
+    const gestureTouch = this.applyAxisLock({
+      deltaX: touch.currentX - touch.startX,
+      deltaY: touch.currentY - touch.startY,
+      velocityX: touch.velocityX,
+      velocityY: touch.velocityY,
+    });
 
     if (this.callbacks.onPan) {
       this.callbacks.onPan({
-        deltaX,
-        deltaY,
-        velocityX: touch.velocityX,
-        velocityY: touch.velocityY,
+        deltaX: gestureTouch.deltaX,
+        deltaY: gestureTouch.deltaY,
+        velocityX: gestureTouch.velocityX,
+        velocityY: gestureTouch.velocityY,
       });
     }
   }
 
   endPanGesture() {
     const touch = Array.from(this.touches.values())[0];
+    const averagedVelocity = this.getAverageVelocity(touch);
+
     if (!touch && this.callbacks.onPanEnd) {
       this.callbacks.onPanEnd({
-        velocityX: 0,
-        velocityY: 0,
+        velocityX: averagedVelocity.velocityX,
+        velocityY: averagedVelocity.velocityY,
       });
       return;
     }
 
     if (this.callbacks.onPanEnd) {
       this.callbacks.onPanEnd({
-        velocityX: touch.velocityX || 0,
-        velocityY: touch.velocityY || 0,
+        velocityX: averagedVelocity.velocityX,
+        velocityY: averagedVelocity.velocityY,
       });
     }
     this.activeGesture = null;
   }
 
-  recognizeSwipe(touch) {
+  updateGestureAxis(touch) {
+    if (!touch || this.gestureAxis) return;
+
     const deltaX = touch.currentX - touch.startX;
     const deltaY = touch.currentY - touch.startY;
-    const absDeltaX = Math.abs(deltaX);
-    const absDeltaY = Math.abs(deltaY);
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    if (distance <= 10) return;
 
-    // Determine swipe direction (more horizontal or vertical)
-    if (absDeltaX > absDeltaY) {
-      // Horizontal swipe
-      const threshold = window.innerWidth * 0.2; // 20% of viewport width
-      const velocityThreshold = 0.3; // px/ms
+    this.gestureAxis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
+  }
 
-      if (absDeltaX > threshold || Math.abs(touch.velocityX) > velocityThreshold) {
-        const direction = deltaX > 0 ? 'right' : 'left';
+  recordVelocityFrame(touch, timestamp) {
+    if (!touch) return;
 
-        if (this.callbacks.onSwipe) {
-          this.callbacks.onSwipe({
-            direction,
-            distance: absDeltaX,
-            velocity: Math.abs(touch.velocityX),
-          });
-        }
-      }
-    } else {
-      // Vertical swipe
-      const threshold = window.innerHeight * 0.2; // 20% of viewport height
-      const velocityThreshold = 0.3; // px/ms
+    this.velocityFrames.push({
+      vx: touch.velocityX,
+      vy: touch.velocityY,
+      time: timestamp,
+    });
 
-      if (absDeltaY > threshold || Math.abs(touch.velocityY) > velocityThreshold) {
-        const direction = deltaY > 0 ? 'down' : 'up';
-
-        if (this.callbacks.onSwipe) {
-          this.callbacks.onSwipe({
-            direction,
-            distance: absDeltaY,
-            velocity: Math.abs(touch.velocityY),
-          });
-        }
-      }
+    if (this.velocityFrames.length > 5) {
+      this.velocityFrames.shift();
     }
+  }
+
+  applyAxisLock({ deltaX, deltaY, velocityX, velocityY }) {
+    if (this.gestureAxis === 'horizontal') {
+      return {
+        deltaX,
+        deltaY: 0,
+        velocityX,
+        velocityY: 0,
+      };
+    }
+
+    if (this.gestureAxis === 'vertical') {
+      return {
+        deltaX: 0,
+        deltaY,
+        velocityX: 0,
+        velocityY,
+      };
+    }
+
+    return {
+      deltaX,
+      deltaY,
+      velocityX,
+      velocityY,
+    };
+  }
+
+  getAverageVelocity(touch) {
+    const frameCount = this.velocityFrames.length;
+
+    if (frameCount === 0) {
+      return this.applyAxisLock({
+        deltaX: 0,
+        deltaY: 0,
+        velocityX: touch?.velocityX || 0,
+        velocityY: touch?.velocityY || 0,
+      });
+    }
+
+    const totals = this.velocityFrames.reduce(
+      (sum, frame) => ({
+        velocityX: sum.velocityX + frame.vx,
+        velocityY: sum.velocityY + frame.vy,
+      }),
+      { velocityX: 0, velocityY: 0 }
+    );
+
+    return this.applyAxisLock({
+      deltaX: 0,
+      deltaY: 0,
+      velocityX: totals.velocityX / frameCount,
+      velocityY: totals.velocityY / frameCount,
+    });
+  }
+
+  createTouchWithSmoothedVelocity(touch) {
+    const averagedVelocity = this.getAverageVelocity(touch);
+
+    return {
+      ...touch,
+      velocityX: averagedVelocity.velocityX,
+      velocityY: averagedVelocity.velocityY,
+    };
+  }
+
+  getSwipeOptions() {
+    return {
+      allowHorizontal: this.gestureAxis !== 'vertical',
+      allowVertical: this.gestureAxis !== 'horizontal',
+    };
+  }
+
+  resetGestureTracking() {
+    this.activeGesture = null;
+    this.gestureState = 'idle';
+    this.gestureAxis = null;
+    this.velocityFrames = [];
   }
 
   // Public API

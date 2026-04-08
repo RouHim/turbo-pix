@@ -310,6 +310,24 @@ class ViewerControls {
   isZoomed() {
     return this.zoomLevel > 1;
   }
+
+  isAtPanBoundary() {
+    if (!this.elements.image || this.zoomLevel <= 1) {
+      return { left: false, right: false };
+    }
+
+    const maxPanX = (this.elements.image.width * this.zoomLevel - this.elements.image.width) / 2;
+    const tolerance = 0.5;
+
+    if (maxPanX <= 0) {
+      return { left: true, right: true };
+    }
+
+    return {
+      left: this.imagePosition.x >= maxPanX - tolerance,
+      right: this.imagePosition.x <= -maxPanX + tolerance,
+    };
+  }
 }
 
 window.ViewerControls = ViewerControls;

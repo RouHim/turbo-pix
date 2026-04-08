@@ -441,6 +441,24 @@
   touch-action: none;
 }
 
+.viewer-adjacent {
+  position: absolute;
+  inset: var(--space-6);
+  width: calc(100% - (var(--space-6) * 2));
+  height: calc(100% - (var(--space-6) * 2));
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  z-index: 0;
+
+  &.visible {
+    opacity: 1;
+  }
+}
+
 .viewer-image,
 .viewer-video {
   max-width: 100%;
@@ -454,6 +472,8 @@
     opacity 50ms ease-out;
   cursor: grab;
   opacity: 0;
+  position: relative;
+  z-index: 1;
 
   &.loaded {
     opacity: 1;
@@ -461,7 +481,9 @@
 }
 
 .viewer-image.gesture-active,
-.viewer-video.gesture-active {
+.viewer-video.gesture-active,
+.viewer-image.swiping,
+.viewer-video.swiping {
   transition: none;
 }
 

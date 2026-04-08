@@ -40,3 +40,13 @@
 ## Cleanup Notes
 - Removed dead `touchHandler` and `LongPressRecognizer` exports after confirming no remaining references in `static/`.
 - `npm run lint` stayed clean after the deletions.
+
+## GestureManager Refactor Notes
+- `GestureManager` can preserve the viewer callback contract by delegating final swipe/tap decisions to recognizers and forwarding `recognizer.data` unchanged to `.on('swipe')` and `.on('doubleTap')` callbacks.
+- Smoothing release momentum works well by averaging the last up-to-5 `touchmove` velocity samples, then reusing that averaged velocity for both swipe recognition and `panEnd` momentum.
+- Axis lock is safest when it is decided once after movement exceeds 10px and then applied only to gesture output/recognition, not to the stored raw touch coordinates.
+
+## Task 4 Swipe Viewer Notes
+- `SwipeableViewer` works best as a viewer-local visual layer: keep threshold/RAF animation/adjacent-image rendering in `viewer.js`, and let `ViewerControls` stay focused on zoom/pan math.
+- Horizontal viewer swipe needs `GestureManager.enablePan()` from `touchmove` after axis intent is clear; enabling pan immediately on `touchstart` would steal vertical gestures like swipe-down-to-close before axis lock.
+- Reset swipe transforms on every media swap/error path (`showImage`, `setVideoSource`, `showError`, `close`) so interrupted swipe animations never leak into the next photo.

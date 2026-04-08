@@ -1,5 +1,348 @@
 // Photo Viewer Component
-/* global ViewerControls, ViewerMetadata, GestureManager */
+/* global ViewerControls, ViewerMetadata, GestureManager, requestAnimationFrame, cancelAnimationFrame */
+
+class SwipeableViewer {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.elements = viewer.elements;
+    this.animationFrame = null;
+    this.currentTranslateX = 0;
+    this.dragBaseTranslateX = 0;
+    this.isDragging = false;
+    this.isAnimating = false;
+    this.touchStartPoint = null;
+
+    this.adjacent = {
+      previous: this.createAdjacentImage('previous'),
+      next: this.createAdjacentImage('next'),
+    };
+
+    this.bindEvents();
+    this.reset();
+  }
+
+  bindEvents() {
+    if (!this.elements.main) return;
+
+    utils.on(this.elements.main, 'touchstart', (event) => {
+      if (!this.viewer.isOpen || event.touches.length !== 1 || !this.viewer.gestureManager) {
+        return;
+      }
+
+      this.interruptAnimation();
+      this.dragBaseTranslateX = this.currentTranslateX;
+      const [touch] = event.touches;
+      this.touchStartPoint = { x: touch.clientX, y: touch.clientY };
+    });
+
+    utils.on(this.elements.main, 'touchmove', (event) => {
+      if (
+        !this.viewer.isOpen ||
+        event.touches.length !== 1 ||
+        !this.viewer.gestureManager ||
+        !this.touchStartPoint
+      ) {
+        return;
+      }
+
+      const [touch] = event.touches;
+      const deltaX = touch.clientX - this.touchStartPoint.x;
+      const deltaY = touch.clientY - this.touchStartPoint.y;
+      const distance = Math.hypot(deltaX, deltaY);
+      if (distance <= 10) {
+        return;
+      }
+
+      if (this.viewer.controls.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
+        this.viewer.gestureManager.enablePan();
+      }
+    });
+
+    utils.on(this.elements.main, 'touchend', () => {
+      this.touchStartPoint = null;
+    });
+
+    utils.on(this.elements.main, 'touchcancel', () => {
+      this.touchStartPoint = null;
+      this.handleTouchCancel();
+    });
+  }
+
+  createAdjacentImage(direction) {
+    const image = document.createElement('img');
+    image.className = `viewer-adjacent viewer-adjacent-${direction}`;
+    image.alt = '';
+    image.draggable = false;
+    image.setAttribute('aria-hidden', 'true');
+    this.elements.main?.prepend(image);
+    return image;
+  }
+
+  reset() {
+    this.interruptAnimation();
+    this.isDragging = false;
+    this.isAnimating = false;
+    this.dragBaseTranslateX = 0;
+    this.render(0);
+    this.hideAdjacent();
+    this.updateAdjacentSources();
+    this.toggleSwipeClass(false);
+  }
+
+  handlePan(data) {
+    if (!this.canHandleHorizontalPan()) {
+      return false;
+    }
+
+    this.isDragging = true;
+    this.toggleSwipeClass(true);
+    this.updateAdjacentSources();
+
+    const translateX = this.getDragTranslateX(data.deltaX);
+    this.render(translateX);
+    return true;
+  }
+
+  handlePanEnd(data) {
+    if (!this.isDragging && this.currentTranslateX === 0) {
+      return false;
+    }
+
+    this.toggleSwipeClass(false);
+
+    const direction = this.getNavigationDirection(this.currentTranslateX);
+    const shouldNavigate = this.shouldNavigate(this.currentTranslateX, data.velocityX);
+
+    if (!direction || !shouldNavigate || !this.canNavigate(direction)) {
+      this.snapBack();
+      return true;
+    }
+
+    const targetX = direction === 'next' ? -this.getViewportWidth() : this.getViewportWidth();
+    this.animateTo(targetX, async () => {
+      await this.navigate(direction);
+    });
+
+    return true;
+  }
+
+  handleTouchCancel() {
+    if (!this.isDragging && this.currentTranslateX === 0 && !this.isAnimating) {
+      return;
+    }
+
+    this.interruptAnimation();
+    this.toggleSwipeClass(false);
+    this.finishInteraction();
+    this.render(0);
+  }
+
+  startZoomEdgeSwipe(data) {
+    this.viewer.controls.reset();
+    this.dragBaseTranslateX = 0;
+    return this.handlePan(data);
+  }
+
+  canHandleHorizontalPan() {
+    if (!this.viewer.isOpen || !this.viewer.getCurrentPhoto()) {
+      return false;
+    }
+
+    return this.viewer.gestureManager?.gestureAxis === 'horizontal';
+  }
+
+  shouldNavigate(translateX, velocityX) {
+    const threshold = this.getViewportWidth() * 0.3;
+    return Math.abs(translateX) >= threshold || Math.abs(velocityX) > 0.3;
+  }
+
+  getDragTranslateX(deltaX) {
+    const translateX = this.dragBaseTranslateX + deltaX;
+
+    if (translateX > 0 && !this.canNavigate('previous')) {
+      return translateX * 0.3;
+    }
+
+    if (translateX < 0 && !this.canNavigate('next')) {
+      return translateX * 0.3;
+    }
+
+    return translateX;
+  }
+
+  getNavigationDirection(translateX) {
+    if (translateX < 0) {
+      return 'next';
+    }
+
+    if (translateX > 0) {
+      return 'previous';
+    }
+
+    return null;
+  }
+
+  canNavigate(direction) {
+    if (direction === 'previous') {
+      return this.viewer.currentIndex > 0;
+    }
+
+    if (direction === 'next') {
+      return this.viewer.currentIndex < this.viewer.photos.length - 1;
+    }
+
+    return false;
+  }
+
+  getViewportWidth() {
+    return window.innerWidth || this.elements.main?.clientWidth || 0;
+  }
+
+  snapBack() {
+    this.animateTo(0, () => this.finishInteraction());
+  }
+
+  animateTo(targetX, onComplete = null) {
+    this.interruptAnimation();
+
+    const startX = this.currentTranslateX;
+    const duration = 300;
+    const startTime = Date.now();
+    this.isAnimating = true;
+
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const translateX = startX + (targetX - startX) * eased;
+
+      this.render(translateX);
+
+      if (progress < 1) {
+        this.animationFrame = requestAnimationFrame(animate);
+        return;
+      }
+
+      this.animationFrame = null;
+      this.isAnimating = false;
+
+      if (onComplete) {
+        onComplete();
+      }
+    };
+
+    animate();
+  }
+
+  interruptAnimation() {
+    if (!this.animationFrame) {
+      return;
+    }
+
+    cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = null;
+    this.isAnimating = false;
+  }
+
+  async navigate(direction) {
+    this.finishInteraction();
+
+    if (direction === 'next') {
+      await this.viewer.showNext();
+    }
+
+    if (direction === 'previous') {
+      await this.viewer.showPrevious();
+    }
+
+    this.viewer.triggerHapticFeedback('light');
+    this.render(0);
+    this.updateAdjacentSources();
+  }
+
+  finishInteraction() {
+    this.isDragging = false;
+    this.dragBaseTranslateX = 0;
+    this.isAnimating = false;
+    this.toggleSwipeClass(false);
+    this.hideAdjacent();
+  }
+
+  render(translateX) {
+    this.currentTranslateX = translateX;
+
+    const activeMedia = this.getActiveMediaElement();
+    if (activeMedia) {
+      activeMedia.style.transform = `translateX(${translateX}px)`;
+    }
+
+    this.renderAdjacent(translateX);
+  }
+
+  renderAdjacent(translateX) {
+    const width = this.getViewportWidth();
+    const direction = this.getNavigationDirection(translateX);
+
+    this.adjacent.previous.style.transform = `translateX(${translateX - width}px)`;
+    this.adjacent.next.style.transform = `translateX(${translateX + width}px)`;
+
+    this.adjacent.previous.classList.toggle(
+      'visible',
+      translateX > 0 &&
+        direction === 'previous' &&
+        this.adjacent.previous.dataset.available === 'true'
+    );
+    this.adjacent.next.classList.toggle(
+      'visible',
+      translateX < 0 && direction === 'next' && this.adjacent.next.dataset.available === 'true'
+    );
+  }
+
+  updateAdjacentSources() {
+    this.updateAdjacentSource('previous', this.viewer.photos[this.viewer.currentIndex - 1]);
+    this.updateAdjacentSource('next', this.viewer.photos[this.viewer.currentIndex + 1]);
+  }
+
+  updateAdjacentSource(direction, photo) {
+    const element = this.adjacent[direction];
+    const source = this.getAdjacentSource(photo);
+
+    element.dataset.available = source ? 'true' : 'false';
+    element.src = source || '';
+    element.classList.remove('visible');
+  }
+
+  getAdjacentSource(photo) {
+    if (!photo || this.viewer.isVideoFile(photo.filename)) {
+      return null;
+    }
+
+    const preloaded = this.viewer.preloadedImages.get(photo.hash_sha256);
+    return preloaded?.src || this.viewer.getMediaUrl(photo);
+  }
+
+  getActiveMediaElement() {
+    if (this.elements.image?.style.display !== 'none') {
+      return this.elements.image;
+    }
+
+    if (this.elements.video?.style.display !== 'none') {
+      return this.elements.video;
+    }
+
+    return this.elements.image || this.elements.video;
+  }
+
+  hideAdjacent() {
+    this.adjacent.previous.classList.remove('visible');
+    this.adjacent.next.classList.remove('visible');
+  }
+
+  toggleSwipeClass(active) {
+    this.elements.image?.classList.toggle('swiping', active);
+    this.elements.video?.classList.toggle('swiping', active);
+  }
+}
 
 class PhotoViewer {
   constructor() {
@@ -47,6 +390,7 @@ class PhotoViewer {
     this.controls = new ViewerControls(this, this.elements);
     this.metadata = new ViewerMetadata(this.elements);
     this.gestureManager = null;
+    this.swipeableViewer = new SwipeableViewer(this);
 
     this.init();
   }
@@ -205,20 +549,11 @@ class PhotoViewer {
     this.gestureManager.on('swipe', (data) => {
       const { direction, velocity } = data;
 
-      // Only allow swipe navigation when not zoomed
-      if (this.controls.isZoomed()) {
-        return;
+      if (direction === 'up') {
+        // Swipe up could toggle info in the future
       }
 
-      if (direction === 'left') {
-        this.showNext();
-        this.triggerHapticFeedback('light');
-      } else if (direction === 'right') {
-        this.showPrevious();
-        this.triggerHapticFeedback('light');
-      } else if (direction === 'up') {
-        // Swipe up could toggle info in the future
-      } else if (direction === 'down') {
+      if (direction === 'down') {
         // Swipe down to close (with threshold)
         if (velocity > 0.5) {
           this.close();
@@ -227,19 +562,32 @@ class PhotoViewer {
       }
     });
 
-    // Pan while zoomed
+    // Pan while zoomed / swipe while unzoomed
     this.gestureManager.on('pan', (data) => {
       const { deltaX, deltaY } = data;
 
-      // Only allow pan when zoomed
       if (this.controls.isZoomed()) {
         this.gestureManager.enablePan();
+
+        const panBoundary = this.controls.isAtPanBoundary();
+        const isHorizontalSwipe = this.gestureManager.gestureAxis === 'horizontal';
+        const isSwipeToPrevious = isHorizontalSwipe && deltaX > 0 && panBoundary.left;
+        const isSwipeToNext = isHorizontalSwipe && deltaX < 0 && panBoundary.right;
+
+        if (isSwipeToPrevious || isSwipeToNext) {
+          if (this.swipeableViewer.startZoomEdgeSwipe(data)) {
+            if (this.elements.image) this.elements.image.classList.remove('gesture-active');
+            return;
+          }
+        }
+
         this.controls.updateTouchPan(deltaX, deltaY);
         // Disable transitions during pan
         if (this.elements.image) this.elements.image.classList.add('gesture-active');
-      } else {
-        this.gestureManager.disablePan();
+        return;
       }
+
+      this.swipeableViewer.handlePan(data);
     });
 
     this.gestureManager.on('panEnd', (data) => {
@@ -247,6 +595,10 @@ class PhotoViewer {
 
       // Re-enable transitions
       if (this.elements.image) this.elements.image.classList.remove('gesture-active');
+
+      if (this.swipeableViewer.handlePanEnd(data)) {
+        return;
+      }
 
       if (this.controls.isZoomed()) {
         this.controls.applyMomentum(velocityX, velocityY);
@@ -340,6 +692,8 @@ class PhotoViewer {
     if (this.elements.sidebar) {
       this.elements.sidebar.classList.remove('show');
     }
+
+    this.swipeableViewer.reset();
 
     // Stop any playing video
     if (this.elements.video) {
@@ -472,12 +826,16 @@ class PhotoViewer {
   showImage(src) {
     if (this.elements.image) {
       this.elements.image.src = src;
+      this.elements.image.style.transform = 'translateX(0)';
       this.elements.image.style.display = 'block';
       this.elements.image.classList.add('loaded');
       if (this.elements.video) {
+        this.elements.video.style.transform = 'translateX(0)';
         this.elements.video.style.display = 'none';
       }
     }
+
+    this.swipeableViewer.reset();
   }
 
   async displayVideo(photo, forceTranscode = false) {
@@ -750,11 +1108,15 @@ class PhotoViewer {
 
     // Now set the new source
     this.elements.video.src = videoUrl;
+    this.elements.video.style.transform = 'translateX(0)';
     this.elements.video.style.display = 'block';
     this.elements.video.classList.add('loaded');
     if (this.elements.image) {
+      this.elements.image.style.transform = 'translateX(0)';
       this.elements.image.style.display = 'none';
     }
+
+    this.swipeableViewer.reset();
 
     // Auto-play if user preference allows
     const settings = api.getViewSettings();
@@ -1132,11 +1494,15 @@ class PhotoViewer {
 
   showError(message) {
     if (this.elements.image) {
+      this.elements.image.style.transform = 'translateX(0)';
       this.elements.image.style.display = 'none';
     }
     if (this.elements.video) {
+      this.elements.video.style.transform = 'translateX(0)';
       this.elements.video.style.display = 'none';
     }
+
+    this.swipeableViewer.reset();
 
     utils.showToast('Error', message, 'error');
   }

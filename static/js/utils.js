@@ -467,47 +467,6 @@ class SimpleState {
   }
 }
 
-// Touch/gesture helpers for mobile
-const touchHandler = {
-  startX: 0,
-  startY: 0,
-
-  handleTouchStart(e) {
-    this.startX = e.touches[0].clientX;
-    this.startY = e.touches[0].clientY;
-  },
-
-  handleTouchEnd(e, onSwipeLeft, onSwipeRight, onSwipeUp, onSwipeDown) {
-    if (!this.startX || !this.startY) return;
-
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-
-    const diffX = this.startX - endX;
-    const diffY = this.startY - endY;
-
-    // Determine if it's more horizontal or vertical
-    if (Math.abs(diffX) > Math.abs(diffY)) {
-      // Horizontal swipe
-      if (Math.abs(diffX) > 50) {
-        // Minimum swipe distance
-        if (diffX > 0 && onSwipeLeft) onSwipeLeft();
-        else if (diffX < 0 && onSwipeRight) onSwipeRight();
-      }
-    } else {
-      // Vertical swipe
-      if (Math.abs(diffY) > 50) {
-        // Minimum swipe distance
-        if (diffY > 0 && onSwipeUp) onSwipeUp();
-        else if (diffY < 0 && onSwipeDown) onSwipeDown();
-      }
-    }
-
-    this.startX = 0;
-    this.startY = 0;
-  },
-};
-
 // Performance helpers
 const performanceUtils = {
   mark: (name) => {
@@ -557,6 +516,5 @@ window.utils = {
   storage,
   videoCodecSupport,
   SimpleState,
-  touchHandler,
   performance: performanceUtils,
 };

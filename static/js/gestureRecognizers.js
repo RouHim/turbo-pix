@@ -43,13 +43,13 @@ class SwipeRecognizer {
     const deltaY = touch.currentY - touch.startY;
     const absDeltaX = Math.abs(deltaX);
     const absDeltaY = Math.abs(deltaY);
-    const duration = touch.lastTime - touch.startTime;
+    const duration = (touch.lastTime || touch.startTime) - touch.startTime;
+    const velocityX = touch.velocityX || 0;
+    const velocityY = touch.velocityY || 0;
 
     if (duration > this.maxDuration) return null;
 
-    const velocity = Math.sqrt(
-      touch.velocityX * touch.velocityX + touch.velocityY * touch.velocityY
-    );
+    const velocity = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
 
     // Determine primary direction
     if (absDeltaX > absDeltaY) {
@@ -57,14 +57,14 @@ class SwipeRecognizer {
       if (!allowHorizontal) return null;
 
       const threshold = window.innerWidth * 0.2;
-      if (absDeltaX > threshold || Math.abs(touch.velocityX) > this.velocityThreshold) {
+      if (absDeltaX > threshold || Math.abs(velocityX) > this.velocityThreshold) {
         return {
           type: 'swipe',
           confidence: Math.min(velocity / 2, 1.0),
           data: {
             direction: deltaX > 0 ? 'right' : 'left',
             distance: absDeltaX,
-            velocity: Math.abs(touch.velocityX),
+            velocity: Math.abs(velocityX),
           },
         };
       }
@@ -73,14 +73,14 @@ class SwipeRecognizer {
       if (!allowVertical) return null;
 
       const threshold = window.innerHeight * 0.2;
-      if (absDeltaY > threshold || Math.abs(touch.velocityY) > this.velocityThreshold) {
+      if (absDeltaY > threshold || Math.abs(velocityY) > this.velocityThreshold) {
         return {
           type: 'swipe',
           confidence: Math.min(velocity / 2, 1.0),
           data: {
             direction: deltaY > 0 ? 'down' : 'up',
             distance: absDeltaY,
-            velocity: Math.abs(touch.velocityY),
+            velocity: Math.abs(velocityY),
           },
         };
       }
@@ -106,14 +106,15 @@ class DoubleTapRecognizer {
     const deltaX = touch.currentX - touch.startX;
     const deltaY = touch.currentY - touch.startY;
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    const duration = touch.lastTime - touch.startTime;
+    const timestamp = touch.lastTime || touch.startTime;
+    const duration = timestamp - touch.startTime;
 
     // Must be a tap (short duration, small movement)
     if (distance > this.maxTapDistance || duration > this.maxTapDuration) {
       return null;
     }
 
-    const now = touch.lastTime;
+    const now = timestamp;
     const timeSinceLastTap = now - this.lastTapTime;
     const distanceFromLastTap = Math.sqrt(
       Math.pow(touch.currentX - this.lastTapX, 2) + Math.pow(touch.currentY - this.lastTapY, 2)
@@ -178,37 +179,8 @@ class PanRecognizer {
       data: {
         deltaX,
         deltaY,
-        velocityX: touch.velocityX,
-        velocityY: touch.velocityY,
-      },
-    };
-  }
-}
-
-class LongPressRecognizer {
-  constructor() {
-    this.minDuration = 500; // ms
-    this.maxMovement = 10; // px
-  }
-
-  recognize(touch, isStillActive = true) {
-    if (!touch || !isStillActive) return null;
-
-    const deltaX = touch.currentX - touch.startX;
-    const deltaY = touch.currentY - touch.startY;
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    const duration = Date.now() - touch.startTime;
-
-    if (distance > this.maxMovement) return null;
-    if (duration < this.minDuration) return null;
-
-    return {
-      type: 'longPress',
-      confidence: 1.0,
-      data: {
-        x: touch.currentX,
-        y: touch.currentY,
-        duration,
+        velocityX: touch.velocityX || 0,
+        velocityY: touch.velocityY || 0,
       },
     };
   }
@@ -220,5 +192,4 @@ window.GestureRecognizers = {
   SwipeRecognizer,
   DoubleTapRecognizer,
   PanRecognizer,
-  LongPressRecognizer,
 };

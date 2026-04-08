@@ -31,25 +31,29 @@ test.describe('Viewer Swipe Gestures', () => {
   });
 
   test('swipe right navigates to previous photo', async ({ page }) => {
-    // GIVEN: Viewer is open on the second photo
+    // GIVEN: Viewer is open on the first photo, then navigated to the second
     const photos = await TestHelpers.getPhotoCards(page);
     expect(photos.length).toBeGreaterThan(1);
 
-    const secondHash = await photos[1].getAttribute('data-photo-id');
-    await photos[1].scrollIntoViewIfNeeded();
-    await photos[1].click({ force: true });
+    const firstHash = await photos[0].getAttribute('data-photo-id');
+    await page.locator('.photo-card').first().scrollIntoViewIfNeeded();
+    await page.locator('.photo-card').first().click();
     await TestHelpers.verifyViewerOpen(page);
 
-    const currentHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(currentHash).toBe(secondHash);
+    // Navigate to second photo via swipe left
+    await TestHelpers.swipeLeft(page);
+    await page.waitForTimeout(500);
+
+    const secondHash = await TestHelpers.getCurrentPhotoHash(page);
+    expect(secondHash).not.toBe(firstHash);
 
     // WHEN: User swipes right
     await TestHelpers.swipeRight(page);
     await page.waitForTimeout(500);
 
-    // THEN: Viewer shows the previous photo
-    const newHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(newHash).not.toBe(secondHash);
+    // THEN: Viewer shows the previous (first) photo again
+    const backHash = await TestHelpers.getCurrentPhotoHash(page);
+    expect(backHash).toBe(firstHash);
   });
 
   test('swipe down past threshold dismisses viewer', async ({ page }) => {

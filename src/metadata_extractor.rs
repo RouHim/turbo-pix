@@ -413,8 +413,10 @@ impl MetadataExtractor {
     ) {
         if metadata.taken_at.is_none() {
             if let Some(fs_metadata) = file_metadata {
-                if let Ok(modified) = fs_metadata.modified() {
-                    metadata.taken_at = Some(modified.into());
+                if let Ok(created_or_modified) =
+                    fs_metadata.created().or_else(|_| fs_metadata.modified())
+                {
+                    metadata.taken_at = Some(created_or_modified.into());
                 }
             }
         }
@@ -884,6 +886,34 @@ mod tests {
 
         assert!(result.is_some(), "1990-01-01 should be accepted (boundary)");
         assert_eq!(result.unwrap().year(), 1990);
+    }
+
+    #[test]
+    fn test_fallback_prefers_creation_over_modification() {
+        let source = std::fs::read_to_string(Path::new("src/metadata_extractor.rs"))
+            .expect("should read metadata extractor source");
+        let fallback_function = source
+            .split("fn apply_file_creation_fallback")
+            .nth(1)
+            .and_then(|rest| rest.split("pub fn parse_exif_datetime").next())
+            .expect("should isolate apply_file_creation_fallback source");
+
+        assert!(
+            fallback_function.contains("fs_metadata.created().or_else(|_| fs_metadata.modified())"),
+            "apply_file_creation_fallback should prefer created() before modified()"
+        );
+    }
+
+    #[test]
+    fn test_fallback_graceful_when_no_birthtime() {
+        let mut metadata = PhotoMetadata::default();
+
+        MetadataExtractor::apply_file_creation_fallback(&mut metadata, None);
+
+        assert!(
+            metadata.taken_at.is_none(),
+            "apply_file_creation_fallback should leave taken_at unset when file metadata is unavailable"
+        );
     }
 
     #[test]

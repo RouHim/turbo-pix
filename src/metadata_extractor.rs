@@ -332,12 +332,7 @@ impl MetadataExtractor {
                             metadata.bitrate = bitrate_str.parse::<i32>().ok();
                         }
 
-                        // Extract creation_time from format tags
-                        if let Some(creation_time) =
-                            parsed["format"]["tags"]["creation_time"].as_str()
-                        {
-                            metadata.taken_at = Self::parse_video_creation_time(creation_time);
-                        }
+                        metadata.taken_at = Self::extract_taken_at_from_ffprobe_json(&parsed);
 
                         // Extract video codec and frame rate from streams
                         if let Some(streams) = parsed["streams"].as_array() {
@@ -390,6 +385,26 @@ impl MetadataExtractor {
                 debug!("  while extracting metadata for: {}", path.display());
             }
         }
+    }
+
+    fn extract_taken_at_from_ffprobe_json(parsed: &serde_json::Value) -> Option<DateTime<Utc>> {
+        parsed["format"]["tags"]["creation_time"]
+            .as_str()
+            .and_then(Self::parse_video_creation_time)
+            .or_else(|| {
+                parsed["format"]["tags"]["com.apple.quicktime.creationdate"]
+                    .as_str()
+                    .and_then(Self::parse_video_creation_time)
+            })
+            .or_else(|| {
+                parsed["streams"].as_array().and_then(|streams| {
+                    streams.iter().find_map(|stream| {
+                        stream["tags"]["creation_time"]
+                            .as_str()
+                            .and_then(Self::parse_video_creation_time)
+                    })
+                })
+            })
     }
 
     fn apply_file_creation_fallback(
@@ -691,6 +706,64 @@ mod tests {
     }
 
     #[test]
+    fn test_video_stream_level_creation_time() {
+        // GIVEN: ffprobe JSON with creation_time only in stream tags
+        let json_str = r#"{
+            "format": {
+                "tags": {}
+            },
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "tags": {
+                        "creation_time": "2022-03-20T08:00:00.000000Z"
+                    }
+                }
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should find the stream-level creation_time
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from stream-level creation_time"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2022);
+        assert_eq!(dt.month(), 3);
+        assert_eq!(dt.day(), 20);
+    }
+
+    #[test]
+    fn test_video_quicktime_creation_date() {
+        // GIVEN: ffprobe JSON with QuickTime-style creation date in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "com.apple.quicktime.creationdate": "2023-08-10T15:00:00+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse QuickTime tag
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from QuickTime creation date tag"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2023);
+        assert_eq!(dt.hour(), 13);
+    }
+
+    #[test]
     fn test_video_metadata_extraction() {
         // GIVEN: MP4 video file
         let path = Path::new("test-data/test_video.mp4");
@@ -706,10 +779,10 @@ mod tests {
         assert!(metadata.width.is_some(), "Should extract video width");
         assert!(metadata.height.is_some(), "Should extract video height");
 
-        // THEN: Should have taken_at from file modification fallback
+        // THEN: Should have taken_at from file date fallback
         assert!(
             metadata.taken_at.is_some(),
-            "Should have taken_at from file modification date fallback"
+            "Should have taken_at from file date fallback"
         );
     }
 

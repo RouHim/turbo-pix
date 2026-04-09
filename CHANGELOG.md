@@ -1,3 +1,10 @@
+## [2.28.2](https://github.com/RouHim/turbo-pix/compare/2.28.1...2.28.2) (2026-04-09)
+
+
+### Bug Fixes
+
+* **metadata:** add format.tags.date* fallback to video date extraction ([bf55485](https://github.com/RouHim/turbo-pix/commit/bf55485cfdba954fb3ff7bd4214184c7a7adeb67))
+
 ## [2.28.1](https://github.com/RouHim/turbo-pix/compare/2.28.0...2.28.1) (2026-04-09)
 
 

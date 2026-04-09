@@ -1,3 +1,26 @@
+# [2.27.0](https://github.com/RouHim/turbo-pix/compare/2.26.0...2.27.0) (2026-04-09)
+
+
+### Bug Fixes
+
+* add @eslint/js as explicit dependency for eslint 10 ([3982efa](https://github.com/RouHim/turbo-pix/commit/3982efa26ae3344a7d425fce902c71026330483c))
+* bump stylelint to 17 and stylelint-config-standard to 40, regenerate lockfile ([497976c](https://github.com/RouHim/turbo-pix/commit/497976c45d43bb286d4c837c68d852051ae13364)), closes [#29](https://github.com/RouHim/turbo-pix/issues/29)
+* correct GitHub Copilot model string format for nighthawk ([cd015f2](https://github.com/RouHim/turbo-pix/commit/cd015f2f46f0a2bb37154826dd70ad7c66dc9752))
+* migrate geo_location to ureq v3 API ([fba422e](https://github.com/RouHim/turbo-pix/commit/fba422ec5543a3994b5191d13dd7cec241b6b94a))
+* update CI Node.js version to 22 for eslint 10 compatibility ([a91cb1e](https://github.com/RouHim/turbo-pix/commit/a91cb1ea7fc3d4e48e3d0dbfdf8d4de7f9dcdee7))
+* update hash formatting for sha2 0.11 compatibility ([d9a6369](https://github.com/RouHim/turbo-pix/commit/d9a63696193b9a23a8a822ee44a6ea50af28b120))
+
+
+### Features
+
+* add nighthawk config ([ea21aac](https://github.com/RouHim/turbo-pix/commit/ea21aacfa640205db6108e22bce6bcb7a9242b3d))
+* add nighthawk config ([8d17a2b](https://github.com/RouHim/turbo-pix/commit/8d17a2b399da459b96bc5fb9e0e80ba2deb15d0c))
+
+
+### Reverts
+
+* libsqlite3-sys 0.37 incompatible with sqlx 0.8 (requires 0.28/0.30) ([c5d9ca5](https://github.com/RouHim/turbo-pix/commit/c5d9ca5de00b1db42678df16d3a06246609635dd))
+
 # [2.26.0](https://github.com/RouHim/turbo-pix/compare/2.25.1...2.26.0) (2026-04-09)
 
 

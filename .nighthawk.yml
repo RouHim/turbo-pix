@@ -1,4 +1,4 @@
-model: github-copilot/gpt-5.4-mini
+model: github_copilot::openai/gpt-5.4-mini
 budget:
   max_time_minutes: 60
 commands:

@@ -114,6 +114,8 @@ npm run test:e2e:report   # View test report
 
 **sqlite-vec:** Uses the vlasky/sqlite-vec community fork (git dep, not crates.io). Drop-in replacement API — same `sqlite3_vec_init`, `vec_distance_cosine`, `vec0` virtual table. Fork includes native musl fix, so no build-time sed patches needed in the Containerfile.
 
+**SQLite native dep constraint:** `Cargo.toml` cannot bump `libsqlite3-sys` independently while `sqlx = 0.8.x` is in use — `cargo tree -i libsqlite3-sys` resolves both TurboPix and `sqlx-sqlite` through the same `0.30.x` native `sqlite3` link target, and `0.37.x` causes a links conflict.
+
 **Glassmorphism visibility:** `backdrop-filter` on CSS Grid children has no visible blur effect — the element must be `position: fixed` overlaying scrollable content for the blur to actually show. Header and sidebar need fixed positioning with content scrolling behind them.
 
 **InfiniteScroll layout dependency:** `infiniteScroll.js:9` binds to `.main-content` as the scroll container (`scrollTop`, `scrollHeight`, `clientHeight`). Any layout refactor must keep `.main-content` as a scrollable element with `overflow-y: auto` — removing this breaks infinite scroll silently.

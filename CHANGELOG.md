@@ -1,3 +1,12 @@
+## [2.28.1](https://github.com/RouHim/turbo-pix/compare/2.28.0...2.28.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* **metadata:** add stream-level creation_time extraction + epoch guard ([32b0650](https://github.com/RouHim/turbo-pix/commit/32b0650e81e49f3f7992e4747679c522fd3e12f3))
+* **metadata:** expand video creation time parser format coverage ([ed51545](https://github.com/RouHim/turbo-pix/commit/ed515451cfc69d1d58f8dfe971d5d5e857287f6a))
+* **metadata:** use file creation date fallback instead of modification date ([9d791a9](https://github.com/RouHim/turbo-pix/commit/9d791a9f0d3a9dcc9b7cfb1f229c2ddac36502e5))
+
 # [2.28.0](https://github.com/RouHim/turbo-pix/compare/2.27.0...2.28.0) (2026-04-09)
 
 

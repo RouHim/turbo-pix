@@ -1,0 +1,11 @@
+model: gpt-5.4-mini
+budget:
+  max_time_minutes: 60
+commands:
+  test: cargo test
+  lint: cargo clippy --message-format=json
+  build: cargo build
+  audit: cargo audit --quiet --json
+git:
+  branch_prefix: nighthawk/
+  pr_tool: gh

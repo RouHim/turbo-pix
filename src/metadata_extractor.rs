@@ -405,6 +405,21 @@ impl MetadataExtractor {
                     })
                 })
             })
+            .or_else(|| {
+                // "date" and "date-{lang}" are generic date tags used by some containers (e.g., MOV)
+                parsed["format"]["tags"].as_object().and_then(|tags| {
+                    tags.get("date")
+                        .and_then(|v| v.as_str())
+                        .and_then(Self::parse_video_creation_time)
+                        .or_else(|| {
+                            tags.iter()
+                                .filter(|(k, _)| k.starts_with("date"))
+                                .find_map(|(_, v)| {
+                                    v.as_str().and_then(Self::parse_video_creation_time)
+                                })
+                        })
+                })
+            })
     }
 
     fn apply_file_creation_fallback(
@@ -763,6 +778,108 @@ mod tests {
         let dt = taken_at.unwrap();
         assert_eq!(dt.year(), 2023);
         assert_eq!(dt.hour(), 13);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_only() {
+        // GIVEN: ffprobe JSON with date only in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse date tag
+        assert!(taken_at.is_some(), "Should extract taken_at from date tag");
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2011);
+        assert_eq!(dt.month(), 8);
+        assert_eq!(dt.day(), 6);
+        assert_eq!(dt.hour(), 20);
+        assert_eq!(dt.minute(), 32);
+        assert_eq!(dt.second(), 38);
+    }
+
+    #[test]
+    fn test_video_creation_time_priority_over_date() {
+        // GIVEN: ffprobe JSON with creation_time and date tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "creation_time": "2023-01-01T00:00:00.000000Z",
+                    "date": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should prefer creation_time over date tag
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from creation_time"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2023);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_localized_variant() {
+        // GIVEN: ffprobe JSON with localized date tag in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date-deu": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse localized date tag variant
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from localized date tag"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2011);
+        assert_eq!(dt.month(), 8);
+        assert_eq!(dt.day(), 6);
+        assert_eq!(dt.hour(), 20);
+        assert_eq!(dt.minute(), 32);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_unparseable() {
+        // GIVEN: ffprobe JSON with an invalid date tag
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date": "not-a-date"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should not parse invalid date values
+        assert!(taken_at.is_none(), "Should ignore unparseable date tag");
     }
 
     #[test]

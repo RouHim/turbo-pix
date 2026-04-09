@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
 use exif::{In, Tag, Value};
 use log::debug;
 
@@ -425,18 +425,47 @@ impl MetadataExtractor {
     }
 
     fn parse_video_creation_time(creation_time: &str) -> Option<DateTime<Utc>> {
-        creation_time.parse::<DateTime<Utc>>().ok().or_else(|| {
-            NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.fZ")
-                .ok()
-                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
-        })
+        let parsed = creation_time
+            .parse::<DateTime<Utc>>()
+            .ok()
+            .or_else(|| {
+                DateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.f%z")
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            })
+            .or_else(|| {
+                DateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%z")
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })?;
+
+        if parsed.year() < 1990 {
+            return None;
+        }
+
+        Some(parsed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_ffprobe_is_installed() {
@@ -731,10 +760,76 @@ mod tests {
         );
         assert_eq!(result.unwrap().month(), 6);
 
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00-0400");
+        assert!(
+            result.is_some(),
+            "Should parse timezone offset without colon"
+        );
+        assert_eq!(result.unwrap().year(), 2024);
+        assert_eq!(result.unwrap().hour(), 14);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00-04:00");
+        assert!(result.is_some(), "Should parse timezone offset with colon");
+        assert_eq!(result.unwrap().hour(), 14);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15 10:30:00");
+        assert!(result.is_some(), "Should parse space-separated format");
+        assert_eq!(result.unwrap().year(), 2024);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00");
+        assert!(result.is_some(), "Should parse naive ISO without Z");
+        assert_eq!(result.unwrap().hour(), 10);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00.000+0200");
+        assert!(result.is_some(), "Should parse QuickTime Apple format");
+        assert_eq!(result.unwrap().hour(), 8);
+
         // GIVEN: Invalid string
         let invalid = "not-a-date";
 
         // WHEN/THEN: Should return None
         assert!(MetadataExtractor::parse_video_creation_time(invalid).is_none());
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_rejects_epoch_zero() {
+        let result = MetadataExtractor::parse_video_creation_time("1970-01-01T00:00:00.000000Z");
+
+        assert!(result.is_none(), "Epoch-zero should be filtered out");
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_rejects_pre_1990() {
+        let result = MetadataExtractor::parse_video_creation_time("1989-12-31T23:59:59Z");
+
+        assert!(result.is_none(), "Pre-1990 dates should be filtered out");
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_accepts_1990() {
+        let result = MetadataExtractor::parse_video_creation_time("1990-01-01T00:00:00Z");
+
+        assert!(result.is_some(), "1990-01-01 should be accepted (boundary)");
+        assert_eq!(result.unwrap().year(), 1990);
+    }
+
+    #[test]
+    fn test_video_with_creation_time_fixture() {
+        let path = Path::new("test-data/test_video_with_date.mp4");
+        if !path.exists() {
+            return;
+        }
+        let file_meta = std::fs::metadata(path).ok();
+
+        let metadata = MetadataExtractor::extract_with_metadata(path, file_meta.as_ref());
+
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should extract taken_at from embedded creation_time"
+        );
+        let taken_at = metadata.taken_at.unwrap();
+        assert_eq!(taken_at.year(), 2023, "Year should be 2023");
+        assert_eq!(taken_at.month(), 6, "Month should be June");
+        assert_eq!(taken_at.day(), 15, "Day should be 15");
     }
 }

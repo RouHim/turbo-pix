@@ -1,3 +1,15 @@
+## [2.28.3](https://github.com/RouHim/turbo-pix/compare/2.28.2...2.28.3) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ci:** use Alpine ffmpeg in container build ([9967cf1](https://github.com/RouHim/turbo-pix/commit/9967cf1f71f9ea04a8747c9a57cebe81b61cca14))
+
+
+### Reverts
+
+* fix pipe ([5fc4053](https://github.com/RouHim/turbo-pix/commit/5fc4053453e4e9328a28d96a04e35fef5cd05e0a))
+
 ## [2.28.1](https://github.com/RouHim/turbo-pix/compare/2.28.0...2.28.1) (2026-04-09)
 
 

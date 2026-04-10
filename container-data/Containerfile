@@ -1,7 +1,7 @@
 # # # # # # # # # # # # # # # # # # # #
 # FFmpeg Static Binaries
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-FROM mwader/static-ffmpeg:7.1 AS ffmpeg
+FROM mwader/static-ffmpeg:8.1 AS ffmpeg
 
 # # # # # # # # # # # # # # # # # # # #
 # Application Builder

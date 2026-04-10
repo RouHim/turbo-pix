@@ -1,3 +1,10 @@
+## [2.28.4](https://github.com/RouHim/turbo-pix/compare/2.28.3...2.28.4) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ci:** replace flaky johnvansickle.com ffmpeg download with mwader/static-ffmpeg ([0ad777f](https://github.com/RouHim/turbo-pix/commit/0ad777fc3f01dcc2cc4d0a923454d530bd78819f))
+
 ## [2.28.3](https://github.com/RouHim/turbo-pix/compare/2.28.2...2.28.3) (2026-04-10)
 
 

@@ -1402,38 +1402,29 @@ mod tests {
         assert_eq!(resolved_values, [0, 0, 0]);
     }
 
+    fn make_geo_test_photos() -> (Photo, Photo, Photo) {
+        let unresolved = create_test_photo_with_metadata(
+            "needs-geo.jpg",
+            "needs-geo-hash",
+            json!({"location":{"latitude":52.52,"longitude":13.405}}),
+        );
+        let resolved = create_test_photo_with_metadata(
+            "resolved-geo.jpg",
+            "resolved-geo-hash",
+            json!({"location":{"latitude":48.137,"longitude":11.575}}),
+        );
+        let no_gps = create_test_photo_with_metadata(
+            "no-gps.jpg",
+            "no-gps-hash",
+            json!({"camera":{"make":"Canon"}}),
+        );
+        (unresolved, resolved, no_gps)
+    }
+
     #[tokio::test]
     async fn test_get_photos_needing_geo_resolution() {
         let pool = create_test_db_pool().await.unwrap();
-        let unresolved_photo = create_test_photo_with_metadata(
-            "needs-geo.jpg",
-            "needs-geo-hash",
-            json!({
-                "location": {
-                    "latitude": 52.52,
-                    "longitude": 13.405
-                }
-            }),
-        );
-        let resolved_photo = create_test_photo_with_metadata(
-            "resolved-geo.jpg",
-            "resolved-geo-hash",
-            json!({
-                "location": {
-                    "latitude": 48.137,
-                    "longitude": 11.575
-                }
-            }),
-        );
-        let no_gps_photo = create_test_photo_with_metadata(
-            "no-gps.jpg",
-            "no-gps-hash",
-            json!({
-                "camera": {
-                    "make": "Canon"
-                }
-            }),
-        );
+        let (unresolved_photo, resolved_photo, no_gps_photo) = make_geo_test_photos();
 
         unresolved_photo.create(&pool).await.unwrap();
         resolved_photo.create(&pool).await.unwrap();

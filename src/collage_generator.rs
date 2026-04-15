@@ -727,32 +727,37 @@ fn score_template(template: LayoutTemplate, photo_infos: &[PhotoInfo]) -> f32 {
         .filter(|i| i.orientation == Orientation::Portrait)
         .count();
 
-    let orientation_score = match template {
-        LayoutTemplate::TwoStacked | LayoutTemplate::ThreePyramid => {
-            // Favor these for portrait photos
-            if portrait_count > landscape_count {
-                1.0
-            } else {
-                0.5
+    // Extract orientation scoring into a small helper to reduce function complexity
+    fn compute_orientation_score(template: LayoutTemplate, landscape_count: usize, portrait_count: usize, total_photos: usize) -> f32 {
+        match template {
+            LayoutTemplate::TwoStacked | LayoutTemplate::ThreePyramid => {
+                // Favor these for portrait photos
+                if portrait_count > landscape_count {
+                    1.0
+                } else {
+                    0.5
+                }
             }
-        }
-        LayoutTemplate::ThreeLinear => {
-            // Favor for all landscape
-            if landscape_count == photo_infos.len() {
-                1.0
-            } else {
-                0.6
+            LayoutTemplate::ThreeLinear => {
+                // Favor for all landscape
+                if landscape_count == total_photos {
+                    1.0
+                } else {
+                    0.6
+                }
             }
-        }
-        LayoutTemplate::FiveMosaic | LayoutTemplate::SixMosaic => {
-            if landscape_count >= portrait_count {
-                0.9
-            } else {
-                0.6
+            LayoutTemplate::FiveMosaic | LayoutTemplate::SixMosaic => {
+                if landscape_count >= portrait_count {
+                    0.9
+                } else {
+                    0.6
+                }
             }
+            _ => 0.7, // Default moderate score
         }
-        _ => 0.7, // Default moderate score
-    };
+    }
+
+    let orientation_score = compute_orientation_score(template, landscape_count, portrait_count, photo_infos.len());
     total_score += orientation_score * 0.3;
 
     // Space utilization (30% weight)

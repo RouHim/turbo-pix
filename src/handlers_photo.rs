@@ -674,40 +674,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_endpoint() {
-        let db_pool = create_in_memory_pool()
-            .await
-            .expect("Failed to create test database");
+        let db_pool = create_in_memory_pool().await.expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
 
-        // Create the update request
         let update_req = MetadataUpdateRequest {
             taken_at: Some("2024-03-15T14:30:00Z".to_string()),
             latitude: Some(40.7128),
             longitude: Some(-74.0060),
         };
 
-        // Call the handler
         let result = update_photo_metadata(photo_hash.clone(), update_req, db_pool.clone()).await;
-
-        // Verify the result is ok
         assert!(result.is_ok(), "Handler should succeed");
 
-        // Verify the photo was updated in the database
         let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
             .await
             .expect("Failed to query database")
             .expect("Photo should exist");
 
-        // Verify the date was updated
         assert!(updated_photo.taken_at.is_some());
         let taken_at = updated_photo.taken_at.unwrap();
         assert_eq!(taken_at.year(), 2024);
         assert_eq!(taken_at.month(), 3);
         assert_eq!(taken_at.day(), 15);
 
-        // Verify GPS coordinates were updated
         assert_eq!(
             updated_photo
                 .metadata

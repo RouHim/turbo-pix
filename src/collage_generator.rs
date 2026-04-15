@@ -228,10 +228,11 @@ fn build_collage_signature(date: &str, photo_hashes: &[String]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(date.as_bytes());
     hasher.update(b"|");
-    for hash in hashes {
-        hasher.update(hash.as_bytes());
-        hasher.update(b",");
-    }
+
+    // Concatenate all hashes with commas in a single buffer (preserve trailing comma)
+    let mut concatenated = hashes.join(",");
+    concatenated.push(',');
+    hasher.update(concatenated.as_bytes());
 
     hasher
         .finalize()

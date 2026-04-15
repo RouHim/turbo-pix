@@ -1870,14 +1870,17 @@ mod tests {
         fs::create_dir_all(&photos_dir).unwrap();
         fs::create_dir_all(&staging_dir).unwrap();
 
-        let base_time = Utc::now(); let mut first_chunk_hashes = Vec::new();
+        let base_time = Utc::now();
+        let mut first_chunk_hashes = Vec::new();
         for i in 0..10 {
             let photo_path = photos_dir.join(format!("photo_{}.jpg", i));
             write_test_image(&photo_path);
             let taken_at = base_time + chrono::Duration::seconds(i as i64);
             let hash_seed = i as u64 + 1;
             insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
-            if i < 6 { first_chunk_hashes.push(format!("{:064x}", hash_seed)); }
+            if i < 6 {
+                first_chunk_hashes.push(format!("{:064x}", hash_seed));
+            }
         }
 
         let date_str = base_time.format("%Y-%m-%d").to_string();

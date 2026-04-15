@@ -1210,16 +1210,6 @@ mod tests {
             create_test_photo("test3.jpg".to_string(), "hash3".to_string()),
         ];
 
-        // Helper to get current count
-        let get_count = || async {
-            let row = sqlx::query("SELECT COUNT(*) as count FROM photos")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            let c: i64 = row.get("count");
-            c
-        };
-
         // Test 1: Successful transaction - all photos committed
         let mut tx = pool.begin().await.unwrap();
         for photo in &photos {
@@ -1228,7 +1218,11 @@ mod tests {
         tx.commit().await.unwrap();
 
         // Verify all photos were committed
-        let count = get_count().await;
+        let count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get("count");
         assert_eq!(count, 3, "All photos should be visible after commit");
 
         // Test 2: Failed transaction - no photos should be added
@@ -1251,7 +1245,11 @@ mod tests {
         assert!(result.is_err());
 
         // Verify count is still 3 (rollback worked)
-        let final_count = get_count().await;
+        let final_count = sqlx::query("SELECT COUNT(*) as count FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let final_count: i64 = final_count.get("count");
         assert_eq!(
             final_count, 3,
             "Count should remain 3 after failed transaction"

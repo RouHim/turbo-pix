@@ -1508,12 +1508,18 @@ async fn index_collage_file(
     // Get file metadata
     let metadata = fs::metadata(file_path)?;
     let size = metadata.len();
-    let modified = metadata.modified().ok().map(|t| {
-        let duration = t
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::from_secs(0));
-        DateTime::from_timestamp(duration.as_secs() as i64, 0).unwrap_or_else(Utc::now)
-    });
+
+    // Helper to convert SystemTime -> Option<DateTime<Utc>>
+    fn system_time_to_datetime_opt(opt: Option<std::time::SystemTime>) -> Option<DateTime<Utc>> {
+        opt.map(|t| {
+            let duration = t
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0));
+            DateTime::from_timestamp(duration.as_secs() as i64, 0).unwrap_or_else(Utc::now)
+        })
+    }
+
+    let modified = system_time_to_datetime_opt(metadata.modified().ok());
 
     // Create PhotoFile
     let photo_file = PhotoFile {

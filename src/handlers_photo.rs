@@ -35,37 +35,48 @@ pub struct PhotosResponse {
     pub has_prev: bool,
 }
 
-pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(50).min(100);
-    let offset = (page - 1) * limit;
-
-    // If a query string or year/month filter is provided, use search instead of list
-    let result = if query.q.is_some() || query.year.is_some() || query.month.is_some() {
+async fn fetch_photos(
+    db_pool: &DbPool,
+    query: &PhotoQuery,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Photo>, i64), String> {
+    if query.q.is_some() || query.year.is_some() || query.month.is_some() {
         let search_query = SearchQuery {
             q: query.q.clone(),
             year: query.year,
             month: query.month,
         };
         Photo::search_photos(
-            &db_pool,
+            db_pool,
             &search_query,
-            limit as i64,
-            offset as i64,
+            limit,
+            offset,
             query.sort.as_deref(),
             query.order.as_deref(),
         )
         .await
+        .map_err(|e| format!("{}", e))
     } else {
         Photo::list_with_pagination(
-            &db_pool,
-            limit as i64,
-            offset as i64,
+            db_pool,
+            limit,
+            offset,
             query.sort.as_deref(),
             query.order.as_deref(),
         )
         .await
-    };
+        .map_err(|e| format!("{}", e))
+    }
+}
+
+pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    let page = query.page.unwrap_or(1);
+    let limit = query.limit.unwrap_or(50).min(100);
+    let offset = (page - 1) * limit;
+
+    // Dispatch to helper that selects search vs list
+    let result = fetch_photos(&db_pool, &query, limit as i64, offset as i64).await;
 
     match result {
         Ok((photos, total)) => {

@@ -828,24 +828,44 @@ fn stroke_rect(canvas: &mut RgbaImage, rect: &Rect, thickness: u32, color: Rgba<
             break;
         }
 
-        // Helper to set or blend a pixel at (px, py)
-        let set_or_blend = |px: u32, py: u32| {
-            let pixel = canvas.get_pixel_mut(px, py);
-            if color[3] == 255 {
-                *pixel = color;
-            } else {
-                blend_pixel(pixel, &color);
-            }
-        };
-
         for x in left..=right {
-            set_or_blend(x, top);
-            set_or_blend(x, bottom);
+            {
+                let top_pixel = canvas.get_pixel_mut(x, top);
+                if color[3] == 255 {
+                    *top_pixel = color;
+                } else {
+                    blend_pixel(top_pixel, &color);
+                }
+            }
+
+            {
+                let bottom_pixel = canvas.get_pixel_mut(x, bottom);
+                if color[3] == 255 {
+                    *bottom_pixel = color;
+                } else {
+                    blend_pixel(bottom_pixel, &color);
+                }
+            }
         }
 
         for y in top..=bottom {
-            set_or_blend(left, y);
-            set_or_blend(right, y);
+            {
+                let left_pixel = canvas.get_pixel_mut(left, y);
+                if color[3] == 255 {
+                    *left_pixel = color;
+                } else {
+                    blend_pixel(left_pixel, &color);
+                }
+            }
+
+            {
+                let right_pixel = canvas.get_pixel_mut(right, y);
+                if color[3] == 255 {
+                    *right_pixel = color;
+                } else {
+                    blend_pixel(right_pixel, &color);
+                }
+            }
         }
     }
 }

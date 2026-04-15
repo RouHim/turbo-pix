@@ -399,21 +399,6 @@ fn generate_template_cells(
     start_x: u32,
     start_y: u32,
 ) -> Vec<Rect> {
-    // Small helper extracted for the common two side-by-side layout to reduce
-    // duplication and simplify the match arm.
-    let two_side_by_side = |content_width: u32, content_height: u32, start_x: u32, start_y: u32| -> Vec<Rect> {
-        let cell_width = (content_width.saturating_sub(COLLAGE_GUTTER)) / 2;
-        vec![
-            Rect::new(start_x, start_y, cell_width, content_height),
-            Rect::new(
-                start_x + cell_width + COLLAGE_GUTTER,
-                start_y,
-                cell_width,
-                content_height,
-            ),
-        ]
-    };
-
     match template {
         LayoutTemplate::Single => {
             vec![Rect::new(start_x, start_y, content_width, content_height)]

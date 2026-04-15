@@ -116,38 +116,45 @@ pub async fn delete_orphaned_photos(
     }
     let deleted_paths: Vec<String> = select_query.fetch_all(pool).await?;
 
-    // Delete orphaned photos
-    let delete_sql = format!(
-        "DELETE FROM photos WHERE file_path NOT IN ({})",
-        placeholders
-    );
-    let mut delete_query = sqlx::query(&delete_sql);
-    for path in existing_paths {
-        delete_query = delete_query.bind(path);
+    // Helper to delete rows from a table where a column is NOT IN the provided paths
+    async fn delete_not_in(
+        pool: &DbPool,
+        table: &str,
+        column: &str,
+        placeholders: &str,
+        existing_paths: &[String],
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let sql = format!("DELETE FROM {} WHERE {} NOT IN ({})", table, column, placeholders);
+        let mut query = sqlx::query(&sql);
+        for path in existing_paths {
+            query = query.bind(path);
+        }
+        let result = query.execute(pool).await?;
+        Ok(result.rows_affected())
     }
-    let deleted_photos = delete_query.execute(pool).await?.rows_affected();
+
+    // Delete orphaned photos
+    let deleted_photos = delete_not_in(pool, "photos", "file_path", &placeholders, existing_paths).await?;
 
     // Delete orphaned vectors
-    let vector_cache_sql = format!(
-        "DELETE FROM semantic_vector_path_mapping WHERE path NOT IN ({})",
-        placeholders
-    );
-    let mut vector_query = sqlx::query(&vector_cache_sql);
-    for path in existing_paths {
-        vector_query = vector_query.bind(path);
-    }
-    let deleted_vectors = vector_query.execute(pool).await?.rows_affected();
+    let deleted_vectors = delete_not_in(
+        pool,
+        "semantic_vector_path_mapping",
+        "path",
+        &placeholders,
+        existing_paths,
+    )
+    .await?;
 
-    // Delete orphaned video metadata
-    let metadata_sql = format!(
-        "DELETE FROM video_semantic_metadata WHERE path NOT IN ({})",
-        placeholders
-    );
-    let mut metadata_query = sqlx::query(&metadata_sql);
-    for path in existing_paths {
-        metadata_query = metadata_query.bind(path);
-    }
-    metadata_query.execute(pool).await?;
+    // Delete orphaned video metadata (ignore rows affected)
+    let _ = delete_not_in(
+        pool,
+        "video_semantic_metadata",
+        "path",
+        &placeholders,
+        existing_paths,
+    )
+    .await?;
 
     // Clean up orphaned vectors
     sqlx::query(

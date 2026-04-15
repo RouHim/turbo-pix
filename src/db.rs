@@ -528,39 +528,46 @@ impl Photo {
         pool: &DbPool,
         old_hash: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        sqlx::query(
-            r#"
-            UPDATE photos SET
-                hash_sha256 = ?,
-                file_path = ?, filename = ?, file_size = ?, mime_type = ?,
-                taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?,
-                thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?,
-                metadata = ?,
-                file_modified = ?, updated_at = ?
-            WHERE hash_sha256 = ?
-            "#,
-        )
-        .bind(&self.hash_sha256)
-        .bind(&self.file_path)
-        .bind(&self.filename)
-        .bind(self.file_size)
-        .bind(&self.mime_type)
-        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
-        .bind(self.width)
-        .bind(self.height)
-        .bind(self.orientation)
-        .bind(self.duration)
-        .bind(&self.thumbnail_path)
-        .bind(self.has_thumbnail)
-        .bind(&self.blurhash)
-        .bind(self.is_favorite.unwrap_or(false))
-        .bind(self.semantic_vector_indexed.unwrap_or(false))
-        .bind(self.metadata.to_string())
-        .bind(self.date_modified.to_rfc3339())
-        .bind(Utc::now().to_rfc3339())
-        .bind(old_hash)
-        .execute(pool)
-        .await?;
+        // Prepare frequently used values to keep the query invocation concise
+        let taken_at_rfc = self.taken_at.map(|dt| dt.to_rfc3339());
+        let is_favorite = self.is_favorite.unwrap_or(false);
+        let semantic_indexed = self.semantic_vector_indexed.unwrap_or(false);
+        let metadata_str = self.metadata.to_string();
+        let updated_at_rfc = Utc::now().to_rfc3339();
+        let file_modified_rfc = self.date_modified.to_rfc3339();
+
+        // Single-line SQL reduces function length while preserving behavior
+        let sql = "UPDATE photos SET \
+                   hash_sha256 = ?, \
+                   file_path = ?, filename = ?, file_size = ?, mime_type = ?, \
+                   taken_at = ?, width = ?, height = ?, orientation = ?, duration = ?, \
+                   thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?, \
+                   metadata = ?, \
+                   file_modified = ?, updated_at = ? \
+                   WHERE hash_sha256 = ?";
+
+        sqlx::query(sql)
+            .bind(&self.hash_sha256)
+            .bind(&self.file_path)
+            .bind(&self.filename)
+            .bind(self.file_size)
+            .bind(&self.mime_type)
+            .bind(taken_at_rfc)
+            .bind(self.width)
+            .bind(self.height)
+            .bind(self.orientation)
+            .bind(self.duration)
+            .bind(&self.thumbnail_path)
+            .bind(self.has_thumbnail)
+            .bind(&self.blurhash)
+            .bind(is_favorite)
+            .bind(semantic_indexed)
+            .bind(metadata_str)
+            .bind(file_modified_rfc)
+            .bind(updated_at_rfc)
+            .bind(old_hash)
+            .execute(pool)
+            .await?;
 
         Ok(())
     }

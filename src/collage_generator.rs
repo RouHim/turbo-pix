@@ -1208,9 +1208,15 @@ fn create_collage_image(
 /// - Example: 10 photos → [6, 4] is optimal
 ///
 /// Returns an empty vector if fewer than MIN_PHOTOS_PER_COLLAGE photos are provided.
-fn compute_chunk_sizes(mut remaining: usize) -> Vec<usize> {
+fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
     const MIN_PHOTOS_PER_COLLAGE: usize = 3;
+    if photos.len() < MIN_PHOTOS_PER_COLLAGE {
+        return Vec::new();
+    }
+
+    // Phase 1: Calculate optimal chunk sizes
     let mut sizes = Vec::new();
+    let mut remaining = photos.len();
 
     while remaining >= MIN_PHOTOS_PER_COLLAGE {
         // Start with maximum size or remaining photos, whichever is smaller
@@ -1233,18 +1239,6 @@ fn compute_chunk_sizes(mut remaining: usize) -> Vec<usize> {
         sizes.push(size);
         remaining = remaining.saturating_sub(size);
     }
-
-    sizes
-}
-
-fn chunk_photos(photos: &[Photo]) -> Vec<Vec<&Photo>> {
-    const MIN_PHOTOS_PER_COLLAGE: usize = 3;
-    if photos.len() < MIN_PHOTOS_PER_COLLAGE {
-        return Vec::new();
-    }
-
-    // Phase 1: Calculate optimal chunk sizes (extracted)
-    let sizes = compute_chunk_sizes(photos.len());
 
     // Phase 2: Build actual chunks from photos using calculated sizes
     let mut chunks = Vec::new();

@@ -45,17 +45,25 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
         >(sqlite3_vec_init as *const ())));
     }
 
-    // Build connection options with PRAGMAs
-    let connect_options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database_path))?
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(30))
-        .pragma("temp_store", "MEMORY")
-        .pragma("cache_size", "-128000") // 128MB cache
-        .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
-        .pragma("wal_autocheckpoint", "10000")
-        .pragma("analysis_limit", "1000");
+    // Build connection options with PRAGMAs (extracted for clarity)
+    fn build_connect_options(
+        database_path: &str,
+    ) -> Result<SqliteConnectOptions, Box<dyn std::error::Error>> {
+        let base = SqliteConnectOptions::from_str(&format!("sqlite://{}", database_path))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        Ok(base
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(30))
+            .pragma("temp_store", "MEMORY")
+            .pragma("cache_size", "-128000") // 128MB cache
+            .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
+            .pragma("wal_autocheckpoint", "10000")
+            .pragma("analysis_limit", "1000"))
+    }
+
+    let connect_options = build_connect_options(database_path)?;
 
     // Calculate pool size
     let pool_size = db_pool_size();

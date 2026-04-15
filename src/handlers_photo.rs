@@ -392,21 +392,27 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         }
     };
 
-    let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    fn collect_exif_fields(exif_metadata: &exif::Exif) -> BTreeMap<String, serde_json::Value> {
+        let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
-    // Iterate through all fields
-    for field in exif_metadata.fields() {
-        let tag_name = format!("{}", field.tag);
-        let value = field.display_value().to_string();
+        // Iterate through all fields
+        for field in exif_metadata.fields() {
+            let tag_name = format!("{}", field.tag);
+            let value = field.display_value().to_string();
 
-        exif_data.insert(
-            format!("0x{:04X}_{}", field.tag.number(), tag_name),
-            json!({
-                "value": value,
-                "tag": tag_name
-            }),
-        );
+            exif_data.insert(
+                format!("0x{:04X}_{}", field.tag.number(), tag_name),
+                json!({
+                    "value": value,
+                    "tag": tag_name
+                }),
+            );
+        }
+
+        exif_data
     }
+
+    let exif_data = collect_exif_fields(&exif_metadata);
 
     Ok(warp::reply::json(&json!({
         "hash": photo_hash,

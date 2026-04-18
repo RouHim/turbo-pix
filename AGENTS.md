@@ -135,3 +135,5 @@ npm run test:e2e:report   # View test report
 **Startup indexing isolation:** `src/main.rs:start_background_tasks()` must keep `run_startup_rescan()` on a dedicated `std::thread` with its own `tokio::runtime::Runtime`; moving startup indexing back onto the main async runtime starves HTTP requests and makes `/api/indexing/status` look hung.
 
 **Indexing empty-state contract:** `static/js/photoGrid.js:showEmptyState()` must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
+
+**Video taken-at extraction order:** `src/metadata_extractor.rs:extract_taken_at_from_ffprobe_json()` must check `format.tags.creation_time` → `format.tags.com.apple.quicktime.creationdate` → `streams[].tags.creation_time` → `format.tags.date` / `format.tags.date-{lang}`, then fall back via `apply_file_creation_fallback()` using `created().or_else(modified)`; ffprobe metadata varies by container.

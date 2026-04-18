@@ -1,28 +1,7 @@
 # # # # # # # # # # # # # # # # # # # #
-# FFmpeg Downloader
+# FFmpeg Static Binaries
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-FROM alpine:latest AS ffmpeg-downloader
-
-ARG TARGETARCH
-
-# Download and extract static ffmpeg build for the target architecture
-RUN apk add --no-cache curl tar xz && \
-    FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${TARGETARCH}-static.tar.xz" && \
-    curl \
-      --fail \
-      --location \
-      --retry 5 \
-      --retry-delay 3 \
-      --retry-all-errors \
-      --connect-timeout 20 \
-      --max-time 300 \
-      --output ffmpeg-release.tar.xz \
-      "${FFMPEG_URL}" && \
-    tar xf ffmpeg-release.tar.xz && \
-    mv ffmpeg-*/ffmpeg /ffmpeg && \
-    mv ffmpeg-*/ffprobe /ffprobe && \
-    chmod +x /ffmpeg /ffprobe && \
-    rm -rf ffmpeg-* ffmpeg-release.tar.xz
+FROM mwader/static-ffmpeg:8.1 AS ffmpeg
 
 # # # # # # # # # # # # # # # # # # # #
 # Application Builder
@@ -88,8 +67,8 @@ COPY --chmod=777 --chown=$USER:$USER --from=builder /empty_dir /tmp
 COPY --chmod=755 --chown=$USER:$USER --from=builder /app/target/*/production/turbo-pix /turbo-pix
 
 # Copy ffmpeg and ffprobe static binaries
-COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffmpeg /ffmpeg
-COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg-downloader /ffprobe /ffprobe
+COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg /ffmpeg /ffmpeg
+COPY --chmod=755 --chown=$USER:$USER --from=ffmpeg /ffprobe /ffprobe
 
 EXPOSE 18473
 USER $USER

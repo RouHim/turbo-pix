@@ -1,3 +1,54 @@
+# [2.29.0](https://github.com/RouHim/turbo-pix/compare/2.28.6...2.29.0) (2026-04-18)
+
+
+### Features
+
+* add nighthawk config ([816ec9f](https://github.com/RouHim/turbo-pix/commit/816ec9f92279d701ba823ac4d180ec5b6e39b1e8))
+* add nighthawk config ([8393c45](https://github.com/RouHim/turbo-pix/commit/8393c45573458e409956c4baede117a08ac85777))
+* add nighthawk config ([fe401d3](https://github.com/RouHim/turbo-pix/commit/fe401d3f9bfd726577c313fc15b3023664df878c))
+* add nighthawk config ([4d3a390](https://github.com/RouHim/turbo-pix/commit/4d3a39037221fff07cc8c15d3227c8ba4afa9f84))
+* add nighthawk config ([24f49cc](https://github.com/RouHim/turbo-pix/commit/24f49cc4892bf5eb66c835a9636df9430ed76695))
+
+## [2.28.6](https://github.com/RouHim/turbo-pix/compare/2.28.5...2.28.6) (2026-04-17)
+
+## [2.28.5](https://github.com/RouHim/turbo-pix/compare/2.28.4...2.28.5) (2026-04-10)
+
+## [2.28.4](https://github.com/RouHim/turbo-pix/compare/2.28.3...2.28.4) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ci:** replace flaky johnvansickle.com ffmpeg download with mwader/static-ffmpeg ([0ad777f](https://github.com/RouHim/turbo-pix/commit/0ad777fc3f01dcc2cc4d0a923454d530bd78819f))
+
+## [2.28.3](https://github.com/RouHim/turbo-pix/compare/2.28.2...2.28.3) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ci:** use Alpine ffmpeg in container build ([9967cf1](https://github.com/RouHim/turbo-pix/commit/9967cf1f71f9ea04a8747c9a57cebe81b61cca14))
+
+
+### Reverts
+
+* fix pipe ([5fc4053](https://github.com/RouHim/turbo-pix/commit/5fc4053453e4e9328a28d96a04e35fef5cd05e0a))
+
+## [2.28.1](https://github.com/RouHim/turbo-pix/compare/2.28.0...2.28.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* **metadata:** add stream-level creation_time extraction + epoch guard ([32b0650](https://github.com/RouHim/turbo-pix/commit/32b0650e81e49f3f7992e4747679c522fd3e12f3))
+* **metadata:** expand video creation time parser format coverage ([ed51545](https://github.com/RouHim/turbo-pix/commit/ed515451cfc69d1d58f8dfe971d5d5e857287f6a))
+* **metadata:** use file creation date fallback instead of modification date ([9d791a9](https://github.com/RouHim/turbo-pix/commit/9d791a9f0d3a9dcc9b7cfb1f229c2ddac36502e5))
+
+# [2.28.0](https://github.com/RouHim/turbo-pix/compare/2.27.0...2.28.0) (2026-04-09)
+
+
+### Features
+
+* add nighthawk config ([1d88a2f](https://github.com/RouHim/turbo-pix/commit/1d88a2ff79da8eeabe8b9bc6a7ea4572cf2cbb35))
+* add nighthawk config ([00ba76c](https://github.com/RouHim/turbo-pix/commit/00ba76cf31f4756f3dde938601800c0b9471536c))
+
 # [2.27.0](https://github.com/RouHim/turbo-pix/compare/2.26.0...2.27.0) (2026-04-09)
 
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
 use exif::{In, Tag, Value};
 use log::debug;
 
@@ -332,12 +332,7 @@ impl MetadataExtractor {
                             metadata.bitrate = bitrate_str.parse::<i32>().ok();
                         }
 
-                        // Extract creation_time from format tags
-                        if let Some(creation_time) =
-                            parsed["format"]["tags"]["creation_time"].as_str()
-                        {
-                            metadata.taken_at = Self::parse_video_creation_time(creation_time);
-                        }
+                        metadata.taken_at = Self::extract_taken_at_from_ffprobe_json(&parsed);
 
                         // Extract video codec and frame rate from streams
                         if let Some(streams) = parsed["streams"].as_array() {
@@ -392,14 +387,51 @@ impl MetadataExtractor {
         }
     }
 
+    fn extract_taken_at_from_ffprobe_json(parsed: &serde_json::Value) -> Option<DateTime<Utc>> {
+        parsed["format"]["tags"]["creation_time"]
+            .as_str()
+            .and_then(Self::parse_video_creation_time)
+            .or_else(|| {
+                parsed["format"]["tags"]["com.apple.quicktime.creationdate"]
+                    .as_str()
+                    .and_then(Self::parse_video_creation_time)
+            })
+            .or_else(|| {
+                parsed["streams"].as_array().and_then(|streams| {
+                    streams.iter().find_map(|stream| {
+                        stream["tags"]["creation_time"]
+                            .as_str()
+                            .and_then(Self::parse_video_creation_time)
+                    })
+                })
+            })
+            .or_else(|| {
+                // "date" and "date-{lang}" are generic date tags used by some containers (e.g., MOV)
+                parsed["format"]["tags"].as_object().and_then(|tags| {
+                    tags.get("date")
+                        .and_then(|v| v.as_str())
+                        .and_then(Self::parse_video_creation_time)
+                        .or_else(|| {
+                            tags.iter()
+                                .filter(|(k, _)| k.starts_with("date"))
+                                .find_map(|(_, v)| {
+                                    v.as_str().and_then(Self::parse_video_creation_time)
+                                })
+                        })
+                })
+            })
+    }
+
     fn apply_file_creation_fallback(
         metadata: &mut PhotoMetadata,
         file_metadata: Option<&std::fs::Metadata>,
     ) {
         if metadata.taken_at.is_none() {
             if let Some(fs_metadata) = file_metadata {
-                if let Ok(modified) = fs_metadata.modified() {
-                    metadata.taken_at = Some(modified.into());
+                if let Ok(created_or_modified) =
+                    fs_metadata.created().or_else(|_| fs_metadata.modified())
+                {
+                    metadata.taken_at = Some(created_or_modified.into());
                 }
             }
         }
@@ -425,18 +457,47 @@ impl MetadataExtractor {
     }
 
     fn parse_video_creation_time(creation_time: &str) -> Option<DateTime<Utc>> {
-        creation_time.parse::<DateTime<Utc>>().ok().or_else(|| {
-            NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.fZ")
-                .ok()
-                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
-        })
+        let parsed = creation_time
+            .parse::<DateTime<Utc>>()
+            .ok()
+            .or_else(|| {
+                DateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.f%z")
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            })
+            .or_else(|| {
+                DateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%z")
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%dT%H:%M:%S")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(creation_time, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+            })?;
+
+        if parsed.year() < 1990 {
+            return None;
+        }
+
+        Some(parsed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_ffprobe_is_installed() {
@@ -662,6 +723,166 @@ mod tests {
     }
 
     #[test]
+    fn test_video_stream_level_creation_time() {
+        // GIVEN: ffprobe JSON with creation_time only in stream tags
+        let json_str = r#"{
+            "format": {
+                "tags": {}
+            },
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "tags": {
+                        "creation_time": "2022-03-20T08:00:00.000000Z"
+                    }
+                }
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should find the stream-level creation_time
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from stream-level creation_time"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2022);
+        assert_eq!(dt.month(), 3);
+        assert_eq!(dt.day(), 20);
+    }
+
+    #[test]
+    fn test_video_quicktime_creation_date() {
+        // GIVEN: ffprobe JSON with QuickTime-style creation date in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "com.apple.quicktime.creationdate": "2023-08-10T15:00:00+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse QuickTime tag
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from QuickTime creation date tag"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2023);
+        assert_eq!(dt.hour(), 13);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_only() {
+        // GIVEN: ffprobe JSON with date only in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse date tag
+        assert!(taken_at.is_some(), "Should extract taken_at from date tag");
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2011);
+        assert_eq!(dt.month(), 8);
+        assert_eq!(dt.day(), 6);
+        assert_eq!(dt.hour(), 20);
+        assert_eq!(dt.minute(), 32);
+        assert_eq!(dt.second(), 38);
+    }
+
+    #[test]
+    fn test_video_creation_time_priority_over_date() {
+        // GIVEN: ffprobe JSON with creation_time and date tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "creation_time": "2023-01-01T00:00:00.000000Z",
+                    "date": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should prefer creation_time over date tag
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from creation_time"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2023);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_localized_variant() {
+        // GIVEN: ffprobe JSON with localized date tag in format tags
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date-deu": "2011-08-06T22:32:38+0200"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should parse localized date tag variant
+        assert!(
+            taken_at.is_some(),
+            "Should extract taken_at from localized date tag"
+        );
+        let dt = taken_at.unwrap();
+        assert_eq!(dt.year(), 2011);
+        assert_eq!(dt.month(), 8);
+        assert_eq!(dt.day(), 6);
+        assert_eq!(dt.hour(), 20);
+        assert_eq!(dt.minute(), 32);
+    }
+
+    #[test]
+    fn test_video_format_tags_date_unparseable() {
+        // GIVEN: ffprobe JSON with an invalid date tag
+        let json_str = r#"{
+            "format": {
+                "tags": {
+                    "date": "not-a-date"
+                }
+            },
+            "streams": []
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: Extract taken_at from parsed ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: Should not parse invalid date values
+        assert!(taken_at.is_none(), "Should ignore unparseable date tag");
+    }
+
+    #[test]
     fn test_video_metadata_extraction() {
         // GIVEN: MP4 video file
         let path = Path::new("test-data/test_video.mp4");
@@ -677,10 +898,10 @@ mod tests {
         assert!(metadata.width.is_some(), "Should extract video width");
         assert!(metadata.height.is_some(), "Should extract video height");
 
-        // THEN: Should have taken_at from file modification fallback
+        // THEN: Should have taken_at from file date fallback
         assert!(
             metadata.taken_at.is_some(),
-            "Should have taken_at from file modification date fallback"
+            "Should have taken_at from file date fallback"
         );
     }
 
@@ -731,10 +952,104 @@ mod tests {
         );
         assert_eq!(result.unwrap().month(), 6);
 
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00-0400");
+        assert!(
+            result.is_some(),
+            "Should parse timezone offset without colon"
+        );
+        assert_eq!(result.unwrap().year(), 2024);
+        assert_eq!(result.unwrap().hour(), 14);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00-04:00");
+        assert!(result.is_some(), "Should parse timezone offset with colon");
+        assert_eq!(result.unwrap().hour(), 14);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15 10:30:00");
+        assert!(result.is_some(), "Should parse space-separated format");
+        assert_eq!(result.unwrap().year(), 2024);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00");
+        assert!(result.is_some(), "Should parse naive ISO without Z");
+        assert_eq!(result.unwrap().hour(), 10);
+
+        let result = MetadataExtractor::parse_video_creation_time("2024-01-15T10:30:00.000+0200");
+        assert!(result.is_some(), "Should parse QuickTime Apple format");
+        assert_eq!(result.unwrap().hour(), 8);
+
         // GIVEN: Invalid string
         let invalid = "not-a-date";
 
         // WHEN/THEN: Should return None
         assert!(MetadataExtractor::parse_video_creation_time(invalid).is_none());
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_rejects_epoch_zero() {
+        let result = MetadataExtractor::parse_video_creation_time("1970-01-01T00:00:00.000000Z");
+
+        assert!(result.is_none(), "Epoch-zero should be filtered out");
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_rejects_pre_1990() {
+        let result = MetadataExtractor::parse_video_creation_time("1989-12-31T23:59:59Z");
+
+        assert!(result.is_none(), "Pre-1990 dates should be filtered out");
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_accepts_1990() {
+        let result = MetadataExtractor::parse_video_creation_time("1990-01-01T00:00:00Z");
+
+        assert!(result.is_some(), "1990-01-01 should be accepted (boundary)");
+        assert_eq!(result.unwrap().year(), 1990);
+    }
+
+    #[test]
+    fn test_fallback_prefers_creation_over_modification() {
+        let source = std::fs::read_to_string(Path::new("src/metadata_extractor.rs"))
+            .expect("should read metadata extractor source");
+        let fallback_function = source
+            .split("fn apply_file_creation_fallback")
+            .nth(1)
+            .and_then(|rest| rest.split("pub fn parse_exif_datetime").next())
+            .expect("should isolate apply_file_creation_fallback source");
+
+        assert!(
+            fallback_function.contains("fs_metadata.created().or_else(|_| fs_metadata.modified())"),
+            "apply_file_creation_fallback should prefer created() before modified()"
+        );
+    }
+
+    #[test]
+    fn test_fallback_graceful_when_no_birthtime() {
+        let mut metadata = PhotoMetadata::default();
+
+        MetadataExtractor::apply_file_creation_fallback(&mut metadata, None);
+
+        assert!(
+            metadata.taken_at.is_none(),
+            "apply_file_creation_fallback should leave taken_at unset when file metadata is unavailable"
+        );
+    }
+
+    #[test]
+    fn test_video_with_creation_time_fixture() {
+        let path = Path::new("test-data/test_video_with_date.mp4");
+        if !path.exists() {
+            return;
+        }
+        let file_meta = std::fs::metadata(path).ok();
+
+        let metadata = MetadataExtractor::extract_with_metadata(path, file_meta.as_ref());
+
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should extract taken_at from embedded creation_time"
+        );
+        let taken_at = metadata.taken_at.unwrap();
+        assert_eq!(taken_at.year(), 2023, "Year should be 2023");
+        assert_eq!(taken_at.month(), 6, "Month should be June");
+        assert_eq!(taken_at.day(), 15, "Day should be 15");
     }
 }

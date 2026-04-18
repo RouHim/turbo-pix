@@ -35,37 +35,48 @@ pub struct PhotosResponse {
     pub has_prev: bool,
 }
 
-pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(50).min(100);
-    let offset = (page - 1) * limit;
-
-    // If a query string or year/month filter is provided, use search instead of list
-    let result = if query.q.is_some() || query.year.is_some() || query.month.is_some() {
+async fn fetch_photos(
+    db_pool: &DbPool,
+    query: &PhotoQuery,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Photo>, i64), String> {
+    if query.q.is_some() || query.year.is_some() || query.month.is_some() {
         let search_query = SearchQuery {
             q: query.q.clone(),
             year: query.year,
             month: query.month,
         };
         Photo::search_photos(
-            &db_pool,
+            db_pool,
             &search_query,
-            limit as i64,
-            offset as i64,
+            limit,
+            offset,
             query.sort.as_deref(),
             query.order.as_deref(),
         )
         .await
+        .map_err(|e| format!("{}", e))
     } else {
         Photo::list_with_pagination(
-            &db_pool,
-            limit as i64,
-            offset as i64,
+            db_pool,
+            limit,
+            offset,
             query.sort.as_deref(),
             query.order.as_deref(),
         )
         .await
-    };
+        .map_err(|e| format!("{}", e))
+    }
+}
+
+pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    let page = query.page.unwrap_or(1);
+    let limit = query.limit.unwrap_or(50).min(100);
+    let offset = (page - 1) * limit;
+
+    // Dispatch to helper that selects search vs list
+    let result = fetch_photos(&db_pool, &query, limit as i64, offset as i64).await;
 
     match result {
         Ok((photos, total)) => {
@@ -381,21 +392,27 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         }
     };
 
-    let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    fn collect_exif_fields(exif_metadata: &exif::Exif) -> BTreeMap<String, serde_json::Value> {
+        let mut exif_data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
-    // Iterate through all fields
-    for field in exif_metadata.fields() {
-        let tag_name = format!("{}", field.tag);
-        let value = field.display_value().to_string();
+        // Iterate through all fields
+        for field in exif_metadata.fields() {
+            let tag_name = format!("{}", field.tag);
+            let value = field.display_value().to_string();
 
-        exif_data.insert(
-            format!("0x{:04X}_{}", field.tag.number(), tag_name),
-            json!({
-                "value": value,
-                "tag": tag_name
-            }),
-        );
+            exif_data.insert(
+                format!("0x{:04X}_{}", field.tag.number(), tag_name),
+                json!({
+                    "value": value,
+                    "tag": tag_name
+                }),
+            );
+        }
+
+        exif_data
     }
+
+    let exif_data = collect_exif_fields(&exif_metadata);
 
     Ok(warp::reply::json(&json!({
         "hash": photo_hash,
@@ -661,36 +678,28 @@ mod tests {
             .await
             .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
 
-        // Create the update request
         let update_req = MetadataUpdateRequest {
             taken_at: Some("2024-03-15T14:30:00Z".to_string()),
             latitude: Some(40.7128),
             longitude: Some(-74.0060),
         };
 
-        // Call the handler
         let result = update_photo_metadata(photo_hash.clone(), update_req, db_pool.clone()).await;
-
-        // Verify the result is ok
         assert!(result.is_ok(), "Handler should succeed");
 
-        // Verify the photo was updated in the database
         let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
             .await
             .expect("Failed to query database")
             .expect("Photo should exist");
 
-        // Verify the date was updated
         assert!(updated_photo.taken_at.is_some());
         let taken_at = updated_photo.taken_at.unwrap();
         assert_eq!(taken_at.year(), 2024);
         assert_eq!(taken_at.month(), 3);
         assert_eq!(taken_at.day(), 15);
 
-        // Verify GPS coordinates were updated
         assert_eq!(
             updated_photo
                 .metadata

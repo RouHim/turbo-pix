@@ -45,17 +45,25 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
         >(sqlite3_vec_init as *const ())));
     }
 
-    // Build connection options with PRAGMAs
-    let connect_options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database_path))?
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(30))
-        .pragma("temp_store", "MEMORY")
-        .pragma("cache_size", "-128000") // 128MB cache
-        .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
-        .pragma("wal_autocheckpoint", "10000")
-        .pragma("analysis_limit", "1000");
+    // Build connection options with PRAGMAs (extracted for clarity)
+    fn build_connect_options(
+        database_path: &str,
+    ) -> Result<SqliteConnectOptions, Box<dyn std::error::Error>> {
+        let base = SqliteConnectOptions::from_str(&format!("sqlite://{}", database_path))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        Ok(base
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(30))
+            .pragma("temp_store", "MEMORY")
+            .pragma("cache_size", "-128000") // 128MB cache
+            .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
+            .pragma("wal_autocheckpoint", "10000")
+            .pragma("analysis_limit", "1000"))
+    }
+
+    let connect_options = build_connect_options(database_path)?;
 
     // Calculate pool size
     let pool_size = db_pool_size();
@@ -108,38 +116,49 @@ pub async fn delete_orphaned_photos(
     }
     let deleted_paths: Vec<String> = select_query.fetch_all(pool).await?;
 
-    // Delete orphaned photos
-    let delete_sql = format!(
-        "DELETE FROM photos WHERE file_path NOT IN ({})",
-        placeholders
-    );
-    let mut delete_query = sqlx::query(&delete_sql);
-    for path in existing_paths {
-        delete_query = delete_query.bind(path);
+    // Helper to delete rows from a table where a column is NOT IN the provided paths
+    async fn delete_not_in(
+        pool: &DbPool,
+        table: &str,
+        column: &str,
+        placeholders: &str,
+        existing_paths: &[String],
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let sql = format!(
+            "DELETE FROM {} WHERE {} NOT IN ({})",
+            table, column, placeholders
+        );
+        let mut query = sqlx::query(&sql);
+        for path in existing_paths {
+            query = query.bind(path);
+        }
+        let result = query.execute(pool).await?;
+        Ok(result.rows_affected())
     }
-    let deleted_photos = delete_query.execute(pool).await?.rows_affected();
+
+    // Delete orphaned photos
+    let deleted_photos =
+        delete_not_in(pool, "photos", "file_path", &placeholders, existing_paths).await?;
 
     // Delete orphaned vectors
-    let vector_cache_sql = format!(
-        "DELETE FROM semantic_vector_path_mapping WHERE path NOT IN ({})",
-        placeholders
-    );
-    let mut vector_query = sqlx::query(&vector_cache_sql);
-    for path in existing_paths {
-        vector_query = vector_query.bind(path);
-    }
-    let deleted_vectors = vector_query.execute(pool).await?.rows_affected();
+    let deleted_vectors = delete_not_in(
+        pool,
+        "semantic_vector_path_mapping",
+        "path",
+        &placeholders,
+        existing_paths,
+    )
+    .await?;
 
-    // Delete orphaned video metadata
-    let metadata_sql = format!(
-        "DELETE FROM video_semantic_metadata WHERE path NOT IN ({})",
-        placeholders
-    );
-    let mut metadata_query = sqlx::query(&metadata_sql);
-    for path in existing_paths {
-        metadata_query = metadata_query.bind(path);
-    }
-    metadata_query.execute(pool).await?;
+    // Delete orphaned video metadata (ignore rows affected)
+    let _ = delete_not_in(
+        pool,
+        "video_semantic_metadata",
+        "path",
+        &placeholders,
+        existing_paths,
+    )
+    .await?;
 
     // Clean up orphaned vectors
     sqlx::query(

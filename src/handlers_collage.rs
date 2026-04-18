@@ -161,30 +161,25 @@ pub fn build_collage_routes(
         .and(with_db(db_pool.clone()))
         .and_then(get_collage_image);
 
-    let data_path_generate = data_path.clone();
-    let locale_generate = locale.clone();
-    let generate = warp::path!("api" / "collages" / "generate")
-        .and(warp::post())
-        .and(with_db(db_pool.clone()))
-        .map(move |db_pool| (db_pool, data_path_generate.clone(), locale_generate.clone()))
-        .untuple_one()
-        .and_then(generate_collages_manual);
+    let generate = {
+        let data_path = data_path.clone();
+        let locale = locale.clone();
+        warp::path!("api" / "collages" / "generate")
+            .and(warp::post())
+            .and(with_db(db_pool.clone()))
+            .map(move |db_pool| (db_pool, data_path.clone(), locale.clone()))
+            .untuple_one()
+            .and_then(generate_collages_manual)
+    };
 
-    let data_path_accept = data_path;
-    let semantic_search_accept = semantic_search;
-    let accept = warp::path!("api" / "collages" / i64 / "accept")
-        .and(warp::post())
-        .and(with_db(db_pool.clone()))
-        .map(move |id, db_pool| {
-            (
-                id,
-                db_pool,
-                data_path_accept.clone(),
-                semantic_search_accept.clone(),
-            )
-        })
-        .untuple_one()
-        .and_then(accept_collage);
+    let accept = {
+        warp::path!("api" / "collages" / i64 / "accept")
+            .and(warp::post())
+            .and(with_db(db_pool.clone()))
+            .map(move |id, db_pool| (id, db_pool, data_path.clone(), semantic_search.clone()))
+            .untuple_one()
+            .and_then(accept_collage)
+    };
 
     let reject = warp::path!("api" / "collages" / i64 / "reject")
         .and(warp::delete())

@@ -67,21 +67,30 @@ fn build_phases(
         .iter()
         .position(|(id, _)| *id == current_phase);
 
+    fn state_for(
+        i: usize,
+        active_idx: Option<usize>,
+        is_indexing: bool,
+        is_complete: bool,
+    ) -> &'static str {
+        if is_indexing {
+            match active_idx {
+                Some(active) if i < active => "done",
+                Some(active) if i == active => "active",
+                _ => "pending",
+            }
+        } else if is_complete {
+            "done"
+        } else {
+            "pending"
+        }
+    }
+
     CANONICAL_PHASES
         .iter()
         .enumerate()
         .map(|(i, (id, kind))| {
-            let state = if is_indexing {
-                match active_idx {
-                    Some(active) if i < active => "done",
-                    Some(active) if i == active => "active",
-                    _ => "pending",
-                }
-            } else if is_complete {
-                "done"
-            } else {
-                "pending"
-            };
+            let state = state_for(i, active_idx, is_indexing, is_complete);
 
             let snap = phases_data
                 .get(id)

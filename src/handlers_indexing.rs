@@ -67,7 +67,12 @@ fn build_phases(
         .iter()
         .position(|(id, _)| *id == current_phase);
 
-    fn state_for(i: usize, active_idx: Option<usize>, is_indexing: bool, is_complete: bool) -> &'static str {
+    fn state_for(
+        i: usize,
+        active_idx: Option<usize>,
+        is_indexing: bool,
+        is_complete: bool,
+    ) -> &'static str {
         if is_indexing {
             match active_idx {
                 Some(active) if i < active => "done",

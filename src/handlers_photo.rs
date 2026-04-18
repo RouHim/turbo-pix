@@ -674,7 +674,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_photo_metadata_endpoint() {
-        let db_pool = create_in_memory_pool().await.expect("Failed to create test database");
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
 

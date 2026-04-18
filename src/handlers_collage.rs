@@ -173,8 +173,6 @@ pub fn build_collage_routes(
     };
 
     let accept = {
-        let data_path = data_path;
-        let semantic_search = semantic_search;
         warp::path!("api" / "collages" / i64 / "accept")
             .and(warp::post())
             .and(with_db(db_pool.clone()))

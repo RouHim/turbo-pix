@@ -124,7 +124,10 @@ pub async fn delete_orphaned_photos(
         placeholders: &str,
         existing_paths: &[String],
     ) -> Result<u64, Box<dyn std::error::Error>> {
-        let sql = format!("DELETE FROM {} WHERE {} NOT IN ({})", table, column, placeholders);
+        let sql = format!(
+            "DELETE FROM {} WHERE {} NOT IN ({})",
+            table, column, placeholders
+        );
         let mut query = sqlx::query(&sql);
         for path in existing_paths {
             query = query.bind(path);
@@ -134,7 +137,8 @@ pub async fn delete_orphaned_photos(
     }
 
     // Delete orphaned photos
-    let deleted_photos = delete_not_in(pool, "photos", "file_path", &placeholders, existing_paths).await?;
+    let deleted_photos =
+        delete_not_in(pool, "photos", "file_path", &placeholders, existing_paths).await?;
 
     // Delete orphaned vectors
     let deleted_vectors = delete_not_in(

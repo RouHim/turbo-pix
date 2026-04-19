@@ -1,7 +1,7 @@
 model: github_copilot::openai/gpt-5.4-mini
 reasoning_effort: "high"
 budget:
-  max_time_minutes: 120
+  max_time_minutes: 999
 commands:
   test: cargo test
   lint: cargo clippy --message-format=json

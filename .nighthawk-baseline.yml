@@ -1,9 +1,9 @@
 version: 1
-last_updated: 2026-04-15
+last_updated: 2026-04-19
 categories:
   _global:
     lint_warnings: 0
     test_coverage: null
-    complexity_score: 97.0
+    complexity_score: 92.0
     dead_code_count: 0
     large_files: 19

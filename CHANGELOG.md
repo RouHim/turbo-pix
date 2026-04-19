@@ -1,3 +1,11 @@
+# [2.30.0](https://github.com/RouHim/turbo-pix/compare/2.29.2...2.30.0) (2026-04-19)
+
+
+### Features
+
+* add nighthawk config ([569fb9a](https://github.com/RouHim/turbo-pix/commit/569fb9a0eb6d2b830bee18aa4c222c6d1913b1d2))
+* add nighthawk config ([09948e4](https://github.com/RouHim/turbo-pix/commit/09948e4d9e7fae1a5db6ed0ada792802b0a1d0fe))
+
 ## [2.29.2](https://github.com/RouHim/turbo-pix/compare/2.29.1...2.29.2) (2026-04-19)
 
 ## [2.29.1](https://github.com/RouHim/turbo-pix/compare/2.29.0...2.29.1) (2026-04-18)

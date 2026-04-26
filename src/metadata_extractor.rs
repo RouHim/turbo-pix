@@ -1369,7 +1369,10 @@ mod tests {
         let metadata = MetadataExtractor::extract_with_metadata(&path, file_meta.as_ref());
 
         // THEN: Should get date from filename, NOT file creation time
-        assert!(metadata.taken_at.is_some(), "Should parse date from filename");
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should parse date from filename"
+        );
         let dt = metadata.taken_at.unwrap();
         assert_eq!(dt.year(), 2024);
         assert_eq!(dt.month(), 2);

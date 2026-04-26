@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use exif::{In, Tag, Value};
 use log::debug;
 
@@ -77,27 +77,27 @@ impl MetadataExtractor {
 
         if is_video {
             Self::extract_video_metadata(path, &mut metadata);
-            if metadata.taken_at.is_none() {
-                Self::apply_file_creation_fallback(&mut metadata, file_metadata);
-            }
         } else {
             // Use kamadak-exif for all EXIF reading
-            if let Err(e) = Self::extract_exif_metadata(path, &mut metadata, file_metadata) {
+            if let Err(e) = Self::extract_exif_metadata(path, &mut metadata) {
                 debug!("Failed to read EXIF data for {}: {}", path.display(), e);
-                // Even without EXIF, try file creation date fallback
-                Self::apply_file_creation_fallback(&mut metadata, file_metadata);
             }
+        }
+
+        // Fallback 1: Try to parse date from filename
+        if metadata.taken_at.is_none() {
+            metadata.taken_at = Self::parse_date_from_filename(path);
+        }
+        // Fallback 2: Use file creation/modification time
+        if metadata.taken_at.is_none() {
+            Self::apply_file_creation_fallback(&mut metadata, file_metadata);
         }
 
         metadata
     }
 
     /// Extract all EXIF metadata using kamadak-exif
-    fn extract_exif_metadata(
-        path: &Path,
-        metadata: &mut PhotoMetadata,
-        file_metadata: Option<&std::fs::Metadata>,
-    ) -> Result<(), String> {
+    fn extract_exif_metadata(path: &Path, metadata: &mut PhotoMetadata) -> Result<(), String> {
         let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
         let mut bufreader = std::io::BufReader::new(&file);
         let exifreader = exif::Reader::new();
@@ -108,11 +108,6 @@ impl MetadataExtractor {
         Self::extract_basic_info(&exif, metadata);
         Self::extract_camera_info(&exif, metadata);
         Self::extract_gps_info(&exif, metadata);
-
-        // If still no date found after EXIF extraction, try file modification/creation date as final fallback
-        if metadata.taken_at.is_none() {
-            Self::apply_file_creation_fallback(metadata, file_metadata);
-        }
 
         Ok(())
     }
@@ -493,7 +488,79 @@ impl MetadataExtractor {
         Some(parsed)
     }
 
-    fn parse_date_from_filename(_path: &Path) -> Option<DateTime<Utc>> {
+    fn parse_date_from_filename(path: &Path) -> Option<DateTime<Utc>> {
+        let file_name = path.file_name()?.to_str()?;
+        if file_name.starts_with('.') {
+            return None;
+        }
+
+        let stem = path.file_stem()?.to_str()?;
+
+        // Pass 1: Try full-stem datetime patterns
+        let datetime_formats = [
+            "%Y%m%d_%H%M%S",     // 20240215_185056
+            "%Y%m%d%H%M%S",      // 20240215185056
+            "%Y-%m-%d-%H-%M-%S", // 2024-02-15-18-50-56
+        ];
+        for format in &datetime_formats {
+            if let Ok(naive) = NaiveDateTime::parse_from_str(stem, format) {
+                if naive.year() >= 1990 {
+                    return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                }
+            }
+        }
+
+        // Pass 2: Try date-only patterns on the full stem (handles ISO dates like 2024-02-15)
+        let date_only_formats = ["%Y%m%d", "%F"];
+        for format in &date_only_formats {
+            if let Ok(date) = NaiveDate::parse_from_str(stem, format) {
+                if date.year() >= 1990 {
+                    let naive = date.and_hms_opt(0, 0, 0)?;
+                    return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                }
+            }
+        }
+
+        // Pass 3: Shard-based date+time patterns
+        // Try full datetime patterns on each underscore-separated shard
+        for shard in stem.split('_') {
+            for format in &datetime_formats {
+                if let Ok(naive) = NaiveDateTime::parse_from_str(shard, format) {
+                    if naive.year() >= 1990 {
+                        return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                    }
+                }
+            }
+        }
+
+        // Normalize separators (/ . -) to _ and search for date+time shards
+        let replaced = stem.replace(['/', ' ', '.', '-'], "_");
+        let shards: Vec<&str> = replaced.split('_').collect();
+
+        let date_formats = ["%Y%m%d", "%F"]; // %F = %Y-%m-%d
+        let time_formats = ["%H%M%S", "%H-%M-%S"];
+
+        for (i, shard) in shards.iter().enumerate() {
+            for date_fmt in &date_formats {
+                if let Ok(date) = NaiveDate::parse_from_str(shard, date_fmt) {
+                    if date.year() < 1990 {
+                        continue;
+                    }
+                    if let Some(next_shard) = shards.get(i + 1) {
+                        for time_fmt in &time_formats {
+                            if let Ok(time) = NaiveTime::parse_from_str(next_shard, time_fmt) {
+                                let naive = date.and_time(time);
+                                return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                            }
+                        }
+                    }
+                    // No time found, use midnight
+                    let naive = date.and_hms_opt(0, 0, 0)?;
+                    return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                }
+            }
+        }
+
         None
     }
 }

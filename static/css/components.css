@@ -347,8 +347,6 @@
   bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
-  gap: var(--space-2);
   background: var(--glass-bg);
   backdrop-filter: blur(16px) saturate(1.5);
   -webkit-backdrop-filter: blur(16px) saturate(1.5);
@@ -358,14 +356,6 @@
   padding: var(--space-2);
   z-index: 10;
   max-width: 88%;
-  overflow: auto hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
 
   & .accept-collage-btn {
     background: var(--color-success, oklch(65% 0.18 155deg));
@@ -378,6 +368,19 @@
   @media (width <= 768px) {
     bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
   }
+}
+
+.viewer-controls-inner {
+  display: flex;
+  gap: var(--space-2);
+  overflow: auto hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.viewer-controls-inner::-webkit-scrollbar {
+  display: none;
 }
 
 .viewer-controls::before,

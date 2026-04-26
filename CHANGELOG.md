@@ -1,3 +1,10 @@
+# [2.31.0](https://github.com/RouHim/turbo-pix/compare/2.30.6...2.31.0) (2026-04-26)
+
+
+### Features
+
+* **metadata_extractor:** add filename date parsing fallback and centralize fallback chain ([152ad04](https://github.com/RouHim/turbo-pix/commit/152ad044b6917fdea7c0b77a1ced61a5e5ae7580))
+
 ## [2.30.6](https://github.com/RouHim/turbo-pix/compare/2.30.5...2.30.6) (2026-04-25)
 
 ## [2.30.5](https://github.com/RouHim/turbo-pix/compare/2.30.4...2.30.5) (2026-04-24)

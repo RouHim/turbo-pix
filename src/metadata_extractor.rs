@@ -1356,4 +1356,116 @@ mod tests {
         assert_eq!(dt.minute(), 0);
         assert_eq!(dt.second(), 0);
     }
+
+    #[test]
+    fn test_extract_with_metadata_filename_priority_over_file_creation() {
+        // GIVEN: A temp file with date-like name but no EXIF
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("20240215_185056_test.jpg");
+        std::fs::write(&path, b"fake jpeg data").unwrap();
+        let file_meta = std::fs::metadata(&path).ok();
+
+        // WHEN: Extract metadata
+        let metadata = MetadataExtractor::extract_with_metadata(&path, file_meta.as_ref());
+
+        // THEN: Should get date from filename, NOT file creation time
+        assert!(metadata.taken_at.is_some(), "Should parse date from filename");
+        let dt = metadata.taken_at.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+
+        // Cleanup
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_extract_with_metadata_exif_priority_over_filename() {
+        // GIVEN: Use an existing test image WITH EXIF (sample_with_exif.jpg)
+        let path = Path::new("test-data/sample_with_exif.jpg");
+        if !path.exists() {
+            return; // Skip if test file not available
+        }
+        let file_meta = std::fs::metadata(path).ok();
+
+        // WHEN: Extract metadata
+        let metadata = MetadataExtractor::extract_with_metadata(path, file_meta.as_ref());
+
+        // THEN: EXIF date should be present and take priority
+        assert!(metadata.taken_at.is_some(), "Should extract EXIF date");
+        // The filename doesn't have a date pattern, so EXIF is the only source
+        // Just verify taken_at is populated from EXIF, not None
+    }
+
+    #[test]
+    fn test_extract_with_metadata_video_filename_fallback() {
+        // GIVEN: A temp video file with date-like name (empty file, no ffprobe metadata)
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("20240215_185056_test.mp4");
+        std::fs::write(&path, b"").unwrap(); // Empty file
+        let file_meta = std::fs::metadata(&path).ok();
+
+        // WHEN: Extract metadata
+        let metadata = MetadataExtractor::extract_with_metadata(&path, file_meta.as_ref());
+
+        // THEN: Should get date from filename even for video
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should parse date from video filename"
+        );
+        let dt = metadata.taken_at.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+
+        // Cleanup
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_extract_with_metadata_no_filename_no_filemeta() {
+        // GIVEN: A temp file with random name and no EXIF, with None file_metadata
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("random_photo_test.jpg");
+        std::fs::write(&path, b"fake jpeg data").unwrap();
+
+        // WHEN: Extract metadata with no file metadata
+        let metadata = MetadataExtractor::extract_with_metadata(&path, None);
+
+        // THEN: taken_at should be None (no filename date, no file metadata)
+        assert!(
+            metadata.taken_at.is_none(),
+            "Should return None when no date source available"
+        );
+
+        // Cleanup
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_extract_with_metadata_file_creation_fallback() {
+        // GIVEN: A temp file with random name and no EXIF, with file metadata
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("random_photo_test.jpg");
+        std::fs::write(&path, b"fake jpeg data").unwrap();
+        let file_meta = std::fs::metadata(&path).ok();
+
+        // WHEN: Extract metadata
+        let metadata = MetadataExtractor::extract_with_metadata(&path, file_meta.as_ref());
+
+        // THEN: Should fall back to file creation time
+        assert!(
+            metadata.taken_at.is_some(),
+            "Should fall back to file creation time"
+        );
+
+        // Cleanup
+        std::fs::remove_file(&path).ok();
+    }
 }

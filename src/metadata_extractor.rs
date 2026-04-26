@@ -492,6 +492,10 @@ impl MetadataExtractor {
 
         Some(parsed)
     }
+
+    fn parse_date_from_filename(_path: &Path) -> Option<DateTime<Utc>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1051,5 +1055,238 @@ mod tests {
         assert_eq!(taken_at.year(), 2023, "Year should be 2023");
         assert_eq!(taken_at.month(), 6, "Month should be June");
         assert_eq!(taken_at.day(), 15, "Day should be 15");
+    }
+
+    // --- parse_date_from_filename tests (red phase - stub returns None) ---
+
+    #[test]
+    fn test_parse_date_from_filename_primary_format() {
+        // GIVEN: Filename with YYYYMMDD_HHMMSS pattern (primary use case)
+        let path = Path::new("20240215_185056.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(result.is_some(), "Should parse YYYYMMDD_HHMMSS format");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_with_prefix() {
+        // GIVEN: Filename with IMG_ prefix and YYYYMMDD_HHMMSS pattern
+        let path = Path::new("IMG_20240215_185056.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(
+            result.is_some(),
+            "Should parse IMG_ prefixed YYYYMMDD_HHMMSS format"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_date_only() {
+        // GIVEN: Filename with YYYYMMDD date-only pattern
+        let path = Path::new("20240215.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 00:00:00 UTC
+        assert!(result.is_some(), "Should parse YYYYMMDD date-only format");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_no_date() {
+        // GIVEN: Filename with no recognizable date pattern
+        let path = Path::new("random_photo.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None
+        assert!(result.is_none(), "Should return None for random filename");
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_rejects_pre_1990() {
+        // GIVEN: Filename with 1970 date (epoch start)
+        let path = Path::new("19700101_120000.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (year < 1990)
+        assert!(result.is_none(), "Should reject dates before 1990");
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_accepts_1990_boundary() {
+        // GIVEN: Filename with 1990-01-01 date (boundary)
+        let path = Path::new("19900101_000000.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should accept 1990-01-01 00:00:00 UTC
+        assert!(result.is_some(), "Should accept 1990-01-01 (boundary)");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 1990);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_invalid_month() {
+        // GIVEN: Filename with month 13 (invalid)
+        let path = Path::new("20241301.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (invalid month)
+        assert!(result.is_none(), "Should reject invalid month 13");
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_dashed_format() {
+        // GIVEN: Filename with YYYY-MM-DD-HH-MM-SS dashed pattern
+        let path = Path::new("Screenshot_2024-02-15-18-50-56.png");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(
+            result.is_some(),
+            "Should parse YYYY-MM-DD-HH-MM-SS dashed format"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_14_digit_compact() {
+        // GIVEN: Filename with 14-digit YYYYMMDDHHMMSS compact format
+        let path = Path::new("20240215185056.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(
+            result.is_some(),
+            "Should parse 14-digit YYYYMMDDHHMMSS format"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_shard_first_match() {
+        // GIVEN: Filename with date prefixed by other text (shard first match)
+        let path = Path::new("backup_20240101_photos.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-01-01 00:00:00 UTC
+        assert!(
+            result.is_some(),
+            "Should find date in filename with prefix text"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_hidden_file() {
+        // GIVEN: Hidden file (starts with dot) that contains a date
+        let path = Path::new(".hidden_20240215.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (hidden file)
+        assert!(result.is_none(), "Should ignore hidden files (dotfiles)");
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_vid_dash_separators() {
+        // GIVEN: Filename with VID-YYYYMMDD-HHMMSS dash separators
+        let path = Path::new("VID-20240215-185056.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(
+            result.is_some(),
+            "Should parse VID-YYYYMMDD-HHMMSS dash format"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_parse_date_from_filename_iso_date() {
+        // GIVEN: Filename with ISO date format (YYYY-MM-DD)
+        let path = Path::new("2024-02-15.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 00:00:00 UTC
+        assert!(result.is_some(), "Should parse ISO YYYY-MM-DD format");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
     }
 }

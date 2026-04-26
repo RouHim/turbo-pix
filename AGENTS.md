@@ -137,3 +137,5 @@ npm run test:e2e:report   # View test report
 **Indexing empty-state contract:** `static/js/photoGrid.js:showEmptyState()` must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
 
 **Video taken-at extraction order:** `src/metadata_extractor.rs:extract_taken_at_from_ffprobe_json()` must check `format.tags.creation_time` → `format.tags.com.apple.quicktime.creationdate` → `streams[].tags.creation_time` → `format.tags.date` / `format.tags.date-{lang}`, then fall back via `apply_file_creation_fallback()` using `created().or_else(modified)`; ffprobe metadata varies by container.
+
+**Filename date parsing:** `metadata_extractor.rs` parses `taken_at` from filenames as a fallback before file creation time. Supported patterns: `%Y%m%d_%H%M%S`, `%Y%m%d%H%M%S`, `%Y-%m-%d-%H-%M-%S` (full stem), plus shard-based `%Y%m%d` and `%Y-%m-%d` with optional adjacent `%H%M%S`/`%H-%M-%S`. Years < 1990 are rejected (consistent with `parse_video_creation_time`). Fallback chain: EXIF/video metadata → filename → file creation time.

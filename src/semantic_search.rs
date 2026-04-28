@@ -21,6 +21,7 @@
 //! Relevant matches typically score 60-70+, with strong matches reaching 70+.
 
 use anyhow::{Context, Error as E, Result};
+use async_trait::async_trait;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
@@ -77,6 +78,17 @@ pub struct SemanticSearchEngine {
     tokenizer: Arc<Tokenizer>,
     device: Arc<Device>,
     pool: DbPool,
+}
+
+#[async_trait]
+pub trait SemanticSearch: Send + Sync {
+    async fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>>;
+    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)>;
+    async fn encode_video_vector(
+        &self,
+        video_path: &str,
+        frame_count: Option<usize>,
+    ) -> Result<(String, Tensor, VideoSemanticMeta)>;
 }
 
 impl SemanticSearchEngine {
@@ -452,6 +464,57 @@ impl SemanticSearchEngine {
     }
 }
 
+#[async_trait]
+impl SemanticSearch for SemanticSearchEngine {
+    async fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>> {
+        self.search(query, limit, offset).await
+    }
+
+    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)> {
+        self.encode_image_vector(image_path).await
+    }
+
+    async fn encode_video_vector(
+        &self,
+        video_path: &str,
+        frame_count: Option<usize>,
+    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+        self.encode_video_vector(video_path, frame_count).await
+    }
+}
+
+#[cfg(test)]
+pub struct NoopSemanticSearch;
+
+#[cfg(test)]
+#[async_trait]
+impl SemanticSearch for NoopSemanticSearch {
+    async fn search(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        Ok(vec![])
+    }
+
+    async fn encode_image_vector(&self, _image_path: &str) -> Result<(String, Tensor)> {
+        Err(anyhow::anyhow!(
+            "NoopSemanticSearch: semantic search not available"
+        ))
+    }
+
+    async fn encode_video_vector(
+        &self,
+        _video_path: &str,
+        _frame_count: Option<usize>,
+    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+        Err(anyhow::anyhow!(
+            "NoopSemanticSearch: semantic search not available"
+        ))
+    }
+}
+
 pub async fn batch_store_semantic_vectors(
     pool: &DbPool,
     items: Vec<SemanticBatchItem>,
@@ -558,7 +621,10 @@ pub fn download_models(data_path: &str) -> Result<()> {
 }
 
 /// Loads CLIP ViT-B/32 model and tokenizer from HuggingFace Hub
-fn load_clip_model(device: &Device, data_path: &str) -> Result<(clip::ClipModel, Tokenizer)> {
+pub(crate) fn load_clip_model(
+    device: &Device,
+    data_path: &str,
+) -> Result<(clip::ClipModel, Tokenizer)> {
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
     let model_repo = hf_hub::api::sync::ApiBuilder::new()

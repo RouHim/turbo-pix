@@ -1,3 +1,16 @@
+# [2.33.0](https://github.com/RouHim/turbo-pix/compare/2.32.2...2.33.0) (2026-04-28)
+
+
+### Bug Fixes
+
+* **viewer:** add opacity and will-change to mobile sidebar for smooth transitions ([ba7815a](https://github.com/RouHim/turbo-pix/commit/ba7815a307e6ab569eca113375b137a70c83bbb4))
+* **viewer:** set z-index on mobile sidebar to render above photo ([fd9662c](https://github.com/RouHim/turbo-pix/commit/fd9662c5794f3ca1c9b91328428ebfc01b512e4f))
+
+
+### Features
+
+* **viewer:** add close button to mobile sidebar info panel ([61dac32](https://github.com/RouHim/turbo-pix/commit/61dac32a77c913b4768629abc1323179b0083764))
+
 ## [2.32.2](https://github.com/RouHim/turbo-pix/compare/2.32.1...2.32.2) (2026-04-28)
 
 ## [2.32.1](https://github.com/RouHim/turbo-pix/compare/2.32.0...2.32.1) (2026-04-27)

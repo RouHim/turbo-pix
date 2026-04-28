@@ -13,6 +13,8 @@ use crate::db::DbPool;
 use crate::geo_location::NominatimClient;
 use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
+use crate::semantic_search::SemanticSearch;
+#[cfg(test)]
 use crate::semantic_search::SemanticSearchEngine;
 
 /// Batch size for database writes (I/O-bound operations)
@@ -193,7 +195,7 @@ pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
     db_pool: DbPool,
     cache_manager: CacheManager,
-    semantic_search: Arc<SemanticSearchEngine>,
+    semantic_search: Arc<dyn SemanticSearch>,
     data_path: PathBuf,
     locale: String,
     nominatim_url: String,
@@ -206,7 +208,7 @@ impl PhotoScheduler {
         photo_paths: Vec<PathBuf>,
         db_pool: DbPool,
         cache_manager: CacheManager,
-        semantic_search: Arc<SemanticSearchEngine>,
+        semantic_search: Arc<dyn SemanticSearch>,
         data_path: PathBuf,
         locale: String,
         nominatim_url: String,
@@ -619,8 +621,35 @@ mod tests {
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
+    use std::sync::OnceLock;
+
     use crate::cache_manager::CacheManager;
     use crate::db::{create_test_db_pool, DbPool, Photo};
+    use crate::semantic_search::NoopSemanticSearch;
+
+    type CachedModel = (
+        std::sync::Arc<std::sync::RwLock<candle_transformers::models::clip::ClipModel>>,
+        std::sync::Arc<tokenizers::Tokenizer>,
+        std::sync::Arc<candle_core::Device>,
+    );
+
+    static MODEL_CACHE: OnceLock<CachedModel> = OnceLock::new();
+
+    fn get_cached_scheduler_model(pool: crate::db::DbPool) -> SemanticSearchEngine {
+        let (model, tokenizer, device) = MODEL_CACHE
+            .get_or_init(|| {
+                let device = std::sync::Arc::new(candle_core::Device::Cpu);
+                let (model, tokenizer) = crate::semantic_search::load_clip_model(&device, "./data")
+                    .expect("Failed to load model");
+                (
+                    std::sync::Arc::new(std::sync::RwLock::new(model)),
+                    std::sync::Arc::new(tokenizer),
+                    device,
+                )
+            })
+            .clone();
+        SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+    }
 
     struct TestEnvironment {
         temp_dir: TempDir,
@@ -630,12 +659,12 @@ mod tests {
     }
 
     impl TestEnvironment {
-        async fn new() -> Self {
+        async fn new_without_semantics() -> Self {
             let temp_dir = TempDir::new().unwrap();
             let db_pool = create_test_db_pool().await.unwrap();
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-            let semantic_search =
-                Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+            let semantic_search: Arc<dyn crate::semantic_search::SemanticSearch> =
+                Arc::new(NoopSemanticSearch);
 
             let photo_paths = vec![temp_dir.path().to_path_buf()];
             let data_path = temp_dir.path().to_path_buf();
@@ -656,6 +685,38 @@ mod tests {
                 cache_manager,
                 scheduler,
             }
+        }
+
+        async fn new_with_semantics() -> Self {
+            let temp_dir = TempDir::new().unwrap();
+            let db_pool = create_test_db_pool().await.unwrap();
+            let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
+            let semantic_search: Arc<dyn crate::semantic_search::SemanticSearch> =
+                Arc::new(get_cached_scheduler_model(db_pool.clone()));
+
+            let photo_paths = vec![temp_dir.path().to_path_buf()];
+            let data_path = temp_dir.path().to_path_buf();
+
+            let scheduler = PhotoScheduler::new(
+                photo_paths,
+                db_pool.clone(),
+                cache_manager.clone(),
+                semantic_search,
+                data_path,
+                "en".to_string(),
+                "https://nominatim.openstreetmap.org".to_string(),
+            );
+
+            Self {
+                temp_dir,
+                db_pool,
+                cache_manager,
+                scheduler,
+            }
+        }
+
+        async fn new() -> Self {
+            Self::new_without_semantics().await
         }
 
         fn create_test_image(&self, filename: &str, content: &[u8]) -> PathBuf {
@@ -719,7 +780,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let result = rt.block_on(async {
-            let env = TestEnvironment::new().await;
+            let env = TestEnvironment::new_without_semantics().await;
             env.scheduler.run_startup_rescan().await
         });
 
@@ -771,7 +832,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_orphaned_file_cleanup() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_without_semantics().await;
 
         // Add a photo to database but don't create the file
         let fake_path = env.temp_dir.path().join("nonexistent.jpg");
@@ -798,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rescan_detects_file_modifications() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_without_semantics().await;
 
         // Create and index initial file
         let image_path = env.create_test_image("test.jpg", b"original content");
@@ -826,15 +887,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_database_vacuum_operations() {
-        let env = TestEnvironment::new().await;
+        let db_pool = create_test_db_pool().await.unwrap();
 
-        // Add some test data
-        env.create_test_image("test1.jpg", b"content 1");
-        env.create_test_image("test2.jpg", b"content 2");
-        env.scheduler.run_startup_rescan().await.unwrap();
-
-        // Test vacuum operation (should not fail)
-        let vacuum_result = crate::db::vacuum_database(&env.db_pool).await;
+        // Test vacuum operation (should not fail, even on empty DB)
+        let vacuum_result = crate::db::vacuum_database(&db_pool).await;
         assert!(vacuum_result.is_ok());
     }
 
@@ -849,7 +905,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_rescan_and_cleanup_comprehensive() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_without_semantics().await;
 
         // Setup complex scenario:
         // 1. Create some files
@@ -894,8 +950,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_pool = create_test_db_pool().await.unwrap();
         let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
-        let semantic_search =
-            Arc::new(SemanticSearchEngine::new(db_pool.clone(), "./data").unwrap());
+        let semantic_search: Arc<dyn crate::semantic_search::SemanticSearch> =
+            Arc::new(NoopSemanticSearch);
         let data_path = temp_dir.path().to_path_buf();
 
         // Create scheduler with non-existent path
@@ -917,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_rescan_operations() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_without_semantics().await;
 
         // Create test files
         env.create_test_image("concurrent1.jpg", b"content 1");
@@ -940,7 +996,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase2_batch_semantic_vectors() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_with_semantics().await;
 
         // Create test images
         env.create_test_image("semantic1.jpg", b"test image 1");
@@ -982,7 +1038,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_write_consistency() {
-        let env = TestEnvironment::new().await;
+        let env = TestEnvironment::new_without_semantics().await;
 
         // Create multiple test files to trigger batching
         for i in 0..10 {

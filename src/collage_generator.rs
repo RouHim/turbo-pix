@@ -1422,7 +1422,7 @@ pub async fn accept_collage(
     pool: &DbPool,
     collage_id: i64,
     data_path: &Path,
-    semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
+    semantic_search: std::sync::Arc<dyn crate::semantic_search::SemanticSearch>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get collage
     let collage = Collage::get_by_id(pool, collage_id)
@@ -1496,7 +1496,7 @@ pub async fn reject_collage(
 async fn index_collage_file(
     pool: &DbPool,
     file_path: &Path,
-    semantic_search: std::sync::Arc<crate::semantic_search::SemanticSearchEngine>,
+    semantic_search: std::sync::Arc<dyn crate::semantic_search::SemanticSearch>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get file metadata
     let metadata = fs::metadata(file_path)?;

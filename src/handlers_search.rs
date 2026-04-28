@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::DbPool;
-use crate::semantic_search::SemanticSearchEngine;
+use crate::semantic_search::SemanticSearch;
 use crate::warp_helpers::{with_db, with_semantic_search, DatabaseError};
 
 #[derive(Debug, Deserialize)]
@@ -40,7 +40,7 @@ pub struct SemanticSearchResponse {
 pub async fn semantic_search(
     query: SemanticSearchQuery,
     db_pool: DbPool,
-    semantic_search: Arc<SemanticSearchEngine>,
+    semantic_search: Arc<dyn SemanticSearch>,
 ) -> Result<impl Reply, Rejection> {
     log::info!(
         "Semantic search query: '{}' (limit: {}, offset: {})",
@@ -118,7 +118,7 @@ pub async fn semantic_search(
 
 pub fn build_search_routes(
     db_pool: DbPool,
-    semantic_search_engine: Arc<SemanticSearchEngine>,
+    semantic_search_engine: Arc<dyn SemanticSearch>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path("api")
         .and(warp::path("search"))

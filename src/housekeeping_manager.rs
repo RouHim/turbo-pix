@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::db::DbPool;
-use crate::semantic_search::SemanticSearchEngine;
+use crate::semantic_search::SemanticSearch;
 
 const HOUSEKEEPING_TERMS: &[&str] = &[
     "screenshot",
@@ -24,7 +24,7 @@ const MAX_RESULTS_PER_TERM: usize = 100;
 
 pub async fn run_housekeeping_scan(
     db_pool: &DbPool,
-    semantic_search: &Arc<SemanticSearchEngine>,
+    semantic_search: &Arc<dyn SemanticSearch>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     info!("Starting housekeeping candidate identification scan...");
 

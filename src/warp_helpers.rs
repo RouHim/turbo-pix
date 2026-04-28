@@ -1,6 +1,6 @@
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
-use crate::semantic_search::SemanticSearchEngine;
+use crate::semantic_search::SemanticSearch;
 use crate::thumbnail_generator::ThumbnailGenerator;
 use serde::Serialize;
 use std::convert::Infallible;
@@ -51,8 +51,8 @@ pub fn with_thumbnail_generator(
 }
 
 pub fn with_semantic_search(
-    semantic_search: Arc<SemanticSearchEngine>,
-) -> impl Filter<Extract = (Arc<SemanticSearchEngine>,), Error = Infallible> + Clone {
+    semantic_search: Arc<dyn SemanticSearch>,
+) -> impl Filter<Extract = (Arc<dyn SemanticSearch>,), Error = Infallible> + Clone {
     warp::any().map(move || semantic_search.clone())
 }
 

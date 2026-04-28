@@ -5,7 +5,7 @@ use warp::{reject, Filter, Rejection, Reply};
 
 use crate::collage_generator::{self, Collage};
 use crate::db::DbPool;
-use crate::semantic_search::SemanticSearchEngine;
+use crate::semantic_search::SemanticSearch;
 use crate::warp_helpers::{with_db, DatabaseError};
 
 /// List all pending collages
@@ -26,7 +26,7 @@ pub async fn accept_collage(
     id: i64,
     db_pool: DbPool,
     data_path: PathBuf,
-    semantic_search: Arc<SemanticSearchEngine>,
+    semantic_search: Arc<dyn SemanticSearch>,
 ) -> Result<impl Reply, Rejection> {
     info!("Accepting collage {}", id);
 
@@ -149,7 +149,7 @@ pub fn build_collage_routes(
     db_pool: DbPool,
     data_path: PathBuf,
     locale: String,
-    semantic_search: Arc<SemanticSearchEngine>,
+    semantic_search: Arc<dyn SemanticSearch>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let list_pending = warp::path!("api" / "collages" / "pending")
         .and(warp::get())

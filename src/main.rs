@@ -19,7 +19,7 @@ use turbo_pix::handlers_search::build_search_routes;
 use turbo_pix::handlers_static::build_static_routes;
 use turbo_pix::handlers_thumbnail::build_thumbnail_routes;
 use turbo_pix::scheduler::PhotoScheduler;
-use turbo_pix::semantic_search::{self, SemanticSearchEngine};
+use turbo_pix::semantic_search::{self, SemanticSearch, SemanticSearchEngine};
 use turbo_pix::thumbnail_generator::ThumbnailGenerator;
 use turbo_pix::video_processor;
 use turbo_pix::warp_helpers::{cors, handle_rejection};
@@ -132,7 +132,7 @@ type InitServicesResult = (
     db_pool::DbPool,
     ThumbnailGenerator,
     PhotoScheduler,
-    Arc<SemanticSearchEngine>,
+    Arc<dyn SemanticSearch>,
     CacheManager,
 );
 

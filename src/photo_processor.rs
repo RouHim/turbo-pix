@@ -12,9 +12,7 @@ use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
 use crate::scheduler::IndexingStatus;
-use crate::semantic_search::{
-    batch_store_semantic_vectors, SemanticBatchItem, SemanticSearchEngine,
-};
+use crate::semantic_search::{batch_store_semantic_vectors, SemanticBatchItem, SemanticSearch};
 use crate::video_processor;
 
 /// Batch size for semantic vector computation (CPU-bound operations)
@@ -69,7 +67,7 @@ pub struct ProcessedPhoto {
 
 pub struct PhotoProcessor {
     scanner: FileScanner,
-    semantic_search: Arc<SemanticSearchEngine>,
+    semantic_search: Arc<dyn SemanticSearch>,
 }
 
 /// Attempt to fix MOOV atom placement for video files during scanning.
@@ -91,7 +89,7 @@ fn maybe_fix_moov_for_video(path: &Path) {
 }
 
 impl PhotoProcessor {
-    pub fn new(photo_paths: Vec<PathBuf>, semantic_search: Arc<SemanticSearchEngine>) -> Self {
+    pub fn new(photo_paths: Vec<PathBuf>, semantic_search: Arc<dyn SemanticSearch>) -> Self {
         Self {
             scanner: FileScanner::new(photo_paths),
             semantic_search,

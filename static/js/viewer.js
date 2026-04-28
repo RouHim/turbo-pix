@@ -543,8 +543,10 @@ class PhotoViewer {
       rotateRightBtn: utils.$('.rotate-right-btn'),
       deletePhotoBtn: utils.$('.delete-photo-btn'),
       acceptCollageBtn: utils.$('[data-action="accept-collage"]'),
+      sidebarCloseBtn: document.getElementById('sidebar-close-btn'),
     };
 
+    this._handleSidebarClose = () => this.toggleSidebar();
     this.controls = new ViewerControls(this, this.elements);
     this.metadata = new ViewerMetadata(this.elements);
     this.gestureManager = null;
@@ -586,6 +588,10 @@ class PhotoViewer {
 
     if (this.elements.metadataBtn) {
       utils.on(this.elements.metadataBtn, 'click', () => this.toggleInfo());
+    }
+
+    if (this.elements.sidebarCloseBtn) {
+      utils.on(this.elements.sidebarCloseBtn, 'click', this._handleSidebarClose);
     }
 
     if (this.elements.rotateLeftBtn) {
@@ -848,6 +854,11 @@ class PhotoViewer {
     // Hide sidebar when closing viewer
     if (this.elements.sidebar) {
       this.elements.sidebar.classList.remove('show');
+    }
+
+    // Clean up sidebar close button event listener
+    if (this.elements.sidebarCloseBtn) {
+      this.elements.sidebarCloseBtn.removeEventListener('click', this._handleSidebarClose);
     }
 
     this.swipeableViewer.reset();

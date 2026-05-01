@@ -282,6 +282,7 @@
         font-size: var(--font-lg);
         transition: var(--transition-fast);
         background: var(--background-color);
+        color: var(--text-primary);
 
         &:focus {
           outline: none;

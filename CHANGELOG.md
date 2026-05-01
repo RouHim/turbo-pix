@@ -1,3 +1,10 @@
+## [2.33.2](https://github.com/RouHim/turbo-pix/compare/2.33.1...2.33.2) (2026-05-01)
+
+
+### Bug Fixes
+
+* **css:** set explicit text color on search input for dark mode visibility ([7d07838](https://github.com/RouHim/turbo-pix/commit/7d07838a60586ed4e03167639510e95c1eb86f84))
+
 ## [2.33.1](https://github.com/RouHim/turbo-pix/compare/2.33.0...2.33.1) (2026-04-29)
 
 # [2.33.0](https://github.com/RouHim/turbo-pix/compare/2.32.2...2.33.0) (2026-04-28)

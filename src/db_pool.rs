@@ -11,7 +11,7 @@ pub type DbPool = sqlx::SqlitePool;
 // Formula: (max_concurrent_photo_tasks() * 2) + API_REQUEST_BUFFER
 // - *2 multiplier: Each task may need multiple connections during processing
 // - API buffer: Reserve connections for concurrent API requests
-const API_REQUEST_BUFFER: usize = 10;
+const API_REQUEST_BUFFER: usize = 2;
 
 /// Returns optimal number of concurrent photo processing tasks based on CPU cores
 /// Formula: num_cores (for CPU-bound CLIP inference)
@@ -57,8 +57,8 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(30))
             .pragma("temp_store", "MEMORY")
-            .pragma("cache_size", "-128000") // 128MB cache
-            .pragma("mmap_size", "536870912") // 512MB memory-mapped I/O
+            .pragma("cache_size", "-32000") // 32MB cache
+            .pragma("mmap_size", "268435456") // 256MB memory-mapped I/O
             .pragma("wal_autocheckpoint", "10000")
             .pragma("analysis_limit", "1000"))
     }

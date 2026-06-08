@@ -1,6 +1,13 @@
 ## [2.33.20](https://github.com/RouHim/turbo-pix/compare/2.33.19...2.33.20) (2026-06-08)
 
 
+### Performance Improvements
+
+* **db:** reduce idle memory footprint ([2e9f5e3](https://github.com/RouHim/turbo-pix/commit/2e9f5e334474b132c69e017546c7eea92a9ef658))
+
+## [2.33.20](https://github.com/RouHim/turbo-pix/compare/2.33.19...2.33.20) (2026-06-08)
+
+
 ### Performance
 
 * **db:** reduce idle memory footprint: mmap_size 512→256 MB, cache_size 128→32 MB, pool buffer 10→2

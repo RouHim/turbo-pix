@@ -488,6 +488,141 @@ impl MetadataExtractor {
         Some(parsed)
     }
 
+    /// Returns true if all characters in s are ASCII digits and length is in range
+    fn token_is_all_ascii_digits(s: &str, len_range: core::ops::RangeInclusive<usize>) -> bool {
+        len_range.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// Try to interpret shards[start..start+3] as year-month-day
+    /// Year must be exactly 4 digits and >= 1990, month 1-12, day 1-31
+    fn try_parse_date_triplet(shards: &[&str], start: usize) -> Option<NaiveDate> {
+        let year_str = shards.get(start)?;
+        if year_str.len() != 4 || !year_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let year: i32 = year_str.parse().ok()?;
+        if year < 1990 {
+            return None;
+        }
+        let month_str = shards.get(start + 1)?;
+        if !(1..=2).contains(&month_str.len()) || !month_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let month: u32 = month_str.parse().ok()?;
+        if !(1..=12).contains(&month) {
+            return None;
+        }
+        let day_str = shards.get(start + 2)?;
+        if !(1..=2).contains(&day_str.len()) || !day_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let day: u32 = day_str.parse().ok()?;
+        if !(1..=31).contains(&day) {
+            return None;
+        }
+        NaiveDate::from_ymd_opt(year, month, day)
+    }
+
+    /// Try to interpret shards[0..3] as hour-minute-second (1-2 digits each)
+    fn try_parse_time_triplet(shards: &[&str]) -> Option<NaiveTime> {
+        let hour_str = shards.first()?;
+        if !(1..=2).contains(&hour_str.len()) || !hour_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let hour: u32 = hour_str.parse().ok()?;
+        if hour > 23 {
+            return None;
+        }
+        let min_str = shards.get(1)?;
+        if !(1..=2).contains(&min_str.len()) || !min_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let min: u32 = min_str.parse().ok()?;
+        if min > 59 {
+            return None;
+        }
+        let sec_str = shards.get(2)?;
+        if !(1..=2).contains(&sec_str.len()) || !sec_str.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let sec: u32 = sec_str.parse().ok()?;
+        if sec > 59 {
+            return None;
+        }
+        NaiveTime::from_hms_opt(hour, min, sec)
+    }
+
+    /// Try to parse a compact time token (6-12 digits) as HHMMSS + trailing sub-second
+    fn try_parse_compact_time_ms(token: &str) -> Option<NaiveTime> {
+        if !Self::token_is_all_ascii_digits(token, 6..=12) {
+            return None;
+        }
+        NaiveTime::parse_from_str(&token[..6], "%H%M%S").ok()
+    }
+
+    /// Tokenized date-time heuristic: scan shards for date + optional time tokens
+    fn try_heuristic_date_from_shards(shards: &[&str]) -> Option<DateTime<Utc>> {
+        for i in 0..shards.len() {
+            // Strategy 1: Compact date token (8 digits) at position i
+            if let Some(compact) = shards.get(i) {
+                if Self::token_is_all_ascii_digits(compact, 8..=8) {
+                    if let Ok(date) = NaiveDate::parse_from_str(compact, "%Y%m%d") {
+                        if date.year() >= 1990 {
+                            let time = shards
+                                .get(i + 1)
+                                .and_then(|t| Self::try_parse_compact_time_ms(t))
+                                .or_else(|| {
+                                    if i + 3 < shards.len() {
+                                        Self::try_parse_time_triplet(&shards[i + 1..])
+                                    } else {
+                                        None
+                                    }
+                                });
+                            let naive = if let Some(t) = time {
+                                date.and_time(t)
+                            } else {
+                                date.and_hms_opt(0, 0, 0)?
+                            };
+                            return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                        }
+                    }
+                }
+            }
+
+            // Strategy 2: Tokenized date triplet at i, i+1, i+2
+            if let Some(date) = Self::try_parse_date_triplet(shards, i) {
+                let time = shards
+                    .get(i + 3)
+                    .and_then(|t| Self::try_parse_compact_time_ms(t))
+                    .or_else(|| {
+                        if i + 6 <= shards.len() {
+                            Self::try_parse_time_triplet(&shards[i + 3..])
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(t) = time {
+                    let naive = date.and_time(t);
+                    return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+                }
+                // If the next 3+ tokens look like a failed time attempt
+                // (all short numeric), skip this date position — don't default to midnight
+                let next_looks_like_time = shards.get(i + 3).is_some_and(|first| {
+                    shards[i + 3..]
+                        .iter()
+                        .take(3)
+                        .all(|s| s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit()))
+                        && first.len() <= 2
+                });
+                if next_looks_like_time {
+                    continue;
+                }
+                let naive = date.and_hms_opt(0, 0, 0)?;
+                return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+            }
+        }
+        None
+    }
     fn parse_date_from_filename(path: &Path) -> Option<DateTime<Utc>> {
         let file_name = path.file_name()?.to_str()?;
         if file_name.starts_with('.') {
@@ -561,6 +696,10 @@ impl MetadataExtractor {
             }
         }
 
+        // Pass 4: Tokenized date-time heuristic
+        if let Some(dt) = Self::try_heuristic_date_from_shards(&shards) {
+            return Some(dt);
+        }
         None
     }
 }
@@ -1470,5 +1609,227 @@ mod tests {
 
         // Cleanup
         std::fs::remove_file(&path).ok();
+    }
+
+    // ============================================================
+    // Heuristic tokenized date-time parsing tests (Pass 4)
+    // ============================================================
+
+    #[test]
+    fn test_heuristic_signal_tokenized_with_ms() {
+        // GIVEN: Signal export filename with dash-separated tokens including ms
+        let path = Path::new("signal-2023-05-10-10-38-24-409.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2023-05-10 10:38:24 UTC (ms dropped)
+        assert!(
+            result.is_some(),
+            "Should parse Signal tokenized date with ms"
+        );
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2023);
+        assert_eq!(dt.month(), 5);
+        assert_eq!(dt.day(), 10);
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 38);
+        assert_eq!(dt.second(), 24);
+    }
+
+    #[test]
+    fn test_heuristic_signal_tokenized_variant() {
+        // GIVEN: Another Signal export filename variant
+        let path = Path::new("signal-2023-06-16-16-42-39-944.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2023-06-16 16:42:39 UTC
+        assert!(result.is_some(), "Should parse Signal variant");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2023);
+        assert_eq!(dt.month(), 6);
+        assert_eq!(dt.day(), 16);
+        assert_eq!(dt.hour(), 16);
+        assert_eq!(dt.minute(), 42);
+        assert_eq!(dt.second(), 39);
+    }
+
+    #[test]
+    fn test_heuristic_compact_date_with_ms_blob() {
+        // GIVEN: Compact date with ms blob appended to time token
+        let path = Path::new("2022-12-19-091755119.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2022-12-19 09:17:55 UTC
+        assert!(result.is_some(), "Should parse compact date with ms blob");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2022);
+        assert_eq!(dt.month(), 12);
+        assert_eq!(dt.day(), 19);
+        assert_eq!(dt.hour(), 9);
+        assert_eq!(dt.minute(), 17);
+        assert_eq!(dt.second(), 55);
+    }
+
+    #[test]
+    fn test_heuristic_compact_date_with_ms_blob_variant() {
+        // GIVEN: Another compact date with ms blob variant
+        let path = Path::new("2022-12-18-200148753.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2022-12-18 20:01:48 UTC
+        assert!(result.is_some(), "Should parse compact date variant");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2022);
+        assert_eq!(dt.month(), 12);
+        assert_eq!(dt.day(), 18);
+        assert_eq!(dt.hour(), 20);
+        assert_eq!(dt.minute(), 1);
+        assert_eq!(dt.second(), 48);
+    }
+
+    #[test]
+    fn test_heuristic_whatsapp_img() {
+        // GIVEN: WhatsApp image filename (IMG-YYYYMMDD-WANNNNN)
+        let path = Path::new("IMG-20250115-WA0001.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2025-01-15 00:00:00 UTC
+        assert!(result.is_some(), "Should parse WhatsApp IMG filename");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2025);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_heuristic_whatsapp_vid() {
+        // GIVEN: WhatsApp video filename (VID-YYYYMMDD-WANNNNN)
+        let path = Path::new("VID-20250115-WA0002.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2025-01-15 00:00:00 UTC
+        assert!(result.is_some(), "Should parse WhatsApp VID filename");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2025);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_heuristic_ios_tokenized_underscore() {
+        // GIVEN: iOS-style filename with underscore-separated tokens
+        let path = Path::new("IMG_2024_02_15_18_50_56.jpg");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-02-15 18:50:56 UTC
+        assert!(result.is_some(), "Should parse iOS tokenized filename");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 18);
+        assert_eq!(dt.minute(), 50);
+        assert_eq!(dt.second(), 56);
+    }
+
+    #[test]
+    fn test_heuristic_12_digit_time_token() {
+        // GIVEN: Filename with 12-digit time token (HHMMSS + 6 sub-second digits)
+        let path = Path::new("2024-01-01-123045123456.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should extract 2024-01-01 12:30:45 UTC (first 6 digits of time)
+        assert!(result.is_some(), "Should parse 12-digit time token");
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+        assert_eq!(dt.hour(), 12);
+        assert_eq!(dt.minute(), 30);
+        assert_eq!(dt.second(), 45);
+    }
+
+    #[test]
+    fn test_heuristic_rejects_invalid_month_triplet() {
+        // GIVEN: Filename with month 13 (invalid) in tokenized format
+        let path = Path::new("2024-13-01-10-30-00.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (month 13 invalid)
+        assert!(result.is_none(), "Should reject month 13");
+    }
+
+    #[test]
+    fn test_heuristic_rejects_invalid_hour_triplet() {
+        // GIVEN: Filename with hour 25 (invalid) in tokenized format
+        let path = Path::new("2024-01-01-25-00-00.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (hour 25 invalid)
+        assert!(result.is_none(), "Should reject hour 25");
+    }
+
+    #[test]
+    fn test_heuristic_rejects_pre_1990_triplet() {
+        // GIVEN: Filename with year 1989 (pre-1990) in tokenized format
+        let path = Path::new("1989-12-31-10-30-00.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (year < 1990)
+        assert!(result.is_none(), "Should reject pre-1990 year");
+    }
+
+    #[test]
+    fn test_heuristic_rejects_ambiguous_short_sequence() {
+        // GIVEN: Filename with short ambiguous numbers (no 4-digit year)
+        let path = Path::new("1-2-3-4-5-6.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (no recognizable date pattern)
+        assert!(
+            result.is_none(),
+            "Should reject ambiguous short number sequence"
+        );
+    }
+
+    #[test]
+    fn test_heuristic_rejects_time_only() {
+        // GIVEN: Filename with only a time token (no year)
+        let path = Path::new("123045.mp4");
+
+        // WHEN: Parse date from filename
+        let result = MetadataExtractor::parse_date_from_filename(path);
+
+        // THEN: Should return None (no year present)
+        assert!(result.is_none(), "Should reject time-only filename");
     }
 }

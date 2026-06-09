@@ -1,3 +1,10 @@
+# [2.34.0](https://github.com/RouHim/turbo-pix/compare/2.33.21...2.34.0) (2026-06-09)
+
+
+### Features
+
+* generalized heuristic filename date-time parsing ([e721960](https://github.com/RouHim/turbo-pix/commit/e721960b5e9e4a60c04bbd68950109238649182d))
+
 ## [2.33.21](https://github.com/RouHim/turbo-pix/compare/2.33.20...2.33.21) (2026-06-09)
 
 ## [2.33.20](https://github.com/RouHim/turbo-pix/compare/2.33.19...2.33.20) (2026-06-08)

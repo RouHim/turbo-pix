@@ -1,61 +1,7 @@
 use warp::reply::Reply;
 use warp::Filter;
 
-macro_rules! include_static {
-    ($($path:expr),* $(,)?) => {
-        &[$(($path, include_str!(concat!("../static/", $path)))),*]
-    };
-}
-
-#[allow(unused_macros)]
-macro_rules! include_static_binary {
-    ($($path:expr),* $(,)?) => {
-        &[$(($path, include_bytes!(concat!("../static/", $path)) as &[u8])),*]
-    };
-}
-
-const STATIC_FILES: &[(&str, &str)] = include_static![
-    "index.html",
-    "favicon.svg",
-    "site.webmanifest",
-    "css/main.css",
-    "css/components.css",
-    "css/responsive.css",
-    "js/constants.js",
-    "js/utils.js",
-    "js/logger.js",
-    "js/blurhash.js",
-    "js/api.js",
-    "js/viewerControls.js",
-    "js/viewerMetadata.js",
-    "js/viewerMetadataEdit.js",
-    "js/photoCard.js",
-    "js/infiniteScroll.js",
-    "js/photoGrid.js",
-    "js/viewer.js",
-    "js/search.js",
-    "js/timeline.js",
-    "js/router.js",
-    "js/i18n.js",
-    "js/app.js",
-    "js/collages.js",
-    "js/housekeeping.js",
-    "js/indexingOrbit.js",
-    "js/gestureManager.js",
-    "js/gestureRecognizers.js",
-    "js/feather.min.js",
-    "js/icons.js",
-    "i18n/i18nManager.js",
-    "i18n/en/index.js",
-    "i18n/de/index.js",
-];
-
-const STATIC_BINARY_FILES: &[(&str, &[u8])] = include_static_binary![
-    "fonts/PlayfairDisplay-Bold.woff2",
-    "fonts/PlayfairDisplay-Regular.woff2",
-    "fonts/DMSans-Regular.woff2",
-    "fonts/DMSans-Medium.woff2",
-];
+include!(concat!(env!("OUT_DIR"), "/embedded_static.rs"));
 
 fn content_type_from_path(path: &str) -> &'static str {
     match path.rsplit('.').next() {
@@ -156,9 +102,7 @@ pub fn build_static_routes(
             let path_str = path.as_str();
             // Reject API and static asset paths - let them be handled by specific routes or return 404
             if path_str.starts_with("/api/")
-                || path_str.starts_with("/css/")
-                || path_str.starts_with("/js/")
-                || path_str.starts_with("/i18n/")
+                || path_str.starts_with("/assets/")
                 || path_str.starts_with("/favicon")
                 || path_str.starts_with("/site.webmanifest")
                 || path_str.starts_with("/fonts/")

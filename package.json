@@ -9,13 +9,15 @@
     "url": "https://github.com/RouHim/turbo-pix.git"
   },
   "scripts": {
-    "format": "prettier --write \"static/**/*.{js,css}\"",
-    "format:check": "prettier --check \"static/**/*.{js,css}\"",
+    "dev": "vite",
+    "build": "vite build",
+    "format": "prettier --write \"frontend/**/*.{js,css,svelte,html}\"",
+    "format:check": "prettier --check \"frontend/**/*.{js,css,svelte,html}\"",
+    "lint:js": "eslint --no-warn-ignored \"frontend/src/**/*.{js,svelte}\"",
     "lint": "npm run lint:js && npm run lint:css",
-    "lint:js": "eslint --no-warn-ignored \"static/**/*.js\"",
-    "lint:js:fix": "eslint --no-warn-ignored --fix \"static/**/*.js\"",
-    "lint:css": "stylelint \"static/**/*.css\"",
-    "lint:css:fix": "stylelint --fix \"static/**/*.css\"",
+    "lint:css": "stylelint \"frontend/src/**/*.css\"",
+    "lint:js:fix": "eslint --no-warn-ignored --fix \"frontend/src/**/*.{js,svelte}\"",
+    "lint:css:fix": "stylelint --fix \"frontend/src/**/*.css\"",
     "lint:fix": "npm run lint:js:fix && npm run lint:css:fix && npm run format",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -30,10 +32,19 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.57.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "eslint": "^10.0.0",
+    "eslint-plugin-svelte": "^3.22.0",
     "prettier": "^3.0.0",
+    "prettier-plugin-svelte": "^4.1.1",
     "simple-git-hooks": "^2.13.1",
     "stylelint": "^17.0.0",
-    "stylelint-config-standard": "^40.0.0"
+    "stylelint-config-standard": "^40.0.0",
+    "vite": "^8.2.0"
+  },
+  "dependencies": {
+    "feather-icons": "^4.29.2",
+    "svelte": "^5.56.8",
+    "svelte-i18n": "^4.0.1"
   }
 }

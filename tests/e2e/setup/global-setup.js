@@ -21,6 +21,7 @@ const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
 async function buildBinary() {
   console.log('Building TurboPix binary...');
   try {
+    await execAsync('npm run build');
     const { stdout, stderr } = await execAsync('cargo build --bin turbo-pix');
     if (stderr && !stderr.includes('Finished')) {
       console.log('Build output:', stderr);

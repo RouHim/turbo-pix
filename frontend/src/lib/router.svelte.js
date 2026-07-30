@@ -1,0 +1,137 @@
+const validViews = ['all', 'favorites', 'videos', 'collages', 'housekeeping'];
+const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
+
+const defaultState = {
+  view: 'all',
+  photo: null,
+  query: null,
+  sort: 'date_desc',
+  year: null,
+  month: null,
+};
+
+export const route = $state({ ...defaultState });
+
+let updatingFromPopstate = false;
+let isInitialized = false;
+
+export function parseUrl(url) {
+  const pathView = url.pathname.replace(/^\//, '').replace(/\/$/, '');
+
+  return normalizeState({
+    view: pathView || 'all',
+    photo: normalizeString(url.searchParams.get('photo')),
+    query: normalizeString(url.searchParams.get('q')),
+    sort: url.searchParams.get('sort'),
+    year: parsePositiveInteger(url.searchParams.get('year')),
+    month: parsePositiveInteger(url.searchParams.get('month')),
+  });
+}
+
+export function normalizeState(state) {
+  const view = validViews.includes(state.view) ? state.view : defaultState.view;
+  const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
+
+  return {
+    view,
+    photo: normalizeString(state.photo),
+    query: normalizeString(state.query),
+    sort,
+    year: parsePositiveInteger(state.year),
+    month: parsePositiveInteger(state.month),
+  };
+}
+
+export function parsePositiveInteger(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const parsedValue = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+    return null;
+  }
+
+  return parsedValue;
+}
+
+export function normalizeString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalizedValue = value.trim();
+  return normalizedValue ? normalizedValue : null;
+}
+
+export function buildUrl(state = {}) {
+  const normalizedState = normalizeState({ ...defaultState, ...state });
+  const url = new URL(window.location.origin);
+
+  url.pathname = normalizedState.view === 'all' ? '/' : `/${normalizedState.view}`;
+
+  if (normalizedState.query) {
+    url.searchParams.set('q', normalizedState.query);
+  }
+
+  if (normalizedState.sort !== defaultState.sort) {
+    url.searchParams.set('sort', normalizedState.sort);
+  }
+
+  if (normalizedState.year !== null) {
+    url.searchParams.set('year', String(normalizedState.year));
+
+    if (normalizedState.month !== null) {
+      url.searchParams.set('month', String(normalizedState.month));
+    }
+  }
+
+  if (normalizedState.photo) {
+    url.searchParams.set('photo', normalizedState.photo);
+  }
+
+  return `${url.pathname}${url.search}`;
+}
+
+function getCurrentState() {
+  return parseUrl(new URL(window.location));
+}
+
+export function pushState(changes = {}) {
+  const nextState = normalizeState({ ...getCurrentState(), ...changes });
+  const url = buildUrl(nextState);
+
+  if (!updatingFromPopstate) {
+    window.history.pushState(nextState, '', url);
+  }
+
+  Object.assign(route, nextState);
+}
+
+export function replaceState(changes = {}) {
+  const nextState = normalizeState({ ...getCurrentState(), ...changes });
+  const url = buildUrl(nextState);
+
+  if (!updatingFromPopstate) {
+    window.history.replaceState(nextState, '', url);
+  }
+
+  Object.assign(route, nextState);
+}
+
+function handlePopState() {
+  updatingFromPopstate = true;
+  Object.assign(route, getCurrentState());
+  updatingFromPopstate = false;
+}
+
+export function init() {
+  if (!isInitialized) {
+    window.addEventListener('popstate', handlePopState);
+    isInitialized = true;
+  }
+
+  Object.assign(route, getCurrentState());
+  return route;
+}

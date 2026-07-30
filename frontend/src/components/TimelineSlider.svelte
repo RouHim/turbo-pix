@@ -1,0 +1,590 @@
+<script>
+  import { get } from 'svelte/store';
+  import { t } from '../lib/i18n.js';
+  import { api } from '../lib/api.js';
+  import { appState } from '../lib/state.svelte.js';
+  import { route, pushState } from '../lib/router.svelte.js';
+  import { APP_CONSTANTS } from '../lib/constants.js';
+
+  let data = $state(null);
+  let currentFilter = $state(null);
+  let debounceTimer = null;
+  let hoveredIndex = $state(null);
+  let selectedIndex = $state(null);
+  let sliderValue = $state(0);
+  let canvasEl = $state(null);
+  let yearSelectEl = $state(null);
+  let monthSelectEl = $state(null);
+  let tooltipDate = $state('');
+  let tooltipCount = $state('');
+  let tooltipX = $state(0);
+  let tooltipY = $state(0);
+  let tooltipVisible = $state(false);
+  let initError = $state(false);
+
+  let positions = $derived(
+    data?.density?.map((d) => ({
+      year: d.year,
+      month: d.month,
+      count: d.count,
+    })) ?? []
+  );
+
+  let years = $derived(
+    data?.density
+      ? [...new Set(data.density.map((d) => d.year))].sort((a, b) => b - a)
+      : []
+  );
+
+  let maxSlider = $derived(Math.max(0, positions.length - 1));
+
+  let labelText = $derived.by(() => {
+    if (!currentFilter) {
+      return get(t)('ui.all_dates', 'All Dates');
+    }
+    if (!currentFilter.month) {
+      return String(currentFilter.year);
+    }
+    const monthKey = APP_CONSTANTS.MONTH_KEYS[currentFilter.month - 1];
+    const monthName = get(t)(`ui.months.${monthKey}`, monthKey.charAt(0).toUpperCase() + monthKey.slice(1));
+    return `${monthName} ${currentFilter.year}`;
+  });
+
+  $effect(() => {
+    fetchTimelineData();
+  });
+
+  async function fetchTimelineData() {
+    try {
+      data = await api.request('/api/photos/timeline');
+      if (data?.density?.length > 0) {
+        sliderValue = data.density.length - 1;
+      }
+    } catch (error) {
+      console.error('Failed to initialize timeline:', error);
+      initError = true;
+    }
+  }
+
+  $effect(() => {
+    if (data && canvasEl) {
+      renderHeatmap();
+    }
+  });
+
+  function applyFilter(updateUrl = true) {
+    if (updateUrl) {
+      const year = currentFilter?.year ?? null;
+      const month = currentFilter?.month ?? null;
+      // Never push month without year
+      pushState({ year, month: year ? month : null });
+    }
+    appState.selectedYear = currentFilter?.year ?? null;
+    appState.selectedMonth = currentFilter?.year ? (currentFilter.month ?? null) : null;
+  }
+
+  function resetFilter() {
+    currentFilter = null;
+    selectedIndex = null;
+    if (positions.length > 0) {
+      sliderValue = positions.length - 1;
+    }
+    if (yearSelectEl) yearSelectEl.value = '';
+    if (monthSelectEl) monthSelectEl.value = '';
+    renderHeatmap();
+    applyFilter();
+  }
+
+  function handleSliderInput(e) {
+    const index = parseInt(e.target.value);
+    if (index >= positions.length - 1) {
+      currentFilter = null;
+      selectedIndex = null;
+    } else {
+      const pos = positions[index];
+      currentFilter = { year: pos.year, month: pos.month };
+      selectedIndex = index;
+    }
+    renderHeatmap();
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => applyFilter(), 300);
+  }
+
+  function handleDropdownChange() {
+    const year = yearSelectEl?.value;
+    const month = monthSelectEl?.value;
+    if (!year && !month) {
+      currentFilter = null;
+    } else {
+      currentFilter = {
+        year: year ? parseInt(year) : null,
+        month: month ? parseInt(month) : null,
+      };
+    }
+    applyFilter();
+  }
+
+  function getBarIndexFromX(clientX) {
+    if (!canvasEl || positions.length === 0) return null;
+    const rect = canvasEl.getBoundingClientRect();
+    const canvasX = clientX - rect.left;
+    const barWidth = canvasEl.width / positions.length;
+    const index = Math.floor(canvasX / barWidth);
+    return index >= 0 && index < positions.length ? index : null;
+  }
+
+  function handleCanvasClick(e) {
+    const index = getBarIndexFromX(e.clientX);
+    if (index === null) return;
+    const pos = positions[index];
+    currentFilter = { year: pos.year, month: pos.month };
+    selectedIndex = index;
+    sliderValue = index;
+    renderHeatmap();
+    applyFilter();
+  }
+
+  function handleCanvasHover(e) {
+    const index = getBarIndexFromX(e.clientX);
+    if (index !== hoveredIndex) {
+      hoveredIndex = index;
+      if (index !== null) {
+        const pos = positions[index];
+        const monthKey = APP_CONSTANTS.MONTH_KEYS[pos.month - 1];
+        const monthName = get(t)(`ui.months.${monthKey}`, monthKey.charAt(0).toUpperCase() + monthKey.slice(1));
+        tooltipDate = `${monthName} ${pos.year}`;
+        tooltipCount = get(t)('ui.photos_count', { default: `${pos.count} photos`, values: { count: pos.count } });
+        tooltipX = e.clientX;
+        tooltipY = e.clientY - 60;
+        tooltipVisible = true;
+      } else {
+        tooltipVisible = false;
+      }
+      renderHeatmap();
+    } else if (index !== null) {
+      tooltipX = e.clientX;
+      tooltipY = e.clientY - 60;
+    }
+  }
+
+  function handleCanvasLeave() {
+    hoveredIndex = null;
+    tooltipVisible = false;
+    renderHeatmap();
+  }
+
+  function renderHeatmap() {
+    if (!canvasEl || !data?.density) return;
+    const ctx = canvasEl.getContext('2d');
+    const width = canvasEl.width;
+    const height = canvasEl.height;
+    ctx.clearRect(0, 0, width, height);
+    if (positions.length === 0) return;
+
+    const maxCount = Math.max(...data.density.map((d) => d.count));
+    drawYearMarkers(ctx, width, height);
+
+    const barWidth = width / positions.length;
+    positions.forEach((pos, index) => {
+      const normalizedHeight = (pos.count / maxCount) * height;
+      const x = index * barWidth;
+      const y = height - normalizedHeight;
+      const isHovered = hoveredIndex === index;
+      const isSelected = selectedIndex === index;
+
+      let opacity = 0.3 + (pos.count / maxCount) * 0.7;
+      if (isHovered && !isSelected) {
+        opacity = Math.min(opacity + 0.2, 1);
+      }
+
+      ctx.fillStyle = `rgba(99, 102, 241, ${opacity})`;
+      ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
+
+      if (isSelected) {
+        ctx.strokeStyle = 'rgba(99, 102, 241, 1)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x + 1, y, barWidth - 3, normalizedHeight);
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(99, 102, 241, 0.6)';
+        ctx.fillStyle = 'rgba(99, 102, 241, 0.9)';
+        ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
+        ctx.shadowBlur = 0;
+      }
+
+      if (isHovered && !isSelected) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
+      }
+    });
+  }
+
+  function drawYearMarkers(ctx, width, height) {
+    if (positions.length === 0) return;
+    const barWidth = width / positions.length;
+    let lastYear = null;
+    positions.forEach((pos, index) => {
+      if (pos.year !== lastYear) {
+        const x = index * barWidth;
+        if (lastYear !== null) {
+          ctx.strokeStyle = 'rgba(99, 102, 241, 0.15)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+        lastYear = pos.year;
+      }
+    });
+  }
+
+  // Restore filter from route state (URL restore / popstate)
+  $effect(() => {
+    const year = route.year;
+    const month = route.month;
+    if (!year && !month) {
+      // Reset to no filter (only if we have a current filter)
+      if (currentFilter) {
+        currentFilter = null;
+        selectedIndex = null;
+        if (positions.length > 0) {
+          sliderValue = positions.length - 1;
+        }
+        if (yearSelectEl) yearSelectEl.value = '';
+        if (monthSelectEl) monthSelectEl.value = '';
+        renderHeatmap();
+        appState.selectedYear = null;
+        appState.selectedMonth = null;
+      }
+    } else if (year) {
+      const matchIndex = positions.findIndex(
+        (p) => p.year === year && p.month === month
+      );
+      currentFilter = { year, month: month || null };
+      selectedIndex = matchIndex >= 0 ? matchIndex : null;
+      if (matchIndex >= 0) {
+        sliderValue = matchIndex;
+      }
+      if (yearSelectEl && year) yearSelectEl.value = String(year);
+      if (monthSelectEl && month) monthSelectEl.value = String(month);
+      renderHeatmap();
+      appState.selectedYear = year;
+      appState.selectedMonth = month || null;
+    }
+  });
+</script>
+
+{#if !initError}
+  <div class="timeline-container">
+    <!-- Desktop: Slider -->
+    <div class="timeline-slider desktop-only">
+      <button
+        type="button"
+        class="timeline-reset"
+        title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+        onclick={resetFilter}
+      >
+        ✕
+      </button>
+      <div class="timeline-track">
+        <canvas
+          class="timeline-heatmap"
+          width="800"
+          height="40"
+          bind:this={canvasEl}
+          onclick={handleCanvasClick}
+          onmousemove={handleCanvasHover}
+          onmouseleave={handleCanvasLeave}
+          style="cursor: pointer;"
+        ></canvas>
+        <input
+          type="range"
+          class="timeline-input"
+          min="0"
+          max={maxSlider}
+          value={sliderValue}
+          oninput={handleSliderInput}
+          ondblclick={resetFilter}
+        />
+      </div>
+      <div class="timeline-label">{labelText}</div>
+    </div>
+
+    <!-- Mobile: Dropdowns -->
+    <div class="timeline-dropdowns mobile-only">
+      <select
+        id="timeline-year-select"
+        class="timeline-year-select"
+        bind:this={yearSelectEl}
+        onchange={handleDropdownChange}
+      >
+        <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
+        {#each years as year (year)}
+          <option value={year}>{year}</option>
+        {/each}
+      </select>
+      <select
+        id="timeline-month-select"
+        class="timeline-month-select"
+        bind:this={monthSelectEl}
+        onchange={handleDropdownChange}
+      >
+        <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
+        {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i}
+          <option value={i + 1}>{$t(`ui.months.${monthKey}`, { default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1) })}</option>
+        {/each}
+      </select>
+      <button
+        type="button"
+        class="timeline-reset"
+        title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+        onclick={resetFilter}
+      >
+        ✕
+      </button>
+    </div>
+  </div>
+
+  {#if tooltipVisible}
+    <div
+      class="timeline-tooltip"
+      style="left: {tooltipX}px; top: {tooltipY}px; display: block;"
+    >
+      <div class="timeline-tooltip-date">{tooltipDate}</div>
+      <div class="timeline-tooltip-count">{tooltipCount}</div>
+    </div>
+  {/if}
+{/if}
+
+<style>
+  .timeline-container {
+    margin: var(--space-6) 0;
+    padding: var(--space-5) var(--space-6);
+    background: var(--surface-color);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--divider-color);
+    box-shadow: var(--shadow-light);
+    transition: var(--transition-medium);
+  }
+
+  .timeline-container:hover {
+    box-shadow: var(--shadow-medium);
+  }
+
+  .timeline-slider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .timeline-reset {
+    flex-shrink: 0;
+    width: var(--space-8);
+    height: var(--space-8);
+    border-radius: var(--radius-sm);
+    border: 1.5px solid var(--divider-color);
+    background: var(--background-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-lg);
+    font-weight: var(--font-semibold);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .timeline-reset::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--primary-color);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .timeline-reset:hover::before {
+    opacity: 1;
+  }
+
+  .timeline-reset:hover {
+    border-color: var(--primary-color);
+    color: white;
+    box-shadow: var(--shadow-medium);
+  }
+
+  .timeline-reset:active {
+    transform: translateY(0);
+  }
+
+  .timeline-track {
+    flex: 1;
+    position: relative;
+    height: var(--button-size-lg);
+    display: flex;
+    align-items: center;
+  }
+
+  .timeline-heatmap {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    left: 0;
+    width: 100%;
+    height: 28px;
+    pointer-events: none;
+    border-radius: 14px;
+    box-shadow: inset 0 2px 4px rgb(0 0 0 / 10%);
+    background: linear-gradient(to bottom, rgb(0 0 0 / 5%), transparent);
+  }
+
+  .timeline-input {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100%;
+    transform: translateY(-50%);
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: grab;
+    height: var(--button-size-lg);
+  }
+
+  .timeline-input:active {
+    cursor: grabbing;
+  }
+
+  .timeline-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: var(--primary-color);
+    cursor: grab;
+    border: 3px solid white;
+    box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .timeline-input::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
+  }
+
+  .timeline-input:active::-webkit-slider-thumb {
+    cursor: grabbing;
+    transform: scale(1.1);
+  }
+
+  .timeline-input::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: var(--primary-color);
+    cursor: grab;
+    border: 3px solid white;
+    box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .timeline-input::-moz-range-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
+  }
+
+  .timeline-input:active::-moz-range-thumb {
+    cursor: grabbing;
+    transform: scale(1.1);
+  }
+
+  .timeline-label {
+    flex-shrink: 0;
+    min-width: 130px;
+    text-align: right;
+    font-size: var(--font-md);
+    font-weight: var(--font-semibold);
+    color: var(--primary-color);
+    letter-spacing: -0.01em;
+  }
+
+  /* Mobile Timeline Dropdowns */
+  .timeline-dropdowns {
+    display: none;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .timeline-year-select,
+  .timeline-month-select {
+    flex: 1;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: var(--background-color);
+    color: var(--text-primary);
+    font-size: var(--font-base);
+    cursor: pointer;
+  }
+
+  .timeline-year-select:focus,
+  .timeline-month-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+  }
+
+  .desktop-only {
+    display: flex;
+  }
+
+  .mobile-only {
+    display: none;
+  }
+
+  /* Timeline Tooltip */
+  :global(.timeline-tooltip) {
+    position: fixed;
+    background: var(--surface-color);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    box-shadow: var(--shadow-heavy);
+    pointer-events: none;
+    z-index: var(--z-modal);
+    transform: translateX(-50%);
+  }
+
+  :global(.timeline-tooltip-date) {
+    font-size: var(--font-md);
+    font-weight: var(--font-semibold);
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+  }
+
+  :global(.timeline-tooltip-count) {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+  }
+
+  @media (width <= 768px) {
+    .desktop-only {
+      display: none;
+    }
+
+    .mobile-only {
+      display: flex;
+    }
+
+    .timeline-container {
+      padding: 12px 15px;
+    }
+
+    .timeline-label {
+      min-width: 100px;
+      font-size: 13px;
+    }
+  }
+</style>

@@ -93,7 +93,7 @@ test.describe('Layout Glassmorphism', () => {
   });
 
   test('header and sidebar CSS should declare -webkit-backdrop-filter', async ({ page }) => {
-    const cssResponse = await page.request.get('/css/main.css');
+    const cssResponse = await page.request.get('/assets/index.css');
     const cssText = await cssResponse.text();
 
     expect(cssText).toContain('.header');
@@ -102,7 +102,7 @@ test.describe('Layout Glassmorphism', () => {
   });
 
   test('indexing orbit CSS should declare -webkit-backdrop-filter', async ({ page }) => {
-    const cssResponse = await page.request.get('/css/components.css');
+    const cssResponse = await page.request.get('/assets/index.css');
     const cssText = await cssResponse.text();
 
     expect(cssText).toContain('[data-phase-ring]');

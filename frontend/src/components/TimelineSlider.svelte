@@ -1,10 +1,14 @@
 <script>
   import { get } from 'svelte/store';
+  import { onDestroy } from 'svelte';
+  import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { appState } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
+
+  const activeLocale = $derived(get(locale) || 'en');
 
   let data = $state(null);
   let currentFilter = $state(null);
@@ -38,16 +42,16 @@
 
   const labelText = $derived.by(() => {
     if (!currentFilter) {
-      return get(t)('ui.all_dates', 'All Dates');
+      return get(t)('ui.all_dates', { locale: activeLocale, default: 'All Dates' });
     }
     if (!currentFilter.month) {
       return String(currentFilter.year);
     }
     const monthKey = APP_CONSTANTS.MONTH_KEYS[currentFilter.month - 1];
-    const monthName = get(t)(
-      `ui.months.${monthKey}`,
-      monthKey.charAt(0).toUpperCase() + monthKey.slice(1)
-    );
+    const monthName = get(t)(`ui.months.${monthKey}`, {
+      locale: activeLocale,
+      default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+    });
     return `${monthName} ${currentFilter.year}`;
   });
 
@@ -152,10 +156,10 @@
       if (index !== null) {
         const pos = positions[index];
         const monthKey = APP_CONSTANTS.MONTH_KEYS[pos.month - 1];
-        const monthName = get(t)(
-          `ui.months.${monthKey}`,
-          monthKey.charAt(0).toUpperCase() + monthKey.slice(1)
-        );
+        const monthName = get(t)(`ui.months.${monthKey}`, {
+          locale: activeLocale,
+          default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+        });
         tooltipDate = `${monthName} ${pos.year}`;
         tooltipCount = get(t)('ui.photos_count', {
           default: `${pos.count} photos`,
@@ -271,11 +275,15 @@
         sliderValue = matchIndex;
       }
       if (yearSelectEl && year) yearSelectEl.value = String(year);
-      if (monthSelectEl && month) monthSelectEl.value = String(month);
+      if (monthSelectEl) monthSelectEl.value = String(month);
       renderHeatmap();
       appState.selectedYear = year;
       appState.selectedMonth = month || null;
     }
+  });
+
+  onDestroy(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
   });
 </script>
 

@@ -34,9 +34,9 @@ export const themeState = $state({ theme: 'light' });
 export const toasts = $state([]);
 
 let toastId = 0;
-export function addToast(message, type = 'info', duration = 4000) {
+export function addToast(title, message = '', type = 'info', duration = 4000) {
   const id = ++toastId;
-  toasts.push({ id, message, type });
+  toasts.push({ id, title, message, type });
   if (duration > 0) {
     setTimeout(() => {
       const idx = toasts.findIndex((t) => t.id === id);

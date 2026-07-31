@@ -23,15 +23,12 @@
   let pollTimer = $state(null);
   let hideTimer = $state(null);
   let autoOpened = $state(false);
+  let completionPulse = $state(false);
   let sheetOpen = $state(false);
   let ringEl = $state(null);
   let svgEl = $state(null);
 
   const ringMode = $derived(determineMode());
-
-  function getTranslation(key, fallback) {
-    return $t(key) || fallback;
-  }
 
   function polarToCartesian(centerX, centerY, radius, angleInDegrees) {
     const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180;
@@ -78,6 +75,7 @@
   }
 
   function determineMode() {
+    if (completionPulse) return 'compact';
     if (!indexingState.isIndexing) return 'hidden';
     if (hasIndexedBefore()) return 'compact';
     const photosIndexed = Number(indexingState.photosIndexed ?? 0);
@@ -123,11 +121,14 @@
   function hideRing({ showCompletionPulse = false } = {}) {
     cancelPendingHide();
     if (showCompletionPulse) {
+      completionPulse = true;
       hideTimer = setTimeout(() => {
+        completionPulse = false;
         closeSheet();
       }, HIDE_DELAY);
       return;
     }
+    completionPulse = false;
     closeSheet();
   }
 
@@ -151,10 +152,15 @@
       if (normalizedStatus.is_indexing) {
         indexingState.isIndexing = true;
         updateOrbit(normalizedStatus);
+        if (!autoOpened && determineMode() === 'large') {
+          autoOpened = true;
+          requestAnimationFrame(() => openSheet(true));
+        }
       } else if (wasIndexing) {
         markIndexingCompleted();
         indexingState.isIndexing = false;
         hideRing({ showCompletionPulse: true });
+        window.dispatchEvent(new CustomEvent('indexingCompleted'));
       } else {
         indexingState.isIndexing = false;
         hideRing();
@@ -216,12 +222,6 @@
       },
     };
 
-    const mode = determineMode();
-    if (mode === 'large' && !autoOpened) {
-      autoOpened = true;
-      requestAnimationFrame(() => openSheet(true));
-    }
-
     document.addEventListener('keydown', onKeydown);
     startPolling();
   });
@@ -243,11 +243,17 @@
       const isDeterminate = phase.kind === 'determinate';
       const total = phase.total || 0;
       const processed = phase.processed || 0;
-      const percent = isDeterminate && total > 0 ? Math.round((processed / total) * 100) : 0;
+      const percent = completionPulse
+        ? 100
+        : isDeterminate && total > 0
+          ? Math.round((processed / total) * 100)
+          : 0;
       const errorsText =
         phase.errors && phase.errors > 0
-          ? $t('ui.indexing_sheet_errors', { default: `${phase.errors} error(s)` }) ||
-            `${phase.errors} error(s)`
+          ? $t('ui.indexing_sheet_errors', {
+              values: { count: phase.errors },
+              default: `${phase.errors} error(s)`,
+            })
           : '';
       return {
         ...phase,
@@ -259,9 +265,9 @@
         percent,
         errorsText,
         countLabel: isDeterminate ? `${processed}/${total}` : '—',
-        isActive: phase.state === 'active',
-        isDone: phase.state === 'done',
-        isError: phase.state === 'error',
+        isActive: completionPulse ? false : phase.state === 'active',
+        isDone: completionPulse ? true : phase.state === 'done',
+        isError: completionPulse ? false : phase.state === 'error',
       };
     })
   );
@@ -273,6 +279,7 @@
           const processed = sp.processed || 0;
           const total = sp.total || 0;
           const tpl = $t('ui.indexing_ring_tooltip', {
+            values: { phase: sp.phaseName, processed, total },
             default: `${sp.phaseName} — ${processed}/${total}`,
           });
           return tpl;
@@ -287,7 +294,7 @@
   const centerIcon = $derived(
     (() => {
       const activePhase = PHASES.find((p) => p.id === indexingState.currentPhase);
-      return activePhase?.icon || 'camera';
+      return completionPulse ? 'check-circle' : activePhase?.icon || 'camera';
     })()
   );
 </script>
@@ -302,26 +309,36 @@
   aria-expanded={sheetOpen}
   title={tooltipText}
   onclick={toggleSheet}
+  onkeydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleSheet();
+    }
+  }}
   role="button"
   tabindex="0"
 >
   <div class="indexing-orbit-shell">
     <svg bind:this={svgEl} class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
-      {#each PHASES as phase, i (phase.name || i)}phase, i}
+      {#each PHASES as phase, i (phase.id)}
         {@const arcD = arcPaths()[i]}
         {@const sp = sheetPhases.find((p) => p.id === phase.id)}
-        {@const phaseState = sp?.isDone
+        {@const phaseState = completionPulse
           ? 'done'
-          : sp?.isError
-            ? 'error'
-            : sp?.isActive
-              ? 'active'
-              : 'pending'}
-        {@const dashOffset = sp?.isDone
+          : sp?.isDone
+            ? 'done'
+            : sp?.isError
+              ? 'error'
+              : sp?.isActive
+                ? 'active'
+                : 'pending'}
+        {@const dashOffset = completionPulse
           ? 0
-          : sp?.isActive && sp.isDeterminate && sp.total > 0
-            ? ARC_LENGTH * (1 - Math.min(Math.max(sp.processed / sp.total, 0), 1))
-            : ARC_LENGTH}
+          : sp?.isDone
+            ? 0
+            : sp?.isActive && sp.isDeterminate && sp.total > 0
+              ? ARC_LENGTH * (1 - Math.min(Math.max(sp.processed / sp.total, 0), 1))
+              : ARC_LENGTH}
         <path
           class="indexing-orbit-segment"
           d={arcD}
@@ -387,23 +404,23 @@
     <span>{$t('ui.indexing_sheet_photos_indexed', { default: 'photos indexed' })}</span>
   </div>
   <div class="indexing-sheet-phases">
-    {#each sheetPhases as phase, i (phase.name || i)}sp (sp.id)}
+    {#each sheetPhases as phase (phase.id)}
       <div
         class="indexing-sheet-phase"
-        class:is-active={sp.isActive}
-        class:is-done={sp.isDone}
-        class:is-error={sp.isError}
-        data-phase-id={sp.id}
+        class:is-active={phase.isActive}
+        class:is-done={phase.isDone}
+        class:is-error={phase.isError}
+        data-phase-id={phase.id}
       >
-        <Icon name={sp.icon} width={16} height={16} className="phase-icon" />
+        <Icon name={phase.icon} width={16} height={16} className="phase-icon" />
         <div class="phase-info">
-          <span class="phase-name">{sp.phaseName}</span>
+          <span class="phase-name">{phase.phaseName}</span>
           <div class="phase-progress-bar">
-            <div class="phase-progress-fill" data-phase-fill style="width: {sp.percent}%"></div>
+            <div class="phase-progress-fill" data-phase-fill style="width: {phase.percent}%"></div>
           </div>
         </div>
-        <span class="phase-count" data-phase-count>{sp.countLabel}</span>
-        <span data-phase-errors class="indexing-phase-errors">{sp.errorsText}</span>
+        <span class="phase-count" data-phase-count>{phase.countLabel}</span>
+        <span data-phase-errors class="indexing-phase-errors">{phase.errorsText}</span>
       </div>
     {/each}
   </div>
@@ -677,18 +694,18 @@
     color: var(--color-danger, oklch(55% 0.2 25deg));
   }
 
-  .phase-icon {
+  :global(.phase-icon) {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
     color: var(--text-secondary);
   }
 
-  .indexing-sheet-phase.is-active .phase-icon {
+  .indexing-sheet-phase.is-active :global(.phase-icon) {
     color: var(--primary-color);
   }
 
-  .indexing-sheet-phase.is-done .phase-icon {
+  .indexing-sheet-phase.is-done :global(.phase-icon) {
     color: var(--primary-color);
   }
 

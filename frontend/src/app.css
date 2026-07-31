@@ -325,20 +325,6 @@
       font-size: var(--font-2xl);
       box-shadow: var(--shadow-light);
       border: 1px solid var(--divider-color);
-
-      --theme-icon-bg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'%3E%3C/path%3E%3C/svg%3E");
-    }
-
-    & .theme-toggle.dark {
-      --theme-icon-bg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='5'%3E%3C/circle%3E%3Cline x1='12' y1='1' x2='12' y2='3'%3E%3C/line%3E%3Cline x1='12' y1='21' x2='12' y2='23'%3E%3C/line%3E%3Cline x1='4.22' y1='4.22' x2='5.64' y2='5.64'%3E%3C/line%3E%3Cline x1='18.36' y1='18.36' x2='19.78' y2='19.78'%3E%3C/line%3E%3Cline x1='1' y1='12' x2='3' y2='12'%3E%3C/line%3E%3Cline x1='21' y1='12' x2='23' y2='12'%3E%3C/line%3E%3Cline x1='4.22' y1='19.78' x2='5.64' y2='18.36'%3E%3C/line%3E%3Cline x1='18.36' y1='5.64' x2='19.78' y2='4.22'%3E%3C/line%3E%3C/svg%3E");
-    }
-
-    & .theme-toggle .theme-icon::before {
-      content: '';
-      display: inline-block;
-      width: var(--font-2xl);
-      height: var(--font-2xl);
-      background: var(--theme-icon-bg) center/contain no-repeat;
     }
 
     & .theme-toggle:hover {
@@ -1439,7 +1425,7 @@
   padding-bottom: 0;
 }
 
-.photo-meta .meta-item label {
+.photo-meta .meta-item .meta-label {
   font-weight: var(--font-semibold);
   font-size: var(--font-base);
   color: var(--text-secondary);
@@ -1451,7 +1437,7 @@
   font-weight: var(--font-medium);
 }
 
-.photo-meta-full .meta-item label {
+.photo-meta-full .meta-item .meta-label {
   font-weight: var(--font-semibold);
   font-size: var(--font-base);
   color: var(--text-secondary);
@@ -2326,116 +2312,6 @@
   }
 }
 
-/* Toast Notifications */
-#toast-container {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  z-index: 10000;
-  pointer-events: none;
-}
-
-.toast {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--surface-color);
-  color: var(--text-primary);
-  border: 1px solid var(--divider-color);
-  border-left: 4px solid var(--divider-color);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-medium);
-  opacity: 0;
-  transform: translateX(100%);
-  transition:
-    opacity 0.3s ease,
-    transform 0.3s ease;
-  pointer-events: auto;
-  min-width: 250px;
-  max-width: 350px;
-}
-
-.toast-visible {
-  opacity: 1;
-  transform: translateX(0);
-}
-
-.toast-success {
-  border-left-color: oklch(55% 0.22 145deg);
-}
-
-.toast-error {
-  border-left-color: oklch(55% 0.22 25deg);
-}
-
-.toast-info {
-  border-left-color: oklch(55% 0.22 240deg);
-}
-
-.toast-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-}
-
-.toast-success .toast-icon {
-  color: oklch(55% 0.22 145deg);
-}
-
-.toast-error .toast-icon {
-  color: oklch(55% 0.22 25deg);
-}
-
-.toast-info .toast-icon {
-  color: oklch(55% 0.22 240deg);
-}
-
-.toast-content {
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.toast-title {
-  font-weight: 600;
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.toast-message {
-  font-size: 13px;
-  line-height: 1.4;
-  overflow-wrap: break-word;
-  opacity: 0.8;
-}
-
-.toast-close {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  padding: 2px;
-  margin: -2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm, 4px);
-  transition: opacity 0.2s;
-}
-
-.toast-close:hover {
-  opacity: 1;
-}
-
 /* View Transitions */
 ::view-transition-group(*) {
   animation-duration: 0.3s;
@@ -2801,7 +2677,7 @@
     opacity: 1;
     max-height: 65vh;
     transform: translateY(100%);
-    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: none;
     will-change: transform;
     border-top-left-radius: var(--radius-lg);
     border-top-right-radius: var(--radius-lg);

@@ -5,40 +5,15 @@ import svelteParser from 'svelte-eslint-parser';
 export default [
   js.configs.recommended,
   {
-    ignores: ['static/js/**/*.min.js', 'frontend/src/lib/i18n.js', 'frontend/src/lib/router.svelte.js'],
+    ignores: ['frontend/src/lib/i18n.js', 'frontend/src/lib/router.svelte.js'],
   },
   {
     linterOptions: {
       reportUnusedDisableDirectives: 'error',
     },
   },
-  // Old static JS files
   {
-    files: ['static/js/**/*.js', '!static/js/**/*.min.js'],
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: 'script',
-      globals: {
-        window: 'readonly', document: 'readonly', console: 'readonly',
-        fetch: 'readonly', URLSearchParams: 'readonly', URL: 'readonly',
-        setTimeout: 'readonly', clearTimeout: 'readonly',
-        setInterval: 'readonly', clearInterval: 'readonly',
-        localStorage: 'readonly', feather: 'readonly', navigator: 'readonly',
-        CustomEvent: 'readonly', IntersectionObserver: 'readonly',
-        Image: 'readonly', Blob: 'readonly', performance: 'readonly',
-        module: 'readonly', utils: 'readonly', api: 'readonly',
-        PhotoCard: 'writable', confirm: 'readonly',
-      },
-    },
-    rules: {
-      'no-unused-vars': 'warn', 'no-console': 'off',
-      'prefer-const': 'error', 'no-var': 'error',
-      'no-case-declarations': 'off',
-      'no-redeclare': ['error', { builtinGlobals: false }],
-    },
-  },
-  {
-    files: ['static/i18n/**/*.js', 'static/js/i18n.js', 'tests/**/*.js', 'playwright.config.js'],
+    files: ['tests/**/*.js', 'playwright.config.js'],
     languageOptions: {
       ecmaVersion: 2022, sourceType: 'module',
       globals: {
@@ -79,6 +54,7 @@ export default [
         FormData: 'readonly', DOMParser: 'readonly', ResizeObserver: 'readonly',
         MutationObserver: 'readonly', MediaMetadata: 'readonly',
         SvelteURL: 'readonly',
+        confirm: 'readonly',
       },
     },
     rules: {

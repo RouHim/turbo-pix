@@ -1,5 +1,6 @@
 <script>
   import { toasts } from '../lib/state.svelte.js';
+  import Icon from './Icon.svelte';
 
   const typeIcons = {
     success: 'check-circle',
@@ -10,11 +11,14 @@
 </script>
 
 {#if toasts.length > 0}
-  <div class="toast-container">
+  <div class="toast-container" aria-live="polite">
     {#each toasts as toast (toast.id)}
       <div class="toast toast-{toast.type}">
-        <span class="toast-icon" data-feather={typeIcons[toast.type] || 'info'}></span>
-        <span class="toast-message">{toast.message}</span>
+        <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
+        <span class="toast-content">
+          {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
+          {#if toast.message}<span class="toast-message">{toast.message}</span>{/if}
+        </span>
       </div>
     {/each}
   </div>
@@ -46,6 +50,14 @@
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
     pointer-events: auto;
     animation: toast-in 0.3s ease-out;
+  }
+  .toast-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .toast-title {
+    font-weight: 600;
   }
   .toast-error {
     border-left: 3px solid var(--error, #e74c3c);

@@ -7,6 +7,7 @@
   const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
 
   let showModal = $state(false);
+  let editTargetHash = $state(null);
   let takenAt = $state('');
   let latitude = $state('');
   let longitude = $state('');
@@ -21,6 +22,7 @@
 
   function openModal() {
     if (!photo || !isFormatSupported(photo)) return;
+    editTargetHash = photo.hash_sha256;
     populateForm();
     showModal = true;
     document.body.style.overflow = 'hidden';
@@ -32,6 +34,28 @@
     errorMessage = '';
     onClose();
   }
+
+  // Close the modal if the viewed photo changed while it was open (the
+  // form targets the hash captured at open time).
+  $effect(() => {
+    if (showModal && photo?.hash_sha256 !== editTargetHash) {
+      closeModal();
+    }
+  });
+
+  // Escape closes the modal; the viewer's own keydown handler ignores
+  // events originating inside #metadata-edit-modal (see PhotoViewer).
+  $effect(() => {
+    if (!showModal) return;
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   function populateForm() {
     if (!photo) return;
@@ -104,7 +128,7 @@
         updates.longitude = lngVal;
       }
 
-      const updatedPhoto = await api.updatePhotoMetadata(photo.hash_sha256, updates);
+      const updatedPhoto = await api.updatePhotoMetadata(editTargetHash, updates);
 
       // Update photo refs
       if (onSaved) {
@@ -113,6 +137,7 @@
 
       addToast(
         get(t)('ui.metadata.edit_success', { default: 'Metadata updated successfully' }),
+        '',
         'success',
         3000
       );
@@ -144,8 +169,12 @@
     class="modal"
     style="display: flex"
     onclick={onOverlayClick}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') closeModal();
+    }}
     role="dialog"
     aria-modal="true"
+    tabindex="-1"
   >
     <div class="modal-content">
       <div class="modal-header">

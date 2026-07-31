@@ -22,12 +22,10 @@
   let currentIndex = $state(0);
   const preloadedImages = $state(new Map());
   let showSidebar = $state(false);
-  let showMetadataEdit = $state(false);
   let updateUrlEnabled = $state(true);
 
   // Loading / video
   let isLoading = $state(false);
-  const isVideoPlaying = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
 
@@ -135,7 +133,7 @@
 
   function isAtPanBoundary() {
     if (!imageEl || zoomLevel <= 1) return { left: false, right: false };
-    const maxPanX = (imageEl.naturalWidth * zoomLevel - imageEl.naturalWidth) / 2;
+    const maxPanX = (imageEl.width * zoomLevel - imageEl.width) / 2;
     const tolerance = 0.5;
     if (maxPanX <= 0) return { left: true, right: true };
     return {
@@ -185,11 +183,11 @@
   }
 
   // ── Pinch zoom (called by gesture callbacks) ───────────────────────────────
-  function startPinchZoom(scale, centerX, centerY) {
+  function startPinchZoom() {
     gestureBaseZoom = zoomLevel;
   }
 
-  function updatePinchZoom(scale, deltaScale, centerX, centerY) {
+  function updatePinchZoom(scale) {
     const newZoom = gestureBaseZoom * scale;
     zoomLevel = Math.max(minZoom, Math.min(maxZoom, newZoom));
     applyZoom();
@@ -252,8 +250,8 @@
   // ── Touch-based pan ────────────────────────────────────────────────────────
   function updateTouchPan(deltaX, deltaY) {
     if (zoomLevel <= 1 || !imageEl) return;
-    const maxPanX = (imageEl.naturalWidth * zoomLevel - imageEl.naturalWidth) / 2;
-    const maxPanY = (imageEl.naturalHeight * zoomLevel - imageEl.naturalHeight) / 2;
+    const maxPanX = (imageEl.width * zoomLevel - imageEl.width) / 2;
+    const maxPanY = (imageEl.height * zoomLevel - imageEl.height) / 2;
     imagePosition = {
       x: Math.max(-maxPanX, Math.min(maxPanX, deltaX / zoomLevel)),
       y: Math.max(-maxPanY, Math.min(maxPanY, deltaY / zoomLevel)),
@@ -279,8 +277,8 @@
         y: imagePosition.y + vy,
       };
 
-      const maxPanX = (imageEl.naturalWidth * zoomLevel - imageEl.naturalWidth) / 2;
-      const maxPanY = (imageEl.naturalHeight * zoomLevel - imageEl.naturalHeight) / 2;
+      const maxPanX = (imageEl.width * zoomLevel - imageEl.width) / 2;
+      const maxPanY = (imageEl.height * zoomLevel - imageEl.height) / 2;
       imagePosition = {
         x: Math.max(-maxPanX, Math.min(maxPanX, imagePosition.x)),
         y: Math.max(-maxPanY, Math.min(maxPanY, imagePosition.y)),
@@ -297,14 +295,14 @@
 
   // ── Gesture handlers ───────────────────────────────────────────────────────
   function onPinch(data) {
-    const { scale, deltaScale, centerX, centerY, initialCenterX, initialCenterY } = data;
+    const { scale } = data;
     if (!pinchStarted) {
-      startPinchZoom(scale, initialCenterX, initialCenterY);
+      startPinchZoom();
       pinchStarted = true;
       if (imageEl) imageEl.classList.add('gesture-active');
       if (videoEl) videoEl.classList.add('gesture-active');
     }
-    updatePinchZoom(scale, deltaScale, centerX, centerY);
+    updatePinchZoom(scale);
   }
 
   function onPinchEnd() {
@@ -391,6 +389,9 @@
     if (viewerEl) {
       if (imageEl) imageEl.style.viewTransitionName = 'viewer-image';
       const openAction = () => {
+        // The callback runs on the next frame; if the viewer was already
+        // closed in between (Escape within the deferral window), don't reopen.
+        if (!isOpen) return;
         viewerEl.classList.add('active', 'fade-in');
         document.body.style.overflow = 'hidden';
       };
@@ -581,7 +582,9 @@
           );
           return;
         }
-      } catch (_) {}
+      } catch {
+        /* ignore */
+      }
     }
 
     setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC);
@@ -640,7 +643,9 @@
             );
             resolve(status.state);
           }
-        } catch (_) {}
+        } catch {
+          /* ignore */
+        }
       }, POLL_INTERVAL);
     });
   }
@@ -720,6 +725,7 @@
         photos[currentIndex] = currentPhoto;
         addToast(
           get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }),
+          '',
           'info',
           2000
         );
@@ -729,6 +735,7 @@
         photos[currentIndex] = currentPhoto;
         addToast(
           get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }),
+          '',
           'success',
           2000
         );
@@ -739,9 +746,10 @@
           detail: { photoHash, isFavorite: !isFav },
         })
       );
-    } catch (error) {
+    } catch {
       addToast(
         get(t)('ui.fav_error', { default: 'Failed to update favorite status' }),
+        '',
         'error',
         2000
       );
@@ -758,7 +766,12 @@
     link.href = mediaUrl;
     link.download = currentPhoto.filename || `photo-${currentPhoto.hash_sha256?.substring(0, 8)}`;
     link.click();
-    addToast(get(t)('ui.download_started', { default: 'Photo download started' }), 'info', 2000);
+    addToast(
+      get(t)('ui.download_started', { default: 'Photo download started' }),
+      '',
+      'info',
+      2000
+    );
   }
 
   // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -804,7 +817,10 @@
     if (!currentPhoto || isCollagePhoto(currentPhoto)) return;
 
     const confirmed = window.confirm(
-      'Are you sure you want to permanently delete this photo? This action cannot be undone.'
+      get(t)('notifications.confirmDeleteMessage', {
+        default:
+          'Are you sure you want to permanently delete this photo? This action cannot be undone.',
+      })
     );
     if (!confirmed) return;
 
@@ -813,6 +829,7 @@
     try {
       isLoading = true;
       await api.deletePhoto(photoHash);
+      window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
       addToast('Deleted', 'Photo deleted successfully', 'success', 2000);
 
       photos = photos.filter((p) => p.hash_sha256 !== photoHash);
@@ -904,6 +921,11 @@
   // ── Keyboard ───────────────────────────────────────────────────────────────
   function onKeydown(e) {
     if (!isOpen) return;
+    // Events originating inside the metadata edit modal are handled by the
+    // modal itself; the global search input must still close the viewer.
+    if (e.target instanceof HTMLElement) {
+      if (e.target.closest('#metadata-edit-modal')) return;
+    }
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
@@ -948,12 +970,8 @@
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
-  let _openViewerHandler = $state(null);
-  let _keydownHandler = $state(null);
 
   $effect(() => {
-    _openViewerHandler = onOpenViewer;
-    _keydownHandler = onKeydown;
     window.addEventListener('openViewer', onOpenViewer);
     window.addEventListener('keydown', onKeydown);
     return () => {
@@ -995,6 +1013,10 @@
   $effect(() => {
     if (route.photo && !isOpen) {
       openByHash(route.photo);
+    } else if (!route.photo && isOpen && updateUrlEnabled) {
+      // Browser Back: only auto-close when the open photo was reflected in the
+      // URL. Viewers opened without a URL param (collages) must not be closed.
+      close(false);
     }
   });
 
@@ -1012,10 +1034,6 @@
         photoHash,
       });
     }
-  }
-
-  function getCurrentPhoto() {
-    return currentPhoto;
   }
 
   // Self-ref for SwipeableViewer to reference this component's methods
@@ -1066,8 +1084,6 @@
   };
 </script>
 
-<svelte:window onkeydown={(e) => onKeydown(e)} />
-
 <div
   id="photo-viewer"
   class="photo-viewer"
@@ -1075,8 +1091,8 @@
   class:collage-mode={isCollage}
   bind:this={viewerEl}
 >
-  <div class="viewer-overlay" onclick={() => close()}></div>
-  <div class="viewer-content" onclick={stopPropagation}>
+  <div class="viewer-overlay" role="presentation" onclick={() => close()}></div>
+  <div class="viewer-content" role="presentation" onclick={stopPropagation}>
     <button
       type="button"
       class="viewer-close close-viewer"
@@ -1086,31 +1102,31 @@
       <Icon name="x" width={24} height={24} />
     </button>
 
-    {#if hasPrev}
-      <button
-        type="button"
-        class="viewer-prev"
-        title={$t('ui.previous', { default: 'Previous' })}
-        onclick={showPrevious}
-      >
-        <Icon name="chevron-left" width={28} height={28} />
-      </button>
-    {/if}
+    <button
+      type="button"
+      class="viewer-prev"
+      class:hidden={!hasPrev}
+      title={$t('ui.previous', { default: 'Previous' })}
+      onclick={showPrevious}
+    >
+      <Icon name="chevron-left" width={28} height={28} />
+    </button>
 
-    {#if hasNext}
-      <button
-        type="button"
-        class="viewer-next"
-        title={$t('ui.next', { default: 'Next' })}
-        onclick={showNext}
-      >
-        <Icon name="chevron-right" width={28} height={28} />
-      </button>
-    {/if}
+    <button
+      type="button"
+      class="viewer-next"
+      class:hidden={!hasNext}
+      title={$t('ui.next', { default: 'Next' })}
+      onclick={showNext}
+    >
+      <Icon name="chevron-right" width={28} height={28} />
+    </button>
 
     <ViewerControls
       {isVideo}
       {isFavorite}
+      {rotationDisabled}
+      {rotationDisabledTitle}
       showAcceptCollage={isPendingCollage}
       {isAcceptingCollage}
       onZoomIn={zoomIn}
@@ -1128,6 +1144,7 @@
 
     <div
       class="viewer-main"
+      role="presentation"
       bind:this={mainEl}
       onclick={onMainClick}
       use:gestures={gestureHandlers}
@@ -1135,6 +1152,7 @@
       <img
         id="viewer-image"
         class="viewer-image"
+        role="presentation"
         alt={$t('ui.selected_media', { default: 'Selected media' })}
         bind:this={imageEl}
         onmousedown={startDrag}
@@ -1157,7 +1175,6 @@
     <div class="viewer-sidebar" class:show={showSidebar}>
       <ViewerMetadata
         photo={currentPhoto}
-        {showSidebar}
         onEditMetadata={openMetadataEdit}
         onCloseSidebar={() => {
           showSidebar = false;
@@ -1170,9 +1187,7 @@
 <ViewerMetadataEdit
   bind:this={metadataEditRef}
   photo={currentPhoto}
-  onClose={() => {
-    showMetadataEdit = false;
-  }}
+  onClose={() => {}}
   onSaved={onMetadataSaved}
 />
 
@@ -1199,7 +1214,7 @@
       visibility var(--transition-medium);
   }
 
-  .photo-viewer.fade-in {
+  :global(.photo-viewer.fade-in) {
     animation: viewer-fade-in var(--transition-slow) ease-out;
   }
 
@@ -1219,11 +1234,9 @@
   @keyframes viewer-fade-in {
     from {
       opacity: 0;
-      transform: scale(0.98);
     }
     to {
       opacity: 1;
-      transform: scale(1);
     }
   }
 
@@ -1422,27 +1435,43 @@
 
   .viewer-sidebar {
     grid-area: sidebar;
-    width: 0;
     background: var(--surface-color);
     padding: 0;
-    overflow: hidden;
-    height: 100dvh;
-    min-height: 100dvh;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    transition:
-      width var(--transition-medium),
-      padding var(--transition-medium),
-      opacity var(--transition-medium);
     opacity: 0;
     box-shadow: -4px 0 24px rgb(0 0 0 / 10%);
+    transition: opacity var(--transition-medium);
   }
 
   .viewer-sidebar.show {
-    width: 400px;
-    padding: var(--space-8) var(--space-6) var(--space-8) var(--space-6);
     opacity: 1;
+  }
+
+  @media (max-width: 768px) {
+    .viewer-content {
+      grid-template-areas: 'main';
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (min-width: 769px) {
+    .viewer-sidebar {
+      width: 0;
+      height: 100dvh;
+      min-height: 100dvh;
+      overflow: hidden;
+      transition:
+        width var(--transition-medium),
+        padding var(--transition-medium),
+        opacity var(--transition-medium);
+    }
+
+    .viewer-sidebar.show {
+      width: 400px;
+      padding: var(--space-8) var(--space-6) var(--space-8) var(--space-6);
+    }
   }
 
   @starting-style {

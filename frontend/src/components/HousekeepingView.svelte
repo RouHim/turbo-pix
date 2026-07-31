@@ -1,19 +1,33 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { getThumbnailUrl, formatDate, formatFileSize, handleError } from '../lib/utils.js';
+  import { getThumbnailUrl, formatDate, handleError } from '../lib/utils.js';
 
   let candidates = $state([]);
   let loading = $state(true);
   let error = $state(false);
   let loaded = $state(false);
+  let scanning = $state(false);
 
   onMount(() => {
     loadAndRender();
+    window.addEventListener('indexingStatusChanged', handleIndexingStatusChanged);
+    return () => window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
   });
+
+  function handleIndexingStatusChanged(e) {
+    const phases = e.detail?.phases || [];
+    const hk = phases.find((p) => p.id === 'housekeeping');
+    if (hk?.state === 'active') {
+      scanning = true;
+    } else if (hk?.state === 'done') {
+      scanning = false;
+      loadAndRender();
+    }
+  }
 
   async function loadAndRender() {
     loading = true;
@@ -65,7 +79,7 @@
 
     try {
       await api.deletePhoto(photo.hash_sha256);
-      addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), 'success');
+      addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), '', 'success');
       window.dispatchEvent(
         new CustomEvent('housekeepingCandidateRemoved', {
           detail: { hash: photo.hash_sha256 },
@@ -75,6 +89,15 @@
     } catch (e) {
       handleError(e, 'Delete photo');
     }
+  }
+
+  function handleCardClick(e, photo) {
+    if (e.target.closest('.card-action-btn')) return;
+    window.dispatchEvent(
+      new CustomEvent('openViewer', {
+        detail: { photo, photos: candidates.map(enrichPhoto) },
+      })
+    );
   }
 </script>
 
@@ -93,6 +116,10 @@
         {$t('ui.try_again', { default: 'Try Again' })}
       </button>
     </div>
+  {:else if scanning}
+    <div class="no-photos">
+      {$t('ui.housekeeping_scanning', { default: 'Looking for duplicates and issues...' })}
+    </div>
   {:else if candidates.length === 0}
     <div class="no-photos">
       {$t('ui.no_housekeeping_candidates', { default: 'No issues found. Your library is clean!' })}
@@ -101,7 +128,19 @@
     <div class="photo-grid" id="photo-grid">
       {#each candidates as candidate (candidate.photo.hash_sha256)}
         {@const photo = enrichPhoto(candidate)}
-        <div class="photo-card" data-photo-id={photo.hash_sha256}>
+        <div
+          class="photo-card"
+          data-photo-id={photo.hash_sha256}
+          role="button"
+          tabindex="0"
+          onclick={(e) => handleCardClick(e, photo)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleCardClick(e, photo);
+            }
+          }}
+        >
           <div class="photo-card-image-container image-loaded">
             <img
               class="photo-card-image"
@@ -116,7 +155,7 @@
               {photo.filename || $t('ui.photo', { default: 'Photo' })}
             </span>
             <span class="photo-card-meta">
-              <span>{formatDate(photo.date_taken || photo.date_modified)}</span>
+              <span>{formatDate(photo.taken_at || photo.date_modified)}</span>
               {#if photo.housekeepingReason}
                 <span class="housekeeping-reason">{photo.housekeepingReason}</span>
               {/if}

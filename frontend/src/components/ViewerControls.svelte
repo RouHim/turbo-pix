@@ -3,10 +3,7 @@
   import { t } from '../lib/i18n.js';
 
   const {
-    zoomLevel = 1,
     isVideo = false,
-    imageEl = null,
-    viewerEl = null,
     onZoomIn = () => {},
     onZoomOut = () => {},
     onFitToScreen = () => {},
@@ -21,6 +18,8 @@
     isFavorite = false,
     showAcceptCollage = false,
     isAcceptingCollage = false,
+    rotationDisabled = false,
+    rotationDisabledTitle = '',
   } = $props();
 </script>
 
@@ -90,7 +89,11 @@
     <button
       type="button"
       class="zoom-btn rotate-left-btn"
-      title={$t('ui.rotate_left', { default: 'Rotate Left 90°' })}
+      class:btn-disabled={rotationDisabled}
+      title={rotationDisabled
+        ? rotationDisabledTitle
+        : $t('ui.rotate_left', { default: 'Rotate Left 90°' })}
+      disabled={rotationDisabled}
       onclick={onRotateLeft}
     >
       <Icon name="rotate-ccw" width={18} height={18} />
@@ -98,7 +101,11 @@
     <button
       type="button"
       class="zoom-btn rotate-right-btn"
-      title={$t('ui.rotate_right', { default: 'Rotate Right 90°' })}
+      class:btn-disabled={rotationDisabled}
+      title={rotationDisabled
+        ? rotationDisabledTitle
+        : $t('ui.rotate_right', { default: 'Rotate Right 90°' })}
+      disabled={rotationDisabled}
       onclick={onRotateRight}
     >
       <Icon name="rotate-cw" width={18} height={18} />

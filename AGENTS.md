@@ -110,7 +110,7 @@ npm run test:e2e:report   # View test report
 
 **Icons:** Do not use emojis, use feather icons instead
 
-**Indexing phases:** When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) step div in static/index.html, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase.
+**Indexing phases:** When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) the PHASES array + phase UI in frontend/src/components/IndexingOrbit.svelte, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase.
 
 **sqlite-vec:** Uses the vlasky/sqlite-vec community fork (git dep, not crates.io). Drop-in replacement API — same `sqlite3_vec_init`, `vec_distance_cosine`, `vec0` virtual table. Fork includes native musl fix, so no build-time sed patches needed in the Containerfile.
 
@@ -134,8 +134,20 @@ npm run test:e2e:report   # View test report
 
 **Startup indexing isolation:** `src/main.rs:start_background_tasks()` must keep `run_startup_rescan()` on a dedicated `std::thread` with its own `tokio::runtime::Runtime`; moving startup indexing back onto the main async runtime starves HTTP requests and makes `/api/indexing/status` look hung.
 
-**Indexing empty-state contract:** `static/js/photoGrid.js:showEmptyState()` must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
+**Indexing empty-state contract:** `frontend/src/components/PhotoGrid.svelte` (template empty-state branch) must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
 
 **Video taken-at extraction order:** `src/metadata_extractor.rs:extract_taken_at_from_ffprobe_json()` must check `format.tags.creation_time` → `format.tags.com.apple.quicktime.creationdate` → `streams[].tags.creation_time` → `format.tags.date` / `format.tags.date-{lang}`, then fall back via `apply_file_creation_fallback()` using `created().or_else(modified)`; ffprobe metadata varies by container.
 
 **Filename date parsing:** `metadata_extractor.rs` parses `taken_at` from filenames as a fallback before file creation time. Supported patterns: `%Y%m%d_%H%M%S`, `%Y%m%d%H%M%S`, `%Y-%m-%d-%H-%M-%S` (full stem), plus shard-based `%Y%m%d` and `%Y-%m-%d` with optional adjacent `%H%M%S`/`%H-%M-%S`. Years < 1990 are rejected (consistent with `parse_video_creation_time`). Fallback chain: EXIF/video metadata → filename → file creation time.
+
+**Svelte migration toolchain:** Vite 8.2's default CSS minifier (Lightning CSS) collapses adjacent `backdrop-filter` + `-webkit-backdrop-filter` pairs to the `-webkit-` form, which modern Chromium ignores (computed `backdrop-filter: none`). `vite.config.js` must keep `build.cssMinify: false`.
+
+**Svelte i18n:** svelte-i18n `$t(key, { values: {...} })` returns the raw message (ICU placeholders render literally) when `values` is omitted — always pass `values` for keys containing `{...}` placeholders.
+
+**Svelte scoped CSS beats global media overrides:** Scoped styles (with the `svelte-*` hash attribute) outrank global `@media` rules of equal class specificity. The mobile `.viewer-content` single-column grid override in `app.css` was silently overridden by the scoped two-column `grid-template` in `PhotoViewer.svelte`, leaving the absolutely-positioned `.viewer-sidebar` anchored to an off-screen grid column. Mobile overrides that must win have to live in the scoped style too.
+
+**`startViewTransition` defers its callback:** `document.startViewTransition(cb)` runs `cb` on the next frame. If the viewer is closed (Escape) inside that window, `close()` removes classes that were never added, then the deferred callback re-adds `active`/`fade-in` — viewer visibly open with `isOpen=false`, so Escape appears dead. Guard the callback with `if (!isOpen) return;`.
+
+**E2E server log strips query strings:** the warp access log shows `GET /api/photos` even when the request carries `?page=1&limit=50&q=...`. When debugging E2E request issues, trust the browser-side `page.on('request')`/`waitForResponse` URLs, not the server log.
+
+**Playwright click stability vs CSS animations:** an animated `transform: scale(...)` on the viewer (`.photo-viewer.fade-in`) makes every descendant's bounding box move every frame, so `locator.click()` on viewer children (e.g. the mobile sidebar close button) never stabilizes. Keep open/close animations opacity-only.

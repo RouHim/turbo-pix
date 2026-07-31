@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { isLoading } from 'svelte-i18n';
   import { t, initI18n } from './lib/i18n.js';
-  import { appState } from './lib/state.svelte.js';
+  import { appState, addToast } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
   import { throttle } from './lib/utils.js';
@@ -11,8 +12,6 @@
   import Sidebar from './components/Sidebar.svelte';
   import SortControls from './components/SortControls.svelte';
   import ToastContainer from './lib/ToastContainer.svelte';
-
-  // Feature components — stubbed until later phases fill them in
   import PhotoGrid from './components/PhotoGrid.svelte';
   import CollagesView from './components/CollagesView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
@@ -55,6 +54,24 @@
     updateMobile();
     window.addEventListener('resize', updateMobile);
 
+    let connectionWasUp = true;
+    const healthTimer = setInterval(async () => {
+      try {
+        await api.healthCheck();
+        connectionWasUp = true;
+      } catch {
+        if (connectionWasUp) {
+          addToast(
+            get(t)('errors.connectionLost', { default: 'Server connection lost' }),
+            '',
+            'error',
+            4000
+          );
+        }
+        connectionWasUp = false;
+      }
+    }, 30000);
+
     (async () => {
       let defaultLocale = 'en';
       try {
@@ -71,7 +88,10 @@
       ready = true;
     })();
 
-    return () => window.removeEventListener('resize', updateMobile);
+    return () => {
+      window.removeEventListener('resize', updateMobile);
+      clearInterval(healthTimer);
+    };
   });
 
   // Keep appState.currentView in sync with route
@@ -96,7 +116,9 @@
         {/if}
       </h2>
       <div class="content-actions">
-        <SortControls />
+        {#if route.view !== 'collages' && route.view !== 'housekeeping'}
+          <SortControls />
+        {/if}
       </div>
     </div>
 

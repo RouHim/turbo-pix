@@ -7,5 +7,6 @@
 </script>
 
 {#if svg}
+  <!-- eslint-disable-next-line svelte/no-at-html-tags -- icon names come from internal literals only, never user input -->
   {@html svg}
 {/if}

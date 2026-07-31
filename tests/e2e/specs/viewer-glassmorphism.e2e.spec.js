@@ -99,7 +99,7 @@ test.describe('Viewer Glassmorphism', () => {
     // WHEN: We fetch the raw CSS source file
     // Chromium aliases -webkit-backdrop-filter to backdropFilter in computed styles and CSSOM,
     // so we verify presence by reading the raw CSS text instead.
-    const cssResponse = await page.request.get('/css/components.css');
+    const cssResponse = await page.request.get('/assets/index.css');
     const cssText = await cssResponse.text();
 
     // THEN: The CSS source includes both .viewer-controls selector and -webkit-backdrop-filter

@@ -1,6 +1,5 @@
 // Utility functions
 import { addToast } from './state.svelte.js';
-import { icons } from 'feather-icons';
 import { APP_CONSTANTS } from './constants.js';
 import { logger } from './logger.js';
 import { t, translateError, getLocale } from './i18n.js';
@@ -138,61 +137,17 @@ export function throttle(func, limit) {
 // ── Toast notifications ─────────────────────────────────────────────────────
 
 /**
- * Display a toast notification using DOM manipulation.
- * Kept as-is for now; will be wired to reactive toasts later.
+ * Display a toast notification via the reactive toast system.
  * @param {string} title
  * @param {string} message
  * @param {'info'|'success'|'error'} type
  * @param {number} duration - ms, 0 = persistent
  */
-export function showToast(title, message, type = 'info', duration = 3000) {
-  // Reactive toast system (ToastContainer)
+export function showToast(title, message = '', type = 'info', duration = 3000) {
   try {
-    addToast(message ? `${title}: ${message}` : title, type, duration);
+    addToast(title, message, type, duration);
   } catch {
     /* state may not be ready */
-  }
-
-  let container = document.getElementById('toast-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'toast-container';
-    document.body.appendChild(container);
-  }
-
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-
-  let iconName = 'info';
-  if (type === 'success') iconName = 'check-circle';
-  if (type === 'error') iconName = 'alert-circle';
-
-  const iconSvg = icons[iconName] ? icons[iconName].toSvg({ width: 18, height: 18 }) : '';
-  const closeSvg = icons['x'] ? icons['x'].toSvg({ width: 18, height: 18 }) : '';
-
-  toast.innerHTML = `
-    <div class="toast-icon">${iconSvg}</div>
-    <div class="toast-content">
-      <div class="toast-title">${title}</div>
-      ${message ? `<div class="toast-message">${message}</div>` : ''}
-    </div>
-    <button class="toast-close" aria-label="Close">${closeSvg}</button>
-  `;
-
-  const dismiss = () => {
-    toast.classList.remove('toast-visible');
-    setTimeout(() => toast.remove(), 300);
-  };
-
-  toast.querySelector('.toast-close').addEventListener('click', dismiss);
-  container.appendChild(toast);
-
-  window.requestAnimationFrame(() => {
-    toast.classList.add('toast-visible');
-  });
-
-  if (duration > 0) {
-    setTimeout(dismiss, duration);
   }
 }
 

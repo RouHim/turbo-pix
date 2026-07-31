@@ -4,14 +4,26 @@
   import Icon from '../lib/Icon.svelte';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { formatCollageDate, getThumbnailUrl, handleError } from '../lib/utils.js';
+  import { formatCollageDate, handleError } from '../lib/utils.js';
 
   let collages = $state([]);
   let loading = $state(true);
   let error = $state(false);
 
+  function handleCollageAction(e) {
+    const id = e.detail?.collageId;
+    if (id == null) return;
+    collages = collages.filter((c) => c.id !== id);
+  }
+
   onMount(() => {
+    window.addEventListener('collageAccepted', handleCollageAction);
+    window.addEventListener('collageRejected', handleCollageAction);
     loadPendingCollages();
+    return () => {
+      window.removeEventListener('collageAccepted', handleCollageAction);
+      window.removeEventListener('collageRejected', handleCollageAction);
+    };
   });
 
   async function loadPendingCollages() {
@@ -30,7 +42,7 @@
   async function acceptCollage(collage) {
     try {
       await api.acceptCollage(collage.id);
-      addToast($t('notifications.collageAccepted', { default: 'Collage accepted' }), 'success');
+      addToast($t('notifications.collageAccepted', { default: 'Collage accepted' }), '', 'success');
       window.dispatchEvent(
         new CustomEvent('collageAccepted', { detail: { collageId: collage.id } })
       );
@@ -42,14 +54,14 @@
   }
 
   async function rejectCollage(collage) {
-    const msg = $t('notifications.confirmDeleteMessage', {
+    const msg = $t('messages.confirm_reject_collage', {
       default: 'Are you sure you want to reject this collage?',
     });
     if (!confirm(msg)) return;
 
     try {
       await api.rejectCollage(collage.id);
-      addToast($t('notifications.collageRejected', { default: 'Collage rejected' }), 'info');
+      addToast($t('notifications.collageRejected', { default: 'Collage rejected' }), '', 'info');
       window.dispatchEvent(
         new CustomEvent('collageRejected', { detail: { collageId: collage.id } })
       );
@@ -69,6 +81,7 @@
           default: `${count} collage(s) generated`,
           values: { count },
         }),
+        '',
         'success'
       );
       await loadPendingCollages();
@@ -78,8 +91,8 @@
     }
   }
 
-  function openViewer(collage) {
-    const collageAsPhoto = {
+  function collageToPhoto(collage) {
+    return {
       hash_sha256: collage.id,
       thumbnail_path: `/api/collages/${collage.id}/image`,
       path: `/api/collages/${collage.id}/image`,
@@ -89,7 +102,14 @@
       collageDate: collage.date,
       collagePhotoCount: collage.photo_count,
     };
-    window.dispatchEvent(new CustomEvent('openViewer', { detail: { photo: collageAsPhoto } }));
+  }
+
+  function openViewer(collage) {
+    window.dispatchEvent(
+      new CustomEvent('openViewer', {
+        detail: { photo: collageToPhoto(collage), photos: collages.map(collageToPhoto) },
+      })
+    );
   }
 </script>
 

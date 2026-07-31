@@ -31,14 +31,18 @@ export function parseUrl(url) {
 export function normalizeState(state) {
   const view = validViews.includes(state.view) ? state.view : defaultState.view;
   const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
+  const year = parsePositiveInteger(state.year);
+  const rawMonth = parsePositiveInteger(state.month);
+  const month =
+    year === null ? null : rawMonth !== null && rawMonth >= 1 && rawMonth <= 12 ? rawMonth : null;
 
   return {
     view,
     photo: normalizeString(state.photo),
     query: normalizeString(state.query),
     sort,
-    year: parsePositiveInteger(state.year),
-    month: parsePositiveInteger(state.month),
+    year,
+    month,
   };
 }
 
@@ -123,7 +127,11 @@ export function replaceState(changes = {}) {
 function handlePopState() {
   updatingFromPopstate = true;
   Object.assign(route, getCurrentState());
-  updatingFromPopstate = false;
+  // Svelte 5 effects flush in a microtask during the route mutation, so the
+  // flag must survive that flush; clear it on the next microtask instead.
+  queueMicrotask(() => {
+    updatingFromPopstate = false;
+  });
 }
 
 export function init() {

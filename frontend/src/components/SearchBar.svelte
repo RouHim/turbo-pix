@@ -1,24 +1,21 @@
 <script>
   import { get } from 'svelte/store';
+  import { onDestroy } from 'svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { route, pushState } from '../lib/router.svelte.js';
+  import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { appState, photoGridState } from '../lib/state.svelte.js';
-
-  const MAX_HISTORY = 20;
+  import Icon from '../lib/Icon.svelte';
 
   let query = $state('');
-  let searchHistory = $state([]);
+  let searchHistory = $state(api.getSearchHistory() || []);
   let showSuggestions = $state(false);
   let suggestions = $state([]);
   let searching = $state(false);
   let inputEl = $state(null);
   let focused = $state(false);
   let currentQuery = $state('');
-
-  $effect(() => {
-    searchHistory = api.getSearchHistory() || [];
-  });
+  let searchTimer = null;
 
   // Sync query input from route on popstate / initial load
   $effect(() => {
@@ -89,12 +86,20 @@
     photoGridState.currentQuery = cleanQuery;
     photoGridState.currentPage = 1;
     appState.searchQuery = cleanQuery;
-
-    searching = false;
   }
 
+  // The flag clears once the grid finishes loading the search results.
+  $effect(() => {
+    if (!photoGridState.loading) {
+      searching = false;
+    }
+  });
+
   function clearSearch(updateUrl = true) {
-    const q = query.trim();
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
     query = '';
     currentQuery = '';
     showSuggestions = false;
@@ -117,7 +122,12 @@
       clearSearch();
       return;
     }
-    performSearch(q, true);
+    // Debounce like typing so the grid request lands after the click handler
+    // returns (deterministic for E2E waitForResponse) and dedupes with onInput.
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      performSearch(q, true);
+    }, 300);
   }
 
   function onKeydown(e) {
@@ -141,10 +151,26 @@
 
   function onInput() {
     const q = query.trim();
-    // Generate suggestions as user types (not performing search on every input)
+    // Generate suggestions as user types
     generateSuggestions(q);
     showSuggestions = suggestions.length > 0;
+
+    // Debounced live search (matches old search.js behavior)
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      if (q.length >= 2) {
+        performSearch(q, false);
+        replaceState({ query: q });
+      } else if (q.length === 0) {
+        clearSearch(false);
+        replaceState({ query: null });
+      }
+    }, 300);
   }
+
+  onDestroy(() => {
+    if (searchTimer) clearTimeout(searchTimer);
+  });
 
   function selectSuggestion(s) {
     query = s.query;
@@ -154,7 +180,6 @@
 
   function generateSuggestions(currentValue) {
     const items = [];
-    const _t = (key, fallback) => get(t)(key, fallback) || fallback;
     const history = searchHistory || [];
 
     // Recent searches
@@ -215,7 +240,6 @@
   function getSearchSuggestions(value) {
     const items = [];
     const lowerValue = value.toLowerCase();
-    const _t = (key, fallback) => get(t)(key, fallback) || fallback;
 
     // Camera suggestions
     if (lowerValue.includes('canon') || lowerValue.includes('camera')) {
@@ -347,6 +371,11 @@
 
     return { query: parsed.text.trim(), filters };
   }
+  $effect(() => {
+    if (appState.mobileSearchOpen) {
+      inputEl?.focus();
+    }
+  });
 </script>
 
 <div class="search-container" class:mobile-show={appState.mobileSearchOpen}>
@@ -370,8 +399,8 @@
   </button>
 
   <!-- Search hint -->
-  <div class="search-hint" class:visible={focused && !query}>
-    <span class="search-hint-icon">ⓘ</span>
+  <div class="search-hint" class:visible={focused && !query} data-search-hint="true">
+    <Icon name="info" width={14} height={14} className="search-hint-icon" />
     <span
       >{$t('ui.search_hint', {
         default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true',
@@ -504,7 +533,7 @@
     opacity: 1;
   }
 
-  .search-hint-icon {
+  :global(.search-hint-icon) {
     margin-right: var(--space-2);
     flex-shrink: 0;
     font-size: 14px;

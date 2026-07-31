@@ -84,7 +84,6 @@ jobs:
         run: cargo build --profile production
   e2e-tests:
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -166,9 +165,32 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
 
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Install npm dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+      - name: Upload dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 1
+
   build-binaries:
     name: Build and upload release binaries
-    needs: create-release
+    needs:
+      - create-release
+      - build-frontend
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -189,6 +211,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v7
+        with:
+          name: frontend-dist
+          path: dist
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

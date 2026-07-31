@@ -65,9 +65,15 @@ export class SwipeableViewer {
       }
 
       if (this.viewer.controls?.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
-        this.viewer.gestureManager.enablePan();
+        if (this.viewer.gestureManager.activeGesture !== 'pan') {
+          this.viewer.gestureManager.enablePan();
+          this.viewer.gestureManager.processPan();
+        }
       } else if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > 0) {
-        this.viewer.gestureManager.enablePan();
+        if (this.viewer.gestureManager.activeGesture !== 'pan') {
+          this.viewer.gestureManager.enablePan();
+          this.viewer.gestureManager.processPan();
+        }
       }
     });
 

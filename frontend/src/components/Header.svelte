@@ -1,6 +1,7 @@
 <script>
   import { t } from '../lib/i18n.js';
   import { appState } from '../lib/state.svelte.js';
+  import { pushState } from '../lib/router.svelte.js';
   import SearchBar from './SearchBar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import Icon from '../lib/Icon.svelte';
@@ -15,7 +16,8 @@
 
   function onLogoClick(e) {
     e.preventDefault();
-    window.location.href = '/';
+    pushState({ view: 'all', query: null });
+    appState.sidebarOpen = false;
   }
 </script>
 

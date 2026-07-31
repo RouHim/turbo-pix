@@ -12,7 +12,8 @@
   ];
 
   function navigate(view) {
-    pushState({ view, query: null, year: null, month: null });
+    if (route.view === view) return;
+    pushState({ view });
     appState.currentView = view;
     appState.sidebarOpen = false;
   }
@@ -37,6 +38,7 @@
         class="nav-item"
         class:active={route.view === view.id}
         data-view={view.id}
+        aria-current={route.view === view.id ? 'page' : undefined}
         onclick={() => navigate(view.id)}
       >
         {$t(view.key, { default: view.fallback })}

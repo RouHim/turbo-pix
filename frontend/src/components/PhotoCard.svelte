@@ -1,25 +1,15 @@
 <script>
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import {
-    formatDate,
-    formatFileSize,
-    getThumbnailUrl,
-    getPhotoUrl,
-    handleError,
-  } from '../lib/utils.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
+  import { formatDate, formatFileSize, getThumbnailUrl, getPhotoUrl } from '../lib/utils.js';
   import { toDataURL } from '../lib/blurhash.js';
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
 
-  const { photo, context = 'default', onOpen } = $props();
+  const { photo, onOpen } = $props();
 
   // --- Derived state ---
-  const extension = $derived(
-    photo?.filename ? '.' + (photo.filename.split('.').pop()?.toLowerCase() ?? '') : ''
-  );
-  const isVideo = $derived(APP_CONSTANTS.VIDEO_EXTENSIONS.includes(extension));
+  const isVideo = $derived(photo?.metadata?.video?.codec != null);
   const title = $derived(photo?.filename || `Photo ${photo?.hash_sha256?.substring(0, 8)}`);
   const meta = $derived.by(() => {
     if (!photo) return '';
@@ -30,11 +20,13 @@
     if (photo.file_size) parts.push(formatFileSize(photo.file_size));
     return parts.join(' • ');
   });
-  const blurhashUrl = $derived(() => {
+  const blurhashUrl = $derived.by(() => {
     if (photo?.blurhash) {
       try {
         return toDataURL(photo.blurhash, 32, 32, 1);
-      } catch {}
+      } catch {
+        return null;
+      }
     }
     return null;
   });
@@ -76,7 +68,7 @@
       const title = newState
         ? $t('ui.added', { default: 'Added' })
         : $t('ui.removed', { default: 'Removed' });
-      addToast(`${title}: ${message}`, 'success', 2000);
+      addToast(title, message, 'success', 2000);
 
       window.dispatchEvent(
         new CustomEvent('favoriteToggled', {
@@ -88,9 +80,8 @@
       photo.is_favorite = wasFavorite;
       console.error('Error toggling favorite:', error);
       addToast(
-        $t('ui.error', { default: 'Error' }) +
-          ': ' +
-          $t('messages.error_updating_favorite', { default: 'Error updating favorite status' }),
+        $t('ui.error', { default: 'Error' }),
+        $t('messages.error_updating_favorite', { default: 'Error updating favorite status' }),
         'error',
         3000
       );
@@ -123,13 +114,17 @@
       );
     } catch (err) {
       console.error('Failed to keep photo:', err);
-      addToast('Error', 'Failed to keep photo', 'error');
+      addToast('Error', 'Failed to keep photo', 'error', 4000);
     }
   }
 
   async function deletePhoto(e) {
     e.stopPropagation();
-    if (!confirm('Are you sure you want to permanently delete this photo?')) return;
+    const confirmMsg = $t('notifications.confirmDeleteMessage', {
+      default:
+        'Are you sure you want to permanently delete this photo? This action cannot be undone.',
+    });
+    if (!confirm(confirmMsg)) return;
     try {
       await api.deletePhoto(photo.hash_sha256);
       addToast('Deleted', 'Photo deleted permanently', 'success', 2000);
@@ -167,7 +162,7 @@
       );
     } catch (err) {
       console.error('Failed to accept collage:', err);
-      addToast('Error', 'Failed to accept collage', 'error');
+      addToast('Error', 'Failed to accept collage', 'error', 4000);
     }
   }
 
@@ -187,7 +182,7 @@
       );
     } catch (err) {
       console.error('Failed to reject collage:', err);
-      addToast('Error', 'Failed to reject collage', 'error');
+      addToast('Error', 'Failed to reject collage', 'error', 4000);
     }
   }
 
@@ -205,6 +200,7 @@
   class="photo-card"
   class:collage-card={photo?.isCollage}
   data-photo-id={photo?.hash_sha256}
+  aria-label={title}
   onclick={handleCardClick}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -216,8 +212,8 @@
   tabindex="0"
 >
   <div class="photo-card-image-container" class:image-loaded={imageLoaded}>
-    {#if blurhashUrl() && !imageLoaded}
-      <img class="photo-card-blurhash" src={blurhashUrl()} alt="" aria-hidden="true" />
+    {#if blurhashUrl && !imageLoaded && !imageError}
+      <img class="photo-card-blurhash" src={blurhashUrl} alt="" aria-hidden="true" />
     {/if}
 
     {#if !imageError}
@@ -302,6 +298,7 @@
       <button
         class="card-action-btn keep-btn"
         title="Keep (Remove from housekeeping list)"
+        aria-label="Keep (Remove from housekeeping list)"
         data-action="keep"
         style="color: #10b981"
         onclick={keepPhoto}
@@ -311,6 +308,7 @@
       <button
         class="card-action-btn delete-btn"
         title="Delete Photo"
+        aria-label="Delete Photo"
         data-action="delete-housekeeping"
         style="color: #ef4444"
         onclick={deletePhoto}
@@ -325,6 +323,9 @@
         title={favoriteActive
           ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
           : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
+        aria-label={favoriteActive
+          ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
+          : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
         data-action="favorite"
         onclick={toggleFavorite}
       >
@@ -333,6 +334,7 @@
       <button
         class="card-action-btn download-btn"
         title={$t('ui.download', { default: 'Download' })}
+        aria-label={$t('ui.download', { default: 'Download' })}
         data-action="download"
         onclick={downloadPhoto}
       >

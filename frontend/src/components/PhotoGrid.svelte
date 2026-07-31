@@ -13,6 +13,8 @@
 
   // --- Internal state ---
   let abortController = null;
+  let pendingLoadTimer = null;
+  let reloadToken = 0;
   let lastLoadSignature = '';
   let loadingStartTime = 0;
 
@@ -21,7 +23,6 @@
   const hasMore = $derived(photoGridState.hasMore);
   const photos = $derived(photoGridState.photos);
   const currentQuery = $derived(photoGridState.currentQuery);
-  const semanticSearchMode = $derived(photoGridState.semanticSearchMode);
 
   // --- Scroll container ref ---
   let scrollContainer = null;
@@ -40,9 +41,7 @@
     const filters = {};
     if (route.view === 'favorites') filters.query = 'is_favorite:true';
     if (route.view === 'videos') {
-      filters.query =
-        (filters.query ? filters.query + ' ' : '') +
-        APP_CONSTANTS.VIDEO_EXTENSIONS.map((e) => `ext:${e}`).join(' OR ');
+      filters.query = (filters.query ? filters.query + ' ' : '') + 'type:video';
     }
     if (route.sort) {
       const [field, order] = route.sort.split('_');
@@ -59,8 +58,10 @@
    * @param {boolean} reset - Whether to reset pagination and clear the grid
    */
   async function loadPhotos(reset = true) {
-    // Dedupe identical concurrent loads (effect + onMount can both fire)
-    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${photoGridState.currentPage}`;
+    // Dedupe identical concurrent loads (effect + onMount can both fire);
+    // reloadToken is bumped by handleIndexingCompleted so a completion
+    // reload is never swallowed by the dedupe.
+    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${photoGridState.currentPage}|${reloadToken}`;
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
 
@@ -80,8 +81,9 @@
         photoGridState.photos = [];
         photoGridState.currentPage = 1;
         photoGridState.hasMore = true;
-        photoGridState.currentQuery = route.query || null;
-        photoGridState.semanticSearchMode = false;
+        if (!photoGridState.semanticSearchMode) {
+          photoGridState.currentQuery = route.query || null;
+        }
       }
       let photosList = [];
 
@@ -178,7 +180,7 @@
       const minDisplayTime = 300;
       const remainingTime = Math.max(0, minDisplayTime - loadingDuration);
 
-      setTimeout(() => {
+      pendingLoadTimer = setTimeout(() => {
         photoGridState.loading = false;
         // Recheck scroll after load in case more content fits
         requestAnimationFrame(() => {
@@ -254,15 +256,22 @@
     if (card) card.is_favorite = isFavorite;
   }
 
-  function handleIndexingStatusChanged() {
-    // Force re-eval of the empty state by triggering a reactive update
-    // The template checks indexingState.isIndexing directly
-    // This just marks reactivity for the empty state recalculation
+  function handlePhotoRemoved(event) {
+    const { hash } = event.detail || {};
+    if (!hash) return;
+    const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === hash);
+    if (idx !== -1) photoGridState.photos.splice(idx, 1);
+  }
+
+  function handleIndexingCompleted() {
+    reloadToken++;
+    loadPhotos(true);
   }
 
   onMount(() => {
     window.addEventListener('favoriteToggled', handleFavoriteToggled);
-    window.addEventListener('indexingStatusChanged', handleIndexingStatusChanged);
+    window.addEventListener('photoRemoved', handlePhotoRemoved);
+    window.addEventListener('indexingCompleted', handleIndexingCompleted);
 
     // Find the scroll container
     scrollContainer = document.querySelector('.main-content');
@@ -272,27 +281,21 @@
 
     return () => {
       window.removeEventListener('favoriteToggled', handleFavoriteToggled);
-      window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
+      window.removeEventListener('photoRemoved', handlePhotoRemoved);
+      window.removeEventListener('indexingCompleted', handleIndexingCompleted);
       if (scrollContainer) {
         scrollContainer.removeEventListener('scroll', onScroll);
       }
+      if (pendingLoadTimer) {
+        clearTimeout(pendingLoadTimer);
+        pendingLoadTimer = null;
+      }
+      scrollContainer = null;
       if (abortController) {
         abortController.abort();
       }
     };
   });
-
-  // ===========================================================================
-  // Helpers
-  // ===========================================================================
-
-  function showEmptyState() {
-    // Handled in template
-  }
-
-  function refresh() {
-    loadPhotos(true);
-  }
 </script>
 
 <!-- ========================================================================= -->
@@ -303,6 +306,7 @@
   {#if loading && photos.length === 0}
     <!-- Skeleton loading -->
     <div class="loading-skeleton">
+      <!-- eslint-disable-next-line no-unused-vars -- placeholder _ index is part of the skeleton keying idiom -->
       {#each Array(6) as _, i (i)}
         <div class="skeleton-item"></div>
       {/each}
@@ -358,7 +362,7 @@
   {/if}
 </div>
 
-<div id="load-more-container" class="load-more-container">
+<div id="load-more-container" class="load-more-container" class:empty={photos.length === 0}>
   {#if loading && photos.length > 0}
     <!-- Loading more: dot wave animation -->
     <div class="infinite-scroll-loading">
@@ -377,7 +381,7 @@
         <div class="end-dot"></div>
       </div>
     </div>
-  {:else if !(loading && photos.length > 0) && !(!hasMore && photos.length > 0)}
+  {:else if photos.length > 0 && !(loading && photos.length > 0) && !(!hasMore && photos.length > 0)}
     <!-- Load More button (shown when idle and hasMore) -->
     <button
       type="button"
@@ -446,6 +450,10 @@
     justify-content: center;
     margin: var(--space-8) 0 var(--space-16);
     padding-bottom: var(--space-8);
+  }
+
+  .load-more-container.empty {
+    display: none;
   }
 
   .load-more-btn {

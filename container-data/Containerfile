@@ -33,6 +33,7 @@ COPY ../Cargo.toml ./
 COPY ../Cargo.lock ./
 COPY ../src ./src
 COPY ../migrations ./migrations
+COPY ../assets ./assets
 COPY --from=frontend-build /app/dist ./dist
 
 # Determine the Rust target triple based on architecture

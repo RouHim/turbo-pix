@@ -1,4 +1,5 @@
 <script>
+  import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { route, replaceState } from '../lib/router.svelte.js';
@@ -564,14 +565,14 @@
         if (response.status === 202) {
           const data = await response.json();
           const pollUrl = data.poll_url;
-          showTranscodeToast(t('video.transcoding.started', { default: 'Video is being converted for playback...' }));
+          showTranscodeToast(get(t)('video.transcoding.started', { default: 'Video is being converted for playback...' }));
           await pollTranscodeStatus(pollUrl, photo);
           return;
         }
         const warningHeader = response.headers.get('X-Transcode-Warning');
         if (warningHeader && warningHeader.trim() !== '') {
-          showTranscodeToast(t('video.transcoding.failed', { default: 'Video conversion failed' }), true);
-          showToast('Error', t('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
+          showTranscodeToast(get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), true);
+          showToast('Error', get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
           return;
         }
       } catch (_) {}
@@ -605,7 +606,7 @@
         if (elapsed >= MAX_POLL_DURATION) {
           clearInterval(intervalId);
           hideTranscodeToast();
-          showTranscodeToast(t('video.transcoding.timeout', { default: 'Video conversion timed out' }), true);
+          showTranscodeToast(get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }), true);
           resolve('Timeout');
           return;
         }
@@ -624,7 +625,7 @@
           } else if (status.state === 'Failed' || status.state === 'Timeout') {
             clearInterval(intervalId);
             hideTranscodeToast();
-            showTranscodeToast(t('video.transcoding.failed', { default: 'Video conversion failed' }), true);
+            showTranscodeToast(get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), true);
             resolve(status.state);
           }
         } catch (_) {}
@@ -640,7 +641,7 @@
         await displayVideo(photo, true);
         return;
       }
-      showToast('Error', t('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
+      showToast('Error', get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
     };
 
     videoEl.src = videoUrl;
@@ -699,12 +700,12 @@
         await api.removeFromFavorites(photoHash);
         currentPhoto = { ...currentPhoto, is_favorite: false };
         photos[currentIndex] = currentPhoto;
-        addToast(t('ui.removed_from_favs', { default: 'Photo removed from favorites' }), 'info', 2000);
+        addToast(get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }), 'info', 2000);
       } else {
         await api.addToFavorites(photoHash);
         currentPhoto = { ...currentPhoto, is_favorite: true };
         photos[currentIndex] = currentPhoto;
-        addToast(t('ui.added_to_favs', { default: 'Photo added to favorites' }), 'success', 2000);
+        addToast(get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }), 'success', 2000);
       }
 
       window.dispatchEvent(
@@ -713,7 +714,7 @@
         })
       );
     } catch (error) {
-      addToast(t('ui.fav_error', { default: 'Failed to update favorite status' }), 'error', 2000);
+      addToast(get(t)('ui.fav_error', { default: 'Failed to update favorite status' }), 'error', 2000);
     }
   }
 
@@ -727,7 +728,7 @@
     link.href = mediaUrl;
     link.download = currentPhoto.filename || `photo-${currentPhoto.hash_sha256?.substring(0, 8)}`;
     link.click();
-    addToast(t('ui.download_started', { default: 'Photo download started' }), 'info', 2000);
+    addToast(get(t)('ui.download_started', { default: 'Photo download started' }), 'info', 2000);
   }
 
   // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -833,8 +834,8 @@
       const errMsg = `${error?.message || ''}`.toLowerCase();
       if (!errMsg.includes('already accepted') && !errMsg.includes('http 409')) {
         addToast(
-          t('ui.accept_collage', { default: 'Accept Collage' }),
-          t('notifications.collageAcceptFailed', { default: 'Failed to accept collage' }),
+          get(t)('ui.accept_collage', { default: 'Accept Collage' }),
+          get(t)('notifications.collageAcceptFailed', { default: 'Failed to accept collage' }),
           'error',
           3000
         );
@@ -845,8 +846,8 @@
     }
 
     addToast(
-      t('ui.accept_collage', { default: 'Accept Collage' }),
-      t('notifications.collageAccepted', { default: 'Collage accepted' }),
+      get(t)('ui.accept_collage', { default: 'Accept Collage' }),
+      get(t)('notifications.collageAccepted', { default: 'Collage accepted' }),
       'success',
       2000
     );
@@ -983,7 +984,7 @@
     get currentPhoto() { return currentPhoto; },
     get currentIndex() { return currentIndex; },
     get photos() { return photos; },
-    get preloadedImages() { _ = preloadedImages; return preloadedImages; },
+    get preloadedImages() { return preloadedImages; },
     get gestureManager() { return mainEl?.__gestureManager || null; },
     get elements() { return { main: mainEl, image: imageEl, video: videoEl }; },
     controls: {

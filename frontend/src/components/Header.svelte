@@ -9,6 +9,10 @@
     appState.sidebarOpen = !appState.sidebarOpen;
   }
 
+  function toggleMobileSearch() {
+    appState.mobileSearchOpen = !appState.mobileSearchOpen;
+  }
+
   function onLogoClick(e) {
     e.preventDefault();
     window.location.href = '/';
@@ -25,6 +29,15 @@
       aria-label={$t('ui.menu', { default: 'Menu' })}
     >
       <Icon name="menu" width={20} height={20} />
+    </button>
+    <button
+      type="button"
+      class="mobile-search-btn"
+      title={$t('ui.search', { default: 'Search' })}
+      onclick={toggleMobileSearch}
+      aria-label={$t('ui.search', { default: 'Search' })}
+    >
+      <Icon name="search" width={20} height={20} />
     </button>
     <h1 class="logo">
       <a href="/" id="logo-link" onclick={onLogoClick}>
@@ -115,8 +128,25 @@
     background: var(--background-secondary);
   }
 
+  .mobile-search-btn {
+    display: none;
+    width: var(--button-size);
+    height: var(--button-size);
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    border-radius: var(--radius-md);
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-search-btn:hover {
+    background: var(--background-secondary);
+  }
   @media (max-width: 768px) {
-    .menu-btn {
+    .menu-btn,
+    .mobile-search-btn {
       display: flex;
     }
   }

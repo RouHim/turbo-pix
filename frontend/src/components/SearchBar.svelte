@@ -116,6 +116,7 @@
   function submitSearch() {
     const q = query.trim();
     showSuggestions = false;
+    appState.mobileSearchOpen = false;
     if (!q) {
       clearSearch();
       return;
@@ -173,7 +174,7 @@
           query: item.query,
           text: item.query,
           icon: '\u{1F552}', // 🕒
-          subtitle: _t('ui.recent_search', 'Recent search'),
+          subtitle: get(t)('ui.recent_search', 'Recent search'),
         }));
       items.push(...recentMatches);
     }
@@ -189,27 +190,27 @@
       items.push(
         {
           query: 'camera:canon',
-          text: _t('ui.canon_photos', 'Canon photos'),
+          text: get(t)('ui.canon_photos', 'Canon photos'),
           icon: '\u{1F4F7}', // 📷
-          subtitle: _t('ui.filter_by_camera', 'Filter by camera'),
+          subtitle: get(t)('ui.filter_by_camera', 'Filter by camera'),
         },
         {
           query: 'camera:nikon',
-          text: _t('ui.nikon_photos', 'Nikon photos'),
+          text: get(t)('ui.nikon_photos', 'Nikon photos'),
           icon: '\u{1F4F7}',
-          subtitle: _t('ui.filter_by_camera', 'Filter by camera'),
+          subtitle: get(t)('ui.filter_by_camera', 'Filter by camera'),
         },
         {
           query: 'has:gps',
-          text: _t('ui.photos_with_location', 'Photos with location'),
+          text: get(t)('ui.photos_with_location', 'Photos with location'),
           icon: '\u{1F4CD}', // 📍
-          subtitle: _t('ui.has_gps_data', 'Has GPS data'),
+          subtitle: get(t)('ui.has_gps_data', 'Has GPS data'),
         },
         {
           query: 'type:video',
-          text: _t('ui.videos_only', 'Videos only'),
+          text: get(t)('ui.videos_only', 'Videos only'),
           icon: '\u{1F3A5}', // 🎥
-          subtitle: _t('ui.filter_by_type', 'Filter by type'),
+          subtitle: get(t)('ui.filter_by_type', 'Filter by type'),
         }
       );
     }
@@ -226,21 +227,21 @@
     if (lowerValue.includes('canon') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:canon',
-        text: _t('ui.canon_photos', 'Canon photos'),
+        text: get(t)('ui.canon_photos', 'Canon photos'),
         icon: '\u{1F4F7}',
       });
     }
     if (lowerValue.includes('nikon') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:nikon',
-        text: _t('ui.nikon_photos', 'Nikon photos'),
+        text: get(t)('ui.nikon_photos', 'Nikon photos'),
         icon: '\u{1F4F7}',
       });
     }
     if (lowerValue.includes('sony') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:sony',
-        text: _t('ui.sony_photos', 'Sony photos'),
+        text: get(t)('ui.sony_photos', 'Sony photos'),
         icon: '\u{1F4F7}',
       });
     }
@@ -249,14 +250,14 @@
     if (lowerValue.includes('2024') || lowerValue.includes('today')) {
       items.push({
         query: 'date:2024',
-        text: _t('ui.photos_from_year', { year: '2024' }) || '2024 photos',
+        text: get(t)('ui.photos_from_year', { year: '2024' }) || '2024 photos',
         icon: '\u{1F4C5}', // 📅
       });
     }
     if (lowerValue.includes('2023')) {
       items.push({
         query: 'date:2023',
-        text: _t('ui.photos_from_year', { year: '2023' }) || '2023 photos',
+        text: get(t)('ui.photos_from_year', { year: '2023' }) || '2023 photos',
         icon: '\u{1F4C5}',
       });
     }
@@ -265,14 +266,14 @@
     if (lowerValue.includes('video')) {
       items.push({
         query: 'type:video',
-        text: _t('ui.videos_only', 'Videos only'),
+        text: get(t)('ui.videos_only', 'Videos only'),
         icon: '\u{1F3A5}',
       });
     }
     if (lowerValue.includes('raw')) {
       items.push({
         query: 'type:raw',
-        text: _t('ui.raw_files_only', 'RAW files only'),
+        text: get(t)('ui.raw_files_only', 'RAW files only'),
         icon: '\u{1F4F8}', // 📸
       });
     }
@@ -281,7 +282,7 @@
     if (lowerValue.includes('gps') || lowerValue.includes('location')) {
       items.push({
         query: 'has:gps',
-        text: _t('ui.photos_with_gps', 'Photos with GPS'),
+        text: get(t)('ui.photos_with_gps', 'Photos with GPS'),
         icon: '\u{1F4CD}',
       });
     }
@@ -354,7 +355,7 @@
   }
 </script>
 
-<div class="search-container">
+<div class="search-container" class:mobile-show={appState.mobileSearchOpen}>
   <input
     type="text"
     id="search-input"
@@ -585,6 +586,21 @@
   @media (max-width: 768px) {
     .search-container {
       display: none;
+      position: fixed;
+      top: var(--header-height);
+      left: 0;
+      right: 0;
+      background: var(--surface-color);
+      padding: var(--space-4);
+      border-bottom: 1px solid var(--divider-color);
+      z-index: 200;
+      box-shadow: var(--shadow-medium);
+      flex-direction: row;
+      gap: var(--space-2);
+    }
+
+    .search-container.mobile-show {
+      display: flex;
     }
   }
 </style>

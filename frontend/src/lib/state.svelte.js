@@ -7,6 +7,7 @@ export const appState = $state({
   isLoading: false,
   isMobile: false,
   sidebarOpen: false,
+  mobileSearchOpen: false,
   totalPhotos: 0,
 });
 

@@ -1,5 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
+  import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
 
@@ -76,7 +77,7 @@
       const hasLng = lng !== '' && lng != null;
 
       if ((hasLat && !hasLng) || (!hasLat && hasLng)) {
-        errorMessage = t('ui.metadata.edit_validation_gps_pair', {
+        errorMessage = get(t)('ui.metadata.edit_validation_gps_pair', {
           default: 'Both latitude and longitude must be provided together',
         });
         saving = false;
@@ -86,7 +87,7 @@
       if (hasLat) {
         const latVal = parseFloat(lat);
         if (latVal < -90 || latVal > 90) {
-          errorMessage = t('ui.metadata.edit_validation_gps', {
+          errorMessage = get(t)('ui.metadata.edit_validation_gps', {
             default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
           });
           saving = false;
@@ -98,7 +99,7 @@
       if (hasLng) {
         const lngVal = parseFloat(lng);
         if (lngVal < -180 || lngVal > 180) {
-          errorMessage = t('ui.metadata.edit_validation_gps', {
+          errorMessage = get(t)('ui.metadata.edit_validation_gps', {
             default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
           });
           saving = false;
@@ -115,14 +116,14 @@
       }
 
       addToast(
-        t('ui.metadata.edit_success', { default: 'Metadata updated successfully' }),
+        get(t)('ui.metadata.edit_success', { default: 'Metadata updated successfully' }),
         'success',
         3000
       );
 
       closeModal();
     } catch (error) {
-      let msg = t('ui.metadata.edit_error', { default: 'Failed to update metadata' });
+      let msg = get(t)('ui.metadata.edit_error', { default: 'Failed to update metadata' });
       if (error.message) {
         const match = error.message.match(/HTTP \d+: (.+)/);
         msg = match?.[1] || error.message;

@@ -27,7 +27,7 @@
   let ringEl = $state(null);
   let svgEl = $state(null);
 
-  let ringMode = $derived(determineMode());
+  const ringMode = $derived(determineMode());
 
   function getTranslation(key, fallback) {
     return $t(key) || fallback;
@@ -236,7 +236,7 @@
     }
   });
 
-  let sheetPhases = $derived(
+  const sheetPhases = $derived(
     indexingState.phases.map((phase) => {
       const def = PHASES.find((p) => p.id === phase.id);
       const phaseName = $t(`ui.indexing_phase_${phase.id}`) || def?.id || phase.id;
@@ -266,7 +266,7 @@
     })
   );
 
-  let activePhaseName = $derived(
+  const activePhaseName = $derived(
     (() => {
       for (const sp of sheetPhases) {
         if (sp.isActive) {
@@ -282,9 +282,9 @@
     })()
   );
 
-  let tooltipText = $derived(ringMode === 'compact' && activePhaseName ? activePhaseName : '');
+  const tooltipText = $derived(ringMode === 'compact' && activePhaseName ? activePhaseName : '');
 
-  let centerIcon = $derived(
+  const centerIcon = $derived(
     (() => {
       const activePhase = PHASES.find((p) => p.id === indexingState.currentPhase);
       return activePhase?.icon || 'camera';
@@ -292,8 +292,6 @@
   );
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={ringEl}
   data-phase-ring
@@ -309,7 +307,7 @@
 >
   <div class="indexing-orbit-shell">
     <svg bind:this={svgEl} class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
-      {#each PHASES as phase, i}
+      {#each PHASES as phase, i (phase.name || i)}phase, i}
         {@const arcD = arcPaths()[i]}
         {@const sp = sheetPhases.find((p) => p.id === phase.id)}
         {@const phaseState = sp?.isDone
@@ -354,8 +352,6 @@
 </div>
 
 <!-- Backdrop -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="indexing-sheet-backdrop"
   class:is-visible={sheetOpen}
@@ -391,7 +387,7 @@
     <span>{$t('ui.indexing_sheet_photos_indexed', { default: 'photos indexed' })}</span>
   </div>
   <div class="indexing-sheet-phases">
-    {#each sheetPhases as sp (sp.id)}
+    {#each sheetPhases as phase, i (phase.name || i)}sp (sp.id)}
       <div
         class="indexing-sheet-phase"
         class:is-active={sp.isActive}

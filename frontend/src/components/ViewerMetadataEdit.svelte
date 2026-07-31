@@ -4,7 +4,7 @@
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
 
-  let { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
+  const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
 
   let showModal = $state(false);
   let takenAt = $state('');

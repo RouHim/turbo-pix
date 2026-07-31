@@ -2,7 +2,7 @@
   import Icon from '../lib/Icon.svelte';
   import { t } from '../lib/i18n.js';
 
-  let {
+  const {
     zoomLevel = 1,
     isVideo = false,
     imageEl = null,

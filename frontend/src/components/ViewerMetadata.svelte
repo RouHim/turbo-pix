@@ -5,16 +5,16 @@
   import { APP_CONSTANTS } from '../lib/constants.js';
   import Icon from '../lib/Icon.svelte';
 
-  let {
+  const {
     photo = null,
     onEditMetadata = () => {},
     showSidebar = false,
     onCloseSidebar = () => {},
   } = $props();
 
-  let showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
-  let isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
-  let isCollage = $derived(photo ? isCollagePhoto(photo) : false);
+  const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
+  const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
+  const isCollage = $derived(photo ? isCollagePhoto(photo) : false);
 
   function isVideoFile(filename) {
     if (!filename) return false;
@@ -71,31 +71,31 @@
     return value ? '1' : '0.5';
   }
 
-  let metadata = $derived(photo?.metadata || {});
-  let camera = $derived(metadata.camera || {});
-  let location = $derived(metadata.location || {});
-  let settings = $derived(metadata.settings || {});
-  let videoMeta = $derived(metadata.video || {});
+  const metadata = $derived(photo?.metadata || {});
+  const camera = $derived(metadata.camera || {});
+  const location = $derived(metadata.location || {});
+  const settings = $derived(metadata.settings || {});
+  const videoMeta = $derived(metadata.video || {});
 
-  let title = $derived(
+  const title = $derived(
     photo?.filename || (photo ? `Photo ${photo.hash_sha256?.substring(0, 8)}` : '-')
   );
-  let dateText = $derived(photo?.taken_at ? formatDate(photo.taken_at) : '-');
-  let sizeText = $derived(() => {
+  const dateText = $derived(photo?.taken_at ? formatDate(photo.taken_at) : '-');
+  const sizeText = $derived(() => {
     if (!photo) return '-';
     const sz = photo.file_size ? formatFileSize(photo.file_size) : '-';
     const dims = photo.width && photo.height ? ` \u2022 ${photo.width}\u00d7${photo.height}` : '';
     return sz + dims;
   });
-  let cameraText = $derived(camera.make && camera.model ? `${camera.make} ${camera.model}` : '-');
-  let locationText = $derived(
+  const cameraText = $derived(camera.make && camera.model ? `${camera.make} ${camera.model}` : '-');
+  const locationText = $derived(
     location.latitude && location.longitude
       ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
       : '-'
   );
 
-  let hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
-  let hasSettings = $derived(
+  const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
+  const hasSettings = $derived(
     settings.iso ||
       settings.aperture ||
       settings.shutter_speed ||
@@ -107,7 +107,7 @@
       photo?.orientation ||
       settings.color_space
   );
-  let hasLocation = $derived(location.latitude || location.longitude);
+  const hasLocation = $derived(location.latitude || location.longitude);
 </script>
 
 <div class="photo-info">

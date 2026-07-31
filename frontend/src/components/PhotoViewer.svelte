@@ -20,14 +20,14 @@
   let currentPhoto = $state(null);
   let photos = $state([]);
   let currentIndex = $state(0);
-  let preloadedImages = $state(new Map());
+  const preloadedImages = $state(new Map());
   let showSidebar = $state(false);
   let showMetadataEdit = $state(false);
   let updateUrlEnabled = $state(true);
 
   // Loading / video
   let isLoading = $state(false);
-  let isVideoPlaying = $state(false);
+  const isVideoPlaying = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
 
@@ -48,8 +48,8 @@
 
   // ── Zoom / Pan state (ported from ViewerControls) ──────────────────────────
   let zoomLevel = $state(1);
-  let maxZoom = 5;
-  let minZoom = 0.5;
+  const maxZoom = 5;
+  const minZoom = 0.5;
   let isDragging = $state(false);
   let dragStart = $state({ x: 0, y: 0 });
   let imagePosition = $state({ x: 0, y: 0 });
@@ -88,11 +88,11 @@
     return getPhotoUrl(photo.hash_sha256);
   }
 
-  let hasPrev = $derived(currentIndex > 0);
-  let hasNext = $derived(currentIndex < photos.length - 1);
-  let isVideo = $derived(currentPhoto ? isVideoFile(currentPhoto.filename) : false);
-  let isCollage = $derived(currentPhoto ? isCollagePhoto(currentPhoto) : false);
-  let isFavorite = $derived(currentPhoto ? api.isFavorite(currentPhoto) : false);
+  const hasPrev = $derived(currentIndex > 0);
+  const hasNext = $derived(currentIndex < photos.length - 1);
+  const isVideo = $derived(currentPhoto ? isVideoFile(currentPhoto.filename) : false);
+  const isCollage = $derived(currentPhoto ? isCollagePhoto(currentPhoto) : false);
+  const isFavorite = $derived(currentPhoto ? api.isFavorite(currentPhoto) : false);
 
   // ── Zoom helpers ───────────────────────────────────────────────────────────
   function applyZoom() {

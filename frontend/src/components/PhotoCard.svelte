@@ -13,15 +13,15 @@
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
 
-  let { photo, context = 'default', onOpen } = $props();
+  const { photo, context = 'default', onOpen } = $props();
 
   // --- Derived state ---
-  let extension = $derived(
+  const extension = $derived(
     photo?.filename ? '.' + (photo.filename.split('.').pop()?.toLowerCase() ?? '') : ''
   );
-  let isVideo = $derived(APP_CONSTANTS.VIDEO_EXTENSIONS.includes(extension));
-  let title = $derived(photo?.filename || `Photo ${photo?.hash_sha256?.substring(0, 8)}`);
-  let meta = $derived.by(() => {
+  const isVideo = $derived(APP_CONSTANTS.VIDEO_EXTENSIONS.includes(extension));
+  const title = $derived(photo?.filename || `Photo ${photo?.hash_sha256?.substring(0, 8)}`);
+  const meta = $derived.by(() => {
     if (!photo) return '';
     const parts = [];
     if (photo.taken_at) parts.push(formatDate(photo.taken_at));
@@ -30,7 +30,7 @@
     if (photo.file_size) parts.push(formatFileSize(photo.file_size));
     return parts.join(' • ');
   });
-  let blurhashUrl = $derived(() => {
+  const blurhashUrl = $derived(() => {
     if (photo?.blurhash) {
       try {
         return toDataURL(photo.blurhash, 32, 32, 1);
@@ -43,7 +43,7 @@
   let imageLoaded = $state(false);
 
   // --- Favorite state (optimistic) ---
-  let favoriteActive = $derived(!!photo?.is_favorite);
+  const favoriteActive = $derived(!!photo?.is_favorite);
 
   function handleCardClick(e) {
     if (!e.target.closest('.card-action-btn')) {

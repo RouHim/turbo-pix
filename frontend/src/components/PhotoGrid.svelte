@@ -17,11 +17,11 @@
   let loadingStartTime = 0;
 
   // --- Derived state ---
-  let loading = $derived(photoGridState.loading);
-  let hasMore = $derived(photoGridState.hasMore);
-  let photos = $derived(photoGridState.photos);
-  let currentQuery = $derived(photoGridState.currentQuery);
-  let semanticSearchMode = $derived(photoGridState.semanticSearchMode);
+  const loading = $derived(photoGridState.loading);
+  const hasMore = $derived(photoGridState.hasMore);
+  const photos = $derived(photoGridState.photos);
+  const currentQuery = $derived(photoGridState.currentQuery);
+  const semanticSearchMode = $derived(photoGridState.semanticSearchMode);
 
   // --- Scroll container ref ---
   let scrollContainer = null;
@@ -303,7 +303,7 @@
   {#if loading && photos.length === 0}
     <!-- Skeleton loading -->
     <div class="loading-skeleton">
-      {#each Array(6) as _}
+      {#each Array(6) as _, i (i)}
         <div class="skeleton-item"></div>
       {/each}
     </div>

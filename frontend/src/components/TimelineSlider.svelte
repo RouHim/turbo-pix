@@ -22,7 +22,7 @@
   let tooltipVisible = $state(false);
   let initError = $state(false);
 
-  let positions = $derived(
+  const positions = $derived(
     data?.density?.map((d) => ({
       year: d.year,
       month: d.month,
@@ -30,13 +30,13 @@
     })) ?? []
   );
 
-  let years = $derived(
+  const years = $derived(
     data?.density ? [...new Set(data.density.map((d) => d.year))].sort((a, b) => b - a) : []
   );
 
-  let maxSlider = $derived(Math.max(0, positions.length - 1));
+  const maxSlider = $derived(Math.max(0, positions.length - 1));
 
-  let labelText = $derived.by(() => {
+  const labelText = $derived.by(() => {
     if (!currentFilter) {
       return get(t)('ui.all_dates', 'All Dates');
     }
@@ -335,7 +335,7 @@
         onchange={handleDropdownChange}
       >
         <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
-        {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i}
+        {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i (i)}
           <option value={i + 1}
             >{$t(`ui.months.${monthKey}`, {
               default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),

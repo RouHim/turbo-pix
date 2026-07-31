@@ -892,11 +892,11 @@ fn format_date_label(date_str: &str, locale: &str) -> String {
 fn load_font() -> Result<Font<'static>, Box<dyn std::error::Error>> {
     let candidates: &[(&[u8], &str)] = &[
         (
-            include_bytes!("../static/fonts/Questrial-Regular.ttf"),
+            include_bytes!("../assets/fonts/Questrial-Regular.ttf"),
             "Questrial Regular",
         ),
         (
-            include_bytes!("../static/fonts/JetBrainsMono-Regular.ttf"),
+            include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
             "JetBrains Mono Regular",
         ),
     ];

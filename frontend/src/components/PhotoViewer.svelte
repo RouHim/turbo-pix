@@ -5,12 +5,7 @@
   import { route, replaceState } from '../lib/router.svelte.js';
   import { photoGridState } from '../lib/state.svelte.js';
   import { addToast } from '../lib/state.svelte.js';
-  import {
-    getPhotoUrl,
-    getVideoUrl,
-    showToast,
-    videoCodecSupport,
-  } from '../lib/utils.js';
+  import { getPhotoUrl, getVideoUrl, showToast, videoCodecSupport } from '../lib/utils.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { logger } from '../lib/logger.js';
   import { gestures } from '../lib/gestures/action.js';
@@ -565,14 +560,25 @@
         if (response.status === 202) {
           const data = await response.json();
           const pollUrl = data.poll_url;
-          showTranscodeToast(get(t)('video.transcoding.started', { default: 'Video is being converted for playback...' }));
+          showTranscodeToast(
+            get(t)('video.transcoding.started', {
+              default: 'Video is being converted for playback...',
+            })
+          );
           await pollTranscodeStatus(pollUrl, photo);
           return;
         }
         const warningHeader = response.headers.get('X-Transcode-Warning');
         if (warningHeader && warningHeader.trim() !== '') {
-          showTranscodeToast(get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), true);
-          showToast('Error', get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
+          showTranscodeToast(
+            get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+            true
+          );
+          showToast(
+            'Error',
+            get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+            'error'
+          );
           return;
         }
       } catch (_) {}
@@ -606,7 +612,10 @@
         if (elapsed >= MAX_POLL_DURATION) {
           clearInterval(intervalId);
           hideTranscodeToast();
-          showTranscodeToast(get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }), true);
+          showTranscodeToast(
+            get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
+            true
+          );
           resolve('Timeout');
           return;
         }
@@ -625,7 +634,10 @@
           } else if (status.state === 'Failed' || status.state === 'Timeout') {
             clearInterval(intervalId);
             hideTranscodeToast();
-            showTranscodeToast(get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), true);
+            showTranscodeToast(
+              get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+              true
+            );
             resolve(status.state);
           }
         } catch (_) {}
@@ -641,7 +653,11 @@
         await displayVideo(photo, true);
         return;
       }
-      showToast('Error', get(t)('video.transcoding.failed', { default: 'Video conversion failed' }), 'error');
+      showToast(
+        'Error',
+        get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+        'error'
+      );
     };
 
     videoEl.src = videoUrl;
@@ -682,7 +698,9 @@
           const img = new Image();
           const imageUrl = getMediaUrl(photo);
           if (!imageUrl) return;
-          img.onload = () => { preloadedImages.set(photo.hash_sha256, img); };
+          img.onload = () => {
+            preloadedImages.set(photo.hash_sha256, img);
+          };
           img.src = imageUrl;
         }
       }
@@ -700,12 +718,20 @@
         await api.removeFromFavorites(photoHash);
         currentPhoto = { ...currentPhoto, is_favorite: false };
         photos[currentIndex] = currentPhoto;
-        addToast(get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }), 'info', 2000);
+        addToast(
+          get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }),
+          'info',
+          2000
+        );
       } else {
         await api.addToFavorites(photoHash);
         currentPhoto = { ...currentPhoto, is_favorite: true };
         photos[currentIndex] = currentPhoto;
-        addToast(get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }), 'success', 2000);
+        addToast(
+          get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }),
+          'success',
+          2000
+        );
       }
 
       window.dispatchEvent(
@@ -714,7 +740,11 @@
         })
       );
     } catch (error) {
-      addToast(get(t)('ui.fav_error', { default: 'Failed to update favorite status' }), 'error', 2000);
+      addToast(
+        get(t)('ui.fav_error', { default: 'Failed to update favorite status' }),
+        'error',
+        2000
+      );
     }
   }
 
@@ -759,7 +789,9 @@
       const newUrl = `${getPhotoUrl(updatedPhoto.hash_sha256)}?t=${timestamp}`;
       if (imageEl) {
         imageEl.src = newUrl;
-        imageEl.onload = () => { isLoading = false; };
+        imageEl.onload = () => {
+          isLoading = false;
+        };
       }
     } catch (error) {
       addToast('Error', error.message || 'Failed to rotate photo', 'error', 5000);
@@ -852,7 +884,9 @@
       2000
     );
     window.dispatchEvent(
-      new CustomEvent('collageAccepted', { detail: { collageId: currentPhoto?.collageId ?? collageId } })
+      new CustomEvent('collageAccepted', {
+        detail: { collageId: currentPhoto?.collageId ?? collageId },
+      })
     );
     close();
   }
@@ -943,8 +977,12 @@
 
   // Document-level mouse events for drag (matches original ViewerControls)
   $effect(() => {
-    function _onDrag(e) { onDrag(e); }
-    function _endDrag() { endDrag(); }
+    function _onDrag(e) {
+      onDrag(e);
+    }
+    function _endDrag() {
+      endDrag();
+    }
     document.addEventListener('mousemove', _onDrag);
     document.addEventListener('mouseup', _endDrag);
     return () => {
@@ -976,17 +1014,33 @@
     }
   }
 
-  function getCurrentPhoto() { return currentPhoto; }
+  function getCurrentPhoto() {
+    return currentPhoto;
+  }
 
   // Self-ref for SwipeableViewer to reference this component's methods
   const thisForSwipe = {
-    get isOpen() { return isOpen; },
-    get currentPhoto() { return currentPhoto; },
-    get currentIndex() { return currentIndex; },
-    get photos() { return photos; },
-    get preloadedImages() { return preloadedImages; },
-    get gestureManager() { return mainEl?.__gestureManager || null; },
-    get elements() { return { main: mainEl, image: imageEl, video: videoEl }; },
+    get isOpen() {
+      return isOpen;
+    },
+    get currentPhoto() {
+      return currentPhoto;
+    },
+    get currentIndex() {
+      return currentIndex;
+    },
+    get photos() {
+      return photos;
+    },
+    get preloadedImages() {
+      return preloadedImages;
+    },
+    get gestureManager() {
+      return mainEl?.__gestureManager || null;
+    },
+    get elements() {
+      return { main: mainEl, image: imageEl, video: videoEl };
+    },
     controls: {
       reset: resetZoom,
       isZoomed,
@@ -998,7 +1052,9 @@
     isVideoFile,
     isCollagePhoto,
     getMediaUrl,
-    getCurrentPhoto() { return currentPhoto; },
+    getCurrentPhoto() {
+      return currentPhoto;
+    },
   };
   // Gesture handlers for use:gestures action
   const gestureHandlers = {
@@ -1054,9 +1110,9 @@
 
     <ViewerControls
       {isVideo}
-      isFavorite={isFavorite}
+      {isFavorite}
       showAcceptCollage={isPendingCollage}
-      isAcceptingCollage={isAcceptingCollage}
+      {isAcceptingCollage}
       onZoomIn={zoomIn}
       onZoomOut={zoomOut}
       onFitToScreen={fitToScreen}
@@ -1093,11 +1149,7 @@
       >
         <track kind="captions" srclang="en" label="Captions" />
       </video>
-      <div
-        class="viewer-loading-indicator"
-        class:show={isLoading}
-        bind:this={loadingEl}
-      >
+      <div class="viewer-loading-indicator" class:show={isLoading} bind:this={loadingEl}>
         <div class="spinner"></div>
       </div>
     </div>
@@ -1107,7 +1159,9 @@
         photo={currentPhoto}
         {showSidebar}
         onEditMetadata={openMetadataEdit}
-        onCloseSidebar={() => { showSidebar = false; }}
+        onCloseSidebar={() => {
+          showSidebar = false;
+        }}
       />
     </div>
   </div>
@@ -1116,15 +1170,14 @@
 <ViewerMetadataEdit
   bind:this={metadataEditRef}
   photo={currentPhoto}
-  onClose={() => { showMetadataEdit = false; }}
+  onClose={() => {
+    showMetadataEdit = false;
+  }}
   onSaved={onMetadataSaved}
 />
 
 {#if transcodeMessage}
-  <div
-    class="transcode-toast transcode-toast-visible"
-    class:transcode-toast-error={transcodeError}
-  >
+  <div class="transcode-toast transcode-toast-visible" class:transcode-toast-error={transcodeError}>
     <Icon name={transcodeError ? 'alert-triangle' : 'loader'} width={18} height={18} />
     <span class="transcode-toast-message">{transcodeMessage}</span>
   </div>
@@ -1164,8 +1217,14 @@
   }
 
   @keyframes viewer-fade-in {
-    from { opacity: 0; transform: scale(0.98); }
-    to { opacity: 1; transform: scale(1); }
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .viewer-overlay {
@@ -1338,8 +1397,12 @@
   }
 
   @keyframes fade-in-fast {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 
   .viewer-loading-indicator :global(.spinner) {
@@ -1352,7 +1415,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .viewer-sidebar {

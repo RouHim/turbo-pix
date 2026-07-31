@@ -10,7 +10,11 @@
       // Theme FOUC prevention: apply persisted/system theme before first paint.
       (function () {
         var theme = null;
-        try { theme = JSON.parse(localStorage.getItem('theme')); } catch (e) { /* ignore */ }
+        try {
+          theme = JSON.parse(localStorage.getItem('theme'));
+        } catch (e) {
+          /* ignore */
+        }
         if (theme !== 'light' && theme !== 'dark') {
           theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }

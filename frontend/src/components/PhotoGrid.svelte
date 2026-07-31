@@ -40,7 +40,9 @@
     const filters = {};
     if (route.view === 'favorites') filters.query = 'is_favorite:true';
     if (route.view === 'videos') {
-      filters.query = (filters.query ? filters.query + ' ' : '') + APP_CONSTANTS.VIDEO_EXTENSIONS.map(e => `ext:${e}`).join(' OR ');
+      filters.query =
+        (filters.query ? filters.query + ' ' : '') +
+        APP_CONSTANTS.VIDEO_EXTENSIONS.map((e) => `ext:${e}`).join(' OR ');
     }
     if (route.sort) {
       const [field, order] = route.sort.split('_');
@@ -86,17 +88,25 @@
       // Semantic search path
       if (photoGridState.semanticSearchMode && photoGridState.currentQuery) {
         const offset = (photoGridState.currentPage - 1) * DEFAULT_BATCH_SIZE;
-        const result = await api.semanticSearch(photoGridState.currentQuery, DEFAULT_BATCH_SIZE, offset);
+        const result = await api.semanticSearch(
+          photoGridState.currentQuery,
+          DEFAULT_BATCH_SIZE,
+          offset
+        );
 
         if (result.results && result.results.length > 0) {
-          const photoHashes = result.results.map(r => r.hash);
+          const photoHashes = result.results.map((r) => r.hash);
           const photosData = await Promise.all(
             photoHashes.map(async (hash) => {
-              try { return await api.getPhoto(hash); }
-              catch (e) { logger.warn(`Failed to load photo ${hash}`, { component: 'PhotoGrid' }, e); return null; }
+              try {
+                return await api.getPhoto(hash);
+              } catch (e) {
+                logger.warn(`Failed to load photo ${hash}`, { component: 'PhotoGrid' }, e);
+                return null;
+              }
             })
           );
-          photosList = photosData.filter(p => p !== null);
+          photosList = photosData.filter((p) => p !== null);
           if (logger) {
             logger.info('Semantic search results loaded', {
               component: 'PhotoGrid',
@@ -139,15 +149,29 @@
       }
     } catch (error) {
       if (error.name === 'AbortError') {
-        if (logger) logger.debug('Photo load request was cancelled', { component: 'PhotoGrid', query: photoGridState.currentQuery });
+        if (logger)
+          logger.debug('Photo load request was cancelled', {
+            component: 'PhotoGrid',
+            query: photoGridState.currentQuery,
+          });
         return;
       }
       if (logger) {
-        logger.error('Error loading photos', error, { component: 'PhotoGrid', method: 'loadPhotos', query: photoGridState.currentQuery, page: photoGridState.currentPage });
+        logger.error('Error loading photos', error, {
+          component: 'PhotoGrid',
+          method: 'loadPhotos',
+          query: photoGridState.currentQuery,
+          page: photoGridState.currentPage,
+        });
       } else {
         console.error('Error loading photos:', error);
       }
-      addToast($t('errors.error_loading_photos', { default: 'Error Loading Photos' }), error.message, 'error', 5000);
+      addToast(
+        $t('errors.error_loading_photos', { default: 'Error Loading Photos' }),
+        error.message,
+        'error',
+        5000
+      );
     } finally {
       // Ensure loading indicator shows for at least 300ms
       const loadingDuration = Date.now() - loadingStartTime;
@@ -200,9 +224,11 @@
   // ===========================================================================
 
   function openViewer(photo) {
-    window.dispatchEvent(new CustomEvent('openViewer', {
-      detail: { photo, photos: photoGridState.photos }
-    }));
+    window.dispatchEvent(
+      new CustomEvent('openViewer', {
+        detail: { photo, photos: photoGridState.photos },
+      })
+    );
   }
 
   // ===========================================================================
@@ -224,7 +250,7 @@
 
   function handleFavoriteToggled(event) {
     const { photoHash, isFavorite } = event.detail;
-    const card = photoGridState.photos.find(p => p.hash_sha256 === photoHash);
+    const card = photoGridState.photos.find((p) => p.hash_sha256 === photoHash);
     if (card) card.is_favorite = isFavorite;
   }
 
@@ -243,7 +269,6 @@
     if (scrollContainer) {
       scrollContainer.addEventListener('scroll', onScroll, { passive: true });
     }
-
 
     return () => {
       window.removeEventListener('favoriteToggled', handleFavoriteToggled);
@@ -293,7 +318,10 @@
           {$t('messages.indexing_in_progress_title', { default: 'Indexing Your Photos' })}
         </div>
         <div class="error-state-message">
-          {$t('messages.indexing_in_progress_message', { default: 'Photos will appear as they are indexed. This may take a while for large collections.' })}
+          {$t('messages.indexing_in_progress_message', {
+            default:
+              'Photos will appear as they are indexed. This may take a while for large collections.',
+          })}
         </div>
       </div>
     {:else}
@@ -306,7 +334,11 @@
         </div>
         <div class="error-state-message">
           {#if currentQuery}
-            {$t('messages.no_photos_match_search', { default: `No photos match your search for "${currentQuery}"` }, { values: { query: currentQuery } })}
+            {$t(
+              'messages.no_photos_match_search',
+              { default: `No photos match your search for "${currentQuery}"` },
+              { values: { query: currentQuery } }
+            )}
           {:else}
             {$t('messages.no_photos_indexed', { default: 'No photos have been indexed yet' })}
           {/if}
@@ -361,12 +393,18 @@
 
 <style>
   @keyframes skeleton-loading {
-    0% { background-position: 100% 50%; }
-    100% { background-position: -100% 50%; }
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: -100% 50%;
+    }
   }
 
   @keyframes dot-wave {
-    0%, 60%, 100% {
+    0%,
+    60%,
+    100% {
       transform: translateY(0);
       opacity: 0.7;
     }
@@ -453,9 +491,15 @@
     box-shadow: 0 2px 4px rgb(0 0 0 / 10%);
   }
 
-  .dot-wave-dot:nth-child(1) { animation-delay: 0s; }
-  .dot-wave-dot:nth-child(2) { animation-delay: 0.2s; }
-  .dot-wave-dot:nth-child(3) { animation-delay: 0.4s; }
+  .dot-wave-dot:nth-child(1) {
+    animation-delay: 0s;
+  }
+  .dot-wave-dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .dot-wave-dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
 
   .infinite-scroll-end {
     display: flex;
@@ -524,21 +568,24 @@
 
   /* Responsive */
   @media (width <= 1200px) {
-    .photo-grid, .loading-skeleton {
+    .photo-grid,
+    .loading-skeleton {
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: var(--space-5);
     }
   }
 
   @media (width <= 1024px) {
-    .photo-grid, .loading-skeleton {
+    .photo-grid,
+    .loading-skeleton {
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: var(--space-4);
     }
   }
 
   @media (width >= 1400px) {
-    .photo-grid, .loading-skeleton {
+    .photo-grid,
+    .loading-skeleton {
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: var(--space-8);
     }

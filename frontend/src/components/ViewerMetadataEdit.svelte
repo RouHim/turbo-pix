@@ -4,11 +4,7 @@
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
 
-  let {
-    photo = null,
-    onClose = () => {},
-    onSaved = () => {},
-  } = $props();
+  let { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
 
   let showModal = $state(false);
   let takenAt = $state('');
@@ -174,7 +170,9 @@
             id="edit-taken-at"
             name="taken_at"
             bind:value={takenAt}
-            oninput={() => { errorMessage = ''; }}
+            oninput={() => {
+              errorMessage = '';
+            }}
           />
         </div>
         <div class="form-group-row">
@@ -191,7 +189,9 @@
               max="90"
               placeholder="-90 to 90"
               bind:value={latitude}
-              oninput={() => { errorMessage = ''; }}
+              oninput={() => {
+                errorMessage = '';
+              }}
             />
           </div>
           <div class="form-group">
@@ -207,7 +207,9 @@
               max="180"
               placeholder="-180 to 180"
               bind:value={longitude}
-              oninput={() => { errorMessage = ''; }}
+              oninput={() => {
+                errorMessage = '';
+              }}
             />
           </div>
         </div>
@@ -225,12 +227,7 @@
           >
             {$t('ui.metadata.edit_cancel', { default: 'Cancel' })}
           </button>
-          <button
-            type="submit"
-            id="metadata-edit-save"
-            class="btn-primary"
-            disabled={saving}
-          >
+          <button type="submit" id="metadata-edit-save" class="btn-primary" disabled={saving}>
             {saving
               ? $t('ui.loading', { default: 'Saving...' })
               : $t('ui.metadata.edit_save', { default: 'Save' })}

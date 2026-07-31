@@ -1,7 +1,13 @@
 <script>
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { formatDate, formatFileSize, getThumbnailUrl, getPhotoUrl, handleError } from '../lib/utils.js';
+  import {
+    formatDate,
+    formatFileSize,
+    getThumbnailUrl,
+    getPhotoUrl,
+    handleError,
+  } from '../lib/utils.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { toDataURL } from '../lib/blurhash.js';
   import { t } from '../lib/i18n.js';
@@ -10,7 +16,9 @@
   let { photo, context = 'default', onOpen } = $props();
 
   // --- Derived state ---
-  let extension = $derived(photo?.filename ? '.' + (photo.filename.split('.').pop()?.toLowerCase() ?? '') : '');
+  let extension = $derived(
+    photo?.filename ? '.' + (photo.filename.split('.').pop()?.toLowerCase() ?? '') : ''
+  );
   let isVideo = $derived(APP_CONSTANTS.VIDEO_EXTENSIONS.includes(extension));
   let title = $derived(photo?.filename || `Photo ${photo?.hash_sha256?.substring(0, 8)}`);
   let meta = $derived.by(() => {
@@ -24,7 +32,9 @@
   });
   let blurhashUrl = $derived(() => {
     if (photo?.blurhash) {
-      try { return toDataURL(photo.blurhash, 32, 32, 1); } catch {}
+      try {
+        return toDataURL(photo.blurhash, 32, 32, 1);
+      } catch {}
     }
     return null;
   });
@@ -68,16 +78,19 @@
         : $t('ui.removed', { default: 'Removed' });
       addToast(`${title}: ${message}`, 'success', 2000);
 
-      window.dispatchEvent(new CustomEvent('favoriteToggled', {
-        detail: { photoHash: photo.hash_sha256, isFavorite: newState }
-      }));
+      window.dispatchEvent(
+        new CustomEvent('favoriteToggled', {
+          detail: { photoHash: photo.hash_sha256, isFavorite: newState },
+        })
+      );
     } catch (error) {
       // Revert on failure
       photo.is_favorite = wasFavorite;
       console.error('Error toggling favorite:', error);
       addToast(
-        $t('ui.error', { default: 'Error' }) + ': ' +
-        $t('messages.error_updating_favorite', { default: 'Error updating favorite status' }),
+        $t('ui.error', { default: 'Error' }) +
+          ': ' +
+          $t('messages.error_updating_favorite', { default: 'Error updating favorite status' }),
         'error',
         3000
       );
@@ -103,9 +116,11 @@
     try {
       await api.removeHousekeepingCandidate(photo.hash_sha256);
       addToast('Kept', 'Photo removed from housekeeping candidates', 'success', 2000);
-      window.dispatchEvent(new CustomEvent('housekeepingCandidateRemoved', {
-        detail: { hash: photo.hash_sha256 }
-      }));
+      window.dispatchEvent(
+        new CustomEvent('housekeepingCandidateRemoved', {
+          detail: { hash: photo.hash_sha256 },
+        })
+      );
     } catch (err) {
       console.error('Failed to keep photo:', err);
       addToast('Error', 'Failed to keep photo', 'error');
@@ -118,16 +133,22 @@
     try {
       await api.deletePhoto(photo.hash_sha256);
       addToast('Deleted', 'Photo deleted permanently', 'success', 2000);
-      window.dispatchEvent(new CustomEvent('housekeepingCandidateRemoved', {
-        detail: { hash: photo.hash_sha256 }
-      }));
+      window.dispatchEvent(
+        new CustomEvent('housekeepingCandidateRemoved', {
+          detail: { hash: photo.hash_sha256 },
+        })
+      );
     } catch (err) {
       console.error('Failed to delete photo:', err);
       let errorMessage = $t('notifications.deletionFailed', { default: 'Failed to delete photo' });
       if (err.message) {
         const match = err.message.match(/HTTP \d+: (.+)/);
         if (match) {
-          try { errorMessage = JSON.parse(match[1]).error || match[1]; } catch { errorMessage = match[1]; }
+          try {
+            errorMessage = JSON.parse(match[1]).error || match[1];
+          } catch {
+            errorMessage = match[1];
+          }
         }
       }
       addToast($t('notifications.error', { default: 'Error' }), errorMessage, 'error', 5000);
@@ -139,9 +160,11 @@
     try {
       await api.acceptCollage(photo.collageId);
       addToast('Accepted', 'Collage accepted', 'success', 2000);
-      window.dispatchEvent(new CustomEvent('collageAccepted', {
-        detail: { collageId: photo.collageId }
-      }));
+      window.dispatchEvent(
+        new CustomEvent('collageAccepted', {
+          detail: { collageId: photo.collageId },
+        })
+      );
     } catch (err) {
       console.error('Failed to accept collage:', err);
       addToast('Error', 'Failed to accept collage', 'error');
@@ -151,15 +174,17 @@
   async function rejectCollage(e) {
     e.stopPropagation();
     const confirmMessage = $t('messages.confirm_reject_collage', {
-      default: 'Are you sure you want to reject this collage?'
+      default: 'Are you sure you want to reject this collage?',
     });
     if (!confirm(confirmMessage)) return;
     try {
       await api.rejectCollage(photo.collageId);
       addToast('Rejected', 'Collage rejected', 'success', 2000);
-      window.dispatchEvent(new CustomEvent('collageRejected', {
-        detail: { collageId: photo.collageId }
-      }));
+      window.dispatchEvent(
+        new CustomEvent('collageRejected', {
+          detail: { collageId: photo.collageId },
+        })
+      );
     } catch (err) {
       console.error('Failed to reject collage:', err);
       addToast('Error', 'Failed to reject collage', 'error');
@@ -181,7 +206,12 @@
   class:collage-card={photo?.isCollage}
   data-photo-id={photo?.hash_sha256}
   onclick={handleCardClick}
-  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(e); } }}
+  onkeydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleCardClick(e);
+    }
+  }}
   role="button"
   tabindex="0"
 >
@@ -205,12 +235,18 @@
         <picture>
           <source
             type="image/webp"
-            srcset="{getThumbnailUrl(photo, 'small')}&format=webp 200w, {getThumbnailUrl(photo, 'medium')}&format=webp 400w, {getThumbnailUrl(photo, 'large')}&format=webp 800w"
+            srcset="{getThumbnailUrl(photo, 'small')}&format=webp 200w, {getThumbnailUrl(
+              photo,
+              'medium'
+            )}&format=webp 400w, {getThumbnailUrl(photo, 'large')}&format=webp 800w"
             sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
           />
           <source
             type="image/jpeg"
-            srcset="{getThumbnailUrl(photo, 'small')}&format=jpeg 200w, {getThumbnailUrl(photo, 'medium')}&format=jpeg 400w, {getThumbnailUrl(photo, 'large')}&format=jpeg 800w"
+            srcset="{getThumbnailUrl(photo, 'small')}&format=jpeg 200w, {getThumbnailUrl(
+              photo,
+              'medium'
+            )}&format=jpeg 400w, {getThumbnailUrl(photo, 'large')}&format=jpeg 800w"
             sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
           />
           <img
@@ -308,8 +344,14 @@
 
 <style>
   @keyframes fade-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .photo-card {

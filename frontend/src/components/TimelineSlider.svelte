@@ -31,9 +31,7 @@
   );
 
   let years = $derived(
-    data?.density
-      ? [...new Set(data.density.map((d) => d.year))].sort((a, b) => b - a)
-      : []
+    data?.density ? [...new Set(data.density.map((d) => d.year))].sort((a, b) => b - a) : []
   );
 
   let maxSlider = $derived(Math.max(0, positions.length - 1));
@@ -46,7 +44,10 @@
       return String(currentFilter.year);
     }
     const monthKey = APP_CONSTANTS.MONTH_KEYS[currentFilter.month - 1];
-    const monthName = get(t)(`ui.months.${monthKey}`, monthKey.charAt(0).toUpperCase() + monthKey.slice(1));
+    const monthName = get(t)(
+      `ui.months.${monthKey}`,
+      monthKey.charAt(0).toUpperCase() + monthKey.slice(1)
+    );
     return `${monthName} ${currentFilter.year}`;
   });
 
@@ -151,9 +152,15 @@
       if (index !== null) {
         const pos = positions[index];
         const monthKey = APP_CONSTANTS.MONTH_KEYS[pos.month - 1];
-        const monthName = get(t)(`ui.months.${monthKey}`, monthKey.charAt(0).toUpperCase() + monthKey.slice(1));
+        const monthName = get(t)(
+          `ui.months.${monthKey}`,
+          monthKey.charAt(0).toUpperCase() + monthKey.slice(1)
+        );
         tooltipDate = `${monthName} ${pos.year}`;
-        tooltipCount = get(t)('ui.photos_count', { default: `${pos.count} photos`, values: { count: pos.count } });
+        tooltipCount = get(t)('ui.photos_count', {
+          default: `${pos.count} photos`,
+          values: { count: pos.count },
+        });
         tooltipX = e.clientX;
         tooltipY = e.clientY - 60;
         tooltipVisible = true;
@@ -257,9 +264,7 @@
         appState.selectedMonth = null;
       }
     } else if (year) {
-      const matchIndex = positions.findIndex(
-        (p) => p.year === year && p.month === month
-      );
+      const matchIndex = positions.findIndex((p) => p.year === year && p.month === month);
       currentFilter = { year, month: month || null };
       selectedIndex = matchIndex >= 0 ? matchIndex : null;
       if (matchIndex >= 0) {
@@ -331,7 +336,11 @@
       >
         <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
         {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i}
-          <option value={i + 1}>{$t(`ui.months.${monthKey}`, { default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1) })}</option>
+          <option value={i + 1}
+            >{$t(`ui.months.${monthKey}`, {
+              default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+            })}</option
+          >
         {/each}
       </select>
       <button
@@ -346,10 +355,7 @@
   </div>
 
   {#if tooltipVisible}
-    <div
-      class="timeline-tooltip"
-      style="left: {tooltipX}px; top: {tooltipY}px; display: block;"
-    >
+    <div class="timeline-tooltip" style="left: {tooltipX}px; top: {tooltipY}px; display: block;">
       <div class="timeline-tooltip-date">{tooltipDate}</div>
       <div class="timeline-tooltip-count">{tooltipCount}</div>
     </div>

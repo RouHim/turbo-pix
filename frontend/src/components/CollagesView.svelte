@@ -30,10 +30,7 @@
   async function acceptCollage(collage) {
     try {
       await api.acceptCollage(collage.id);
-      addToast(
-        $t('notifications.collageAccepted', { default: 'Collage accepted' }),
-        'success'
-      );
+      addToast($t('notifications.collageAccepted', { default: 'Collage accepted' }), 'success');
       window.dispatchEvent(
         new CustomEvent('collageAccepted', { detail: { collageId: collage.id } })
       );
@@ -52,10 +49,7 @@
 
     try {
       await api.rejectCollage(collage.id);
-      addToast(
-        $t('notifications.collageRejected', { default: 'Collage rejected' }),
-        'info'
-      );
+      addToast($t('notifications.collageRejected', { default: 'Collage rejected' }), 'info');
       window.dispatchEvent(
         new CustomEvent('collageRejected', { detail: { collageId: collage.id } })
       );
@@ -95,9 +89,7 @@
       collageDate: collage.date,
       collagePhotoCount: collage.photo_count,
     };
-    window.dispatchEvent(
-      new CustomEvent('openViewer', { detail: { photo: collageAsPhoto } })
-    );
+    window.dispatchEvent(new CustomEvent('openViewer', { detail: { photo: collageAsPhoto } }));
   }
 </script>
 
@@ -112,7 +104,17 @@
   {:else if error}
     <div class="empty-state">
       <div class="empty-state-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="64"
+          height="64"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
           <circle cx="12" cy="12" r="10"></circle>
           <line x1="12" y1="8" x2="12" y2="12"></line>
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
@@ -128,7 +130,17 @@
   {:else if collages.length === 0}
     <div class="empty-state">
       <div class="empty-state-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="64"
+          height="64"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
           <circle cx="8.5" cy="8.5" r="1.5"></circle>
           <polyline points="21 15 16 10 5 21"></polyline>

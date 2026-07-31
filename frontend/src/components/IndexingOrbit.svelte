@@ -239,14 +239,16 @@
   let sheetPhases = $derived(
     indexingState.phases.map((phase) => {
       const def = PHASES.find((p) => p.id === phase.id);
-      const phaseName = $t(`ui.indexing_phase_${phase.id}`) || (def?.id || phase.id);
+      const phaseName = $t(`ui.indexing_phase_${phase.id}`) || def?.id || phase.id;
       const isDeterminate = phase.kind === 'determinate';
       const total = phase.total || 0;
       const processed = phase.processed || 0;
       const percent = isDeterminate && total > 0 ? Math.round((processed / total) * 100) : 0;
-      const errorsText = phase.errors && phase.errors > 0
-        ? ($t('ui.indexing_sheet_errors', { default: `${phase.errors} error(s)` }) || `${phase.errors} error(s)`)
-        : '';
+      const errorsText =
+        phase.errors && phase.errors > 0
+          ? $t('ui.indexing_sheet_errors', { default: `${phase.errors} error(s)` }) ||
+            `${phase.errors} error(s)`
+          : '';
       return {
         ...phase,
         icon: def?.icon || 'camera',
@@ -280,9 +282,7 @@
     })()
   );
 
-  let tooltipText = $derived(
-    ringMode === 'compact' && activePhaseName ? activePhaseName : ''
-  );
+  let tooltipText = $derived(ringMode === 'compact' && activePhaseName ? activePhaseName : '');
 
   let centerIcon = $derived(
     (() => {
@@ -308,19 +308,22 @@
   tabindex="0"
 >
   <div class="indexing-orbit-shell">
-    <svg
-      bind:this={svgEl}
-      class="indexing-orbit-svg"
-      viewBox="0 0 280 280"
-      aria-hidden="true"
-    >
+    <svg bind:this={svgEl} class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
       {#each PHASES as phase, i}
         {@const arcD = arcPaths()[i]}
         {@const sp = sheetPhases.find((p) => p.id === phase.id)}
-        {@const phaseState = sp?.isDone ? 'done' : sp?.isError ? 'error' : sp?.isActive ? 'active' : 'pending'}
-        {@const dashOffset = sp?.isDone ? 0 : sp?.isActive && sp.isDeterminate && sp.total > 0
-          ? ARC_LENGTH * (1 - Math.min(Math.max(sp.processed / sp.total, 0), 1))
-          : ARC_LENGTH}
+        {@const phaseState = sp?.isDone
+          ? 'done'
+          : sp?.isError
+            ? 'error'
+            : sp?.isActive
+              ? 'active'
+              : 'pending'}
+        {@const dashOffset = sp?.isDone
+          ? 0
+          : sp?.isActive && sp.isDeterminate && sp.total > 0
+            ? ARC_LENGTH * (1 - Math.min(Math.max(sp.processed / sp.total, 0), 1))
+            : ARC_LENGTH}
         <path
           class="indexing-orbit-segment"
           d={arcD}
@@ -335,14 +338,11 @@
           {@const pos = polarToCartesian(140, 140, 120, midpointAngle)}
           <g
             data-orbit-phase={phase.id}
-            style="transform-origin: 140px 140px; transform-box: fill-box; animation: {prefersReducedMotion() ? 'none' : 'orbit-segment 2s ease-in-out infinite'}"
+            style="transform-origin: 140px 140px; transform-box: fill-box; animation: {prefersReducedMotion()
+              ? 'none'
+              : 'orbit-segment 2s ease-in-out infinite'}"
           >
-            <circle
-              cx={pos.x}
-              cy={pos.y}
-              class="orbit-dot"
-              data-orbit-dot="true"
-            ></circle>
+            <circle cx={pos.x} cy={pos.y} class="orbit-dot" data-orbit-dot="true"></circle>
           </g>
         {/if}
       {/each}
@@ -403,11 +403,7 @@
         <div class="phase-info">
           <span class="phase-name">{sp.phaseName}</span>
           <div class="phase-progress-bar">
-            <div
-              class="phase-progress-fill"
-              data-phase-fill
-              style="width: {sp.percent}%"
-            ></div>
+            <div class="phase-progress-fill" data-phase-fill style="width: {sp.percent}%"></div>
           </div>
         </div>
         <span class="phase-count" data-phase-count>{sp.countLabel}</span>

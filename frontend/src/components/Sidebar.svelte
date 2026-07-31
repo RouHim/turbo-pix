@@ -82,7 +82,9 @@
     text-align: left;
     cursor: pointer;
     border-radius: var(--radius-md);
-    transition: background var(--transition-fast), color var(--transition-fast);
+    transition:
+      background var(--transition-fast),
+      color var(--transition-fast);
   }
 
   .nav-item:hover {

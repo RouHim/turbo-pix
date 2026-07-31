@@ -43,7 +43,7 @@
       ? null // search results title handled separately
       : $t(titleKeys[route.view] || 'ui.all_photos', {
           default: titleFallbacks[route.view] || 'All Photos',
-        }),
+        })
   );
 
   onMount(() => {

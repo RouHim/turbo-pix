@@ -64,11 +64,7 @@
 
     try {
       // Prefix queries (type:, location:, is_favorite:) use regular search path
-      if (
-        q.startsWith('type:') ||
-        q.startsWith('location:') ||
-        q.startsWith('is_favorite:')
-      ) {
+      if (q.startsWith('type:') || q.startsWith('location:') || q.startsWith('is_favorite:')) {
         photoGridState.semanticSearchMode = false;
         photoGridState.currentQuery = q;
         photoGridState.currentPage = 1;
@@ -165,9 +161,7 @@
     if (history.length > 0) {
       const recentMatches = history
         .filter(
-          (item) =>
-            !currentValue ||
-            item.query.toLowerCase().includes(currentValue.toLowerCase())
+          (item) => !currentValue || item.query.toLowerCase().includes(currentValue.toLowerCase())
         )
         .slice(0, 3)
         .map((item) => ({
@@ -366,22 +360,23 @@
     onkeydown={onKeydown}
     onfocus={onFocus}
     oninput={onInput}
-    onblur={() => { focused = false; setTimeout(() => (showSuggestions = false), 150); }}
+    onblur={() => {
+      focused = false;
+      setTimeout(() => (showSuggestions = false), 150);
+    }}
   />
-  <button
-    type="button"
-    id="search-btn"
-    class="search-btn"
-    class:searching
-    onclick={submitSearch}
-  >
+  <button type="button" id="search-btn" class="search-btn" class:searching onclick={submitSearch}>
     {searching ? '' : $t('ui.search', { default: 'Search' })}
   </button>
 
   <!-- Search hint -->
   <div class="search-hint" class:visible={focused && !query}>
     <span class="search-hint-icon">ⓘ</span>
-    <span>{$t('ui.search_hint', { default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true' })}</span>
+    <span
+      >{$t('ui.search_hint', {
+        default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true',
+      })}</span
+    >
   </div>
 
   {#if showSuggestions}

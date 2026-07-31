@@ -50,9 +50,7 @@
         })
       );
       // Remove from local list
-      candidates = candidates.filter(
-        (c) => c.photo.hash_sha256 !== photo.hash_sha256
-      );
+      candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
     } catch (e) {
       handleError(e, 'Keep photo');
     }
@@ -60,24 +58,20 @@
 
   async function deletePhoto(photo) {
     const msg = $t('notifications.confirmDeleteMessage', {
-      default: 'Are you sure you want to permanently delete this photo? This action cannot be undone.',
+      default:
+        'Are you sure you want to permanently delete this photo? This action cannot be undone.',
     });
     if (!confirm(msg)) return;
 
     try {
       await api.deletePhoto(photo.hash_sha256);
-      addToast(
-        $t('notifications.photoDeleted', { default: 'Photo deleted' }),
-        'success'
-      );
+      addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), 'success');
       window.dispatchEvent(
         new CustomEvent('housekeepingCandidateRemoved', {
           detail: { hash: photo.hash_sha256 },
         })
       );
-      candidates = candidates.filter(
-        (c) => c.photo.hash_sha256 !== photo.hash_sha256
-      );
+      candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
     } catch (e) {
       handleError(e, 'Delete photo');
     }

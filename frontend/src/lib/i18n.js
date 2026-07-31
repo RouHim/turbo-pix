@@ -24,7 +24,6 @@ export function setLocale(l) {
 
 export { _ as t };
 
-
 /**
  * Map backend error strings to translated messages using the current locale dictionary.
  * @param {string} errorMessage - Raw error message from the API

@@ -58,7 +58,8 @@
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
-    if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    if (hours > 0)
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     return `${minutes}:${String(secs).padStart(2, '0')}`;
   }
 
@@ -76,7 +77,9 @@
   let settings = $derived(metadata.settings || {});
   let videoMeta = $derived(metadata.video || {});
 
-  let title = $derived(photo?.filename || (photo ? `Photo ${photo.hash_sha256?.substring(0, 8)}` : '-'));
+  let title = $derived(
+    photo?.filename || (photo ? `Photo ${photo.hash_sha256?.substring(0, 8)}` : '-')
+  );
   let dateText = $derived(photo?.taken_at ? formatDate(photo.taken_at) : '-');
   let sizeText = $derived(() => {
     if (!photo) return '-';
@@ -85,15 +88,24 @@
     return sz + dims;
   });
   let cameraText = $derived(camera.make && camera.model ? `${camera.make} ${camera.model}` : '-');
-  let locationText = $derived(location.latitude && location.longitude
-    ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-    : '-');
+  let locationText = $derived(
+    location.latitude && location.longitude
+      ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+      : '-'
+  );
 
   let hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
   let hasSettings = $derived(
-    settings.iso || settings.aperture || settings.shutter_speed || settings.focal_length ||
-    settings.exposure_mode || settings.metering_mode || settings.white_balance ||
-    settings.flash_used !== undefined || photo?.orientation || settings.color_space
+    settings.iso ||
+      settings.aperture ||
+      settings.shutter_speed ||
+      settings.focal_length ||
+      settings.exposure_mode ||
+      settings.metering_mode ||
+      settings.white_balance ||
+      settings.flash_used !== undefined ||
+      photo?.orientation ||
+      settings.color_space
   );
   let hasLocation = $derived(location.latitude || location.longitude);
 </script>
@@ -146,58 +158,261 @@
 
   <div class="photo-meta-full">
     <div class="meta-section">
-      <h4 class="meta-section-title">{$t('ui.metadata.file_information', { default: 'File Information' })}</h4>
-      <div class="meta-item"><label>{$t('ui.metadata.file_path', { default: 'File path:' })}</label><span id="meta-filename" style="opacity: {fieldOpacity(photo?.file_path || photo?.filename)}">{setField('meta-filename', photo?.file_path || photo?.filename)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.file_size', { default: 'File Size:' })}</label><span id="meta-filesize" style="opacity: {fieldOpacity(photo?.file_size)}">{setField('meta-filesize', photo?.file_size ? formatFileSize(photo.file_size) : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.dimensions', { default: 'Dimensions:' })}</label><span id="meta-dimensions" style="opacity: {fieldOpacity(photo?.width && photo?.height)}">{setField('meta-dimensions', photo?.width && photo?.height ? `${photo.width} \u00d7 ${photo.height} px` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.type', { default: 'Type:' })}</label><span id="meta-type" style="opacity: {fieldOpacity(photo?.mime_type)}">{setField('meta-type', photo?.mime_type)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.date_taken', { default: 'Date Taken:' })}</label><span id="meta-date-taken" style="opacity: {fieldOpacity(photo?.taken_at)}">{setField('meta-date-taken', photo?.taken_at ? formatDate(photo.taken_at) : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.date_modified', { default: 'Date Modified:' })}</label><span id="meta-date-modified" style="opacity: {fieldOpacity(photo?.date_modified)}">{setField('meta-date-modified', photo?.date_modified ? formatDate(photo.date_modified) : null)}</span></div>
+      <h4 class="meta-section-title">
+        {$t('ui.metadata.file_information', { default: 'File Information' })}
+      </h4>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.file_path', { default: 'File path:' })}</label><span
+          id="meta-filename"
+          style="opacity: {fieldOpacity(photo?.file_path || photo?.filename)}"
+          >{setField('meta-filename', photo?.file_path || photo?.filename)}</span
+        >
+      </div>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.file_size', { default: 'File Size:' })}</label><span
+          id="meta-filesize"
+          style="opacity: {fieldOpacity(photo?.file_size)}"
+          >{setField(
+            'meta-filesize',
+            photo?.file_size ? formatFileSize(photo.file_size) : null
+          )}</span
+        >
+      </div>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.dimensions', { default: 'Dimensions:' })}</label><span
+          id="meta-dimensions"
+          style="opacity: {fieldOpacity(photo?.width && photo?.height)}"
+          >{setField(
+            'meta-dimensions',
+            photo?.width && photo?.height ? `${photo.width} \u00d7 ${photo.height} px` : null
+          )}</span
+        >
+      </div>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.type', { default: 'Type:' })}</label><span
+          id="meta-type"
+          style="opacity: {fieldOpacity(photo?.mime_type)}"
+          >{setField('meta-type', photo?.mime_type)}</span
+        >
+      </div>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.date_taken', { default: 'Date Taken:' })}</label><span
+          id="meta-date-taken"
+          style="opacity: {fieldOpacity(photo?.taken_at)}"
+          >{setField('meta-date-taken', photo?.taken_at ? formatDate(photo.taken_at) : null)}</span
+        >
+      </div>
+      <div class="meta-item">
+        <label>{$t('ui.metadata.date_modified', { default: 'Date Modified:' })}</label><span
+          id="meta-date-modified"
+          style="opacity: {fieldOpacity(photo?.date_modified)}"
+          >{setField(
+            'meta-date-modified',
+            photo?.date_modified ? formatDate(photo.date_modified) : null
+          )}</span
+        >
+      </div>
     </div>
 
     {#if hasCamera}
-    <div class="meta-section" id="camera-section">
-      <h4 class="meta-section-title">{$t('ui.metadata.camera_section', { default: 'Camera' })}</h4>
-      <div class="meta-item"><label>{$t('ui.metadata.make', { default: 'Make:' })}</label><span id="meta-camera-make" style="opacity: {fieldOpacity(camera.make)}">{setField('meta-camera-make', camera.make)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.model', { default: 'Model:' })}</label><span id="meta-camera-model" style="opacity: {fieldOpacity(camera.model)}">{setField('meta-camera-model', camera.model)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.lens_make', { default: 'Lens Make:' })}</label><span id="meta-lens-make" style="opacity: {fieldOpacity(camera.lens_make)}">{setField('meta-lens-make', camera.lens_make)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.lens_model', { default: 'Lens Model:' })}</label><span id="meta-lens-model" style="opacity: {fieldOpacity(camera.lens_model)}">{setField('meta-lens-model', camera.lens_model)}</span></div>
-    </div>
+      <div class="meta-section" id="camera-section">
+        <h4 class="meta-section-title">
+          {$t('ui.metadata.camera_section', { default: 'Camera' })}
+        </h4>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.make', { default: 'Make:' })}</label><span
+            id="meta-camera-make"
+            style="opacity: {fieldOpacity(camera.make)}"
+            >{setField('meta-camera-make', camera.make)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.model', { default: 'Model:' })}</label><span
+            id="meta-camera-model"
+            style="opacity: {fieldOpacity(camera.model)}"
+            >{setField('meta-camera-model', camera.model)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.lens_make', { default: 'Lens Make:' })}</label><span
+            id="meta-lens-make"
+            style="opacity: {fieldOpacity(camera.lens_make)}"
+            >{setField('meta-lens-make', camera.lens_make)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.lens_model', { default: 'Lens Model:' })}</label><span
+            id="meta-lens-model"
+            style="opacity: {fieldOpacity(camera.lens_model)}"
+            >{setField('meta-lens-model', camera.lens_model)}</span
+          >
+        </div>
+      </div>
     {/if}
 
     {#if hasSettings}
-    <div class="meta-section" id="settings-section">
-      <h4 class="meta-section-title">{$t('ui.metadata.camera_settings', { default: 'Camera Settings' })}</h4>
-      <div class="meta-item"><label>{$t('ui.metadata.iso', { default: 'ISO:' })}</label><span id="meta-iso" style="opacity: {fieldOpacity(settings.iso)}">{setField('meta-iso', settings.iso ? `ISO ${settings.iso}` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.aperture', { default: 'Aperture:' })}</label><span id="meta-aperture" style="opacity: {fieldOpacity(settings.aperture)}">{setField('meta-aperture', settings.aperture ? `f/${settings.aperture.toFixed(1)}` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.shutter_speed', { default: 'Shutter Speed:' })}</label><span id="meta-shutter" style="opacity: {fieldOpacity(settings.shutter_speed)}">{setField('meta-shutter', settings.shutter_speed)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.focal_length', { default: 'Focal Length:' })}</label><span id="meta-focal" style="opacity: {fieldOpacity(settings.focal_length)}">{setField('meta-focal', settings.focal_length ? `${settings.focal_length.toFixed(0)} mm` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.exposure_mode', { default: 'Exposure Mode:' })}</label><span id="meta-exposure" style="opacity: {fieldOpacity(settings.exposure_mode)}">{setField('meta-exposure', settings.exposure_mode)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.metering_mode', { default: 'Metering Mode:' })}</label><span id="meta-metering" style="opacity: {fieldOpacity(settings.metering_mode)}">{setField('meta-metering', settings.metering_mode)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.white_balance', { default: 'White Balance:' })}</label><span id="meta-wb" style="opacity: {fieldOpacity(settings.white_balance)}">{setField('meta-wb', settings.white_balance)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.flash', { default: 'Flash:' })}</label><span id="meta-flash" style="opacity: {fieldOpacity(settings.flash_used !== undefined)}">{setField('meta-flash', settings.flash_used !== undefined ? (settings.flash_used ? 'Yes' : 'No') : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.orientation', { default: 'Orientation:' })}</label><span id="meta-orientation" style="opacity: {fieldOpacity(photo?.orientation)}">{setField('meta-orientation', photo?.orientation)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.color_space', { default: 'Color Space:' })}</label><span id="meta-colorspace" style="opacity: {fieldOpacity(settings.color_space)}">{setField('meta-colorspace', settings.color_space)}</span></div>
-    </div>
+      <div class="meta-section" id="settings-section">
+        <h4 class="meta-section-title">
+          {$t('ui.metadata.camera_settings', { default: 'Camera Settings' })}
+        </h4>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.iso', { default: 'ISO:' })}</label><span
+            id="meta-iso"
+            style="opacity: {fieldOpacity(settings.iso)}"
+            >{setField('meta-iso', settings.iso ? `ISO ${settings.iso}` : null)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.aperture', { default: 'Aperture:' })}</label><span
+            id="meta-aperture"
+            style="opacity: {fieldOpacity(settings.aperture)}"
+            >{setField(
+              'meta-aperture',
+              settings.aperture ? `f/${settings.aperture.toFixed(1)}` : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.shutter_speed', { default: 'Shutter Speed:' })}</label><span
+            id="meta-shutter"
+            style="opacity: {fieldOpacity(settings.shutter_speed)}"
+            >{setField('meta-shutter', settings.shutter_speed)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.focal_length', { default: 'Focal Length:' })}</label><span
+            id="meta-focal"
+            style="opacity: {fieldOpacity(settings.focal_length)}"
+            >{setField(
+              'meta-focal',
+              settings.focal_length ? `${settings.focal_length.toFixed(0)} mm` : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.exposure_mode', { default: 'Exposure Mode:' })}</label><span
+            id="meta-exposure"
+            style="opacity: {fieldOpacity(settings.exposure_mode)}"
+            >{setField('meta-exposure', settings.exposure_mode)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.metering_mode', { default: 'Metering Mode:' })}</label><span
+            id="meta-metering"
+            style="opacity: {fieldOpacity(settings.metering_mode)}"
+            >{setField('meta-metering', settings.metering_mode)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.white_balance', { default: 'White Balance:' })}</label><span
+            id="meta-wb"
+            style="opacity: {fieldOpacity(settings.white_balance)}"
+            >{setField('meta-wb', settings.white_balance)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.flash', { default: 'Flash:' })}</label><span
+            id="meta-flash"
+            style="opacity: {fieldOpacity(settings.flash_used !== undefined)}"
+            >{setField(
+              'meta-flash',
+              settings.flash_used !== undefined ? (settings.flash_used ? 'Yes' : 'No') : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.orientation', { default: 'Orientation:' })}</label><span
+            id="meta-orientation"
+            style="opacity: {fieldOpacity(photo?.orientation)}"
+            >{setField('meta-orientation', photo?.orientation)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.color_space', { default: 'Color Space:' })}</label><span
+            id="meta-colorspace"
+            style="opacity: {fieldOpacity(settings.color_space)}"
+            >{setField('meta-colorspace', settings.color_space)}</span
+          >
+        </div>
+      </div>
     {/if}
 
     {#if hasLocation}
-    <div class="meta-section" id="location-section">
-      <h4 class="meta-section-title">{$t('ui.metadata.location_section', { default: 'Location' })}</h4>
-      <div class="meta-item"><label>{$t('ui.metadata.gps', { default: 'GPS:' })}</label><span id="meta-gps" style="opacity: {fieldOpacity(location.latitude && location.longitude)}">{setField('meta-gps', location.latitude && location.longitude ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.location_name', { default: 'Location Name:' })}</label><span id="meta-location-name" style="opacity: 0.5">-</span></div>
-    </div>
+      <div class="meta-section" id="location-section">
+        <h4 class="meta-section-title">
+          {$t('ui.metadata.location_section', { default: 'Location' })}
+        </h4>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.gps', { default: 'GPS:' })}</label><span
+            id="meta-gps"
+            style="opacity: {fieldOpacity(location.latitude && location.longitude)}"
+            >{setField(
+              'meta-gps',
+              location.latitude && location.longitude
+                ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+                : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.location_name', { default: 'Location Name:' })}</label><span
+            id="meta-location-name"
+            style="opacity: 0.5">-</span
+          >
+        </div>
+      </div>
     {/if}
 
     {#if isVideo}
-    <div class="meta-section" id="video-section">
-      <h4 class="meta-section-title">{$t('ui.metadata.video_section', { default: 'Video Information' })}</h4>
-      <div class="meta-item"><label>{$t('ui.metadata.duration', { default: 'Duration:' })}</label><span id="meta-duration" style="opacity: {fieldOpacity(photo?.duration)}">{setField('meta-duration', photo?.duration ? formatDuration(photo.duration) : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.video_codec', { default: 'Video Codec:' })}</label><span id="meta-video-codec" style="opacity: {fieldOpacity(videoMeta.codec)}">{setField('meta-video-codec', videoMeta.codec)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.audio_codec', { default: 'Audio Codec:' })}</label><span id="meta-audio-codec" style="opacity: {fieldOpacity(videoMeta.audio_codec)}">{setField('meta-audio-codec', videoMeta.audio_codec)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.frame_rate', { default: 'Frame Rate:' })}</label><span id="meta-framerate" style="opacity: {fieldOpacity(videoMeta.frame_rate)}">{setField('meta-framerate', videoMeta.frame_rate ? `${videoMeta.frame_rate.toFixed(2)} fps` : null)}</span></div>
-      <div class="meta-item"><label>{$t('ui.metadata.bitrate', { default: 'Bitrate:' })}</label><span id="meta-bitrate" style="opacity: {fieldOpacity(videoMeta.bitrate)}">{setField('meta-bitrate', videoMeta.bitrate ? `${videoMeta.bitrate} kbps` : null)}</span></div>
-    </div>
+      <div class="meta-section" id="video-section">
+        <h4 class="meta-section-title">
+          {$t('ui.metadata.video_section', { default: 'Video Information' })}
+        </h4>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.duration', { default: 'Duration:' })}</label><span
+            id="meta-duration"
+            style="opacity: {fieldOpacity(photo?.duration)}"
+            >{setField(
+              'meta-duration',
+              photo?.duration ? formatDuration(photo.duration) : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.video_codec', { default: 'Video Codec:' })}</label><span
+            id="meta-video-codec"
+            style="opacity: {fieldOpacity(videoMeta.codec)}"
+            >{setField('meta-video-codec', videoMeta.codec)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.audio_codec', { default: 'Audio Codec:' })}</label><span
+            id="meta-audio-codec"
+            style="opacity: {fieldOpacity(videoMeta.audio_codec)}"
+            >{setField('meta-audio-codec', videoMeta.audio_codec)}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.frame_rate', { default: 'Frame Rate:' })}</label><span
+            id="meta-framerate"
+            style="opacity: {fieldOpacity(videoMeta.frame_rate)}"
+            >{setField(
+              'meta-framerate',
+              videoMeta.frame_rate ? `${videoMeta.frame_rate.toFixed(2)} fps` : null
+            )}</span
+          >
+        </div>
+        <div class="meta-item">
+          <label>{$t('ui.metadata.bitrate', { default: 'Bitrate:' })}</label><span
+            id="meta-bitrate"
+            style="opacity: {fieldOpacity(videoMeta.bitrate)}"
+            >{setField(
+              'meta-bitrate',
+              videoMeta.bitrate ? `${videoMeta.bitrate} kbps` : null
+            )}</span
+          >
+        </div>
+      </div>
     {/if}
   </div>
 </div>

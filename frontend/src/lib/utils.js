@@ -85,10 +85,10 @@ export function formatCollageDate(dateString) {
     return dateString;
   }
 
-  const monthName = get(t)(`ui.months.${monthKey}`) ||
-    monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
-  const weekdayName = get(t)(`ui.weekdays.${weekdayKey}`) ||
-    weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
+  const monthName =
+    get(t)(`ui.months.${monthKey}`) || monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
+  const weekdayName =
+    get(t)(`ui.weekdays.${weekdayKey}`) || weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
   const locale = getLocale() || 'en';
 
   if (locale === 'de') {
@@ -413,11 +413,7 @@ export const videoCodecSupport = {
       return false;
     }
 
-    const hevcCodecs = [
-      'hvc1.1.6.L93.B0',
-      'hvc1.1.6.L120.B0',
-      'hev1.1.6.L93.B0',
-    ];
+    const hevcCodecs = ['hvc1.1.6.L93.B0', 'hvc1.1.6.L120.B0', 'hev1.1.6.L93.B0'];
 
     for (const codec of hevcCodecs) {
       if (await this.canPlayCodec(codec, width, height)) {

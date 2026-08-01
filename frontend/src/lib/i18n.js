@@ -41,8 +41,9 @@ function detectBrowserLocale() {
 export function initI18n(defaultLocale) {
   const initial =
     readSavedLocale() ||
+    (SUPPORTED.includes(defaultLocale) ? defaultLocale : null) ||
     detectBrowserLocale() ||
-    (SUPPORTED.includes(defaultLocale) ? defaultLocale : 'en');
+    'en';
   init({ fallbackLocale: 'en', initialLocale: initial });
   try {
     if (typeof document !== 'undefined') document.documentElement.lang = initial;
@@ -85,16 +86,22 @@ export function translateError(errorMessage) {
 
   const key = errorMap[errorMessage];
   if (key) {
-    const translated = get(t)(key);
+    const translated = get(_)(key);
     if (translated && translated !== key) return translated;
   }
 
   // Fuzzy match: check if error message contains any known pattern
   for (const [pattern, k] of Object.entries(errorMap)) {
     if (errorMessage.includes(pattern)) {
-      const translated = get(t)(k);
+      const translated = get(_)(k);
       if (translated && translated !== k) return translated;
     }
+  }
+
+  // Case-insensitive database fallback (backend error casing varies)
+  if (errorMessage.toLowerCase().includes('database')) {
+    const translated = get(_)('errors.databaseError');
+    if (translated && translated !== 'errors.databaseError') return translated;
   }
 
   return errorMessage;

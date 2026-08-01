@@ -42,7 +42,6 @@
   let imageEl = $state(null);
   let videoEl = $state(null);
   let mainEl = $state(null);
-  let loadingEl = $state(null);
 
   // ── Zoom / Pan state (ported from ViewerControls) ──────────────────────────
   let zoomLevel = $state(1);
@@ -54,6 +53,7 @@
   let gestureBaseZoom = $state(1);
   let zoomAnimFrame = null;
   let isZoomAnimating = false;
+  let transcodePollTimer = null;
   let pinchStarted = false;
 
   // ── Gesture manager (created by use:gestures action) ───────────────────────
@@ -199,6 +199,7 @@
 
   // ── Double-tap zoom ────────────────────────────────────────────────────────
   function doubleTapZoom(x, y) {
+    if (isVideo) return;
     const targetZoom = zoomLevel > 1 ? 1 : 2.5;
     animateZoomTo(targetZoom, x, y);
   }
@@ -415,6 +416,16 @@
   }
 
   function close(updateUrl = true) {
+    if (zoomAnimFrame) {
+      cancelAnimationFrame(zoomAnimFrame);
+      zoomAnimFrame = null;
+      isZoomAnimating = false;
+    }
+    if (transcodePollTimer) {
+      clearInterval(transcodePollTimer);
+      transcodePollTimer = null;
+    }
+    metadataEditRef?.close?.();
     isOpen = false;
     isPendingCollage = false;
     isAcceptingCollage = false;
@@ -523,7 +534,9 @@
     const img = new Image();
     img.onload = () => {
       preloadedImages.set(photo.hash_sha256, img);
-      showImage(img.src);
+      // A newer photo may have been requested while this image was loading;
+      // only display it if it is still the current one.
+      if (currentPhoto?.hash_sha256 === photo.hash_sha256) showImage(img.src);
     };
     img.onerror = () => {
       showToast(
@@ -588,7 +601,7 @@
             true
           );
           showToast(
-            'Error',
+            get(t)('notifications.error', { default: 'Error' }),
             get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
             'error'
           );
@@ -622,10 +635,11 @@
     const startTime = Date.now();
 
     return new Promise((resolve) => {
-      const intervalId = setInterval(async () => {
+      transcodePollTimer = setInterval(async () => {
         const elapsed = Date.now() - startTime;
         if (elapsed >= MAX_POLL_DURATION) {
-          clearInterval(intervalId);
+          clearInterval(transcodePollTimer);
+          transcodePollTimer = null;
           hideTranscodeToast();
           showTranscodeToast(
             get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
@@ -641,13 +655,15 @@
           const status = await res.json();
 
           if (status.state === 'Completed') {
-            clearInterval(intervalId);
+            clearInterval(transcodePollTimer);
+            transcodePollTimer = null;
             hideTranscodeToast();
             const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
             setVideoSource(photo, newUrl, true, true, true);
             resolve('Completed');
           } else if (status.state === 'Failed' || status.state === 'Timeout') {
-            clearInterval(intervalId);
+            clearInterval(transcodePollTimer);
+            transcodePollTimer = null;
             hideTranscodeToast();
             showTranscodeToast(
               get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
@@ -671,7 +687,7 @@
         return;
       }
       showToast(
-        'Error',
+        get(t)('notifications.error', { default: 'Error' }),
         get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
         'error'
       );
@@ -830,7 +846,13 @@
         };
       }
     } catch (error) {
-      addToast('Error', error.message || 'Failed to rotate photo', 'error', 5000);
+      addToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        error.message ||
+          get(t)('notifications.rotationFailed', { default: 'Failed to rotate photo' }),
+        'error',
+        5000
+      );
       isLoading = false;
     }
   }
@@ -870,10 +892,10 @@
       }
       isLoading = false;
     } catch (error) {
-      let msg = error.message || 'Failed to delete photo';
+      let msg = get(t)('notifications.deletionFailed', { default: 'Failed to delete photo' });
       const match = error.message?.match(/HTTP \d+: (.+)/);
       if (match?.[1]) msg = match[1];
-      addToast('Error', msg, 'error', 5000);
+      addToast(get(t)('notifications.error', { default: 'Error' }), msg, 'error', 5000);
       isLoading = false;
     }
   }
@@ -956,6 +978,12 @@
     if (e.target instanceof HTMLElement) {
       if (e.target.closest('#metadata-edit-modal')) return;
     }
+    // Typing in inputs must not trigger viewer shortcuts (Escape still closes
+    // the viewer from the search input).
+    if (e.key !== 'Escape') {
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    }
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
@@ -1020,6 +1048,10 @@
       };
       swipeableViewer = new SwipeableViewer(thisForSwipe);
       swipeableViewer.mount(elements);
+      return () => {
+        swipeableViewer?.destroy();
+        swipeableViewer = null;
+      };
     }
   });
 
@@ -1043,6 +1075,20 @@
   $effect(() => {
     if (route.photo && !isOpen) {
       openByHash(route.photo);
+    } else if (
+      route.photo &&
+      isOpen &&
+      updateUrlEnabled &&
+      currentPhoto?.hash_sha256 !== route.photo
+    ) {
+      // Back/forward navigation between photos with an open viewer: the URL
+      // already reflects the target photo, so display it without replaceState.
+      const idx = photos.findIndex((p) => p.hash_sha256 === route.photo);
+      if (idx !== -1) {
+        showPhotoAtIndex(idx, false);
+      } else {
+        openByHash(route.photo);
+      }
     } else if (!route.photo && isOpen && updateUrlEnabled) {
       // Browser Back: only auto-close when the open photo was reflected in the
       // URL. Viewers opened without a URL param (collages) must not be closed.
@@ -1197,7 +1243,7 @@
       >
         <track kind="captions" srclang="en" label="Captions" />
       </video>
-      <div class="viewer-loading-indicator" class:show={isLoading} bind:this={loadingEl}>
+      <div class="viewer-loading-indicator" class:show={isLoading}>
         <div class="spinner"></div>
       </div>
     </div>
@@ -1489,6 +1535,10 @@
       grid-template-areas: 'main';
       grid-template-columns: 1fr;
     }
+
+    .viewer-sidebar {
+      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
   }
 
   @media (min-width: 769px) {
@@ -1512,7 +1562,6 @@
   @starting-style {
     .photo-viewer {
       opacity: 0;
-      transform: scale(0.98);
     }
   }
 
@@ -1549,5 +1598,24 @@
 
   :global(.transcode-toast-error) {
     border-color: oklch(55% 0.22 25deg);
+  }
+
+  :global(.transcode-toast .feather) {
+    flex-shrink: 0;
+  }
+
+  :global(.transcode-toast .feather-loader) {
+    animation: transcode-spin 1.5s linear infinite;
+  }
+
+  :global {
+    @keyframes transcode-spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
   }
 </style>

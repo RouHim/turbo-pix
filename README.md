@@ -112,6 +112,8 @@ TURBO_PIX_DATA_PATH=data \
 ./turbo-pix
 ```
 
+Building from source requires the frontend bundle first: `npm run build` (writes dist/), then `cargo build --release`.
+
 ## Configuration
 
 All configuration is done via environment variables:

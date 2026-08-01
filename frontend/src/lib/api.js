@@ -21,8 +21,8 @@ class TurboPixAPI {
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     const config = {
-      headers: { ...this.defaultHeaders, ...options.headers },
       ...options,
+      headers: { ...this.defaultHeaders, ...options.headers },
     };
 
     try {
@@ -61,6 +61,7 @@ class TurboPixAPI {
 
       return await response.text();
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       if (logger) {
         logger.error(`API Error for ${endpoint}`, error, {
           component: 'API',
@@ -103,24 +104,12 @@ class TurboPixAPI {
     return this.request(endpoint, options);
   }
 
-  async getPhoto(hash) {
-    return this.request(`/api/photos/${hash}`);
-  }
-
-  async getPhotoThumbnail(hash, size = 'medium') {
-    const response = await fetch(`/api/photos/${hash}/thumbnail?size=${size}`);
-    if (!response.ok) {
-      throw new Error(`Failed to load thumbnail: ${response.statusText}`);
-    }
-    return response.blob();
+  async getPhoto(hash, options = {}) {
+    return this.request(`/api/photos/${hash}`, options);
   }
 
   async getConfig() {
     return this.request('/api/config');
-  }
-
-  async searchPhotos(query, params = {}) {
-    return this.getPhotos({ ...params, query });
   }
 
   /**
@@ -130,13 +119,13 @@ class TurboPixAPI {
    * @param {number} offset - Number of results to skip (for pagination)
    * @returns {Promise<Object>} Search results with photo hashes and scores
    */
-  async semanticSearch(query, limit = 50, offset = 0) {
+  async semanticSearch(query, limit = 50, offset = 0, options = {}) {
     const searchParams = new URLSearchParams();
     searchParams.set('q', query);
     searchParams.set('limit', limit);
     searchParams.set('offset', offset);
     const endpoint = `/api/search/semantic?${searchParams.toString()}`;
-    return this.request(endpoint);
+    return this.request(endpoint, options);
   }
 
   // Health check
@@ -156,39 +145,6 @@ class TurboPixAPI {
   }
 
   // Collections and cameras features removed
-
-  // Batch operations
-  async batchRequest(requests) {
-    const promises = requests.map(({ endpoint, options }) =>
-      this.request(endpoint, options).catch((error) => ({ error: error.message }))
-    );
-
-    return Promise.all(promises);
-  }
-
-  // Helper methods for common operations
-  async getRecentPhotos(limit = 50) {
-    return this.getPhotos({
-      limit,
-      sort: 'date_indexed',
-      order: 'desc',
-    });
-  }
-
-  async getPhotosWithGPS(params = {}) {
-    return this.getPhotos({
-      ...params,
-      hasGps: true,
-    });
-  }
-
-  async getPhotosInDateRange(startDate, endDate, params = {}) {
-    return this.getPhotos({
-      ...params,
-      dateFrom: startDate,
-      dateTo: endDate,
-    });
-  }
 
   // Favorites (using backend API)
   async toggleFavorite(photoHash, isFavorite) {
@@ -253,13 +209,6 @@ class TurboPixAPI {
     return false;
   }
 
-  async getFavoritePhotos(params = {}) {
-    return this.getPhotos({
-      ...params,
-      query: 'is_favorite:true',
-    });
-  }
-
   // View settings (stored locally)
   getViewSettings() {
     return storage.get('viewSettings', {
@@ -268,13 +217,6 @@ class TurboPixAPI {
       showMetadata: true,
       autoPlay: false,
     });
-  }
-
-  setViewSettings(settings) {
-    const current = this.getViewSettings();
-    const updated = { ...current, ...settings };
-    storage.set('viewSettings', updated);
-    return updated;
   }
 
   // Search history
@@ -300,10 +242,6 @@ class TurboPixAPI {
     // Keep only last 20 searches
     const trimmed = filtered.slice(0, 20);
     storage.set('searchHistory', trimmed);
-  }
-
-  clearSearchHistory() {
-    storage.remove('searchHistory');
   }
 
   // Collages

@@ -25,8 +25,6 @@
   let autoOpened = $state(false);
   let completionPulse = $state(false);
   let sheetOpen = $state(false);
-  let ringEl = $state(null);
-  let svgEl = $state(null);
 
   const ringMode = $derived(determineMode());
 
@@ -95,12 +93,10 @@
   function openSheet(force = false) {
     if (!force && ringMode !== 'compact') return;
     sheetOpen = true;
-    indexingState.sheetOpen = true;
   }
 
   function closeSheet() {
     sheetOpen = false;
-    indexingState.sheetOpen = false;
   }
 
   function markIndexingCompleted() {
@@ -300,7 +296,6 @@
 </script>
 
 <div
-  bind:this={ringEl}
   data-phase-ring
   data-ring-mode={ringMode}
   class="indexing-orbit-ring"
@@ -319,7 +314,7 @@
   tabindex="0"
 >
   <div class="indexing-orbit-shell">
-    <svg bind:this={svgEl} class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
+    <svg class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
       {#each PHASES as phase, i (phase.id)}
         {@const arcD = arcPaths()[i]}
         {@const sp = sheetPhases.find((p) => p.id === phase.id)}
@@ -769,6 +764,29 @@
 
     .orbit-dot {
       animation: none;
+    }
+  }
+
+  @media (width <= 768px) {
+    [data-phase-ring] {
+      --indexing-ring-large-size: 200px;
+      --indexing-ring-compact-size: 48px;
+    }
+    [data-ring-mode='compact'] {
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+    }
+    [data-ring-mode='hidden'] {
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%) scale(0.8);
+    }
+  }
+
+  @media (width <= 480px) {
+    [data-phase-ring] {
+      --indexing-ring-compact-size: 40px;
     }
   }
 </style>

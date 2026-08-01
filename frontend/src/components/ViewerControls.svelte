@@ -28,7 +28,9 @@
     <button
       type="button"
       class="zoom-btn zoom-out"
-      title={$t('ui.zoom_out', { default: 'Zoom Out' })}
+      title={isVideo
+        ? $t('ui.zoom_video_unsupported', { default: 'Zoom not supported for videos' })
+        : $t('ui.zoom_out', { default: 'Zoom Out' })}
       disabled={isVideo}
       onclick={onZoomOut}
     >
@@ -37,7 +39,9 @@
     <button
       type="button"
       class="zoom-btn zoom-in"
-      title={$t('ui.zoom_in', { default: 'Zoom In' })}
+      title={isVideo
+        ? $t('ui.zoom_video_unsupported', { default: 'Zoom not supported for videos' })
+        : $t('ui.zoom_in', { default: 'Zoom In' })}
       disabled={isVideo}
       onclick={onZoomIn}
     >

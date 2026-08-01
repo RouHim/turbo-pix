@@ -15,7 +15,7 @@ import { get } from 'svelte/store';
 export function formatFileSize(bytes) {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
@@ -200,15 +200,6 @@ export function getVideoUrl(photoHash, options = {}) {
   }
   const queryString = params.toString();
   return `/api/photos/${photoHash}/video${queryString ? `?${queryString}` : ''}`;
-}
-
-/**
- * Get the video transcoding status URL.
- * @param {string} photoHash
- * @returns {string}
- */
-export function getVideoStatusUrl(photoHash) {
-  return `/api/photos/${photoHash}/video/status`;
 }
 
 // ── Local storage helpers ───────────────────────────────────────────────────

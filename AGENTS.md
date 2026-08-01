@@ -11,7 +11,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 ## Development Commands
 
 **Backend:** `cargo run` | `cargo test` | `cargo clippy` | `cargo fmt`  
-**Frontend:** `npm run lint` | `npm run format`
+**Frontend:** `npm run build` (required before cargo build — embeds dist/) | `npm run lint` | `npm run format`
 
 ## Code Style
 
@@ -23,12 +23,13 @@ Development/personal project - breaking changes acceptable, database and cache c
 - Imports: std, external crates, local (blank lines between)
 - Zero warnings policy
 
-**Frondend / Vanilla Javascript:**
+**Frontend / Svelte 5 (runes) + Vite:**
 
 - `const` over `let` (no reassignment)
 - Arrow functions: `() => {}` over `function() {}`
 - Template literals: `` `string ${var}` `` over `'string ' + var`
 - When adding visible text to the frontend, add them to the `i18n` translation system.
+- When changing frontend files: run `npm run build` first, then `cargo build --bin turbo-pix` (build.rs embeds dist/ and panics if it is missing)
 
 **General:**
 
@@ -47,7 +48,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 - TDD: Test Driven Development, write tests first, then implement the feature
 - BDD: Behavior Driven Development, focus on the behavior of the application, use GIVEN, WHEN, THEN style
 - E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
-- when changing static files, we have to rebuild the binary (cargo build --bin turbo-pix)
+- when changing frontend files: run `npm run build` first, then `cargo build --bin turbo-pix` (build.rs embeds dist/ and panics if it is missing)
 - **Avoid:** Hardcoded paths and fallback logic mask bugs
 - When troubleshooting bugs, try to reproduce the bug first writing a test
 - After finishing a Task (feature, bug fix, etc) extract relevant learnings from the session/task (if there are ones),
@@ -153,3 +154,11 @@ npm run test:e2e:report   # View test report
 **Semantic search latency:** `/api/search/semantic` takes ~3s server-side per query (embedding generation) even on tiny collections. E2E/manual checks that search must allow ≥5-8s after the request fires; don't mistake the loading skeleton for a hang.
 
 **Rotate fails on housekeeping-candidate photos (known bug):** `image_editor::rotate_image` rewrites `hash_sha256` via `update_with_old_hash`; `housekeeping_candidates.photo_hash` has `FOREIGN KEY ... REFERENCES photos(hash_sha256) ON DELETE CASCADE`, and SQLite rejects updating a parent PK → `HTTP 500 FOREIGN KEY constraint failed` for any photo that is a housekeeping candidate. Fix direction: delete/repoint `housekeeping_candidates` rows or recreate the photo row instead of updating the PK.
+
+**Card-level keydown vs inner buttons:** card-level keydown handlers (PhotoCard, HousekeepingView, CollagesView) must NOT `preventDefault` bubbled Enter/Space from inner action buttons — that kills the button's native click. Guard with `if (e.target !== e.currentTarget) return;` before `preventDefault`.
+
+**Semantic search staleness:** the semantic path needs its own AbortController signal AND a staleness guard: capture `queryAtStart` before `api.semanticSearch(query, limit, offset, options)` and bail out (`queryAtStart !== currentQuery || signal.aborted`) before pushing results — a ~3s embedding response can otherwise pollute a grid the user has already navigated away from.
+
+**`get(t)(key, 'fallback string')` silently drops the fallback:** svelte-i18n's `get(t)` with a positional fallback string does not apply it (raw key is returned). Always pass `{ default: '…' }` as the options object.
+
+**Global media overrides lose to scoped styles (see rule 9):** IndexingOrbit ring mobile sizing/placement and PhotoViewer sidebar mobile transition must live in the component's scoped `<style>` — global `@media (width <= 768px)` rules are outranked by scoped rules of equal specificity and silently no-op.

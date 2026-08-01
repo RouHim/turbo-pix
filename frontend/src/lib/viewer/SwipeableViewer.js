@@ -28,14 +28,7 @@ export class SwipeableViewer {
     this.elements = elements;
     this.adjacent.previous = this.createAdjacentImage('previous');
     this.adjacent.next = this.createAdjacentImage('next');
-    this.bindEvents();
-    this.reset();
-  }
-
-  bindEvents() {
-    if (!this.elements.main) return;
-
-    this.elements.main.addEventListener('touchstart', (event) => {
+    this._onMainTouchStart = (event) => {
       if (!this.viewer.isOpen || event.touches.length !== 1 || !this.viewer.gestureManager) {
         return;
       }
@@ -44,9 +37,8 @@ export class SwipeableViewer {
       this.dragBaseTranslateX = this.currentTranslateX;
       const [touch] = event.touches;
       this.touchStartPoint = { x: touch.clientX, y: touch.clientY };
-    });
-
-    this.elements.main.addEventListener('touchmove', (event) => {
+    };
+    this._onMainTouchMove = (event) => {
       if (
         !this.viewer.isOpen ||
         event.touches.length !== 1 ||
@@ -65,30 +57,48 @@ export class SwipeableViewer {
       }
 
       if (this.viewer.controls?.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
-        if (this.viewer.gestureManager.activeGesture !== 'pan') {
-          this.viewer.gestureManager.enablePan();
-          this.viewer.gestureManager.processPan();
-        }
+        this.viewer.gestureManager.startPan();
       } else if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > 0) {
-        if (this.viewer.gestureManager.activeGesture !== 'pan') {
-          this.viewer.gestureManager.enablePan();
-          this.viewer.gestureManager.processPan();
-        }
+        this.viewer.gestureManager.startPan();
       }
-    });
-
-    this.elements.main.addEventListener('touchend', () => {
+    };
+    this._onMainTouchEnd = () => {
       this.touchStartPoint = null;
-    });
-
-    this.elements.main.addEventListener('touchcancel', () => {
+    };
+    this._onMainTouchCancel = () => {
       this.touchStartPoint = null;
       if (this.isDraggingDown) {
         this.snapBackVertical();
         return;
       }
       this.handleTouchCancel();
-    });
+    };
+    this.bindEvents();
+    this.reset();
+  }
+
+  bindEvents() {
+    if (!this.elements.main) return;
+
+    this.elements.main.addEventListener('touchstart', this._onMainTouchStart, { passive: false });
+    this.elements.main.addEventListener('touchmove', this._onMainTouchMove, { passive: false });
+    this.elements.main.addEventListener('touchend', this._onMainTouchEnd, { passive: false });
+    this.elements.main.addEventListener('touchcancel', this._onMainTouchCancel);
+  }
+
+  destroy() {
+    this.interruptAnimation();
+    const main = this.elements?.main;
+    if (main) {
+      main.removeEventListener('touchstart', this._onMainTouchStart);
+      main.removeEventListener('touchmove', this._onMainTouchMove);
+      main.removeEventListener('touchend', this._onMainTouchEnd);
+      main.removeEventListener('touchcancel', this._onMainTouchCancel);
+    }
+    this.adjacent.previous?.remove();
+    this.adjacent.next?.remove();
+    this.adjacent = { previous: null, next: null };
+    this.elements = null;
   }
 
   createAdjacentImage(direction) {
@@ -115,6 +125,7 @@ export class SwipeableViewer {
     this.hideAdjacent();
     this.updateAdjacentSources();
     this.toggleSwipeClass(false);
+    this.viewer.gestureManager?.resetRecognizers?.();
   }
 
   handlePan(data) {

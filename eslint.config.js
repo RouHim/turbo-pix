@@ -5,9 +5,6 @@ import svelteParser from 'svelte-eslint-parser';
 export default [
   js.configs.recommended,
   {
-    ignores: ['frontend/src/lib/i18n.js', 'frontend/src/lib/router.svelte.js'],
-  },
-  {
     linterOptions: {
       reportUnusedDisableDirectives: 'error',
     },
@@ -43,6 +40,7 @@ export default [
         setTimeout: 'readonly', clearTimeout: 'readonly',
         setInterval: 'readonly', clearInterval: 'readonly',
         localStorage: 'readonly', navigator: 'readonly',
+        queueMicrotask: 'readonly',
         CustomEvent: 'readonly', IntersectionObserver: 'readonly',
         Image: 'readonly', Blob: 'readonly', performance: 'readonly',
         AbortController: 'readonly', requestAnimationFrame: 'readonly',

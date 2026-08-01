@@ -11,8 +11,8 @@
   };
 </script>
 
-<div class="toast-container" aria-live="polite">
-  {#each toasts as toast (toast.id)}
+<div class="toast-region">
+  {#snippet toastItem(toast)}
     <div class="toast toast-{toast.type}">
       <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
       <span class="toast-content">
@@ -28,16 +28,33 @@
         <Icon name="x" width={14} height={14} />
       </button>
     </div>
-  {/each}
+  {/snippet}
+
+  <div class="toast-container" role="alert" aria-live="assertive">
+    {#each toasts.filter((toast) => toast.type === 'error') as toast (toast.id)}
+      {@render toastItem(toast)}
+    {/each}
+  </div>
+  <div class="toast-container" role="status" aria-live="polite">
+    {#each toasts.filter((toast) => toast.type !== 'error') as toast (toast.id)}
+      {@render toastItem(toast)}
+    {/each}
+  </div>
 </div>
 
 <style>
-  .toast-container {
+  .toast-region {
     position: fixed;
     bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .toast-container {
     display: flex;
     flex-direction: column;
     gap: 8px;

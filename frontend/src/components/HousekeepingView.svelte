@@ -3,7 +3,7 @@
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
   import { api } from '../lib/api.js';
-  import { addToast } from '../lib/state.svelte.js';
+  import { addToast, indexingState } from '../lib/state.svelte.js';
   import { getThumbnailUrl, formatDate, handleError } from '../lib/utils.js';
 
   let candidates = $state([]);
@@ -11,13 +11,25 @@
   let error = $state(false);
   let loaded = $state(false);
   let scanning = $state(false);
+  let busy = $state(false);
   let lastHkState = null;
 
   onMount(() => {
+    const hk = (indexingState.phases || []).find((p) => p.id === 'housekeeping');
+    if (hk?.state === 'active') scanning = true;
     loadAndRender();
     window.addEventListener('indexingStatusChanged', handleIndexingStatusChanged);
-    return () => window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
+    window.addEventListener('photoRemoved', handlePhotoRemoved);
+    return () => {
+      window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
+      window.removeEventListener('photoRemoved', handlePhotoRemoved);
+    };
   });
+
+  function handlePhotoRemoved(event) {
+    const { hash } = event.detail || {};
+    if (hash) candidates = candidates.filter((c) => c.photo.hash_sha256 !== hash);
+  }
 
   function handleIndexingStatusChanged(e) {
     const phases = e.detail?.phases || [];
@@ -60,6 +72,8 @@
   }
 
   async function keepPhoto(photo) {
+    if (busy) return;
+    busy = true;
     try {
       await api.removeHousekeepingCandidate(photo.hash_sha256);
       addToast(
@@ -68,15 +82,12 @@
         'success',
         2000
       );
-      window.dispatchEvent(
-        new CustomEvent('housekeepingCandidateRemoved', {
-          detail: { hash: photo.hash_sha256 },
-        })
-      );
       // Remove from local list
       candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
     } catch (e) {
       handleError(e, 'Keep photo');
+    } finally {
+      busy = false;
     }
   }
 
@@ -87,17 +98,16 @@
     });
     if (!confirm(msg)) return;
 
+    if (busy) return;
+    busy = true;
     try {
       await api.deletePhoto(photo.hash_sha256);
       addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), '', 'success');
-      window.dispatchEvent(
-        new CustomEvent('housekeepingCandidateRemoved', {
-          detail: { hash: photo.hash_sha256 },
-        })
-      );
       candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
     } catch (e) {
       handleError(e, 'Delete photo');
+    } finally {
+      busy = false;
     }
   }
 
@@ -146,6 +156,7 @@
           onclick={(e) => handleCardClick(e, photo)}
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
+              if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
               e.preventDefault();
               handleCardClick(e, photo);
             }
@@ -185,6 +196,7 @@
               data-action="keep"
               title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
               aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
+              disabled={busy}
               onclick={() => keepPhoto(photo)}
             >
               <Icon name="check" width={18} height={18} />
@@ -195,6 +207,7 @@
               data-action="delete-housekeeping"
               title={$t('ui.delete_photo', { default: 'Delete' })}
               aria-label={$t('ui.delete_photo', { default: 'Delete' })}
+              disabled={busy}
               onclick={() => deletePhoto(photo)}
             >
               <Icon name="trash-2" width={18} height={18} />

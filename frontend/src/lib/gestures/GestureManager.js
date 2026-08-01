@@ -108,6 +108,11 @@ export class GestureManager {
   handleTouchMove(e) {
     if (this.touches.size === 0) return;
 
+    // First move is no longer preventable-late: block default scrolling for
+    // the whole gesture on the viewer surface (touch-action: none is set
+    // there anyway).
+    if (e.cancelable) e.preventDefault();
+
     const timestamp = Date.now();
 
     // Update touch positions and velocities
@@ -292,11 +297,14 @@ export class GestureManager {
     const touch = Array.from(this.touches.values())[0];
     const averagedVelocity = this.getAverageVelocity(touch);
 
-    if (!touch && this.callbacks.onPanEnd) {
-      this.callbacks.onPanEnd({
-        velocityX: averagedVelocity.velocityX,
-        velocityY: averagedVelocity.velocityY,
-      });
+    if (!touch) {
+      this.activeGesture = null;
+      if (this.callbacks.onPanEnd) {
+        this.callbacks.onPanEnd({
+          velocityX: averagedVelocity.velocityX,
+          velocityY: averagedVelocity.velocityY,
+        });
+      }
       return;
     }
 
@@ -441,14 +449,19 @@ export class GestureManager {
     if (eventMap[event]) this.callbacks[eventMap[event]] = null;
   }
 
-  enablePan() {
+  /**
+   * Starts an explicit pan (used by SwipeableViewer when a swipe boundary is
+   * crossed mid-gesture). Order-independent: idempotent, and processes the
+   * current pan state immediately.
+   */
+  startPan() {
+    if (this.activeGesture === 'pan') return;
     this.activeGesture = 'pan';
+    this.processPan();
   }
 
-  disablePan() {
-    if (this.activeGesture === 'pan') {
-      this.activeGesture = null;
-    }
+  resetRecognizers() {
+    this.recognizers?.doubleTap?.reset?.();
   }
 
   destroy() {

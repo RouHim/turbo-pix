@@ -3,9 +3,11 @@
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
+  import Icon from '../lib/Icon.svelte';
 
   const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
 
+  let modalEl = $state(null);
   let showModal = $state(false);
   let editTargetHash = $state(null);
   let takenAt = $state('');
@@ -51,10 +53,39 @@
       if (e.key === 'Escape') {
         e.preventDefault();
         closeModal();
+      } else if (e.key === 'Tab' && modalEl) {
+        // Trap focus inside the modal so Tab/Shift+Tab never escapes it.
+        const focusables = [
+          ...modalEl.querySelectorAll(
+            'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"] )'
+          ),
+        ].filter((el) => !el.disabled);
+        if (focusables.length === 0) {
+          e.preventDefault();
+          return;
+        }
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  });
+
+  // Move focus into the modal on open; restore it to the edit button on close.
+  $effect(() => {
+    if (showModal) {
+      modalEl?.querySelector('input')?.focus();
+    } else {
+      document.getElementById('metadata-edit-btn')?.focus();
+    }
   });
 
   function populateForm() {
@@ -159,18 +190,29 @@
     if (e.target === e.currentTarget) closeModal();
   }
 
-  // Expose open for parent
+  // Expose open/close for parent
   export { openModal as open };
+
+  export function close() {
+    closeModal();
+  }
 </script>
 
 {#if showModal}
   <div
     id="metadata-edit-modal"
     class="modal"
-    style="display: flex"
+    bind:this={modalEl}
+    aria-labelledby="metadata-edit-title"
     onclick={onOverlayClick}
     onkeydown={(e) => {
-      if (e.key === 'Escape') closeModal();
+      // Escape closes the modal; stopPropagation so the window-level handler
+      // (Escape fallback + Tab trap) never double-fires closeModal.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeModal();
+      }
     }}
     role="dialog"
     aria-modal="true"
@@ -178,15 +220,17 @@
   >
     <div class="modal-content">
       <div class="modal-header">
-        <h2>{$t('ui.metadata.edit_modal_title', { default: 'Edit Photo Metadata' })}</h2>
+        <h2 id="metadata-edit-title">
+          {$t('ui.metadata.edit_modal_title', { default: 'Edit Photo Metadata' })}
+        </h2>
         <button
           type="button"
           id="metadata-edit-close"
           class="close-button"
-          aria-label="Close"
+          aria-label={$t('ui.metadata.close', { default: 'Close' })}
           onclick={closeModal}
         >
-          &times;
+          <Icon name="x" width={20} height={20} />
         </button>
       </div>
       <form id="metadata-edit-form" onsubmit={handleSubmit}>
@@ -216,7 +260,7 @@
               step="any"
               min="-90"
               max="90"
-              placeholder="-90 to 90"
+              placeholder={$t('ui.metadata.edit_latitude_placeholder', { default: '-90 to 90' })}
               bind:value={latitude}
               oninput={() => {
                 errorMessage = '';
@@ -234,7 +278,7 @@
               step="any"
               min="-180"
               max="180"
-              placeholder="-180 to 180"
+              placeholder={$t('ui.metadata.edit_longitude_placeholder', { default: '-180 to 180' })}
               bind:value={longitude}
               oninput={() => {
                 errorMessage = '';

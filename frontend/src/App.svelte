@@ -159,6 +159,7 @@
     overflow-y: auto;
     padding: var(--space-6);
     background: var(--background-color);
+    container-type: inline-size;
   }
 
   .content-header {

@@ -1,3 +1,5 @@
+import { SvelteURL } from 'svelte/reactivity';
+
 const validViews = ['all', 'favorites', 'videos', 'collages', 'housekeeping'];
 const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
 
@@ -51,9 +53,10 @@ export function parsePositiveInteger(value) {
     return null;
   }
 
-  const parsedValue = Number.parseInt(value, 10);
+  const trimmed = String(value).trim();
+  const parsedValue = Number.parseInt(trimmed, 10);
 
-  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0 || String(parsedValue) !== trimmed) {
     return null;
   }
 
@@ -71,7 +74,7 @@ export function normalizeString(value) {
 
 export function buildUrl(state = {}) {
   const normalizedState = normalizeState({ ...defaultState, ...state });
-  const url = new URL(window.location.origin);
+  const url = new SvelteURL(window.location.origin);
 
   url.pathname = normalizedState.view === 'all' ? '/' : `/${normalizedState.view}`;
 

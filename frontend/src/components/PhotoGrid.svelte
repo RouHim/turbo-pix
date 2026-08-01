@@ -66,6 +66,13 @@
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
 
+    // A newer load superseded a pending min-display timer; drop it so the
+    // stale load's finally block can't clear the new load's loading state.
+    if (pendingLoadTimer) {
+      clearTimeout(pendingLoadTimer);
+      pendingLoadTimer = null;
+    }
+
     // Cancel any in-flight request
     if (abortController) {
       abortController.abort();
@@ -99,11 +106,13 @@
 
       // Semantic search path
       if (photoGridState.semanticSearchMode && photoGridState.currentQuery) {
+        const queryAtStart = photoGridState.currentQuery;
         const offset = (photoGridState.currentPage - 1) * DEFAULT_BATCH_SIZE;
         const result = await api.semanticSearch(
           photoGridState.currentQuery,
           DEFAULT_BATCH_SIZE,
-          offset
+          offset,
+          { signal }
         );
 
         if (result.results && result.results.length > 0) {
@@ -111,20 +120,26 @@
           const photosData = await Promise.all(
             photoHashes.map(async (hash) => {
               try {
-                return await api.getPhoto(hash);
+                return await api.getPhoto(hash, { signal });
               } catch (e) {
+                if (e?.name === 'AbortError') throw e;
                 logger.warn(`Failed to load photo ${hash}`, { component: 'PhotoGrid' }, e);
                 return null;
               }
             })
           );
           photosList = photosData.filter((p) => p !== null);
+          // Stale ~3s semantic response: a newer query/load superseded this one.
+          // No-op instead of polluting the fresh grid and corrupting page state.
+          if (queryAtStart !== photoGridState.currentQuery || signal.aborted) {
+            return;
+          }
           if (logger) {
             logger.info('Semantic search results loaded', {
               component: 'PhotoGrid',
               photosCount: photosList.length,
               offset,
-              query: photoGridState.currentQuery,
+              query: queryAtStart,
             });
           }
         }

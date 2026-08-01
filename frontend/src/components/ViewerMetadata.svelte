@@ -1,4 +1,5 @@
 <script>
+  import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { formatDate, formatFileSize, formatDuration } from '../lib/utils.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
@@ -48,7 +49,7 @@
     return map[mimeType] || mimeType.replace('image/', '').toUpperCase();
   }
 
-  function setField(id, value) {
+  function setField(value) {
     return value || '-';
   }
 
@@ -62,8 +63,12 @@
   const settings = $derived(metadata.settings || {});
   const videoMeta = $derived(metadata.video || {});
 
-  const title = $derived(
-    photo?.filename || (photo ? `Photo ${photo.hash_sha256?.substring(0, 8)}` : '-')
+  const title = $derived.by(
+    () =>
+      photo?.filename ||
+      (photo
+        ? `${get(t)('ui.photo', { default: 'Photo' })} ${photo.hash_sha256?.substring(0, 8)}`
+        : '-')
   );
   const dateText = $derived(
     photo?.taken_at ? formatDate(photo.taken_at) : $t('ui.unknown', { default: 'Unknown' })
@@ -165,7 +170,7 @@
         ><span
           id="meta-filename"
           style="opacity: {fieldOpacity(photo?.file_path || photo?.filename)}"
-          >{setField('meta-filename', photo?.file_path || photo?.filename)}</span
+          >{setField(photo?.file_path || photo?.filename)}</span
         >
       </div>
       <div class="meta-item">
@@ -189,14 +194,13 @@
       <div class="meta-item">
         <span class="meta-label">{$t('ui.metadata.type', { default: 'Type:' })}</span><span
           id="meta-type"
-          style="opacity: {fieldOpacity(photo?.mime_type)}"
-          >{setField('meta-type', photo?.mime_type)}</span
+          style="opacity: {fieldOpacity(photo?.mime_type)}">{setField(photo?.mime_type)}</span
         >
       </div>
       <div class="meta-item">
         <span class="meta-label">{$t('ui.metadata.date_taken', { default: 'Date Taken:' })}</span
         ><span id="meta-date-taken" style="opacity: {fieldOpacity(photo?.taken_at)}"
-          >{setField('meta-date-taken', photo?.taken_at ? formatDate(photo.taken_at) : null)}</span
+          >{setField(photo?.taken_at ? formatDate(photo.taken_at) : null)}</span
         >
       </div>
       <div class="meta-item">
@@ -219,27 +223,25 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.make', { default: 'Make:' })}</span><span
             id="meta-camera-make"
-            style="opacity: {fieldOpacity(camera.make)}"
-            >{setField('meta-camera-make', camera.make)}</span
+            style="opacity: {fieldOpacity(camera.make)}">{setField(camera.make)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.model', { default: 'Model:' })}</span><span
             id="meta-camera-model"
-            style="opacity: {fieldOpacity(camera.model)}"
-            >{setField('meta-camera-model', camera.model)}</span
+            style="opacity: {fieldOpacity(camera.model)}">{setField(camera.model)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.lens_make', { default: 'Lens Make:' })}</span
           ><span id="meta-lens-make" style="opacity: {fieldOpacity(camera.lens_make)}"
-            >{setField('meta-lens-make', camera.lens_make)}</span
+            >{setField(camera.lens_make)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.lens_model', { default: 'Lens Model:' })}</span
           ><span id="meta-lens-model" style="opacity: {fieldOpacity(camera.lens_model)}"
-            >{setField('meta-lens-model', camera.lens_model)}</span
+            >{setField(camera.lens_model)}</span
           >
         </div>
       </div>
@@ -254,7 +256,7 @@
           <span class="meta-label">{$t('ui.metadata.iso', { default: 'ISO:' })}</span><span
             id="meta-iso"
             style="opacity: {fieldOpacity(settings.iso)}"
-            >{setField('meta-iso', settings.iso ? `ISO ${settings.iso}` : null)}</span
+            >{setField(settings.iso ? `ISO ${settings.iso}` : null)}</span
           >
         </div>
         <div class="meta-item">
@@ -270,7 +272,7 @@
           <span class="meta-label"
             >{$t('ui.metadata.shutter_speed', { default: 'Shutter Speed:' })}</span
           ><span id="meta-shutter" style="opacity: {fieldOpacity(settings.shutter_speed)}"
-            >{setField('meta-shutter', settings.shutter_speed)}</span
+            >{setField(settings.shutter_speed)}</span
           >
         </div>
         <div class="meta-item">
@@ -287,21 +289,21 @@
           <span class="meta-label"
             >{$t('ui.metadata.exposure_mode', { default: 'Exposure Mode:' })}</span
           ><span id="meta-exposure" style="opacity: {fieldOpacity(settings.exposure_mode)}"
-            >{setField('meta-exposure', settings.exposure_mode)}</span
+            >{setField(settings.exposure_mode)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label"
             >{$t('ui.metadata.metering_mode', { default: 'Metering Mode:' })}</span
           ><span id="meta-metering" style="opacity: {fieldOpacity(settings.metering_mode)}"
-            >{setField('meta-metering', settings.metering_mode)}</span
+            >{setField(settings.metering_mode)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label"
             >{$t('ui.metadata.white_balance', { default: 'White Balance:' })}</span
           ><span id="meta-wb" style="opacity: {fieldOpacity(settings.white_balance)}"
-            >{setField('meta-wb', settings.white_balance)}</span
+            >{setField(settings.white_balance)}</span
           >
         </div>
         <div class="meta-item">
@@ -322,14 +324,14 @@
           <span class="meta-label"
             >{$t('ui.metadata.orientation', { default: 'Orientation:' })}</span
           ><span id="meta-orientation" style="opacity: {fieldOpacity(photo?.orientation)}"
-            >{setField('meta-orientation', photo?.orientation)}</span
+            >{setField(photo?.orientation)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label"
             >{$t('ui.metadata.color_space', { default: 'Color Space:' })}</span
           ><span id="meta-colorspace" style="opacity: {fieldOpacity(settings.color_space)}"
-            >{setField('meta-colorspace', settings.color_space)}</span
+            >{setField(settings.color_space)}</span
           >
         </div>
       </div>
@@ -373,14 +375,14 @@
           <span class="meta-label"
             >{$t('ui.metadata.video_codec', { default: 'Video Codec:' })}</span
           ><span id="meta-video-codec" style="opacity: {fieldOpacity(videoMeta.codec)}"
-            >{setField('meta-video-codec', videoMeta.codec)}</span
+            >{setField(videoMeta.codec)}</span
           >
         </div>
         <div class="meta-item">
           <span class="meta-label"
             >{$t('ui.metadata.audio_codec', { default: 'Audio Codec:' })}</span
           ><span id="meta-audio-codec" style="opacity: {fieldOpacity(videoMeta.audio_codec)}"
-            >{setField('meta-audio-codec', videoMeta.audio_codec)}</span
+            >{setField(videoMeta.audio_codec)}</span
           >
         </div>
         <div class="meta-item">

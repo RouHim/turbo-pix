@@ -708,9 +708,13 @@ impl MetadataExtractor {
 mod tests {
     use super::*;
     use chrono::{Datelike, Timelike};
+    use crate::video_processor::tests::acquire_test_env_lock;
 
     #[test]
     fn test_ffprobe_is_installed() {
+        // Hold the shared test env lock: other test modules (handlers_video,
+        // video_processor) temporarily point FFPROBE_PATH at fake scripts.
+        let _env_lock = acquire_test_env_lock();
         // GIVEN: System environment
         let ffprobe_path = crate::video_processor::get_ffprobe_path();
 
@@ -1094,6 +1098,9 @@ mod tests {
 
     #[test]
     fn test_video_metadata_extraction() {
+        // Hold the shared test env lock so a concurrent test module's fake
+        // FFPROBE_PATH cannot break real ffprobe extraction.
+        let _env_lock = acquire_test_env_lock();
         // GIVEN: MP4 video file
         let path = Path::new("test-data/test_video.mp4");
         if !path.exists() {
@@ -1245,6 +1252,9 @@ mod tests {
 
     #[test]
     fn test_video_with_creation_time_fixture() {
+        // Hold the shared test env lock so a concurrent test module's fake
+        // FFPROBE_PATH cannot break real ffprobe extraction.
+        let _env_lock = acquire_test_env_lock();
         let path = Path::new("test-data/test_video_with_date.mp4");
         if !path.exists() {
             return;

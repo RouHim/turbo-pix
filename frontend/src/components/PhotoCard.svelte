@@ -1,4 +1,5 @@
 <script>
+  import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
   import { formatDate, formatFileSize, getThumbnailUrl, getPhotoUrl } from '../lib/utils.js';
@@ -10,7 +11,11 @@
 
   // --- Derived state ---
   const isVideo = $derived(photo?.metadata?.video?.codec != null);
-  const title = $derived(photo?.filename || `Photo ${photo?.hash_sha256?.substring(0, 8)}`);
+  const title = $derived.by(
+    () =>
+      photo?.filename ||
+      `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`
+  );
   const meta = $derived.by(() => {
     if (!photo) return '';
     const parts = [];
@@ -80,7 +85,7 @@
       photo.is_favorite = wasFavorite;
       console.error('Error toggling favorite:', error);
       addToast(
-        $t('ui.error', { default: 'Error' }),
+        $t('notifications.error', { default: 'Error' }),
         $t('messages.error_updating_favorite', { default: 'Error updating favorite status' }),
         'error',
         3000
@@ -102,125 +107,6 @@
     );
   }
 
-  async function keepPhoto(e) {
-    e.stopPropagation();
-    try {
-      await api.removeHousekeepingCandidate(photo.hash_sha256);
-      addToast(
-        $t('notifications.kept', { default: 'Kept' }),
-        $t('notifications.photoKept', { default: 'Photo removed from housekeeping candidates' }),
-        'success',
-        2000
-      );
-      window.dispatchEvent(
-        new CustomEvent('housekeepingCandidateRemoved', {
-          detail: { hash: photo.hash_sha256 },
-        })
-      );
-    } catch (err) {
-      console.error('Failed to keep photo:', err);
-      addToast(
-        $t('notifications.error', { default: 'Error' }),
-        $t('notifications.keepFailed', { default: 'Failed to keep photo' }),
-        'error',
-        4000
-      );
-    }
-  }
-
-  async function deletePhoto(e) {
-    e.stopPropagation();
-    const confirmMsg = $t('notifications.confirmDeleteMessage', {
-      default:
-        'Are you sure you want to permanently delete this photo? This action cannot be undone.',
-    });
-    if (!confirm(confirmMsg)) return;
-    try {
-      await api.deletePhoto(photo.hash_sha256);
-      addToast(
-        $t('notifications.deleted', { default: 'Deleted' }),
-        $t('notifications.photoDeleted', { default: 'Photo deleted successfully' }),
-        'success',
-        2000
-      );
-      window.dispatchEvent(
-        new CustomEvent('housekeepingCandidateRemoved', {
-          detail: { hash: photo.hash_sha256 },
-        })
-      );
-    } catch (err) {
-      console.error('Failed to delete photo:', err);
-      let errorMessage = $t('notifications.deletionFailed', { default: 'Failed to delete photo' });
-      if (err.message) {
-        const match = err.message.match(/HTTP \d+: (.+)/);
-        if (match) {
-          try {
-            errorMessage = JSON.parse(match[1]).error || match[1];
-          } catch {
-            errorMessage = match[1];
-          }
-        }
-      }
-      addToast($t('notifications.error', { default: 'Error' }), errorMessage, 'error', 5000);
-    }
-  }
-
-  async function acceptCollage(e) {
-    e.stopPropagation();
-    try {
-      await api.acceptCollage(photo.collageId);
-      addToast(
-        $t('notifications.accepted', { default: 'Accepted' }),
-        $t('notifications.collageAccepted', { default: 'Collage accepted' }),
-        'success',
-        2000
-      );
-      window.dispatchEvent(
-        new CustomEvent('collageAccepted', {
-          detail: { collageId: photo.collageId },
-        })
-      );
-    } catch (err) {
-      console.error('Failed to accept collage:', err);
-      addToast(
-        $t('notifications.error', { default: 'Error' }),
-        $t('notifications.collageAcceptFailed', { default: 'Failed to accept collage' }),
-        'error',
-        4000
-      );
-    }
-  }
-
-  async function rejectCollage(e) {
-    e.stopPropagation();
-    const confirmMessage = $t('messages.confirm_reject_collage', {
-      default: 'Are you sure you want to reject this collage?',
-    });
-    if (!confirm(confirmMessage)) return;
-    try {
-      await api.rejectCollage(photo.collageId);
-      addToast(
-        $t('notifications.rejected', { default: 'Rejected' }),
-        $t('notifications.collageRejected', { default: 'Collage rejected' }),
-        'success',
-        2000
-      );
-      window.dispatchEvent(
-        new CustomEvent('collageRejected', {
-          detail: { collageId: photo.collageId },
-        })
-      );
-    } catch (err) {
-      console.error('Failed to reject collage:', err);
-      addToast(
-        $t('notifications.error', { default: 'Error' }),
-        $t('notifications.collageRejectFailed', { default: 'Failed to reject collage' }),
-        'error',
-        4000
-      );
-    }
-  }
-
   function onImageLoad() {
     imageLoaded = true;
   }
@@ -233,12 +119,12 @@
 
 <div
   class="photo-card"
-  class:collage-card={photo?.isCollage}
   data-photo-id={photo?.hash_sha256}
   aria-label={title}
   onclick={handleCardClick}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
+      if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
       e.preventDefault();
       handleCardClick(e);
     }
@@ -252,45 +138,33 @@
     {/if}
 
     {#if !imageError}
-      {#if photo?.isCollage}
+      <picture>
+        <source
+          type="image/webp"
+          srcset="{getThumbnailUrl(photo, 'small')}&format=webp 200w, {getThumbnailUrl(
+            photo,
+            'medium'
+          )}&format=webp 400w, {getThumbnailUrl(photo, 'large')}&format=webp 800w"
+          sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
+        />
+        <source
+          type="image/jpeg"
+          srcset="{getThumbnailUrl(photo, 'small')}&format=jpeg 200w, {getThumbnailUrl(
+            photo,
+            'medium'
+          )}&format=jpeg 400w, {getThumbnailUrl(photo, 'large')}&format=jpeg 800w"
+          sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
+        />
         <img
           class="photo-card-image"
-          src={photo.thumbnail_path || photo.path}
+          src="{getThumbnailUrl(photo, 'medium')}&format=jpeg"
           alt={title}
           loading="lazy"
           decoding="async"
           onload={onImageLoad}
           onerror={onImageError}
         />
-      {:else}
-        <picture>
-          <source
-            type="image/webp"
-            srcset="{getThumbnailUrl(photo, 'small')}&format=webp 200w, {getThumbnailUrl(
-              photo,
-              'medium'
-            )}&format=webp 400w, {getThumbnailUrl(photo, 'large')}&format=webp 800w"
-            sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
-          />
-          <source
-            type="image/jpeg"
-            srcset="{getThumbnailUrl(photo, 'small')}&format=jpeg 200w, {getThumbnailUrl(
-              photo,
-              'medium'
-            )}&format=jpeg 400w, {getThumbnailUrl(photo, 'large')}&format=jpeg 800w"
-            sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
-          />
-          <img
-            class="photo-card-image"
-            src="{getThumbnailUrl(photo, 'medium')}&format=jpeg"
-            alt={title}
-            loading="lazy"
-            decoding="async"
-            onload={onImageLoad}
-            onerror={onImageError}
-          />
-        </picture>
-      {/if}
+      </picture>
     {:else}
       <div class="photo-card-placeholder error-placeholder"></div>
     {/if}
@@ -308,74 +182,30 @@
   </div>
 
   <div class="photo-card-actions">
-    {#if photo?.isCollage}
-      <!-- Collage context -->
-      <button
-        class="card-action-btn accept-btn"
-        title={$t('ui.accept_collage', { default: 'Accept' })}
-        data-action="accept-collage"
-        style="color: #10b981"
-        onclick={acceptCollage}
-      >
-        <Icon name="check" width={18} height={18} />
-      </button>
-      <button
-        class="card-action-btn reject-btn"
-        title={$t('ui.reject_collage', { default: 'Reject' })}
-        data-action="reject-collage"
-        style="color: #ef4444"
-        onclick={rejectCollage}
-      >
-        <Icon name="x" width={18} height={18} />
-      </button>
-    {:else if photo?.housekeepingReason}
-      <!-- Housekeeping context -->
-      <button
-        class="card-action-btn keep-btn"
-        title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-        aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-        data-action="keep"
-        style="color: #10b981"
-        onclick={keepPhoto}
-      >
-        <Icon name="check" width={18} height={18} />
-      </button>
-      <button
-        class="card-action-btn delete-btn"
-        title={$t('ui.delete_photo', { default: 'Delete Photo' })}
-        aria-label={$t('ui.delete_photo', { default: 'Delete Photo' })}
-        data-action="delete-housekeeping"
-        style="color: #ef4444"
-        onclick={deletePhoto}
-      >
-        <Icon name="trash-2" width={18} height={18} />
-      </button>
-    {:else}
-      <!-- Default context: favorite + download -->
-      <button
-        class="card-action-btn favorite-btn"
-        class:active={favoriteActive}
-        title={favoriteActive
-          ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
-          : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
-        aria-label={favoriteActive
-          ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
-          : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
-        data-action="favorite"
-        onclick={toggleFavorite}
-      >
-        <Icon name="heart" width={18} height={18} />
-      </button>
-      <button
-        class="card-action-btn download-btn"
-        title={$t('ui.download', { default: 'Download' })}
-        aria-label={$t('ui.download', { default: 'Download' })}
-        data-action="download"
-        onclick={downloadPhoto}
-      >
-        <Icon name="download" width={18} height={18} />
-      </button>
-    {/if}
+    <!-- Default context: favorite + download -->
+    <button
+      class="card-action-btn favorite-btn"
+      class:active={favoriteActive}
+      title={favoriteActive
+        ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
+        : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
+      aria-label={favoriteActive
+        ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
+        : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
+      data-action="favorite"
+      onclick={toggleFavorite}
+    >
+      <Icon name="heart" width={18} height={18} />
+    </button>
+    <button
+      class="card-action-btn download-btn"
+      title={$t('ui.download', { default: 'Download' })}
+      aria-label={$t('ui.download', { default: 'Download' })}
+      data-action="download"
+      onclick={downloadPhoto}
+    >
+      <Icon name="download" width={18} height={18} />
+    </button>
   </div>
 </div>
 

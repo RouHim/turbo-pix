@@ -569,7 +569,7 @@ pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::{CacheConfig, Config};
     use crate::db::{create_in_memory_pool, Photo};
@@ -589,12 +589,15 @@ mod tests {
         static TEST_ENV_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
     }
 
-    fn test_env_lock() -> &'static Mutex<()> {
+    // Shared test env lock: serializes FFPROBE_PATH/FFMPEG_PATH mutation across
+    // test modules (handlers_video, metadata_extractor) so ffprobe-dependent
+    // tests never observe another test's fake binary path.
+    pub(crate) fn test_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn acquire_test_env_lock() -> Option<MutexGuard<'static, ()>> {
+    pub(crate) fn acquire_test_env_lock() -> Option<MutexGuard<'static, ()>> {
         TEST_ENV_LOCK_DEPTH.with(|depth| {
             let current = depth.get();
             depth.set(current + 1);
@@ -607,7 +610,7 @@ mod tests {
         })
     }
 
-    fn release_test_env_lock() {
+    pub(crate) fn release_test_env_lock() {
         TEST_ENV_LOCK_DEPTH.with(|depth| {
             depth.set(depth.get() - 1);
         });

@@ -318,27 +318,29 @@ mod tests {
     use super::*;
     use crate::db::create_in_memory_pool;
     use crate::video_processor::clear_transcode_status;
+    use crate::video_processor::tests::{acquire_test_env_lock, release_test_env_lock};
     use chrono::Utc;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::MutexGuard;
     use tempfile::TempDir;
-
-    fn test_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
+        _lock: Option<MutexGuard<'static, ()>>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
+            let lock = acquire_test_env_lock();
             let original = std::env::var(key).ok();
             unsafe {
                 std::env::set_var(key, value);
             }
-            Self { key, original }
+            Self {
+                key,
+                original,
+                _lock: lock,
+            }
         }
     }
 
@@ -351,6 +353,7 @@ mod tests {
                     std::env::remove_var(self.key);
                 }
             }
+            release_test_env_lock();
         }
     }
 
@@ -412,7 +415,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_video_202() {
-        let _lock = test_env_lock().lock().unwrap();
         let db_pool = create_in_memory_pool().await.expect("failed to create db");
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -518,7 +520,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_video_cache_hit() {
-        let _lock = test_env_lock().lock().unwrap();
         let db_pool = create_in_memory_pool().await.expect("failed to create db");
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";

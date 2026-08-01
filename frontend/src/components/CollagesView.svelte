@@ -111,6 +111,11 @@
       })
     );
   }
+
+  function handleCardClick(e, collage) {
+    if (e.target.closest('.card-action-btn')) return;
+    openViewer(collage);
+  }
 </script>
 
 <div class="collages-view">
@@ -183,10 +188,21 @@
 
     <div class="photo-grid" id="photo-grid">
       {#each collages as collage (collage.id)}
-        <div class="photo-card collage-card" data-photo-id={collage.id}>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="photo-card-image-container" onclick={() => openViewer(collage)}>
+        <div
+          class="photo-card collage-card"
+          data-photo-id={collage.id}
+          role="button"
+          tabindex="0"
+          onclick={(e) => handleCardClick(e, collage)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
+              e.preventDefault();
+              openViewer(collage);
+            }
+          }}
+        >
+          <div class="photo-card-image-container">
             <img
               class="photo-card-image"
               src={`/api/collages/${collage.id}/image`}
@@ -195,9 +211,7 @@
               style="opacity: 1"
             />
           </div>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="photo-card-overlay" onclick={() => openViewer(collage)}>
+          <div class="photo-card-overlay">
             <span class="photo-card-title">
               {$t('ui.collage_for', {
                 default: `Collage for ${formatCollageDate(collage.date)}`,

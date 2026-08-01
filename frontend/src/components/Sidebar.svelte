@@ -15,6 +15,10 @@
     if (view === 'all') {
       // Clear any active search — matches the Header logo behavior and the
       // old app.js nav handler (which called search.clearSearch()).
+      if (route.view === 'all' && !route.query) {
+        appState.sidebarOpen = false;
+        return;
+      }
       pushState({ view: 'all', query: null });
       appState.sidebarOpen = false;
       return;
@@ -27,6 +31,15 @@
   function closeSidebar() {
     appState.sidebarOpen = false;
   }
+
+  // Escape closes the sidebar whenever it is open.
+  $effect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape' && appState.sidebarOpen) appState.sidebarOpen = false;
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 </script>
 
 <div

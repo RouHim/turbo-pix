@@ -9,7 +9,6 @@ export const indexingState = $state({
   phases: [],
   photosIndexed: 0,
   currentItem: '',
-  sheetOpen: false,
 });
 
 export const photoGridState = $state({

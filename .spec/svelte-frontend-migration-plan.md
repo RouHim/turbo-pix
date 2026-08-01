@@ -285,7 +285,7 @@ export function setLocale(l) {
 
 export { _ as t };
 ```
-Resolution order (localStorage → `/api/config` `default_locale` → `en`) is required by spec FR-015; note the current vanilla code never reads `turbo-pix-locale` at startup — this is a deliberate spec-mandated fix, not a regression. Also port `translateError(errorMessage)` from `static/i18n/i18nManager.js` (backend error-string → translation-key mapping) into this module.
+Resolution order (localStorage → `/api/config` `default_locale` → browser language → `en`) is required by spec FR-015: the operator config beats the browser, and the browser language is kept as a fallback (config value wins when it differs). Note the current vanilla code never reads `turbo-pix-locale` at startup — this is a deliberate spec-mandated fix, not a regression. Also port `translateError(errorMessage)` from `static/i18n/i18nManager.js` (backend error-string → translation-key mapping) into this module.
 
 In templates use `{$t('ui.appTitle')}` and `{$t('ui.photos_count', { values: { count } })}`. This replaces every `data-i18n` / `data-i18n-placeholder` / `data-i18n-title` / `data-i18n-alt` attribute from the old HTML — no test selects on `data-i18n` (verified by grep), so removal is safe.
 
@@ -471,6 +471,6 @@ Manual new-behavior checks (server: `TURBO_PIX_DATA_PATH=/tmp/tp TURBO_PIX_PHOTO
 
 - **Vite chunk names are unpredictable** — that is why embedding goes through `build.rs` globbing, not a file list. If the codegen approach hits an unforeseen blocker (e.g., path escaping on exotic filenames), fall back to the `rust-embed` crate: `#[derive(RustEmbed)] #[folder = "dist/"]` and rewrite `build_static_routes()` to iterate `Assets::iter()`.
 - **svelte-i18n on Svelte 5**: store-based API (`$_`, `$locale`) is supported by Svelte 5's store compatibility, and the two-level nested dictionaries match its dot-path lookup. If it misbehaves at runtime, the spec explicitly allows an equivalent: replace it with a ~50-line `lib/i18n.svelte.js` holding `let currentLocale = $state('en')` + dictionaries + a `t(key, params)` doing the same lookup/`{param}` interpolation; templates keep calling `t(...)`.
-- **Locale resolution order** (localStorage → config → `en`): the current vanilla code ignores `turbo-pix-locale` at startup (verified — `initializeI18n` only uses the config value). The spec (FR-015) mandates persistence, so the new behavior is deliberate, not a drift.
+- **Locale resolution order** (localStorage → config → browser language → `en`): the current vanilla code ignores `turbo-pix-locale` at startup (verified — `initializeI18n` only uses the config value). The spec (FR-015) mandates persistence; the browser-language fallback is a user decision (config wins over browser). The new behavior is deliberate, not a drift.
 - **`static/js/i18n.js` is dead code** (embedded but never loaded by `index.html` — verified) and is not ported. If a hidden consumer surfaces during E2E, port it as `lib/i18n-legacy.js` instead of reviving `static/`.
 - **Build order**: `npm run build` must precede `cargo build`; `build.rs` enforces this with a clear panic. `cargo:rerun-if-changed` per dist file keeps cargo rebuilds correct when the frontend rebuilds.

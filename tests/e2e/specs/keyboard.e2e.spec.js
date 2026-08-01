@@ -75,4 +75,23 @@ test.describe('Keyboard Shortcuts', () => {
     const searchValue = await page.locator(TestHelpers.selectors.searchInput).inputValue();
     expect(searchValue).toBe('');
   });
+
+  test('should toggle favorite with Enter key on card action button', async ({ page }) => {
+    // GIVEN: A photo card with its favorite button focused
+    const photos = await TestHelpers.getPhotoCards(page);
+    expect(photos.length).toBeGreaterThan(0);
+    const favoriteBtn = photos[0].locator(TestHelpers.selectors.favoriteBtn).first();
+    const initialClass = await favoriteBtn.getAttribute('class');
+    await favoriteBtn.focus();
+
+    // WHEN: User presses Enter on the button
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
+
+    // THEN: Favorite toggles and the viewer stays closed (card-level keydown
+    // must not swallow Enter for inner action buttons)
+    const newClass = await favoriteBtn.getAttribute('class');
+    expect(newClass).not.toBe(initialClass);
+    await expect(page.locator(TestHelpers.selectors.viewer)).not.toBeVisible();
+  });
 });

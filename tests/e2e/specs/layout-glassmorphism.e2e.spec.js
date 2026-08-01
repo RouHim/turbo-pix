@@ -51,20 +51,24 @@ test.describe('Layout Glassmorphism', () => {
   test('indexing orbit compact mode should be positioned at bottom-right', async ({ page }) => {
     const styles = await page.evaluate(() => {
       const ring = document.querySelector('[data-phase-ring]');
+      ring.style.transition = 'none';
       ring.setAttribute('data-ring-mode', 'compact');
+      void ring.offsetWidth; // force reflow; no transition runs
       const computed = window.getComputedStyle(ring);
+      const offset = parseFloat(computed.getPropertyValue('--indexing-ring-compact-offset'));
+      const size = parseFloat(computed.getPropertyValue('--indexing-ring-compact-size'));
       return {
         position: computed.position,
-        bottom: computed.bottom,
-        right: computed.right,
+        top: parseFloat(computed.top),
+        left: parseFloat(computed.left),
+        expectedTop: window.innerHeight - offset - size,
+        expectedLeft: window.innerWidth - offset - size,
       };
     });
 
     expect(styles.position).toBe('fixed');
-    expect(parseFloat(styles.bottom)).toBeGreaterThanOrEqual(0);
-    expect(parseFloat(styles.right)).toBeGreaterThanOrEqual(0);
-    expect(styles.bottom).not.toBe('auto');
-    expect(styles.right).not.toBe('auto');
+    expect(Math.abs(styles.top - styles.expectedTop)).toBeLessThan(2);
+    expect(Math.abs(styles.left - styles.expectedLeft)).toBeLessThan(2);
   });
 
   test('sidebar should NOT be offset when indexing orbit is visible', async ({ page }) => {

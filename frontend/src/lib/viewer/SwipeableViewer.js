@@ -428,6 +428,10 @@ export class SwipeableViewer {
       await this.viewer.showPrevious();
     }
 
+    // destroy() nulls this.elements/this.adjacent while the media load is
+    // pending; the continuation below must not dereference them.
+    if (!this.elements) return;
+
     this.viewer.triggerHapticFeedback('light');
     this.render(0);
     this.updateAdjacentSources();

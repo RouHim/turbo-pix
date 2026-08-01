@@ -638,7 +638,7 @@ mod tests {
         if !should_run_video_tests(video_filename) {
             return;
         }
-
+        let _lock = crate::video_processor::tests::acquire_test_env_lock();
         let temp_dir = TempDir::new().unwrap();
         let source = project_photo_path(video_filename);
         let moov_end = temp_dir.path().join("moov_end.mp4");
@@ -665,7 +665,7 @@ mod tests {
         if !should_run_video_tests(video_filename) {
             return;
         }
-
+        let _lock = crate::video_processor::tests::acquire_test_env_lock();
         let temp_dir = TempDir::new().unwrap();
         let source = project_photo_path(video_filename);
         let moov_start = temp_dir.path().join("moov_start.mp4");

@@ -20,7 +20,9 @@ export const photoGridState = $state({
   semanticSearchMode: false,
 });
 
-export const themeState = $state({ theme: 'light' });
+export const themeState = $state({
+  theme: document.documentElement.classList.contains('dark-theme') ? 'dark' : 'light',
+});
 
 export const toasts = $state([]);
 

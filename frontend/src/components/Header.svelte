@@ -32,6 +32,8 @@
       title={$t('ui.menu', { default: 'Menu' })}
       onclick={toggleSidebar}
       aria-label={$t('ui.menu', { default: 'Menu' })}
+      aria-expanded={appState.sidebarOpen}
+      aria-controls="sidebar-nav"
     >
       <Icon name="menu" width={20} height={20} />
     </button>
@@ -153,6 +155,10 @@
     .menu-btn,
     .mobile-search-btn {
       display: flex;
+    }
+
+    .header-actions {
+      gap: var(--space-1);
     }
   }
 

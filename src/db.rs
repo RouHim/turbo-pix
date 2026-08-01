@@ -677,49 +677,61 @@ impl Photo {
         let mut where_clause = String::from(" WHERE 1=1");
         let mut params: Vec<String> = Vec::new();
 
-        if let Some(ref q) = query.q {
-            // Handle special type: queries
-            if q.starts_with("type:") {
-                let media_type = q.strip_prefix("type:").unwrap_or("");
-                match media_type {
-                    "video" => {
-                        where_clause.push_str(" AND mime_type LIKE 'video/%'");
+        if let Some(q) = &query.q {
+            // Split on whitespace and AND per-token conditions so combined
+            // queries like "sunset is_favorite:true" work. A token with an
+            // unknown type:/is_favorite: value falls back to general search.
+            let tokens: Vec<&str> = q.split_whitespace().collect();
+            let mut i = 0;
+            while i < tokens.len() {
+                let token = tokens[i];
+                if let Some(media_type) = token.strip_prefix("type:") {
+                    match media_type {
+                        "video" => where_clause.push_str(" AND mime_type LIKE 'video/%'"),
+                        "image" => where_clause.push_str(" AND mime_type LIKE 'image/%'"),
+                        _ => {
+                            // Unknown type, fall back to general search
+                            where_clause.push_str(" AND ");
+                            where_clause.push_str(build_general_search_condition());
+                            add_general_search_params(&mut params, token);
+                        }
                     }
-                    "image" => {
-                        where_clause.push_str(" AND mime_type LIKE 'image/%'");
+                } else if let Some(favorite_value) = token.strip_prefix("is_favorite:") {
+                    match favorite_value {
+                        "true" => where_clause.push_str(" AND is_favorite = 1"),
+                        "false" => {
+                            where_clause.push_str(" AND (is_favorite = 0 OR is_favorite IS NULL)");
+                        }
+                        _ => {
+                            // Unknown value, fall back to general search
+                            where_clause.push_str(" AND ");
+                            where_clause.push_str(build_general_search_condition());
+                            add_general_search_params(&mut params, token);
+                        }
                     }
-                    _ => {
-                        // Unknown type, fall back to general search
-                        where_clause.push_str(" AND ");
-                        where_clause.push_str(build_general_search_condition());
-                        add_general_search_params(&mut params, q);
+                } else if token.starts_with("location:") {
+                    // Absorb following words until the next prefix token or
+                    // end, so multi-word cities ("location:New York") keep
+                    // working.
+                    let mut city = token.strip_prefix("location:").unwrap_or("").to_string();
+                    while i + 1 < tokens.len()
+                        && !tokens[i + 1].starts_with("type:")
+                        && !tokens[i + 1].starts_with("is_favorite:")
+                        && !tokens[i + 1].starts_with("location:")
+                    {
+                        i += 1;
+                        city.push(' ');
+                        city.push_str(tokens[i]);
                     }
+                    where_clause.push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
+                    params.push(format!("%{}%", city));
+                } else {
+                    // General search across multiple fields (filename + JSON metadata)
+                    where_clause.push_str(" AND ");
+                    where_clause.push_str(build_general_search_condition());
+                    add_general_search_params(&mut params, token);
                 }
-            } else if q.starts_with("location:") {
-                let city = q.strip_prefix("location:").unwrap_or("");
-                where_clause.push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
-                params.push(format!("%{}%", city));
-            } else if q.starts_with("is_favorite:") {
-                let favorite_value = q.strip_prefix("is_favorite:").unwrap_or("");
-                match favorite_value {
-                    "true" => {
-                        where_clause.push_str(" AND is_favorite = 1");
-                    }
-                    "false" => {
-                        where_clause.push_str(" AND (is_favorite = 0 OR is_favorite IS NULL)");
-                    }
-                    _ => {
-                        // Unknown value, fall back to general search
-                        where_clause.push_str(" AND ");
-                        where_clause.push_str(build_general_search_condition());
-                        add_general_search_params(&mut params, q);
-                    }
-                }
-            } else {
-                // General search across multiple fields (filename + JSON metadata)
-                where_clause.push_str(" AND ");
-                where_clause.push_str(build_general_search_condition());
-                add_general_search_params(&mut params, q);
+                i += 1;
             }
         }
 
@@ -1602,5 +1614,95 @@ mod tests {
 
         assert_eq!(total, 0);
         assert!(photos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_combined_general_and_favorite() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut fav_photo =
+            create_test_photo("sunset-fav.jpg".to_string(), "sunset-fav-hash".to_string());
+        fav_photo.is_favorite = Some(true);
+        fav_photo.create(&pool).await.unwrap();
+        let plain_photo =
+            create_test_photo("sunset.jpg".to_string(), "sunset-plain-hash".to_string());
+        plain_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("sunset is_favorite:true");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, fav_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_combined_general_and_type() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut video_photo =
+            create_test_photo("sunset-vid.mp4".to_string(), "sunset-vid-hash".to_string());
+        video_photo.mime_type = Some("video/mp4".to_string());
+        video_photo.create(&pool).await.unwrap();
+        let image_photo =
+            create_test_photo("sunset.jpg".to_string(), "sunset-img-hash".to_string());
+        image_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("sunset type:video");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, video_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_location_multiple_words() {
+        let pool = create_test_db_pool().await.unwrap();
+        let ny_photo = create_test_photo_with_metadata(
+            "new-york.jpg",
+            "new-york-hash",
+            json!({
+                "location": {
+                    "city": "New York"
+                }
+            }),
+        );
+        ny_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("location:New York");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, ny_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_location_combined_with_general() {
+        let pool = create_test_db_pool().await.unwrap();
+        let berlin_photo = create_test_photo_with_metadata(
+            "sunset-berlin.jpg",
+            "sunset-berlin-hash",
+            json!({
+                "location": {
+                    "city": "Berlin"
+                }
+            }),
+        );
+        berlin_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("sunset location:Berlin");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, berlin_photo.file_path);
     }
 }

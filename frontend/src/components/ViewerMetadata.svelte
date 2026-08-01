@@ -28,7 +28,7 @@
   }
 
   function getFormatName(p) {
-    if (!p?.mime_type) return 'this';
+    if (!p?.mime_type) return 'file';
     const mimeType = p.mime_type.toLowerCase();
     const map = {
       'image/x-canon-cr2': 'RAW (CR2)',
@@ -87,7 +87,7 @@
       : $t('ui.unknown', { default: 'Unknown' })
   );
   const locationText = $derived(
-    location.latitude && location.longitude
+    location.latitude != null && location.longitude != null
       ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
       : $t('ui.no_location_data', { default: 'No location data' })
   );
@@ -105,7 +105,7 @@
       photo?.orientation ||
       settings.color_space
   );
-  const hasLocation = $derived(location.latitude || location.longitude);
+  const hasLocation = $derived(location.latitude != null || location.longitude != null);
 </script>
 
 <div class="photo-info">
@@ -120,10 +120,14 @@
           disabled={!showEditBtn}
           title={showEditBtn
             ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
-            : $t('ui.metadata.edit_unsupported_format', {
-                values: { format: getFormatName(photo) },
-                default: 'Editing {format} files is not supported',
-              })}
+            : photo?.mime_type
+              ? $t('ui.metadata.edit_unsupported_format', {
+                  values: { format: getFormatName(photo) },
+                  default: 'Editing {format} files is not supported',
+                })
+              : $t('ui.metadata.edit_unsupported', {
+                  default: 'Editing this file type is not supported',
+                })}
           onclick={onEditMetadata}
         >
           <Icon name="edit-2" width={16} height={16} />
@@ -333,9 +337,9 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.gps', { default: 'GPS:' })}</span><span
             id="meta-gps"
-            style="opacity: {fieldOpacity(location.latitude && location.longitude)}"
+            style="opacity: {fieldOpacity(location.latitude != null && location.longitude != null)}"
             >{setField(
-              location.latitude && location.longitude
+              location.latitude != null && location.longitude != null
                 ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
                 : null
             )}</span

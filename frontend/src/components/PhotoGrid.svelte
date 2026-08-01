@@ -41,9 +41,7 @@
   function buildFilters() {
     const filters = {};
     if (route.view === 'favorites') filters.query = 'is_favorite:true';
-    if (route.view === 'videos') {
-      filters.query = (filters.query ? filters.query + ' ' : '') + 'type:video';
-    }
+    if (route.view === 'videos') filters.query = 'type:video';
     if (route.sort) {
       const [field, order] = route.sort.split('_');
       filters.sort = field;
@@ -90,6 +88,11 @@
         photoGridState.photos = [];
         photoGridState.currentPage = 1;
         photoGridState.hasMore = true;
+        // Filtered views (favorites/videos) always use the regular search
+        // path: semantic results are unfilterable and must not leak into them.
+        if (route.view !== 'all') {
+          photoGridState.semanticSearchMode = false;
+        }
         if (!photoGridState.semanticSearchMode) {
           photoGridState.currentQuery = route.query || null;
         }
@@ -145,11 +148,13 @@
         }
       } else {
         // Regular photo loading
-        const filters = buildFilters();
+        const { query: viewQuery, ...filters } = buildFilters();
         const params = {
           page: photoGridState.currentPage,
           limit: DEFAULT_BATCH_SIZE,
-          query: photoGridState.currentQuery,
+          // Merge the user's search term with the view filter (e.g. Favorites
+          // + "cat" → "cat is_favorite:true"); the backend ANDs the tokens.
+          query: [photoGridState.currentQuery, viewQuery].filter(Boolean).join(' ') || null,
           ...filters,
         };
 
@@ -360,6 +365,11 @@
       if (abortController) {
         abortController.abort();
       }
+      // A load aborted by unmount must not schedule the min-display timer in
+      // its finally block: without this, the global loading flag can be
+      // flipped by a destroyed instance and a duplicate page-1 request can
+      // slip through on remount.
+      lastLoadSignature = null;
     };
   });
 </script>

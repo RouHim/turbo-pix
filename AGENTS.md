@@ -159,7 +159,7 @@ npm run test:e2e:report   # View test report
 
 **Semantic search staleness:** the semantic path needs its own AbortController signal AND a staleness guard: capture `queryAtStart` before `api.semanticSearch(query, limit, offset, options)` and bail out (`queryAtStart !== currentQuery || signal.aborted`) before pushing results — a ~3s embedding response can otherwise pollute a grid the user has already navigated away from.
 
-**Viewer video-path staleness:** every async continuation in `PhotoViewer.svelte` that outlives the current photo must re-check `currentPhoto?.hash_sha256 === photo.hash_sha256` before acting — `displayVideo` (after the HEVC support probe and after the transcode `fetch`), `pollTranscodeStatus` (top of the interval callback; stops the up-to-5-minute poll for a photo the user left), `videoEl.onerror` (no retry/toast for a stale photo), and `displayImage`'s `img.onerror` (mirroring its existing `onload` guard).
+**Viewer video-path staleness:** every async continuation in `PhotoViewer.svelte` that outlives the current photo must re-check `currentPhoto?.hash_sha256 === photo.hash_sha256` before acting — `displayVideo` (after the HEVC support probe and after the transcode `fetch`), `pollTranscodeStatus` (interval top AND after every `await` — a late fetch/json response can otherwise act for the previous photo), `videoEl.onerror` (no retry/toast for a stale photo), and `displayImage`'s `img.onerror` (mirroring its existing `onload` guard).
 
 **`get(t)(key, 'fallback string')` silently drops the fallback:** svelte-i18n's `get(t)` with a positional fallback string does not apply it (raw key is returned). Always pass `{ default: '…' }` as the options object.
 
@@ -172,3 +172,7 @@ npm run test:e2e:report   # View test report
 **Ported DOM helpers keep their element-id arguments:** when porting vanilla JS helpers of the form `setField(id, value)` (id = DOM element id) to Svelte, drop the id parameter — a leftover id string is truthy and renders literally ("meta-filesize") instead of the formatted value. Grep ported call sites for two-arg calls to single-arg functions.
 
 **Shared interval fields must be cleared only by their owner:** `PhotoViewer.pollTranscodeStatus` shares the module-level `transcodePollTimer` across polls — capture the interval id in a local `const`, `clearInterval` that, and only null the shared field (and hide the shared toast) when it still points at your interval. A stale poll clearing the shared field kills a newer photo's poll: its promise never settles, the spinner hangs, and the video never receives its completed transcode URL.
+
+**Backend `q` is tokenized:** `db::search_photos` previously matched `type:`/`location:`/`is_favorite:` only when the whole query started with them; combined queries (`sunset is_favorite:true`) silently matched nothing. The parser now splits on whitespace and ANDs per-token; `location:` absorbs following words until the next prefix token.
+
+**Semantic mode must reset off the `all` view:** PhotoGrid's reset block exits `semanticSearchMode` when `route.view !== 'all'`; semantic results are unfilterable, so filtered views (favorites/videos) always use the regular path with the view filter merged into the query (`cat` + Favorites → `q=cat is_favorite:true`).

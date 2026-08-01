@@ -126,6 +126,7 @@
     --viewer-btn-bg: oklch(20% 0.01 260deg / 45%);
     --viewer-btn-color: oklch(95% 0.005 80deg);
     --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
+    --text-on-accent: oklch(20% 0.01 260deg);
 
     /* Legacy aliases for backward compatibility */
     --border-radius: var(--radius-md);
@@ -151,6 +152,7 @@
     --viewer-btn-bg: oklch(20% 0.01 260deg / 45%);
     --viewer-btn-color: oklch(95% 0.005 80deg);
     --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
+    --text-on-accent: oklch(20% 0.01 260deg);
   }
 
   /* Dark theme variables */
@@ -172,6 +174,7 @@
     --viewer-btn-bg: oklch(15% 0.01 260deg / 50%);
     --viewer-btn-color: oklch(95% 0.005 80deg);
     --viewer-btn-hover-bg: oklch(15% 0.01 260deg / 70%);
+    --text-on-accent: oklch(20% 0.01 260deg);
   }
 } /* end @layer tokens */
 
@@ -1592,10 +1595,6 @@
     display: flex;
   }
 
-  .timeline-container {
-    padding: 12px 15px;
-  }
-
   .timeline-label {
     min-width: 100px;
     font-size: 13px;
@@ -2053,12 +2052,6 @@
     }
   }
 
-  .header-actions {
-    display: flex;
-    gap: var(--space-1);
-    align-items: center;
-  }
-
   .theme-toggle {
     width: var(--button-size);
     height: var(--button-size);
@@ -2211,11 +2204,6 @@
       transform: scale(0.98);
       box-shadow: var(--shadow-light);
     }
-  }
-
-  .nav-item {
-    padding: 14px var(--space-5);
-    font-size: var(--font-md);
   }
 
   [data-sheet-current-item] {

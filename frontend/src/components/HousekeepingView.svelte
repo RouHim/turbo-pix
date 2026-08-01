@@ -13,6 +13,7 @@
   let scanning = $state(false);
   let busy = $state(false);
   let lastHkState = null;
+  let abortController = null;
 
   onMount(() => {
     const hk = (indexingState.phases || []).find((p) => p.id === 'housekeeping');
@@ -26,6 +27,7 @@
     return () => {
       window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
       window.removeEventListener('photoRemoved', handlePhotoRemoved);
+      if (abortController) abortController.abort();
     };
   });
 
@@ -51,8 +53,11 @@
   async function loadAndRender() {
     loading = true;
     error = false;
+    abortController = new AbortController();
     try {
-      const response = await api.getHousekeepingCandidates();
+      const response = await api.getHousekeepingCandidates({
+        signal: abortController.signal,
+      });
       if (response && response.candidates) {
         candidates = response.candidates;
       } else {
@@ -60,6 +65,7 @@
       }
       loaded = true;
     } catch (e) {
+      if (e?.name === 'AbortError') return;
       console.error('Failed to load housekeeping candidates:', e);
       error = true;
     } finally {
@@ -173,6 +179,11 @@
               loading="lazy"
               style="opacity: 1"
             />
+            {#if photo.metadata?.video?.codec}
+              <div class="video-play-icon" aria-hidden="true">
+                <Icon name="play" width={20} height={20} className="video-play-svg" />
+              </div>
+            {/if}
           </div>
           <div class="photo-card-overlay">
             <span class="photo-card-title">
@@ -253,6 +264,30 @@
   .housekeeping-score {
     font-size: var(--font-xs);
     opacity: 0.8;
+  }
+
+  .video-play-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: var(--button-size-lg);
+    height: var(--button-size-lg);
+    background: oklch(0% 0 0deg / 55%);
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-medium);
+    pointer-events: none;
+    color: white;
+    z-index: 5;
+  }
+
+  .video-play-icon :global(svg) {
+    fill: white;
+    stroke: white;
   }
 
   .keep-btn {

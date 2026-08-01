@@ -646,12 +646,14 @@
     const startTime = Date.now();
 
     return new Promise((resolve) => {
-      const intervalId = setInterval(async () => {
-        // Stop polling once the user has moved on to another photo; the
-        // server-side transcode continues regardless. transcodePollTimer is
-        // shared across polls: clear only the interval this poll owns, and
-        // only null shared state / hide the toast while it still points at
-        // us — a newer photo's poll may have replaced it.
+      // Stop polling once the user has moved on to another photo; the
+      // server-side transcode continues regardless. transcodePollTimer is
+      // shared across polls: clear only the interval this poll owns, and
+      // only null shared state / hide the toast while it still points at
+      // us — a newer photo's poll may have replaced it. Checked at the
+      // interval top AND after every await: a late fetch/json response can
+      // otherwise act for the previous photo.
+      const bailIfStale = () => {
         if (currentPhoto?.hash_sha256 !== photo.hash_sha256) {
           clearInterval(intervalId);
           if (transcodePollTimer === intervalId) {
@@ -659,8 +661,13 @@
             hideTranscodeToast();
           }
           resolve('Stale');
-          return;
+          return true;
         }
+        return false;
+      };
+
+      const intervalId = setInterval(async () => {
+        if (bailIfStale()) return;
 
         const elapsed = Date.now() - startTime;
         if (elapsed >= MAX_POLL_DURATION) {
@@ -680,7 +687,9 @@
         try {
           const res = await fetch(pollUrl);
           if (!res.ok) return;
+          if (bailIfStale()) return;
           const status = await res.json();
+          if (bailIfStale()) return;
 
           if (status.state === 'Completed') {
             clearInterval(intervalId);
@@ -1203,7 +1212,7 @@
   class:collage-mode={isCollage}
   bind:this={viewerEl}
 >
-  <div class="viewer-overlay" role="presentation" onclick={() => close()}></div>
+  <div class="viewer-overlay" role="presentation"></div>
   <div class="viewer-content" role="presentation" onclick={stopPropagation}>
     <button
       type="button"

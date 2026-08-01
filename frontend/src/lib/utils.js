@@ -13,6 +13,9 @@ import { get } from 'svelte/store';
  * @returns {string}
  */
 export function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return get(t)('ui.unknown', { default: 'Unknown' });
+  }
   if (bytes === 0) return get(t)('ui.file_size_zero', { default: '0 Bytes' });
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -47,6 +50,9 @@ export function formatDate(dateString) {
  * @returns {string}
  */
 export function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return get(t)('ui.unknown', { default: 'Unknown' });
+  }
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
@@ -98,24 +104,6 @@ export function formatCollageDate(dateString) {
 }
 
 // ── Timing helpers ──────────────────────────────────────────────────────────
-
-/**
- * Debounce a function call.
- * @param {Function} func
- * @param {number} delay - milliseconds
- * @returns {Function}
- */
-export function debounce(func, delay) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, delay);
-  };
-}
 
 /**
  * Throttle a function call.

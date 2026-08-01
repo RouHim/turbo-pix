@@ -245,14 +245,12 @@ class TurboPixAPI {
   }
 
   // Collages
-  async getPendingCollages() {
-    return this.request('/api/collages/pending');
+  async getPendingCollages(options = {}) {
+    return this.request('/api/collages/pending', options);
   }
 
-  async generateCollages() {
-    return this.request('/api/collages/generate', {
-      method: 'POST',
-    });
+  async generateCollages(options = {}) {
+    return this.request('/api/collages/generate', { method: 'POST', ...options });
   }
 
   async acceptCollage(collageId) {
@@ -268,8 +266,8 @@ class TurboPixAPI {
   }
 
   // Housekeeping
-  async getHousekeepingCandidates() {
-    return this.request('/api/housekeeping/candidates');
+  async getHousekeepingCandidates(options = {}) {
+    return this.request('/api/housekeeping/candidates', options);
   }
 
   async removeHousekeepingCandidate(hash) {

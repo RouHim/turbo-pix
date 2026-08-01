@@ -9,6 +9,8 @@
   let collages = $state([]);
   let loading = $state(true);
   let error = $state(false);
+  let actionBusy = $state(false);
+  let abortController = null;
 
   function handleCollageAction(e) {
     const id = e.detail?.collageId;
@@ -23,15 +25,18 @@
     return () => {
       window.removeEventListener('collageAccepted', handleCollageAction);
       window.removeEventListener('collageRejected', handleCollageAction);
+      if (abortController) abortController.abort();
     };
   });
 
   async function loadPendingCollages() {
     loading = true;
     error = false;
+    abortController = new AbortController();
     try {
-      collages = await api.getPendingCollages();
+      collages = await api.getPendingCollages({ signal: abortController.signal });
     } catch (e) {
+      if (e?.name === 'AbortError') return;
       console.error('Failed to load pending collages:', e);
       error = true;
     } finally {
@@ -40,6 +45,8 @@
   }
 
   async function acceptCollage(collage) {
+    if (actionBusy) return;
+    actionBusy = true;
     try {
       await api.acceptCollage(collage.id);
       addToast($t('notifications.collageAccepted', { default: 'Collage accepted' }), '', 'success');
@@ -50,6 +57,8 @@
       collages = collages.filter((c) => c.id !== collage.id);
     } catch (e) {
       handleError(e, 'Accept collage');
+    } finally {
+      actionBusy = false;
     }
   }
 
@@ -58,6 +67,8 @@
       default: 'Are you sure you want to reject this collage?',
     });
     if (!confirm(msg)) return;
+    if (actionBusy) return;
+    actionBusy = true;
 
     try {
       await api.rejectCollage(collage.id);
@@ -68,13 +79,16 @@
       collages = collages.filter((c) => c.id !== collage.id);
     } catch (e) {
       handleError(e, 'Reject collage');
+    } finally {
+      actionBusy = false;
     }
   }
 
   async function generateCollages() {
+    abortController = new AbortController();
     try {
       loading = true;
-      const result = await api.generateCollages();
+      const result = await api.generateCollages({ signal: abortController.signal });
       const count = result?.count ?? result?.collages_created ?? 0;
       addToast(
         $t('notifications.collagesGenerated', {
@@ -86,6 +100,10 @@
       );
       await loadPendingCollages();
     } catch (e) {
+      if (e?.name === 'AbortError') {
+        loading = false;
+        return;
+      }
       handleError(e, 'Generate collages');
       loading = false;
     }
@@ -232,6 +250,7 @@
               data-action="accept-collage"
               title={$t('ui.accept_collage', { default: 'Accept' })}
               aria-label={$t('ui.accept_collage', { default: 'Accept' })}
+              disabled={actionBusy}
               onclick={() => acceptCollage(collage)}
             >
               <Icon name="check" width={18} height={18} />
@@ -242,6 +261,7 @@
               data-action="reject-collage"
               title={$t('ui.reject_collage', { default: 'Reject' })}
               aria-label={$t('ui.reject_collage', { default: 'Reject' })}
+              disabled={actionBusy}
               onclick={() => rejectCollage(collage)}
             >
               <Icon name="x" width={18} height={18} />
@@ -296,6 +316,11 @@
   .collage-actions {
     display: flex;
     gap: var(--space-2);
+  }
+
+  .collage-actions .card-action-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .accept-collage-btn {

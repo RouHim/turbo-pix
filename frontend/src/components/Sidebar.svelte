@@ -54,7 +54,7 @@
   onclick={closeSidebar}
 ></div>
 
-<nav class="sidebar" class:open={appState.sidebarOpen}>
+<nav id="sidebar-nav" class="sidebar" class:open={appState.sidebarOpen}>
   <div class="sidebar-content">
     {#each views as view (view.id)}
       <button
@@ -130,20 +130,20 @@
     z-index: 85;
   }
 
-  .sidebar-overlay.show {
-    display: block;
-  }
-
   @media (max-width: 768px) {
     .sidebar {
       transform: translateX(-100%);
-      transition: transform var(--transition-medium);
+      visibility: hidden;
+      transition:
+        transform var(--transition-medium),
+        visibility var(--transition-medium);
       z-index: 95;
       width: 280px;
     }
 
     .sidebar.open {
       transform: translateX(0);
+      visibility: visible;
     }
 
     .sidebar-overlay {
@@ -158,6 +158,13 @@
     .sidebar-overlay.show {
       opacity: 1;
       visibility: visible;
+    }
+  }
+
+  @media (width <= 480px) {
+    .nav-item {
+      padding: 14px var(--space-5);
+      font-size: var(--font-md);
     }
   }
 

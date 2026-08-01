@@ -620,7 +620,14 @@ pub(crate) mod tests {
             depth.set(current + 1);
 
             TestEnvGuard {
-                _mutex: (current == 0).then(|| test_env_lock().lock().unwrap()),
+                // Recover from a poisoned mutex: one panicking env-dependent
+                // test must not cascade failures across every other test that
+                // shells out to ffprobe/ffmpeg.
+                _mutex: (current == 0).then(|| {
+                    test_env_lock()
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                }),
             }
         })
     }

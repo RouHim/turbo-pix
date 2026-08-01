@@ -89,9 +89,7 @@ test.describe('Keyboard Shortcuts', () => {
 
     // THEN: Favorite toggles and the viewer stays closed (card-level keydown
     // must not swallow Enter for inner action buttons)
-    await expect
-      .poll(() => favoriteBtn.getAttribute('class'))
-      .not.toBe(initialClass);
+    await expect.poll(() => favoriteBtn.getAttribute('class')).not.toBe(initialClass);
     await expect(page.locator(TestHelpers.selectors.viewer)).not.toBeVisible();
   });
 });

@@ -28,14 +28,14 @@ test.describe('Mobile Viewer Sidebar', () => {
     await page.locator('.viewer-sidebar.show').waitFor();
 
     // THEN: Sidebar z-index is 15
-    const sidebarZIndex = await page.evaluate(() =>
-      window.getComputedStyle(document.querySelector('.viewer-sidebar')).zIndex
+    const sidebarZIndex = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.viewer-sidebar')).zIndex
     );
     expect(sidebarZIndex).toBe('15');
 
     // AND: Sidebar z-index > controls z-index
-    const controlsZIndex = await page.evaluate(() =>
-      window.getComputedStyle(document.querySelector('.viewer-controls')).zIndex
+    const controlsZIndex = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.viewer-controls')).zIndex
     );
     expect(parseInt(sidebarZIndex)).toBeGreaterThan(parseInt(controlsZIndex));
   });
@@ -62,11 +62,11 @@ test.describe('Mobile Viewer Sidebar', () => {
     await openViewerOnFirstPhoto(page);
 
     // WHEN: Check computed styles
-    const sidebarPosition = await page.evaluate(() =>
-      window.getComputedStyle(document.querySelector('.viewer-sidebar')).position
+    const sidebarPosition = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.viewer-sidebar')).position
     );
-    const sidebarZIndex = await page.evaluate(() =>
-      window.getComputedStyle(document.querySelector('.viewer-sidebar')).zIndex
+    const sidebarZIndex = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.viewer-sidebar')).zIndex
     );
 
     // THEN: Position is not absolute (should be static from grid flow)
@@ -83,8 +83,8 @@ test.describe('Mobile Viewer Sidebar', () => {
     await page.locator('.viewer-sidebar.show').waitFor();
 
     // WHEN: Check computed styles
-    const backdropFilter = await page.evaluate(() =>
-      window.getComputedStyle(document.querySelector('.viewer-sidebar')).backdropFilter
+    const backdropFilter = await page.evaluate(
+      () => window.getComputedStyle(document.querySelector('.viewer-sidebar')).backdropFilter
     );
 
     // THEN: backdrop-filter contains blur

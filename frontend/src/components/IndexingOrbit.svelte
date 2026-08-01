@@ -24,6 +24,7 @@
   let hideTimer = $state(null);
   let autoOpened = $state(false);
   let completionPulse = $state(false);
+  let destroyed = false;
   let sheetOpen = $state(false);
   let sheetCloseButton = $state(null);
   let ringTrigger = $state(null);
@@ -213,6 +214,7 @@
   }
 
   function scheduleNextPoll() {
+    if (destroyed) return;
     if (pollTimer) clearTimeout(pollTimer);
     const freq = indexingState.isIndexing ? POLL_FREQ_INDEXING : POLL_FREQ_IDLE;
     pollTimer = setTimeout(() => checkStatus(), freq);
@@ -250,6 +252,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     cancelPendingHide();
     stopPolling();
     document.removeEventListener('keydown', onKeydown);
@@ -381,7 +384,7 @@
           {@const pos = polarToCartesian(140, 140, 120, midpointAngle)}
           <g
             data-orbit-phase={phase.id}
-            style="transform-origin: 140px 140px; transform-box: fill-box; animation: {prefersReducedMotion()
+            style="transform-origin: 140px 140px; transform-box: view-box; animation: {prefersReducedMotion()
               ? 'none'
               : 'orbit-segment 2s ease-in-out infinite'}"
           >

@@ -25,6 +25,7 @@
     "all_dates": "All Dates",
     "all_years": "All Years",
     "all_months": "All Months",
+    "photos_count": "{count} photos",
     "clear_timeline_filter": "Clear timeline filter",
     "photo": "Photo",
     "selected_media": "Selected media",
@@ -128,6 +129,7 @@
       "edit_validation_gps": "GPS coordinates must be between -90/90 (lat) and -180/180 (lng)",
       "edit_validation_gps_pair": "Both latitude and longitude must be provided together",
       "edit_unsupported_format": "Editing {format} files is not supported. Only JPEG and PNG formats are supported for metadata editing.",
+      "edit_unsupported": "Editing this file type is not supported",
       "close": "Close",
       "edit_latitude_placeholder": "-90 to 90",
       "edit_longitude_placeholder": "-180 to 180"

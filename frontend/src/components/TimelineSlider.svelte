@@ -17,6 +17,9 @@
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
+  let hoveredIndex = $state(null);
+  let tooltipX = $state(0);
+  let tooltipY = $state(0);
 
   const positions = $derived(
     data?.density?.map((d) => ({
@@ -32,6 +35,15 @@
 
   const maxSlider = $derived(Math.max(0, positions.length - 1));
 
+  function monthYearLabel(year, month) {
+    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
+    const monthName = $t(`ui.months.${monthKey}`, {
+      locale: activeLocale,
+      default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+    });
+    return `${monthName} ${year}`;
+  }
+
   const labelText = $derived.by(() => {
     if (!currentFilter) {
       return $t('ui.all_dates', { locale: activeLocale, default: 'All Dates' });
@@ -39,12 +51,7 @@
     if (!currentFilter.month) {
       return String(currentFilter.year);
     }
-    const monthKey = APP_CONSTANTS.MONTH_KEYS[currentFilter.month - 1];
-    const monthName = $t(`ui.months.${monthKey}`, {
-      locale: activeLocale,
-      default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
-    });
-    return `${monthName} ${currentFilter.year}`;
+    return monthYearLabel(currentFilter.year, currentFilter.month);
   });
 
   $effect(() => {
@@ -124,6 +131,24 @@
     applyFilter();
   }
 
+  function handleTrackHover(e) {
+    if (!canvasEl || positions.length === 0) return;
+    const rect = canvasEl.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const barWidth = rect.width / positions.length;
+    let index = Math.floor((e.clientX - rect.left) / barWidth);
+    if (index < 0 || index >= positions.length) index = -1;
+    hoveredIndex = index >= 0 ? index : null;
+    tooltipX = e.clientX;
+    tooltipY = e.clientY - 60;
+    renderHeatmap();
+  }
+
+  function handleTrackLeave() {
+    hoveredIndex = null;
+    renderHeatmap();
+  }
+
   function renderHeatmap() {
     if (!canvasEl || !data?.density) return;
     const ctx = canvasEl.getContext('2d');
@@ -156,6 +181,9 @@
         ctx.fillStyle = 'rgba(99, 102, 241, 0.9)';
         ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
         ctx.shadowBlur = 0;
+      } else if (hoveredIndex === index) {
+        ctx.fillStyle = 'rgba(99, 102, 241, 0.85)';
+        ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
       }
     });
   }
@@ -204,7 +232,7 @@
         sliderValue = matchIndex;
       }
       if (yearSelectEl && year) yearSelectEl.value = String(year);
-      if (monthSelectEl) monthSelectEl.value = String(month);
+      if (monthSelectEl) monthSelectEl.value = month ? String(month) : '';
       renderHeatmap();
     }
   });
@@ -226,7 +254,7 @@
       >
         ✕
       </button>
-      <div class="timeline-track">
+      <div class="timeline-track" onmousemove={handleTrackHover} onmouseleave={handleTrackLeave}>
         <canvas class="timeline-heatmap" width="800" height="40" bind:this={canvasEl}></canvas>
         <input
           type="range"
@@ -238,6 +266,15 @@
           oninput={handleSliderInput}
           ondblclick={resetFilter}
         />
+        {#if hoveredIndex !== null}
+          {@const pos = positions[hoveredIndex]}
+          <div class="timeline-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
+            <div class="timeline-tooltip-date">{monthYearLabel(pos.year, pos.month)}</div>
+            <div class="timeline-tooltip-count">
+              {$t('ui.photos_count', { values: { count: pos.count }, default: '{count} photos' })}
+            </div>
+          </div>
+        {/if}
       </div>
       <div class="timeline-label">{labelText}</div>
     </div>
@@ -436,6 +473,30 @@
     font-weight: var(--font-semibold);
     color: var(--primary-color);
     letter-spacing: -0.01em;
+  }
+
+  .timeline-tooltip {
+    position: fixed;
+    transform: translateX(-50%);
+    background: var(--surface-color);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    box-shadow: var(--shadow-heavy);
+    pointer-events: none;
+    z-index: var(--z-modal);
+  }
+
+  .timeline-tooltip-date {
+    font-size: var(--font-md);
+    font-weight: var(--font-semibold);
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+  }
+
+  .timeline-tooltip-count {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
   }
 
   /* Mobile Timeline Dropdowns */

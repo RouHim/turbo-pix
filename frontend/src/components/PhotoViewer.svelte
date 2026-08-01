@@ -425,6 +425,10 @@
       clearInterval(transcodePollTimer);
       transcodePollTimer = null;
     }
+    // Clearing the poll timer without hiding the toast would leave the
+    // transcode message visible forever (the polling handler is the only
+    // path that would have hidden it).
+    hideTranscodeToast();
     metadataEditRef?.close?.();
     isOpen = false;
     isPendingCollage = false;
@@ -835,6 +839,10 @@
       const updatedPhoto = await api.rotatePhoto(currentPhoto.hash_sha256, angle);
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
+      // The backend rewrites hash_sha256 on rotation; sync the URL so the
+      // route effect doesn't treat the old hash as missing (spurious 404)
+      // and Back/Forward doesn't land on a dead hash.
+      replaceState({ photo: updatedPhoto.hash_sha256 });
       window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
 
       const timestamp = Date.now();

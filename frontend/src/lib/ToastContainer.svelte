@@ -13,7 +13,7 @@
 
 <div class="toast-region">
   {#snippet toastItem(toast)}
-    <div class="toast toast-{toast.type}">
+    <div class="toast toast-{toast.type}" class:leaving={toast.leaving}>
       <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
       <span class="toast-content">
         {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
@@ -75,6 +75,10 @@
     pointer-events: auto;
     animation: toast-in 0.3s ease-out;
   }
+  .toast.leaving {
+    animation: toast-out 0.3s ease-in forwards;
+    pointer-events: none;
+  }
   .toast-content {
     display: flex;
     flex-direction: column;
@@ -117,6 +121,17 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+
+  @keyframes toast-out {
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(12px);
     }
   }
 </style>

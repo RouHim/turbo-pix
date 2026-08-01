@@ -707,8 +707,8 @@ impl MetadataExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, Timelike};
     use crate::video_processor::tests::acquire_test_env_lock;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn test_ffprobe_is_installed() {
@@ -1124,6 +1124,10 @@ mod tests {
 
     #[test]
     fn test_metadata_extractor_doesnt_panic_on_various_files() {
+        // Hold the shared test env lock: the file list includes a video, so
+        // extract_with_metadata runs real ffprobe which a concurrent test
+        // module's fake FFPROBE_PATH could otherwise break.
+        let _env_lock = acquire_test_env_lock();
         // GIVEN: All test files
         let test_files = vec![
             "test-data/sample_with_exif.jpg",

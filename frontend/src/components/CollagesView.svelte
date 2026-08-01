@@ -148,7 +148,7 @@
       <p class="empty-state-message">
         {$t('ui.collages_load_failed', { default: 'Failed to load collages' })}
       </p>
-      <button type="button" class="btn" onclick={loadPendingCollages}>
+      <button type="button" class="btn-primary" onclick={loadPendingCollages}>
         {$t('ui.try_again', { default: 'Try Again' })}
       </button>
     </div>
@@ -174,14 +174,14 @@
       <p class="empty-state-message">
         {$t('ui.no_pending_collages', { default: 'No pending collages' })}
       </p>
-      <button type="button" class="btn" onclick={generateCollages}>
+      <button type="button" class="btn-primary" onclick={generateCollages}>
         {$t('ui.generate', { default: 'Generate' })}
       </button>
     </div>
   {:else}
     <div class="collages-header">
       <h2 class="view-title">{$t('ui.pending_collages', { default: 'Pending Collages' })}</h2>
-      <button type="button" class="btn generate-btn" onclick={generateCollages}>
+      <button type="button" class="btn-primary generate-btn" onclick={generateCollages}>
         {$t('ui.generate', { default: 'Generate' })}
       </button>
     </div>

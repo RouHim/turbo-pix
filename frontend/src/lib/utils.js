@@ -100,6 +100,24 @@ export function formatCollageDate(dateString) {
 // ── Timing helpers ──────────────────────────────────────────────────────────
 
 /**
+ * Debounce a function call.
+ * @param {Function} func
+ * @param {number} delay - milliseconds
+ * @returns {Function}
+ */
+export function debounce(func, delay) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, delay);
+  };
+}
+
+/**
  * Throttle a function call.
  * @param {Function} func
  * @param {number} limit - milliseconds

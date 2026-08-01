@@ -162,3 +162,11 @@ npm run test:e2e:report   # View test report
 **`get(t)(key, 'fallback string')` silently drops the fallback:** svelte-i18n's `get(t)` with a positional fallback string does not apply it (raw key is returned). Always pass `{ default: '…' }` as the options object.
 
 **Global media overrides lose to scoped styles (see rule 9):** IndexingOrbit ring mobile sizing/placement and PhotoViewer sidebar mobile transition must live in the component's scoped `<style>` — global `@media (width <= 768px)` rules are outranked by scoped rules of equal specificity and silently no-op.
+
+**`@container` global rules lose to scoped styles too:** same cascade trap as `@media` — the mobile compact `.photo-grid`/`.photo-card` overrides (3-up grid at ≤768px, gap 2px at ≤480px) must live in PhotoGrid/PhotoCard scoped styles; global `@container (width <= 768px)` blocks in `app.css` are outranked by the scoped rules and silently no-op, leaving phones on a single-column grid.
+
+**Load-more dedupe must reset on failure:** PhotoGrid's `lastLoadSignature` dedupe (guards concurrent duplicate loads) is set before the request and MUST be cleared in the error path — otherwise every retry of a failed page load (scroll-triggered `loadMore()` and the Load More button) rebuilds the identical signature and is silently swallowed until a route change or reload.
+
+**Test-env lock needs a drop-guarded depth wrapper:** `video_processor::tests::acquire_test_env_lock()` returns a `TestEnvGuard` whose `Drop` decrements the thread-local nesting depth. A plain acquire + manual `release_test_env_lock()` leaks the depth: after the first locked test per thread, every later acquire on that thread silently returns without locking, so the FFPROBE_PATH/FFMPEG_PATH race between test modules quietly returns. Regression test: `test_env_lock_guard_drop_resets_nesting_depth`.
+
+**Ported DOM helpers keep their element-id arguments:** when porting vanilla JS helpers of the form `setField(id, value)` (id = DOM element id) to Svelte, drop the id parameter — a leftover id string is truthy and renders literally ("meta-filesize") instead of the formatted value. Grep ported call sites for two-arg calls to single-arg functions.

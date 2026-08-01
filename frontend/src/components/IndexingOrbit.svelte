@@ -25,6 +25,23 @@
   let autoOpened = $state(false);
   let completionPulse = $state(false);
   let sheetOpen = $state(false);
+  let sheetCloseButton = $state(null);
+  let ringTrigger = $state(null);
+  let sheetHasOpened = false;
+
+  // Move focus into the bottom sheet when it opens and back to the ring on close.
+  // The ring is only refocused while interactive — never when data-ring-mode='hidden'.
+  $effect(() => {
+    if (sheetOpen) {
+      sheetHasOpened = true;
+      sheetCloseButton?.focus();
+    } else if (sheetHasOpened) {
+      sheetHasOpened = false;
+      if (ringMode !== 'hidden') {
+        ringTrigger?.focus();
+      }
+    }
+  });
 
   const ringMode = $derived(determineMode());
 
@@ -112,6 +129,10 @@
       clearTimeout(hideTimer);
       hideTimer = null;
     }
+    // A fresh indexing status (or an aborted hide) must end any in-flight
+    // completion pulse; otherwise the ring/sheet stay stuck in the 'all done'
+    // visual state for the whole of a new indexing run.
+    completionPulse = false;
   }
 
   function hideRing({ showCompletionPulse = false } = {}) {
@@ -311,7 +332,8 @@
     }
   }}
   role="button"
-  tabindex="0"
+  tabindex={ringMode === 'hidden' ? -1 : 0}
+  bind:this={ringTrigger}
 >
   <div class="indexing-orbit-shell">
     <svg class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
@@ -389,7 +411,9 @@
       class="indexing-sheet-close"
       data-sheet-close
       aria-label={$t('ui.close', { default: 'Close' })}
+      tabindex={sheetOpen ? 0 : -1}
       onclick={closeSheet}
+      bind:this={sheetCloseButton}
     >
       <Icon name="x" width={20} height={20} />
     </button>

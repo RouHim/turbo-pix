@@ -127,6 +127,26 @@ test.describe('Photo Viewer', () => {
     expect(mediaLoaded).toBe(true);
   });
 
+  test('should show formatted metadata values in the sidebar', async ({ page }) => {
+    // GIVEN: Viewer is open on a photo
+    const photos = await TestHelpers.getPhotoCards(page);
+    expect(photos.length).toBeGreaterThan(0);
+    await photos[0].click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    // WHEN: User opens the metadata sidebar (hidden by default)
+    await page.locator('[title="View Details"]').click();
+    await expect(page.locator('.viewer-sidebar.show')).toBeVisible();
+
+    // THEN: Field values render the formatted data, not the element id strings
+    // (regression: setField was called with a leftover element-id first arg,
+    // rendering literal "meta-filesize" etc. for every photo)
+    const fileSize = await page.locator('#meta-filesize').textContent();
+    expect(fileSize).not.toBeNull();
+    expect(fileSize).not.toContain('meta-filesize');
+    expect(fileSize).not.toBe('-');
+  });
+
   test('should remove deleted photo from stream without manual reload', async ({ page }) => {
     // GIVEN: At least one photo card is visible in stream
     const cardsBefore = await TestHelpers.getPhotoCards(page);

@@ -1,5 +1,4 @@
 <script>
-  import { get } from 'svelte/store';
   import { onDestroy } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
@@ -7,7 +6,7 @@
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
 
-  const activeLocale = $derived(get(locale) || 'en');
+  const activeLocale = $derived($locale || 'en');
 
   let data = $state(null);
   let currentFilter = $state(null);
@@ -41,13 +40,13 @@
 
   const labelText = $derived.by(() => {
     if (!currentFilter) {
-      return get(t)('ui.all_dates', { locale: activeLocale, default: 'All Dates' });
+      return $t('ui.all_dates', { locale: activeLocale, default: 'All Dates' });
     }
     if (!currentFilter.month) {
       return String(currentFilter.year);
     }
     const monthKey = APP_CONSTANTS.MONTH_KEYS[currentFilter.month - 1];
-    const monthName = get(t)(`ui.months.${monthKey}`, {
+    const monthName = $t(`ui.months.${monthKey}`, {
       locale: activeLocale,
       default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
     });
@@ -114,7 +113,12 @@
 
   function handleDropdownChange() {
     const year = yearSelectEl?.value;
-    const month = monthSelectEl?.value;
+    let month = monthSelectEl?.value;
+    if (!year) {
+      // A month without a year is not a valid filter — clear the stale selection.
+      month = null;
+      if (monthSelectEl) monthSelectEl.value = '';
+    }
     if (!year && !month) {
       currentFilter = null;
     } else {
@@ -153,12 +157,12 @@
       if (index !== null) {
         const pos = positions[index];
         const monthKey = APP_CONSTANTS.MONTH_KEYS[pos.month - 1];
-        const monthName = get(t)(`ui.months.${monthKey}`, {
+        const monthName = $t(`ui.months.${monthKey}`, {
           locale: activeLocale,
           default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
         });
         tooltipDate = `${monthName} ${pos.year}`;
-        tooltipCount = get(t)('ui.photos_count', {
+        tooltipCount = $t('ui.photos_count', {
           default: `${pos.count} photos`,
           values: { count: pos.count },
         });
@@ -333,6 +337,7 @@
         id="timeline-month-select"
         class="timeline-month-select"
         bind:this={monthSelectEl}
+        disabled={!currentFilter?.year}
         onchange={handleDropdownChange}
       >
         <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>

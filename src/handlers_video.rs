@@ -318,15 +318,14 @@ mod tests {
     use super::*;
     use crate::db::create_in_memory_pool;
     use crate::video_processor::clear_transcode_status;
-    use crate::video_processor::tests::{acquire_test_env_lock, release_test_env_lock};
+    use crate::video_processor::tests::{acquire_test_env_lock, TestEnvGuard};
     use chrono::Utc;
-    use std::sync::MutexGuard;
     use tempfile::TempDir;
 
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
-        _lock: Option<MutexGuard<'static, ()>>,
+        _lock: TestEnvGuard,
     }
 
     impl EnvVarGuard {
@@ -353,7 +352,6 @@ mod tests {
                     std::env::remove_var(self.key);
                 }
             }
-            release_test_env_lock();
         }
     }
 

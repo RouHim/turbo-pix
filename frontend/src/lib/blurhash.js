@@ -151,6 +151,12 @@ export const decode = (blurhash, width, height, punch = 1) => {
   const numY = Math.floor(sizeFlag / 9) + 1;
   const numX = (sizeFlag % 9) + 1;
 
+  // Official length check: 1 size flag + 1 max value flag + 1 DC component
+  // (4 base-83 chars) + 2 chars per remaining AC component.
+  if (blurhash.length < 4 + 2 * numX * numY) {
+    throw new Error('Invalid blurhash');
+  }
+
   const quantisedMaximumValue = decode83(blurhash[1]);
   const maximumValue = (quantisedMaximumValue + 1) / 166;
 

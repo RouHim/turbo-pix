@@ -86,12 +86,12 @@ test.describe('Keyboard Shortcuts', () => {
 
     // WHEN: User presses Enter on the button
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(500);
 
     // THEN: Favorite toggles and the viewer stays closed (card-level keydown
     // must not swallow Enter for inner action buttons)
-    const newClass = await favoriteBtn.getAttribute('class');
-    expect(newClass).not.toBe(initialClass);
+    await expect
+      .poll(() => favoriteBtn.getAttribute('class'))
+      .not.toBe(initialClass);
     await expect(page.locator(TestHelpers.selectors.viewer)).not.toBeVisible();
   });
 });

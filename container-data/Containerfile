@@ -8,9 +8,9 @@ FROM mwader/static-ffmpeg:8.1 AS ffmpeg
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 FROM node:24-alpine AS frontend-build
 WORKDIR /app
-COPY ../package.json ../package-lock.json ./
-COPY ../vite.config.js ./
-COPY ../frontend ./frontend
+COPY package.json package-lock.json ./
+COPY vite.config.js ./
+COPY frontend ./frontend
 RUN npm ci && npm run build
 
 # # # # # # # # # # # # # # # # # # # #
@@ -29,12 +29,12 @@ WORKDIR /app
 RUN mkdir "/empty_dir"
 
 # Copy source code
-COPY ../Cargo.toml ./
-COPY ../Cargo.lock ./
-COPY ../build.rs ./
-COPY ../src ./src
-COPY ../migrations ./migrations
-COPY ../assets ./assets
+COPY Cargo.toml ./
+COPY Cargo.lock ./
+COPY build.rs ./
+COPY src ./src
+COPY migrations ./migrations
+COPY assets ./assets
 COPY --from=frontend-build /app/dist ./dist
 
 # Determine the Rust target triple based on architecture

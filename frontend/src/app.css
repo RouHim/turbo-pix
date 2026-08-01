@@ -412,70 +412,72 @@
       transform: translateY(0) scale(1);
     }
   }
-
-  @supports not (backdrop-filter: blur(1px)) {
-    .header {
-      background: var(--surface-color);
-    }
-
-    .sidebar {
-      background: var(--surface-color);
-    }
-
-    [data-phase-ring] {
-      background: var(--surface-color);
-    }
-
-    .viewer-overlay {
-      background: oklch(0% 0 0deg / 92%);
-    }
-
-    .viewer-close,
-    .viewer-prev,
-    .viewer-next,
-    .zoom-btn {
-      background: oklch(20% 0.01 260deg / 90%);
-    }
-
-    .viewer-controls,
-    .viewer-loading-indicator,
-    .viewer-sidebar {
-      background: var(--surface-color);
-    }
-  }
-
-  @media (prefers-reduced-transparency: reduce) {
-    .header,
-    .sidebar {
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      background: var(--surface-color);
-    }
-
-    .viewer-overlay {
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      background: oklch(0% 0 0deg / 92%);
-    }
-
-    .viewer-close,
-    .viewer-prev,
-    .viewer-next,
-    .zoom-btn {
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      background: oklch(20% 0.01 260deg / 90%);
-    }
-
-    .viewer-controls,
-    .viewer-loading-indicator,
-    .viewer-sidebar {
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      background: var(--surface-color);
-    }
-  }
 } /* end @layer layout */
+
+/* Unlayered: must outrank @layer layout rules so solid-surface fallbacks apply
+   when backdrop-filter is unsupported or reduced-transparency is requested. */
+@supports not (backdrop-filter: blur(1px)) {
+  .header {
+    background: var(--surface-color);
+  }
+
+  .sidebar {
+    background: var(--surface-color);
+  }
+
+  [data-phase-ring] {
+    background: var(--surface-color);
+  }
+
+  .viewer-overlay {
+    background: oklch(0% 0 0deg / 92%);
+  }
+
+  .viewer-close,
+  .viewer-prev,
+  .viewer-next,
+  .zoom-btn {
+    background: oklch(20% 0.01 260deg / 90%);
+  }
+
+  .viewer-controls,
+  .viewer-loading-indicator,
+  .viewer-sidebar {
+    background: var(--surface-color);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .header,
+  .sidebar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--surface-color);
+  }
+
+  .viewer-overlay {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: oklch(0% 0 0deg / 92%);
+  }
+
+  .viewer-close,
+  .viewer-prev,
+  .viewer-next,
+  .zoom-btn {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: oklch(20% 0.01 260deg / 90%);
+  }
+
+  .viewer-controls,
+  .viewer-loading-indicator,
+  .viewer-sidebar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--surface-color);
+  }
+}
 
 @layer utilities {
   /* Utility Classes */
@@ -2132,42 +2134,6 @@
     display: none;
   }
 
-  .mobile-search {
-    position: fixed;
-    top: var(--header-height);
-    left: 0;
-    right: 0;
-    background: var(--surface-color);
-    padding: var(--space-4);
-    border-bottom: 1px solid var(--divider-color);
-    z-index: var(--z-dropdown);
-    transform: translateY(-120%);
-    transition: var(--transition-medium);
-    box-shadow: var(--shadow-medium);
-    pointer-events: none;
-    opacity: 0;
-
-    &.show {
-      transform: translateY(0);
-      pointer-events: auto;
-      opacity: 1;
-    }
-
-    & .search-input {
-      flex: 1;
-    }
-
-    & .search-btn {
-      flex-shrink: 0;
-    }
-
-    & .search-container {
-      display: flex;
-      margin: 0;
-      max-width: none;
-    }
-  }
-
   .menu-btn,
   .mobile-search-btn {
     width: var(--button-size);
@@ -2455,45 +2421,5 @@
   .spinner {
     animation: none;
     border: 3px solid var(--primary-color);
-  }
-}
-
-@container (width <= 768px) {
-  .photo-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--space-1);
-  }
-
-  .photo-card {
-    border-radius: 0;
-    border: none;
-    aspect-ratio: 1;
-    overflow: hidden;
-
-    &-image-container {
-      height: 100%;
-      width: 100%;
-      position: absolute;
-      inset: 0;
-    }
-
-    &-image {
-      height: 100%;
-      width: 100%;
-      object-fit: cover;
-    }
-
-    &-overlay,
-    &-info,
-    &-actions {
-      display: none;
-    }
-  }
-}
-
-@container (width <= 480px) {
-  .photo-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
   }
 }

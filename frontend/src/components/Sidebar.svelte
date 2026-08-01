@@ -23,7 +23,11 @@
       appState.sidebarOpen = false;
       return;
     }
-    if (route.view === view) return;
+    if (route.view === view) {
+      // Close the drawer even when tapping the already-active view (mobile).
+      appState.sidebarOpen = false;
+      return;
+    }
     pushState({ view });
     appState.sidebarOpen = false;
   }

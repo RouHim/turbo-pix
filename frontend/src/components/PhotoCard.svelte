@@ -468,4 +468,33 @@
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* Mobile compact grid: must live in scoped styles — global @container rules
+     lose the cascade to scoped rules (see AGENTS.md). */
+  @media (width <= 768px) {
+    .photo-card {
+      border-radius: 0;
+      border: none;
+      aspect-ratio: 1;
+      overflow: hidden;
+    }
+
+    .photo-card-image-container {
+      height: 100%;
+      width: 100%;
+      position: absolute;
+      inset: 0;
+    }
+
+    .photo-card-image {
+      height: 100%;
+      width: 100%;
+      object-fit: cover;
+    }
+
+    .photo-card-overlay,
+    .photo-card-actions {
+      display: none;
+    }
+  }
 </style>

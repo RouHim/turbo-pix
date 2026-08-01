@@ -46,8 +46,14 @@ fn collect(
     binary: &mut Vec<(String, String)>,
 ) {
     println!("cargo:rerun-if-changed={}", dir.display());
-    for entry in fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
+    // Sort entries so the generated STATIC_FILES/STATIC_BINARY_FILES order is
+    // deterministic (fs::read_dir order is filesystem-dependent).
+    let mut paths: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    for path in paths {
         if path.is_dir() {
             collect(&path, root, text, binary);
         } else {

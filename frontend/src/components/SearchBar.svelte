@@ -107,7 +107,7 @@
     photoGridState.currentQuery = '';
     photoGridState.currentPage = 1;
 
-    if (updateUrl) {
+    if (updateUrl && route.query) {
       pushState({ query: null });
     }
   }
@@ -190,8 +190,8 @@
         .map((item) => ({
           query: item.query,
           text: item.query,
-          icon: '\u{1F552}', // 🕒
-          subtitle: get(t)('ui.recent_search', 'Recent search'),
+          icon: 'clock',
+          subtitle: get(t)('ui.recent_search', { default: 'Recent search' }),
         }));
       items.push(...recentMatches);
     }
@@ -207,27 +207,27 @@
       items.push(
         {
           query: 'camera:canon',
-          text: get(t)('ui.canon_photos', 'Canon photos'),
-          icon: '\u{1F4F7}', // 📷
-          subtitle: get(t)('ui.filter_by_camera', 'Filter by camera'),
+          text: get(t)('ui.canon_photos', { default: 'Canon photos' }),
+          icon: 'camera',
+          subtitle: get(t)('ui.filter_by_camera', { default: 'Filter by camera' }),
         },
         {
           query: 'camera:nikon',
-          text: get(t)('ui.nikon_photos', 'Nikon photos'),
-          icon: '\u{1F4F7}',
-          subtitle: get(t)('ui.filter_by_camera', 'Filter by camera'),
+          text: get(t)('ui.nikon_photos', { default: 'Nikon photos' }),
+          icon: 'camera',
+          subtitle: get(t)('ui.filter_by_camera', { default: 'Filter by camera' }),
         },
         {
           query: 'has:gps',
-          text: get(t)('ui.photos_with_location', 'Photos with location'),
-          icon: '\u{1F4CD}', // 📍
-          subtitle: get(t)('ui.has_gps_data', 'Has GPS data'),
+          text: get(t)('ui.photos_with_location', { default: 'Photos with location' }),
+          icon: 'map-pin',
+          subtitle: get(t)('ui.has_gps_data', { default: 'Has GPS data' }),
         },
         {
           query: 'type:video',
-          text: get(t)('ui.videos_only', 'Videos only'),
-          icon: '\u{1F3A5}', // 🎥
-          subtitle: get(t)('ui.filter_by_type', 'Filter by type'),
+          text: get(t)('ui.videos_only', { default: 'Videos only' }),
+          icon: 'video',
+          subtitle: get(t)('ui.filter_by_type', { default: 'Filter by type' }),
         }
       );
     }
@@ -243,22 +243,22 @@
     if (lowerValue.includes('canon') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:canon',
-        text: get(t)('ui.canon_photos', 'Canon photos'),
-        icon: '\u{1F4F7}',
+        text: get(t)('ui.canon_photos', { default: 'Canon photos' }),
+        icon: 'camera',
       });
     }
     if (lowerValue.includes('nikon') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:nikon',
-        text: get(t)('ui.nikon_photos', 'Nikon photos'),
-        icon: '\u{1F4F7}',
+        text: get(t)('ui.nikon_photos', { default: 'Nikon photos' }),
+        icon: 'camera',
       });
     }
     if (lowerValue.includes('sony') || lowerValue.includes('camera')) {
       items.push({
         query: 'camera:sony',
-        text: get(t)('ui.sony_photos', 'Sony photos'),
-        icon: '\u{1F4F7}',
+        text: get(t)('ui.sony_photos', { default: 'Sony photos' }),
+        icon: 'camera',
       });
     }
 
@@ -266,15 +266,15 @@
     if (lowerValue.includes('2024') || lowerValue.includes('today')) {
       items.push({
         query: 'date:2024',
-        text: get(t)('ui.photos_from_year', { values: { year: '2024' } }) || '2024 photos',
-        icon: '\u{1F4C5}', // 📅
+        text: get(t)('ui.photos_from_year', { values: { year: '2024' }, default: '2024 photos' }),
+        icon: 'calendar',
       });
     }
     if (lowerValue.includes('2023')) {
       items.push({
         query: 'date:2023',
-        text: get(t)('ui.photos_from_year', { values: { year: '2023' } }) || '2023 photos',
-        icon: '\u{1F4C5}',
+        text: get(t)('ui.photos_from_year', { values: { year: '2023' }, default: '2023 photos' }),
+        icon: 'calendar',
       });
     }
 
@@ -282,15 +282,15 @@
     if (lowerValue.includes('video')) {
       items.push({
         query: 'type:video',
-        text: get(t)('ui.videos_only', 'Videos only'),
-        icon: '\u{1F3A5}',
+        text: get(t)('ui.videos_only', { default: 'Videos only' }),
+        icon: 'video',
       });
     }
     if (lowerValue.includes('raw')) {
       items.push({
         query: 'type:raw',
-        text: get(t)('ui.raw_files_only', 'RAW files only'),
-        icon: '\u{1F4F8}', // 📸
+        text: get(t)('ui.raw_files_only', { default: 'RAW files only' }),
+        icon: 'image',
       });
     }
 
@@ -298,77 +298,14 @@
     if (lowerValue.includes('gps') || lowerValue.includes('location')) {
       items.push({
         query: 'has:gps',
-        text: get(t)('ui.photos_with_gps', 'Photos with GPS'),
-        icon: '\u{1F4CD}',
+        text: get(t)('ui.photos_with_gps', { default: 'Photos with GPS' }),
+        icon: 'map-pin',
       });
     }
 
     return items;
   }
 
-  /**
-   * Parse special query terms into structured filters.
-   * Used by the regular search path (non-semantic).
-   */
-  export function parseSearchQuery(query) {
-    const filters = {
-      text: '',
-      camera: null,
-      date: null,
-      type: null,
-      hasGps: null,
-    };
-
-    const terms = query.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-
-    terms.forEach((term) => {
-      if (term.startsWith('camera:')) {
-        filters.camera = term.substring(7).replace(/"/g, '');
-      } else if (term.startsWith('date:')) {
-        filters.date = term.substring(5).replace(/"/g, '');
-      } else if (term.startsWith('type:')) {
-        filters.type = term.substring(5).replace(/"/g, '');
-      } else if (term === 'has:gps') {
-        filters.hasGps = true;
-      } else {
-        filters.text += (filters.text ? ' ' : '') + term.replace(/"/g, '');
-      }
-    });
-
-    return filters;
-  }
-
-  /**
-   * Convert parsed filters into API-ready filter object.
-   * Used by the regular search path (non-semantic).
-   */
-  export function buildSearchFilters(query) {
-    const parsed = parseSearchQuery(query);
-    const filters = {};
-
-    if (parsed.camera) {
-      const parts = parsed.camera.split(/[\s-]+/);
-      if (parts.length >= 2) {
-        filters.cameraMake = parts[0];
-        filters.cameraModel = parts.slice(1).join(' ');
-      } else {
-        filters.cameraMake = parts[0];
-      }
-    }
-
-    if (parsed.date) {
-      if (parsed.date.match(/^\d{4}$/)) {
-        filters.dateFrom = `${parsed.date}-01-01`;
-        filters.dateTo = `${parsed.date}-12-31`;
-      }
-    }
-
-    if (parsed.hasGps !== null) {
-      filters.hasGps = parsed.hasGps;
-    }
-
-    return { query: parsed.text.trim(), filters };
-  }
   $effect(() => {
     if (appState.mobileSearchOpen) {
       inputEl?.focus();
@@ -410,7 +347,9 @@
     <div id="search-suggestions" class="search-suggestions show">
       {#each suggestions as s (s.query + s.icon)}
         <button type="button" class="suggestion-item" onclick={() => selectSuggestion(s)}>
-          <span class="suggestion-icon">{s.icon}</span>
+          <span class="suggestion-icon">
+            <Icon name={s.icon} width={16} height={16} />
+          </span>
           <span class="suggestion-text">{s.text}</span>
           {#if s.subtitle}
             <span class="suggestion-subtitle">{s.subtitle}</span>
@@ -588,7 +527,8 @@
   }
 
   .suggestion-icon {
-    font-size: var(--font-xl);
+    display: inline-flex;
+    align-items: center;
     flex-shrink: 0;
   }
 

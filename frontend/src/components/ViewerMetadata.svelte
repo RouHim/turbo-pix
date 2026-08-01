@@ -176,17 +176,13 @@
       <div class="meta-item">
         <span class="meta-label">{$t('ui.metadata.file_size', { default: 'File Size:' })}</span
         ><span id="meta-filesize" style="opacity: {fieldOpacity(photo?.file_size)}"
-          >{setField(
-            'meta-filesize',
-            photo?.file_size ? formatFileSize(photo.file_size) : null
-          )}</span
+          >{setField(photo?.file_size ? formatFileSize(photo.file_size) : null)}</span
         >
       </div>
       <div class="meta-item">
         <span class="meta-label">{$t('ui.metadata.dimensions', { default: 'Dimensions:' })}</span
         ><span id="meta-dimensions" style="opacity: {fieldOpacity(photo?.width && photo?.height)}"
           >{setField(
-            'meta-dimensions',
             photo?.width && photo?.height ? `${photo.width} \u00d7 ${photo.height} px` : null
           )}</span
         >
@@ -207,10 +203,7 @@
         <span class="meta-label"
           >{$t('ui.metadata.date_modified', { default: 'Date Modified:' })}</span
         ><span id="meta-date-modified" style="opacity: {fieldOpacity(photo?.date_modified)}"
-          >{setField(
-            'meta-date-modified',
-            photo?.date_modified ? formatDate(photo.date_modified) : null
-          )}</span
+          >{setField(photo?.date_modified ? formatDate(photo.date_modified) : null)}</span
         >
       </div>
     </div>
@@ -262,10 +255,7 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.aperture', { default: 'Aperture:' })}</span
           ><span id="meta-aperture" style="opacity: {fieldOpacity(settings.aperture)}"
-            >{setField(
-              'meta-aperture',
-              settings.aperture ? `f/${settings.aperture.toFixed(1)}` : null
-            )}</span
+            >{setField(settings.aperture ? `f/${settings.aperture.toFixed(1)}` : null)}</span
           >
         </div>
         <div class="meta-item">
@@ -280,7 +270,6 @@
             >{$t('ui.metadata.focal_length', { default: 'Focal Length:' })}</span
           ><span id="meta-focal" style="opacity: {fieldOpacity(settings.focal_length)}"
             >{setField(
-              'meta-focal',
               settings.focal_length ? `${settings.focal_length.toFixed(0)} mm` : null
             )}</span
           >
@@ -311,7 +300,6 @@
             id="meta-flash"
             style="opacity: {fieldOpacity(settings.flash_used !== undefined)}"
             >{setField(
-              'meta-flash',
               settings.flash_used !== undefined
                 ? settings.flash_used
                   ? $t('ui.yes', { default: 'Yes' })
@@ -347,7 +335,6 @@
             id="meta-gps"
             style="opacity: {fieldOpacity(location.latitude && location.longitude)}"
             >{setField(
-              'meta-gps',
               location.latitude && location.longitude
                 ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
                 : null
@@ -365,10 +352,7 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.duration', { default: 'Duration:' })}</span
           ><span id="meta-duration" style="opacity: {fieldOpacity(photo?.duration)}"
-            >{setField(
-              'meta-duration',
-              photo?.duration ? formatDuration(photo.duration) : null
-            )}</span
+            >{setField(photo?.duration ? formatDuration(photo.duration) : null)}</span
           >
         </div>
         <div class="meta-item">
@@ -389,7 +373,6 @@
           <span class="meta-label">{$t('ui.metadata.frame_rate', { default: 'Frame Rate:' })}</span
           ><span id="meta-framerate" style="opacity: {fieldOpacity(videoMeta.frame_rate)}"
             >{setField(
-              'meta-framerate',
               videoMeta.frame_rate ? `${videoMeta.frame_rate.toFixed(2)} fps` : null
             )}</span
           >
@@ -398,10 +381,7 @@
           <span class="meta-label">{$t('ui.metadata.bitrate', { default: 'Bitrate:' })}</span><span
             id="meta-bitrate"
             style="opacity: {fieldOpacity(videoMeta.bitrate)}"
-            >{setField(
-              'meta-bitrate',
-              videoMeta.bitrate ? `${videoMeta.bitrate} kbps` : null
-            )}</span
+            >{setField(videoMeta.bitrate ? `${videoMeta.bitrate} kbps` : null)}</span
           >
         </div>
       </div>

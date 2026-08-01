@@ -183,6 +183,10 @@
           });
         return;
       }
+      // A failed load must not poison the dedupe: without this, every retry
+      // (scroll-triggered loadMore, Load More button) rebuilds the same
+      // signature and is silently swallowed until a route change or reload.
+      lastLoadSignature = null;
       if (logger) {
         logger.error('Error loading photos', error, {
           component: 'PhotoGrid',
@@ -282,6 +286,7 @@
     if (idx === -1) return;
     if (route.view === 'favorites' && !isFavorite) {
       photoGridState.photos.splice(idx, 1);
+      refillIfEmpty();
     } else {
       photoGridState.photos[idx].is_favorite = isFavorite;
     }
@@ -298,7 +303,19 @@
     const { hash } = event.detail || {};
     if (!hash) return;
     const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === hash);
-    if (idx !== -1) photoGridState.photos.splice(idx, 1);
+    if (idx !== -1) {
+      photoGridState.photos.splice(idx, 1);
+      refillIfEmpty();
+    }
+  }
+
+  // If splicing removed the last visible photo while more pages exist, load the
+  // next page so the grid never shows a false empty state ("No Photos Found")
+  // with unreachable remaining results.
+  function refillIfEmpty() {
+    if (photoGridState.photos.length === 0 && photoGridState.hasMore && !photoGridState.loading) {
+      loadMore();
+    }
   }
 
   function handleIndexingCompleted() {
@@ -654,6 +671,24 @@
     .loading-skeleton {
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: var(--space-8);
+    }
+  }
+
+  /* Mobile compact grid: must live in scoped styles — global @container rules
+     lose the cascade to scoped rules (see AGENTS.md). */
+  @media (width <= 768px) {
+    .photo-grid,
+    .loading-skeleton {
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--space-1);
+    }
+  }
+
+  @media (width <= 480px) {
+    .photo-grid,
+    .loading-skeleton {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
     }
   }
 

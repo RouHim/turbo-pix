@@ -597,29 +597,38 @@ pub(crate) mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    pub(crate) fn acquire_test_env_lock() -> Option<MutexGuard<'static, ()>> {
+    // Guard returned by acquire_test_env_lock: holding it on the outermost call
+    // owns the mutex, and its Drop decrements the nesting depth so later tests on
+    // the same thread can acquire the lock again. Without the drop-decrement the
+    // depth would leak and every subsequent acquire on that thread would silently
+    // return without locking.
+    pub(crate) struct TestEnvGuard {
+        _mutex: Option<MutexGuard<'static, ()>>,
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            TEST_ENV_LOCK_DEPTH.with(|depth| {
+                depth.set(depth.get().saturating_sub(1));
+            });
+        }
+    }
+
+    pub(crate) fn acquire_test_env_lock() -> TestEnvGuard {
         TEST_ENV_LOCK_DEPTH.with(|depth| {
             let current = depth.get();
             depth.set(current + 1);
 
-            if current == 0 {
-                Some(test_env_lock().lock().unwrap())
-            } else {
-                None
+            TestEnvGuard {
+                _mutex: (current == 0).then(|| test_env_lock().lock().unwrap()),
             }
         })
-    }
-
-    pub(crate) fn release_test_env_lock() {
-        TEST_ENV_LOCK_DEPTH.with(|depth| {
-            depth.set(depth.get() - 1);
-        });
     }
 
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
-        _lock: Option<MutexGuard<'static, ()>>,
+        _lock: TestEnvGuard,
     }
 
     impl EnvVarGuard {
@@ -646,8 +655,25 @@ pub(crate) mod tests {
                     std::env::remove_var(self.key);
                 }
             }
-            release_test_env_lock();
         }
+    }
+
+    #[test]
+    fn test_env_lock_guard_drop_resets_nesting_depth() {
+        // GIVEN a guard acquired and released on this thread (incl. a nested acquire)
+        {
+            let _outer = acquire_test_env_lock();
+            let _nested = acquire_test_env_lock();
+        }
+        // WHEN a fresh guard is acquired after the previous ones dropped
+        let fresh = acquire_test_env_lock();
+        // THEN the nesting depth was reset and the fresh guard actually owns the mutex
+        // (a leaked depth would return a guard that holds nothing -> try_lock succeeds)
+        assert!(
+            test_env_lock().try_lock().is_err(),
+            "fresh guard must hold the mutex after previous guards dropped"
+        );
+        drop(fresh);
     }
 
     fn project_photo_path(filename: &str) -> std::path::PathBuf {

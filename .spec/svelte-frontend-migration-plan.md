@@ -4,7 +4,7 @@
 
 Replace the TurboPix vanilla-JS frontend (~15,400 LOC, 28 script files under `static/`, no bundler, embedded into the Rust binary via `include_static!` in `src/handlers_static.rs`) with a Svelte 5 (runes) + Vite build pipeline. Every user-facing feature, behavior, DOM hook, and visual detail is preserved identically; the Rust backend, REST API, and database are untouched. Approved spec: `.spec/svelte-frontend-migration.md`.
 
-Locked decisions (from spec, do not reopen): Svelte 5 runes, Vite, no SvelteKit/SSR; Vite outputs to `dist/` at repo root, Rust embeds from there; full CSS migration to component-scoped `<style>` blocks plus one global token stylesheet; `svelte-i18n` as the i18n library; big-bang cutover, no hybrid mode.
+Locked decisions (from spec, do not reopen): Svelte 5 runes, Vite, no SvelteKit/SSR; Vite outputs to `dist/` at repo root, Rust embeds from there; full CSS migration to component-scoped `<style>` blocks plus one global token stylesheet; `svelte-i18n` as the i18n library (plan decision — the spec leaves the library open); big-bang cutover, no hybrid mode.
 
 ## Approach
 
@@ -408,7 +408,7 @@ Port `static/js/viewerControls.js`: zoom in/out/fit buttons (`.zoom-btn`), CSS-t
 - SVG orbit: `viewBox="0 0 280 280"`, 6 phase segments (60° arc, 4° gap, radius 120) in the exact phase order `discovering, metadata, semantic_vectors, geo_resolution, collages, housekeeping` with their feather icons; port `describeArc`/`polarToCartesian`; determinate phases via stroke-dashoffset progress; indeterminate phases via animated orbit dot (`.orbit-dot`); `data-ring-mode` = `large | compact | hidden` per `determineMode()`; completion pulse → hide after 2 s; click ring toggles sheet; `prefers-reduced-motion` respected.
 - First-visit behavior: `turbopix_has_indexed` localStorage gate — auto-open sheet on first indexing, set key after completion (port `hasIndexedBefore`/`markIndexingCompleted` verbatim).
 
-**6d. `IndexingSheet.svelte`** — `[data-bottom-sheet]` container: per-phase rows `[data-phase-id]` with `[data-phase-fill]` progress bars (determinate width %, indeterminate animation), `[data-phase-count]`, `[data-phase-errors]`; `[data-sheet-current-item]`; `[data-sheet-photos-count]`; `[data-sheet-close]` button; Escape closes; backdrop element; `aria-hidden`/`aria-expanded` managed as in the source.
+**6d. Indexing bottom sheet** (implemented inside `IndexingOrbit.svelte` — no separate `IndexingSheet.svelte` file) — `[data-bottom-sheet]` container: per-phase rows `[data-phase-id]` with `[data-phase-fill]` progress bars (determinate width %, indeterminate animation), `[data-phase-count]`, `[data-phase-errors]`; `[data-sheet-current-item]`; `[data-sheet-photos-count]`; `[data-sheet-close]` button; Escape closes; backdrop element; `aria-hidden`/`aria-expanded` managed as in the source.
 
 **6e. Smoke test**: with the backend indexing, ring segments animate and sheet shows live progress; `window.indexingStatus.checkStatus()` resolves in devtools; completion hides the ring after pulse.
 

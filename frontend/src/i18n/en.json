@@ -26,7 +26,6 @@
     "all_years": "All Years",
     "all_months": "All Months",
     "clear_timeline_filter": "Clear timeline filter",
-    "photos_count": "{count} photos",
     "photo": "Photo",
     "selected_media": "Selected media",
     "date": "Date:",
@@ -153,7 +152,6 @@
     "housekeeping_load_failed": "Could not check for issues",
     "indexing_phase_discovering": "Finding photos",
     "indexing_phase_metadata": "Reading details",
-    "indexing_phase_semantic": "Recognizing content",
     "indexing_phase_semantic_vectors": "Recognizing content",
     "indexing_phase_geo_resolution": "Finding locations",
     "indexing_phase_collages": "Creating collages",
@@ -197,15 +195,11 @@
     "collageAccepted": "Collage accepted. Will appear in All Photos after next scan.",
     "collageRejected": "Collage rejected and deleted",
     "collageAcceptFailed": "Failed to accept collage",
-    "collageRejectFailed": "Failed to reject collage",
     "collagesGenerated": "{count} collage(s) generated successfully",
     "deleted": "Deleted",
     "error": "Error",
     "kept": "Kept",
-    "photoKept": "Photo removed from housekeeping candidates",
-    "accepted": "Accepted",
-    "rejected": "Rejected",
-    "keepFailed": "Failed to keep photo"
+    "photoKept": "Photo removed from housekeeping candidates"
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

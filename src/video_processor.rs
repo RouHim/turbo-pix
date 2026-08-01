@@ -829,6 +829,8 @@ pub(crate) mod tests {
             return;
         }
 
+        let _env_lock = acquire_test_env_lock();
+
         let temp_dir = TempDir::new().unwrap();
         let source = project_photo_path(video_filename);
         let moov_start = temp_dir.path().join("moov_start.mp4");
@@ -849,6 +851,8 @@ pub(crate) mod tests {
             return;
         }
 
+        let _env_lock = acquire_test_env_lock();
+
         let temp_dir = TempDir::new().unwrap();
         let source = project_photo_path(video_filename);
         let moov_end = temp_dir.path().join("moov_end.mp4");
@@ -867,6 +871,8 @@ pub(crate) mod tests {
             eprintln!("Skipping MOOV skip test (prereqs missing or RUN_VIDEO_TESTS not set)");
             return;
         }
+
+        let _env_lock = acquire_test_env_lock();
 
         let temp_dir = TempDir::new().unwrap();
         let source = project_photo_path(video_filename);

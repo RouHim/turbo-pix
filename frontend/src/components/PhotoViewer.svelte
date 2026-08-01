@@ -646,22 +646,29 @@
     const startTime = Date.now();
 
     return new Promise((resolve) => {
-      transcodePollTimer = setInterval(async () => {
+      const intervalId = setInterval(async () => {
         // Stop polling once the user has moved on to another photo; the
-        // server-side transcode continues regardless.
+        // server-side transcode continues regardless. transcodePollTimer is
+        // shared across polls: clear only the interval this poll owns, and
+        // only null shared state / hide the toast while it still points at
+        // us — a newer photo's poll may have replaced it.
         if (currentPhoto?.hash_sha256 !== photo.hash_sha256) {
-          clearInterval(transcodePollTimer);
-          transcodePollTimer = null;
-          hideTranscodeToast();
+          clearInterval(intervalId);
+          if (transcodePollTimer === intervalId) {
+            transcodePollTimer = null;
+            hideTranscodeToast();
+          }
           resolve('Stale');
           return;
         }
 
         const elapsed = Date.now() - startTime;
         if (elapsed >= MAX_POLL_DURATION) {
-          clearInterval(transcodePollTimer);
-          transcodePollTimer = null;
-          hideTranscodeToast();
+          clearInterval(intervalId);
+          if (transcodePollTimer === intervalId) {
+            transcodePollTimer = null;
+            hideTranscodeToast();
+          }
           showTranscodeToast(
             get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
             true
@@ -676,15 +683,15 @@
           const status = await res.json();
 
           if (status.state === 'Completed') {
-            clearInterval(transcodePollTimer);
-            transcodePollTimer = null;
+            clearInterval(intervalId);
+            if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
             const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
             setVideoSource(photo, newUrl, true, true, true);
             resolve('Completed');
           } else if (status.state === 'Failed' || status.state === 'Timeout') {
-            clearInterval(transcodePollTimer);
-            transcodePollTimer = null;
+            clearInterval(intervalId);
+            if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
             showTranscodeToast(
               get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
@@ -696,6 +703,7 @@
           /* ignore */
         }
       }, POLL_INTERVAL);
+      transcodePollTimer = intervalId;
     });
   }
 
@@ -1566,6 +1574,8 @@
 
     .viewer-sidebar {
       transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      padding: var(--space-6) var(--space-5) var(--space-8) var(--space-5);
+      box-shadow: 0 -4px 24px oklch(0% 0 0deg / 20%);
     }
   }
 

@@ -524,6 +524,7 @@
     width: var(--indexing-ring-compact-size);
     height: var(--indexing-ring-compact-size);
     opacity: 0;
+    pointer-events: none;
     transform: translate(0, 0) scale(0.8);
   }
 

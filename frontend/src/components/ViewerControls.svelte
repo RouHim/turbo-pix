@@ -165,6 +165,15 @@
     .viewer-controls {
       bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
     }
+
+    .zoom-btn {
+      width: var(--button-size);
+      height: var(--button-size);
+    }
+
+    .fullscreen-btn {
+      display: none;
+    }
   }
 
   .viewer-controls-inner {

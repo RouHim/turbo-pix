@@ -45,7 +45,7 @@
       <Icon name="search" width={20} height={20} />
     </button>
     <h1 class="logo">
-      <a href="/" id="logo-link" onclick={onLogoClick}>
+      <a href="/" onclick={onLogoClick}>
         <img src="/favicon.svg" alt={$t('ui.logo_alt', { default: 'TurboPix logo' })} />TurboPix
       </a>
     </h1>

@@ -204,6 +204,10 @@
         5000
       );
       loadError = error.message || true;
+      // The finally guard below only clears loading while the load is still
+      // current, but the error path nulled lastLoadSignature — clear it here
+      // or the skeleton/spinner stays forever and retry stays blocked.
+      photoGridState.loading = false;
     } finally {
       // Ensure loading indicator shows for at least 300ms. Only the load
       // that is still current may clear the loading state: a superseded

@@ -80,4 +80,38 @@ test.describe('Startup loading behavior', () => {
     const photos = await TestHelpers.getPhotoCards(page);
     expect(photos.length).toBeGreaterThan(0);
   });
+
+  test('shows error state on failed load and recovers via Try Again', async ({ page }) => {
+    let failPhotos = true;
+    await page.route(
+      (url) => url.pathname === '/api/photos',
+      async (route) => {
+        if (failPhotos) {
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'forced failure' }),
+          });
+        } else {
+          await route.continue();
+        }
+      }
+    );
+
+    await TestHelpers.goto(page);
+
+    // THEN: error state with Try Again is shown (fails pre-fix: skeleton sticks)
+    const errorState = page.locator('.error-state');
+    await expect(errorState).toBeVisible({ timeout: 10000 });
+    await expect(errorState.getByRole('button', { name: 'Try Again' })).toBeVisible();
+
+    // WHEN: the backend is healthy again and the user retries
+    failPhotos = false;
+    await errorState.getByRole('button', { name: 'Try Again' }).click();
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // THEN: photos load
+    const photos = await TestHelpers.getPhotoCards(page);
+    expect(photos.length).toBeGreaterThan(0);
+  });
 });

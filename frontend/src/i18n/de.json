@@ -26,7 +26,6 @@
     "all_years": "Alle Jahre",
     "all_months": "Alle Monate",
     "clear_timeline_filter": "Zeitfilter löschen",
-    "photos_count": "{count} Fotos",
     "photo": "Foto",
     "selected_media": "Ausgewähltes Medium",
     "date": "Datum:",
@@ -153,7 +152,6 @@
     "housekeeping_load_failed": "Probleme konnten nicht geprüft werden",
     "indexing_phase_discovering": "Fotos finden",
     "indexing_phase_metadata": "Details lesen",
-    "indexing_phase_semantic": "Inhalte erkennen",
     "indexing_phase_semantic_vectors": "Inhalte erkennen",
     "indexing_phase_geo_resolution": "Aufnahmeorte finden",
     "indexing_phase_collages": "Collagen erstellen",
@@ -197,15 +195,11 @@
     "collageAccepted": "Collage akzeptiert. Wird nach dem nächsten Scan in Alle Fotos angezeigt.",
     "collageRejected": "Collage abgelehnt und gelöscht",
     "collageAcceptFailed": "Collage konnte nicht akzeptiert werden",
-    "collageRejectFailed": "Collage konnte nicht abgelehnt werden",
     "collagesGenerated": "{count} Collage(n) erfolgreich generiert",
     "deleted": "Gelöscht",
     "error": "Fehler",
     "kept": "Behalten",
-    "photoKept": "Foto von Housekeeping-Kandidaten entfernt",
-    "accepted": "Akzeptiert",
-    "rejected": "Abgelehnt",
-    "keepFailed": "Foto behalten fehlgeschlagen"
+    "photoKept": "Foto von Housekeeping-Kandidaten entfernt"
   },
   "messages": {
     "indexing_in_progress_title": "Fotos werden indiziert",

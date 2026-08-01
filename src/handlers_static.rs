@@ -11,6 +11,11 @@ fn content_type_from_path(path: &str) -> &'static str {
         Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
         Some("ttf") => "font/ttf",
+        Some("webmanifest") => "application/manifest+json",
+        Some("json") => "application/json",
+        Some("ico") => "image/x-icon",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
         _ => "text/plain",
     }
 }
@@ -126,5 +131,26 @@ pub fn build_static_routes(
             .unify()
             .boxed(),
         None => all_static.or(spa_fallback).unify().boxed(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_type_covers_embedded_assets() {
+        assert_eq!(
+            content_type_from_path("site.webmanifest"),
+            "application/manifest+json"
+        );
+        assert_eq!(content_type_from_path("app.js"), "application/javascript");
+        assert_eq!(content_type_from_path("favicon.svg"), "image/svg+xml");
+        assert_eq!(content_type_from_path("index.css"), "text/css");
+        assert_eq!(content_type_from_path("font.woff2"), "font/woff2");
+        assert_eq!(content_type_from_path("data.json"), "application/json");
+        assert_eq!(content_type_from_path("image.png"), "image/png");
+        assert_eq!(content_type_from_path("favicon.ico"), "image/x-icon");
+        assert_eq!(content_type_from_path("photo.webp"), "image/webp");
     }
 }

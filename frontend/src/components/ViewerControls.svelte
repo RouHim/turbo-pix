@@ -245,4 +245,32 @@
     transform: none;
     background: var(--viewer-btn-bg);
   }
+
+  /* Solid-surface fallbacks: scoped so they outrank the base rules when
+     backdrop-filter is unsupported or reduced transparency is requested. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .viewer-controls {
+      background: var(--surface-color);
+    }
+
+    .zoom-btn {
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .viewer-controls,
+    .zoom-btn {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .viewer-controls {
+      background: var(--surface-color);
+    }
+
+    .zoom-btn {
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+  }
 </style>

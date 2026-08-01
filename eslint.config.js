@@ -9,21 +9,6 @@ export default [
       reportUnusedDisableDirectives: 'error',
     },
   },
-  {
-    files: ['tests/**/*.js', 'playwright.config.js'],
-    languageOptions: {
-      ecmaVersion: 2022, sourceType: 'module',
-      globals: {
-        window: 'readonly', document: 'readonly', console: 'readonly',
-        localStorage: 'readonly', navigator: 'readonly', module: 'readonly',
-        global: 'writable', describe: 'readonly', test: 'readonly',
-        expect: 'readonly', beforeEach: 'readonly', afterEach: 'readonly',
-        jest: 'readonly', process: 'readonly', __dirname: 'readonly',
-        __filename: 'readonly', Buffer: 'readonly',
-      },
-    },
-    rules: { 'no-unused-vars': 'off' },
-  },
   // Svelte 5 frontend
   ...svelte.configs['flat/recommended'],
   {
@@ -59,7 +44,7 @@ export default [
       'no-console': 'off',
       'no-empty': 'warn',
       'no-undef': 'warn',
-      'no-unused-vars': 'warn',
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
       'prefer-const': 'warn',
       'no-var': 'error',
       'no-case-declarations': 'off',

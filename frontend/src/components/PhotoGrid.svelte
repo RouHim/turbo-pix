@@ -205,18 +205,23 @@
       );
       loadError = error.message || true;
     } finally {
-      // Ensure loading indicator shows for at least 300ms
-      const loadingDuration = Date.now() - loadingStartTime;
-      const minDisplayTime = 300;
-      const remainingTime = Math.max(0, minDisplayTime - loadingDuration);
+      // Ensure loading indicator shows for at least 300ms. Only the load
+      // that is still current may clear the loading state: a superseded
+      // (aborted) load must not flip loading = false mid-request (empty-state
+      // flash) nor trigger a spurious checkScrollPosition()/loadMore().
+      if (sig === lastLoadSignature) {
+        const loadingDuration = Date.now() - loadingStartTime;
+        const minDisplayTime = 300;
+        const remainingTime = Math.max(0, minDisplayTime - loadingDuration);
 
-      pendingLoadTimer = setTimeout(() => {
-        photoGridState.loading = false;
-        // Recheck scroll after load in case more content fits
-        requestAnimationFrame(() => {
-          setTimeout(() => checkScrollPosition(), 50);
-        });
-      }, remainingTime);
+        pendingLoadTimer = setTimeout(() => {
+          photoGridState.loading = false;
+          // Recheck scroll after load in case more content fits
+          requestAnimationFrame(() => {
+            setTimeout(() => checkScrollPosition(), 50);
+          });
+        }, remainingTime);
+      }
     }
   }
 

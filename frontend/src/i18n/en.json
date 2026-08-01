@@ -169,7 +169,10 @@
     "raw_rotation_disabled": "RAW files cannot be rotated",
     "video_rotation_disabled": "Video rotation is not supported",
     "zoom_video_unsupported": "Zoom not supported for videos",
-    "timeline_slider_aria": "Timeline filter"
+    "timeline_slider_aria": "Timeline filter",
+    "logo_alt": "TurboPix logo",
+    "file_size_zero": "0 Bytes",
+    "retry": "Retry"
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",
@@ -183,7 +186,8 @@
     "unexpectedError": "An unexpected error occurred",
     "connectionLost": "Server connection lost",
     "readOnlyFilesystem": "Cannot delete photo — the photo directory is read-only",
-    "permissionDenied": "Cannot delete photo — insufficient file permissions"
+    "permissionDenied": "Cannot delete photo — insufficient file permissions",
+    "view_crashed": "Something went wrong"
   },
   "notifications": {
     "rotationFailed": "Failed to rotate photo",

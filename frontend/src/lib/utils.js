@@ -13,7 +13,7 @@ import { get } from 'svelte/store';
  * @returns {string}
  */
 export function formatFileSize(bytes) {
-  if (bytes === 0) return '0 Bytes';
+  if (bytes === 0) return get(t)('ui.file_size_zero', { default: '0 Bytes' });
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -37,7 +37,7 @@ export function formatDate(dateString) {
       minute: '2-digit',
     });
   } catch {
-    return 'Unknown';
+    return get(t)('ui.unknown', { default: 'Unknown' });
   }
 }
 
@@ -165,7 +165,8 @@ export function handleError(error, context = '') {
     console.error(`Error in ${context}:`, error);
   }
 
-  const errorMessage = error.message || 'An unexpected error occurred';
+  const errorMessage =
+    error.message || get(t)('errors.unexpectedError', { default: 'An unexpected error occurred' });
 
   // Use i18n if available
   let translatedMessage = errorMessage;

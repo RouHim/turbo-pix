@@ -135,17 +135,41 @@
       <TimelineSlider />
     {/if}
 
-    {#if route.view === 'collages'}
-      <CollagesView />
-    {:else if route.view === 'housekeeping'}
-      <HousekeepingView />
-    {:else}
-      <PhotoGrid />
-    {/if}
+    <svelte:boundary
+      onerror={(error) => logger.error('View render error', error, { component: 'App' })}
+    >
+      {#snippet failed(_error, reset)}
+        <div class="view-error">
+          <p>{$t('errors.view_crashed', { default: 'Something went wrong' })}</p>
+          <button type="button" class="view-error-retry" onclick={reset}>
+            {$t('ui.retry', { default: 'Retry' })}
+          </button>
+        </div>
+      {/snippet}
+      {#if route.view === 'collages'}
+        <CollagesView />
+      {:else if route.view === 'housekeeping'}
+        <HousekeepingView />
+      {:else}
+        <PhotoGrid />
+      {/if}
+    </svelte:boundary>
   </main>
 
   <IndexingOrbit />
-  <PhotoViewer />
+  <svelte:boundary
+    onerror={(error) => logger.error('View render error', error, { component: 'App' })}
+  >
+    {#snippet failed(_error, reset)}
+      <div class="view-error">
+        <p>{$t('errors.view_crashed', { default: 'Something went wrong' })}</p>
+        <button type="button" class="view-error-retry" onclick={reset}>
+          {$t('ui.retry', { default: 'Retry' })}
+        </button>
+      </div>
+    {/snippet}
+    <PhotoViewer />
+  </svelte:boundary>
   <ToastContainer />
 {:else}
   <div class="app-loading">TurboPix</div>
@@ -181,6 +205,41 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+  }
+
+  .view-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-8);
+    color: var(--text-secondary);
+  }
+
+  .view-error-retry {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    border: none;
+    cursor: pointer;
+  }
+
+  /* Responsive content header: scoped so these win over the base rules
+     (global @media overrides of equal specificity are outranked by scoped
+     rules). */
+  @media (max-width: 480px) {
+    .content-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+    .content-header h2 {
+      font-size: var(--font-2xl);
+      margin: 0;
+    }
   }
 
   .app-loading {

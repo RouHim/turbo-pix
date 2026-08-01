@@ -97,7 +97,7 @@ export class GestureManager {
     });
 
     // Detect gesture type
-    if (this.touches.size === 2 && this.options.enablePinch) {
+    if (this.touches.size === 2 && this.options.enablePinch && this.activeGesture !== 'pan') {
       this.startPinchGesture();
     } else if (this.touches.size === 1) {
       // Could be tap, swipe, or pan - wait for movement
@@ -107,11 +107,6 @@ export class GestureManager {
 
   handleTouchMove(e) {
     if (this.touches.size === 0) return;
-
-    // First move is no longer preventable-late: block default scrolling for
-    // the whole gesture on the viewer surface (touch-action: none is set
-    // there anyway).
-    if (e.cancelable) e.preventDefault();
 
     const timestamp = Date.now();
 

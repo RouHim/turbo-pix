@@ -956,6 +956,7 @@ pub(crate) mod tests {
             eprintln!("Skipping video thumbnail generation test (prereqs missing or RUN_VIDEO_TESTS not set)");
             return;
         }
+        let _env_lock = acquire_test_env_lock();
         let video_path_str = video_path.to_string_lossy().into_owned();
         let photo = create_test_video_photo(&video_path_str);
 
@@ -993,6 +994,7 @@ pub(crate) mod tests {
             eprintln!("Skipping video metadata extraction test (prereqs missing or RUN_VIDEO_TESTS not set)");
             return;
         }
+        let _env_lock = acquire_test_env_lock();
         let metadata = extract_video_metadata(&video_path).await;
 
         assert!(
@@ -1053,6 +1055,7 @@ pub(crate) mod tests {
             eprintln!("Skipping video thumbnail different sizes test (prereqs missing or RUN_VIDEO_TESTS not set)");
             return;
         }
+        let _env_lock = acquire_test_env_lock();
         let video_path_str = video_path.to_string_lossy().into_owned();
         let photo = create_test_video_photo(&video_path_str);
 

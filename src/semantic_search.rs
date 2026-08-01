@@ -885,6 +885,7 @@ mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
     use crate::db::Photo;
+    use crate::video_processor::tests::acquire_test_env_lock;
     use chrono::Utc;
     use serde_json::json;
     use std::sync::OnceLock;
@@ -1244,6 +1245,7 @@ mod tests {
             eprintln!("Skipping video embedding test: RUN_VIDEO_TESTS not set");
             return;
         }
+        let _env_lock = acquire_test_env_lock();
 
         let db_pool = create_test_db_pool().await.unwrap();
         let engine = create_test_engine_cached(db_pool.clone());
@@ -1302,6 +1304,7 @@ mod tests {
             eprintln!("Skipping video search test: RUN_VIDEO_TESTS not set");
             return;
         }
+        let _env_lock = acquire_test_env_lock();
 
         let db_pool = create_test_db_pool().await.unwrap();
         let engine = create_test_engine_cached(db_pool.clone());

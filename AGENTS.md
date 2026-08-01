@@ -159,11 +159,13 @@ npm run test:e2e:report   # View test report
 
 **Semantic search staleness:** the semantic path needs its own AbortController signal AND a staleness guard: capture `queryAtStart` before `api.semanticSearch(query, limit, offset, options)` and bail out (`queryAtStart !== currentQuery || signal.aborted`) before pushing results — a ~3s embedding response can otherwise pollute a grid the user has already navigated away from.
 
+**Viewer video-path staleness:** every async continuation in `PhotoViewer.svelte` that outlives the current photo must re-check `currentPhoto?.hash_sha256 === photo.hash_sha256` before acting — `displayVideo` (after the HEVC support probe and after the transcode `fetch`), `pollTranscodeStatus` (top of the interval callback; stops the up-to-5-minute poll for a photo the user left), `videoEl.onerror` (no retry/toast for a stale photo), and `displayImage`'s `img.onerror` (mirroring its existing `onload` guard).
+
 **`get(t)(key, 'fallback string')` silently drops the fallback:** svelte-i18n's `get(t)` with a positional fallback string does not apply it (raw key is returned). Always pass `{ default: '…' }` as the options object.
 
 **Global media overrides lose to scoped styles (see rule 9):** IndexingOrbit ring mobile sizing/placement and PhotoViewer sidebar mobile transition must live in the component's scoped `<style>` — global `@media (width <= 768px)` rules are outranked by scoped rules of equal specificity and silently no-op.
 
-**`@container` global rules lose to scoped styles too:** same cascade trap as `@media` — the mobile compact `.photo-grid`/`.photo-card` overrides (3-up grid at ≤768px, gap 2px at ≤480px) must live in PhotoGrid/PhotoCard scoped styles; global `@container (width <= 768px)` blocks in `app.css` are outranked by the scoped rules and silently no-op, leaving phones on a single-column grid.
+**Scoped styles beat global media overrides:** global `@media`/`@container` overrides of equal-or-lower specificity are outranked by scoped component rules (scoped selectors carry the `svelte-*` hash), so responsive overrides must live in the component's scoped `<style>` — e.g. Header's responsive `.header-content` padding, Sidebar's mobile `.sidebar`/`.sidebar-overlay`, and App's `.content-header` ≤480px layout live in their own components; the corresponding global blocks were deleted from `app.css`.
 
 **Load-more dedupe must reset on failure:** PhotoGrid's `lastLoadSignature` dedupe (guards concurrent duplicate loads) is set before the request and MUST be cleared in the error path — otherwise every retry of a failed page load (scroll-triggered `loadMore()` and the Load More button) rebuilds the identical signature and is silently swallowed until a route change or reload.
 

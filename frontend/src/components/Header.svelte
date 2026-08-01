@@ -16,6 +16,7 @@
 
   function onLogoClick(e) {
     e.preventDefault();
+    appState.mobileSearchOpen = false;
     if (!(route.view === 'all' && !route.query)) {
       pushState({ view: 'all', query: null });
     }
@@ -45,7 +46,7 @@
     </button>
     <h1 class="logo">
       <a href="/" id="logo-link" onclick={onLogoClick}>
-        <img src="/favicon.svg" alt="TurboPix logo" />TurboPix
+        <img src="/favicon.svg" alt={$t('ui.logo_alt', { default: 'TurboPix logo' })} />TurboPix
       </a>
     </h1>
     <div class="header-actions">
@@ -152,6 +153,40 @@
     .menu-btn,
     .mobile-search-btn {
       display: flex;
+    }
+  }
+
+  /* Solid-surface fallbacks: must sit in scoped styles (same specificity as
+     the base rule + later source order) so they win when backdrop-filter is
+     unsupported or reduced transparency is requested. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .header {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .header {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--surface-color);
+    }
+  }
+
+  /* Responsive padding: scoped so these win over the base rule (global
+     @media overrides of equal specificity are outranked by scoped rules). */
+  @media (width <= 1024px) {
+    .header-content {
+      padding: 0 var(--space-4);
+    }
+  }
+
+  @media (width <= 480px) {
+    .header-content {
+      padding: 0 var(--space-2);
+    }
+    .logo {
+      font-size: var(--font-xl);
     }
   }
 </style>

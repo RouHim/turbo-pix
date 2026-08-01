@@ -543,6 +543,8 @@
       if (currentPhoto?.hash_sha256 === photo.hash_sha256) showImage(img.src);
     };
     img.onerror = () => {
+      // A newer photo may have been requested while this image was loading.
+      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
       showToast(
         get(t)('notifications.error', { default: 'Error' }),
         get(t)('errors.failedToLoadImage', { default: 'Failed to load image' }),
@@ -582,11 +584,16 @@
       needsTranscode = !supportsHEVC;
     }
 
+    // A newer photo may have been requested while HEVC support was being probed.
+    if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+
     const videoUrl = getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
 
     if (needsTranscode) {
       try {
         const response = await fetch(videoUrl);
+        // A newer photo may have been requested while the transcode was starting.
+        if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
         if (response.status === 202) {
           const data = await response.json();
           const pollUrl = data.poll_url;
@@ -640,6 +647,16 @@
 
     return new Promise((resolve) => {
       transcodePollTimer = setInterval(async () => {
+        // Stop polling once the user has moved on to another photo; the
+        // server-side transcode continues regardless.
+        if (currentPhoto?.hash_sha256 !== photo.hash_sha256) {
+          clearInterval(transcodePollTimer);
+          transcodePollTimer = null;
+          hideTranscodeToast();
+          resolve('Stale');
+          return;
+        }
+
         const elapsed = Date.now() - startTime;
         if (elapsed >= MAX_POLL_DURATION) {
           clearInterval(transcodePollTimer);
@@ -686,6 +703,8 @@
     videoEl.src = '';
     videoEl.load();
     videoEl.onerror = async () => {
+      // A stale photo's playback failure must neither retry nor toast.
+      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
       if (isHEVC && !needsTranscode && !forceTranscode) {
         await displayVideo(photo, true);
         return;
@@ -1108,6 +1127,7 @@
     if (!photoHash) return;
     try {
       const photo = await api.getPhoto(photoHash);
+      if (route.photo !== photoHash) return; // user pressed Back while the photo was loading
       if (photo) {
         const allPhotos = photoGridState.photos.length > 0 ? photoGridState.photos : [];
         await open(photo, allPhotos);
@@ -1624,6 +1644,48 @@
       to {
         transform: rotate(360deg);
       }
+    }
+  }
+
+  /* Solid-surface fallbacks: scoped so they outrank the base rules when
+     backdrop-filter is unsupported or reduced transparency is requested. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .viewer-overlay {
+      background: oklch(0% 0 0deg / 92%);
+    }
+
+    .viewer-close,
+    .viewer-prev,
+    .viewer-next {
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+
+    .viewer-loading-indicator,
+    .viewer-sidebar {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .viewer-overlay {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: oklch(0% 0 0deg / 92%);
+    }
+
+    .viewer-close,
+    .viewer-prev,
+    .viewer-next {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: oklch(20% 0.01 260deg / 90%);
+    }
+
+    .viewer-loading-indicator,
+    .viewer-sidebar {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--surface-color);
     }
   }
 </style>

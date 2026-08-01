@@ -12,6 +12,7 @@
   ];
 
   function navigate(view) {
+    appState.mobileSearchOpen = false;
     if (view === 'all') {
       // Clear any active search — matches the Header logo behavior and the
       // old app.js nav handler (which called search.clearSearch()).
@@ -138,10 +139,41 @@
       transform: translateX(-100%);
       transition: transform var(--transition-medium);
       z-index: 95;
+      width: 280px;
     }
 
     .sidebar.open {
       transform: translateX(0);
+    }
+
+    .sidebar-overlay {
+      display: block;
+      opacity: 0;
+      visibility: hidden;
+      transition:
+        opacity var(--transition-medium),
+        visibility var(--transition-medium);
+    }
+
+    .sidebar-overlay.show {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+
+  /* Solid-surface fallback: scoped so it outranks the base rule when
+     backdrop-filter is unsupported or reduced transparency is requested. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .sidebar {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .sidebar {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--surface-color);
     }
   }
 </style>

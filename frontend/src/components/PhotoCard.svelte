@@ -42,6 +42,9 @@
   // --- Favorite state (optimistic) ---
   const favoriteActive = $derived(!!photo?.is_favorite);
 
+  // Guards against double-clicks while a favorite toggle request is in flight.
+  let favoritePending = false;
+
   function handleCardClick(e) {
     if (!e.target.closest('.card-action-btn')) {
       if (onOpen) {
@@ -54,6 +57,8 @@
 
   async function toggleFavorite(e) {
     e.stopPropagation();
+    if (favoritePending) return;
+    favoritePending = true;
     const wasFavorite = photo.is_favorite;
     const newState = !wasFavorite;
 
@@ -90,6 +95,8 @@
         'error',
         3000
       );
+    } finally {
+      favoritePending = false;
     }
   }
 

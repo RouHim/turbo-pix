@@ -66,8 +66,7 @@ mod tests {
 
             // The sample file should have EXIF date information
             // This verifies our enhanced extraction is working
-            if metadata.taken_at.is_some() {
-                let taken_at = metadata.taken_at.unwrap();
+            if let Some(taken_at) = metadata.taken_at {
                 // Sample file (Canon EOS 1100D) has date 2024-01-01
                 assert_eq!(taken_at.year(), 2024);
                 assert_eq!(taken_at.month(), 1);

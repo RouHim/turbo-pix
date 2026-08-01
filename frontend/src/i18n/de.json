@@ -169,7 +169,10 @@
     "raw_rotation_disabled": "RAW-Dateien können nicht gedreht werden",
     "video_rotation_disabled": "Videodrehung wird nicht unterstützt",
     "zoom_video_unsupported": "Zoom bei Videos nicht unterstützt",
-    "timeline_slider_aria": "Zeitleisten-Filter"
+    "timeline_slider_aria": "Zeitleisten-Filter",
+    "logo_alt": "TurboPix-Logo",
+    "file_size_zero": "0 Bytes",
+    "retry": "Erneut versuchen"
   },
   "errors": {
     "error_loading_photos": "Fehler beim Laden der Fotos",
@@ -183,7 +186,8 @@
     "unexpectedError": "Ein unerwarteter Fehler ist aufgetreten",
     "connectionLost": "Serververbindung verloren",
     "readOnlyFilesystem": "Foto kann nicht gelöscht werden — das Fotoverzeichnis ist schreibgeschützt",
-    "permissionDenied": "Foto kann nicht gelöscht werden — unzureichende Dateiberechtigungen"
+    "permissionDenied": "Foto kann nicht gelöscht werden — unzureichende Dateiberechtigungen",
+    "view_crashed": "Etwas ist schiefgelaufen"
   },
   "notifications": {
     "rotationFailed": "Drehen fehlgeschlagen",

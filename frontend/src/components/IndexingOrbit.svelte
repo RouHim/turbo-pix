@@ -28,15 +28,21 @@
   let sheetCloseButton = $state(null);
   let ringTrigger = $state(null);
   let sheetHasOpened = false;
+  // Only user-initiated opens may yank focus into the sheet; the auto-open
+  // path (checkStatus → openSheet(true)) must not steal focus from the page.
+  let sheetOpenedByUser = false;
 
   // Move focus into the bottom sheet when it opens and back to the ring on close.
   // The ring is only refocused while interactive — never when data-ring-mode='hidden'.
   $effect(() => {
     if (sheetOpen) {
-      sheetHasOpened = true;
-      sheetCloseButton?.focus();
+      if (sheetOpenedByUser) {
+        sheetHasOpened = true;
+        sheetCloseButton?.focus();
+      }
     } else if (sheetHasOpened) {
       sheetHasOpened = false;
+      sheetOpenedByUser = false;
       if (ringMode !== 'hidden') {
         ringTrigger?.focus();
       }
@@ -324,15 +330,20 @@
   aria-label={$t('ui.indexing_photos', { default: 'Processing your photos...' })}
   aria-expanded={sheetOpen}
   title={tooltipText}
-  onclick={toggleSheet}
+  onclick={() => {
+    sheetOpenedByUser = true;
+    toggleSheet();
+  }}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      sheetOpenedByUser = true;
       toggleSheet();
     }
   }}
   role="button"
-  tabindex={ringMode === 'hidden' ? -1 : 0}
+  aria-hidden={ringMode === 'hidden'}
+  tabindex={ringMode === 'hidden' || ringMode === 'large' ? -1 : 0}
   bind:this={ringTrigger}
 >
   <div class="indexing-orbit-shell">
@@ -399,6 +410,7 @@
   class="indexing-bottom-sheet"
   role="dialog"
   aria-modal="true"
+  aria-label={$t('ui.indexing_photos', { default: 'Processing your photos...' })}
   aria-hidden={!sheetOpen}
 >
   <div class="indexing-sheet-handle"></div>
@@ -811,6 +823,14 @@
   @media (width <= 480px) {
     [data-phase-ring] {
       --indexing-ring-compact-size: 40px;
+    }
+  }
+
+  /* Solid-surface fallback: scoped so it outranks the base rule when
+     backdrop-filter is unsupported or reduced transparency is requested. */
+  @supports not (backdrop-filter: blur(1px)) {
+    [data-phase-ring] {
+      background: var(--surface-color);
     }
   }
 </style>

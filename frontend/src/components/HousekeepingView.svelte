@@ -16,7 +16,10 @@
 
   onMount(() => {
     const hk = (indexingState.phases || []).find((p) => p.id === 'housekeeping');
-    if (hk?.state === 'active') scanning = true;
+    if (hk?.state === 'active') {
+      scanning = true;
+      lastHkState = 'active';
+    }
     loadAndRender();
     window.addEventListener('indexingStatusChanged', handleIndexingStatusChanged);
     window.addEventListener('photoRemoved', handlePhotoRemoved);

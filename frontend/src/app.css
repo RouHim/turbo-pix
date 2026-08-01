@@ -414,71 +414,6 @@
   }
 } /* end @layer layout */
 
-/* Unlayered: must outrank @layer layout rules so solid-surface fallbacks apply
-   when backdrop-filter is unsupported or reduced-transparency is requested. */
-@supports not (backdrop-filter: blur(1px)) {
-  .header {
-    background: var(--surface-color);
-  }
-
-  .sidebar {
-    background: var(--surface-color);
-  }
-
-  [data-phase-ring] {
-    background: var(--surface-color);
-  }
-
-  .viewer-overlay {
-    background: oklch(0% 0 0deg / 92%);
-  }
-
-  .viewer-close,
-  .viewer-prev,
-  .viewer-next,
-  .zoom-btn {
-    background: oklch(20% 0.01 260deg / 90%);
-  }
-
-  .viewer-controls,
-  .viewer-loading-indicator,
-  .viewer-sidebar {
-    background: var(--surface-color);
-  }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .header,
-  .sidebar {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    background: var(--surface-color);
-  }
-
-  .viewer-overlay {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    background: oklch(0% 0 0deg / 92%);
-  }
-
-  .viewer-close,
-  .viewer-prev,
-  .viewer-next,
-  .zoom-btn {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    background: oklch(20% 0.01 260deg / 90%);
-  }
-
-  .viewer-controls,
-  .viewer-loading-indicator,
-  .viewer-sidebar {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    background: var(--surface-color);
-  }
-}
-
 @layer utilities {
   /* Utility Classes */
   .hidden {
@@ -2073,10 +2008,6 @@
     --sidebar-width: 200px;
   }
 
-  .header-content {
-    padding: 0 var(--space-4);
-  }
-
   .search-container {
     margin: 0 var(--space-4);
     max-width: 400px;
@@ -2093,39 +2024,6 @@
 }
 
 @media (width <= 768px) {
-  .sidebar {
-    position: fixed;
-    top: var(--header-height);
-    left: -100%;
-    width: 280px;
-    height: calc(100vh - var(--header-height));
-    z-index: 200;
-    transition: var(--transition-medium);
-    box-shadow: var(--shadow-heavy);
-
-    &.open {
-      left: 0;
-    }
-  }
-
-  .sidebar-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: oklch(0% 0 0deg / 50%);
-    z-index: 150;
-    opacity: 0;
-    visibility: hidden;
-    transition: var(--transition-medium);
-
-    &.show {
-      opacity: 1;
-      visibility: visible;
-    }
-  }
-
   .header-content {
     justify-content: space-between;
   }
@@ -2272,26 +2170,6 @@
 }
 
 @media (width <= 480px) {
-  .header-content {
-    padding: 0 var(--space-2);
-  }
-
-  .logo {
-    font-size: var(--font-xl);
-  }
-
-  .content-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-3);
-    margin-bottom: var(--space-4);
-
-    & h2 {
-      font-size: var(--font-2xl);
-      margin: 0;
-    }
-  }
-
   .content-actions {
     width: 100%;
   }

@@ -20,4 +20,10 @@ export default defineConfig({
       },
     },
   },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:18473',
+      '/health': 'http://localhost:18473',
+    },
+  },
 });

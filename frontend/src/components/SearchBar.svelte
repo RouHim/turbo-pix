@@ -35,6 +35,7 @@
       const q = e.detail?.query;
       if (q) {
         query = q;
+        if (searchTimer) clearTimeout(searchTimer);
         performSearch(q, true);
       }
     }
@@ -171,6 +172,8 @@
   });
 
   function selectSuggestion(s) {
+    if (searchTimer) clearTimeout(searchTimer);
+    appState.mobileSearchOpen = false;
     query = s.query;
     performSearch(s.query, true);
     showSuggestions = false;

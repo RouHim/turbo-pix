@@ -17,6 +17,7 @@
   let reloadToken = 0;
   let lastLoadSignature = '';
   let loadingStartTime = 0;
+  let loadError = $state(null);
 
   // --- Derived state ---
   const loading = $derived(photoGridState.loading);
@@ -75,6 +76,7 @@
 
     photoGridState.loading = true;
     loadingStartTime = Date.now();
+    loadError = null;
 
     try {
       if (reset) {
@@ -83,6 +85,14 @@
         photoGridState.hasMore = true;
         if (!photoGridState.semanticSearchMode) {
           photoGridState.currentQuery = route.query || null;
+        }
+        if (!route.query && photoGridState.semanticSearchMode) {
+          // URL-driven navigation to a query-less URL must end semantic search
+          // (Back from a search). Safety net: works even if PhotoGrid's route
+          // effect runs before SearchBar's (SearchBar mounts first — Header
+          // precedes <main> in App.svelte — so the pipeline normally wins).
+          photoGridState.semanticSearchMode = false;
+          photoGridState.currentQuery = null;
         }
       }
       let photosList = [];
@@ -174,6 +184,7 @@
         'error',
         5000
       );
+      loadError = error.message || true;
     } finally {
       // Ensure loading indicator shows for at least 300ms
       const loadingDuration = Date.now() - loadingStartTime;
@@ -252,8 +263,20 @@
 
   function handleFavoriteToggled(event) {
     const { photoHash, isFavorite } = event.detail;
-    const card = photoGridState.photos.find((p) => p.hash_sha256 === photoHash);
-    if (card) card.is_favorite = isFavorite;
+    const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === photoHash);
+    if (idx === -1) return;
+    if (route.view === 'favorites' && !isFavorite) {
+      photoGridState.photos.splice(idx, 1);
+    } else {
+      photoGridState.photos[idx].is_favorite = isFavorite;
+    }
+  }
+
+  function handlePhotoUpdated(event) {
+    const updatedPhoto = event.detail?.photo;
+    if (!updatedPhoto?.hash_sha256) return;
+    const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
+    if (idx !== -1) photoGridState.photos[idx] = updatedPhoto;
   }
 
   function handlePhotoRemoved(event) {
@@ -270,6 +293,7 @@
 
   onMount(() => {
     window.addEventListener('favoriteToggled', handleFavoriteToggled);
+    window.addEventListener('photoUpdated', handlePhotoUpdated);
     window.addEventListener('photoRemoved', handlePhotoRemoved);
     window.addEventListener('indexingCompleted', handleIndexingCompleted);
 
@@ -281,6 +305,7 @@
 
     return () => {
       window.removeEventListener('favoriteToggled', handleFavoriteToggled);
+      window.removeEventListener('photoUpdated', handlePhotoUpdated);
       window.removeEventListener('photoRemoved', handlePhotoRemoved);
       window.removeEventListener('indexingCompleted', handleIndexingCompleted);
       if (scrollContainer) {
@@ -313,7 +338,26 @@
     </div>
   {:else if photos.length === 0 && !loading}
     <!-- Empty state -->
-    {#if indexingState.isIndexing && !currentQuery}
+    {#if loadError}
+      <div class="error-state">
+        <div class="error-state-icon">
+          <Icon name="alert-triangle" width={64} height={64} />
+        </div>
+        <div class="error-state-title">
+          {$t('errors.error_loading_photos', { default: 'Error Loading Photos' })}
+        </div>
+        <div class="error-state-message">{loadError}</div>
+        <button
+          class="error-state-button"
+          onclick={() => {
+            reloadToken++;
+            loadPhotos(true);
+          }}
+        >
+          {$t('ui.try_again', { default: 'Try Again' })}
+        </button>
+      </div>
+    {:else if indexingState.isIndexing && !currentQuery}
       <div class="error-state indexing-in-progress">
         <div class="error-state-icon">
           <Icon name="camera" width={64} height={64} />
@@ -338,11 +382,10 @@
         </div>
         <div class="error-state-message">
           {#if currentQuery}
-            {$t(
-              'messages.no_photos_match_search',
-              { default: `No photos match your search for "${currentQuery}"` },
-              { values: { query: currentQuery } }
-            )}
+            {$t('messages.no_photos_match_search', {
+              default: `No photos match your search for "${currentQuery}"`,
+              values: { query: currentQuery },
+            })}
           {:else}
             {$t('messages.no_photos_indexed', { default: 'No photos have been indexed yet' })}
           {/if}

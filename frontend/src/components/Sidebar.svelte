@@ -12,9 +12,15 @@
   ];
 
   function navigate(view) {
+    if (view === 'all') {
+      // Clear any active search — matches the Header logo behavior and the
+      // old app.js nav handler (which called search.clearSearch()).
+      pushState({ view: 'all', query: null });
+      appState.sidebarOpen = false;
+      return;
+    }
     if (route.view === view) return;
     pushState({ view });
-    appState.currentView = view;
     appState.sidebarOpen = false;
   }
 

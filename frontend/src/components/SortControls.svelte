@@ -1,7 +1,6 @@
 <script>
   import { t } from '../lib/i18n.js';
   import { route, pushState } from '../lib/router.svelte.js';
-  import { appState } from '../lib/state.svelte.js';
 
   const options = [
     { value: 'date_desc', key: 'ui.newest_first', fallback: 'Newest First' },
@@ -14,7 +13,6 @@
 
   function onChange(e) {
     const sort = e.target.value;
-    appState.sortOrder = sort;
     pushState({ sort });
   }
 </script>

@@ -17,14 +17,15 @@
   let currentQuery = $state('');
   let searchTimer = null;
 
-  // Sync query input from route on popstate / initial load
+  // Sync query input + grid state from route on popstate / initial load.
+  // Re-running the pipeline routes prefix queries (type:/location:/is_favorite:)
+  // and semantic queries through their correct paths.
   $effect(() => {
-    if (route && route.query && route.query !== currentQuery) {
-      query = route.query;
-      currentQuery = route.query;
-    } else if (route && !route.query && currentQuery) {
-      query = '';
-      currentQuery = '';
+    if (!route) return;
+    if (route.query && route.query !== currentQuery) {
+      performSearch(route.query, false);
+    } else if (!route.query && currentQuery) {
+      clearSearch(false);
     }
   });
 
@@ -65,7 +66,6 @@
         photoGridState.semanticSearchMode = false;
         photoGridState.currentQuery = q;
         photoGridState.currentPage = 1;
-        appState.searchQuery = q;
         searching = false;
         return;
       }
@@ -85,7 +85,6 @@
     photoGridState.semanticSearchMode = true;
     photoGridState.currentQuery = cleanQuery;
     photoGridState.currentPage = 1;
-    appState.searchQuery = cleanQuery;
   }
 
   // The flag clears once the grid finishes loading the search results.
@@ -107,7 +106,6 @@
     photoGridState.semanticSearchMode = false;
     photoGridState.currentQuery = '';
     photoGridState.currentPage = 1;
-    appState.searchQuery = '';
 
     if (updateUrl) {
       pushState({ query: null });
@@ -268,14 +266,14 @@
     if (lowerValue.includes('2024') || lowerValue.includes('today')) {
       items.push({
         query: 'date:2024',
-        text: get(t)('ui.photos_from_year', { year: '2024' }) || '2024 photos',
+        text: get(t)('ui.photos_from_year', { values: { year: '2024' } }) || '2024 photos',
         icon: '\u{1F4C5}', // 📅
       });
     }
     if (lowerValue.includes('2023')) {
       items.push({
         query: 'date:2023',
-        text: get(t)('ui.photos_from_year', { year: '2023' }) || '2023 photos',
+        text: get(t)('ui.photos_from_year', { values: { year: '2023' } }) || '2023 photos',
         icon: '\u{1F4C5}',
       });
     }

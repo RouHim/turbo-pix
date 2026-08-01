@@ -1,5 +1,6 @@
 <script>
-  import { toasts } from '../lib/state.svelte.js';
+  import { toasts, removeToast } from '../lib/state.svelte.js';
+  import { t } from './i18n.js';
   import Icon from './Icon.svelte';
 
   const typeIcons = {
@@ -10,19 +11,25 @@
   };
 </script>
 
-{#if toasts.length > 0}
-  <div class="toast-container" aria-live="polite">
-    {#each toasts as toast (toast.id)}
-      <div class="toast toast-{toast.type}">
-        <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
-        <span class="toast-content">
-          {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
-          {#if toast.message}<span class="toast-message">{toast.message}</span>{/if}
-        </span>
-      </div>
-    {/each}
-  </div>
-{/if}
+<div class="toast-container" aria-live="polite">
+  {#each toasts as toast (toast.id)}
+    <div class="toast toast-{toast.type}">
+      <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
+      <span class="toast-content">
+        {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
+        {#if toast.message}<span class="toast-message">{toast.message}</span>{/if}
+      </span>
+      <button
+        type="button"
+        class="toast-close"
+        aria-label={$t('ui.close', { default: 'Close' })}
+        onclick={() => removeToast(toast.id)}
+      >
+        <Icon name="x" width={14} height={14} />
+      </button>
+    </div>
+  {/each}
+</div>
 
 <style>
   .toast-container {
@@ -42,7 +49,7 @@
     gap: 8px;
     padding: 12px 20px;
     border-radius: 12px;
-    background: var(--surface-glass);
+    background: var(--glass-bg);
     backdrop-filter: blur(16px) saturate(1.5);
     -webkit-backdrop-filter: blur(16px) saturate(1.5);
     color: var(--text-primary);
@@ -58,6 +65,19 @@
   }
   .toast-title {
     font-weight: 600;
+  }
+  .toast-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    opacity: 0.6;
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+  }
+  .toast-close:hover {
+    opacity: 1;
   }
   .toast-error {
     border-left: 3px solid var(--error, #e74c3c);

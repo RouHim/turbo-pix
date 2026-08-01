@@ -11,6 +11,7 @@
   let error = $state(false);
   let loaded = $state(false);
   let scanning = $state(false);
+  let lastHkState = null;
 
   onMount(() => {
     loadAndRender();
@@ -23,9 +24,12 @@
     const hk = phases.find((p) => p.id === 'housekeeping');
     if (hk?.state === 'active') {
       scanning = true;
+      lastHkState = 'active';
     } else if (hk?.state === 'done') {
       scanning = false;
-      loadAndRender();
+      const wasActive = lastHkState === 'active';
+      lastHkState = 'done';
+      if (wasActive) loadAndRender();
     }
   }
 
@@ -58,6 +62,12 @@
   async function keepPhoto(photo) {
     try {
       await api.removeHousekeepingCandidate(photo.hash_sha256);
+      addToast(
+        $t('notifications.kept', { default: 'Kept' }),
+        $t('notifications.photoKept', { default: 'Photo removed from housekeeping candidates' }),
+        'success',
+        2000
+      );
       window.dispatchEvent(
         new CustomEvent('housekeepingCandidateRemoved', {
           detail: { hash: photo.hash_sha256 },
@@ -145,7 +155,7 @@
             <img
               class="photo-card-image"
               src={getThumbnailUrl(photo, 'medium')}
-              alt={photo.filename || 'Photo'}
+              alt={photo.filename || $t('ui.photo', { default: 'Photo' })}
               loading="lazy"
               style="opacity: 1"
             />
@@ -161,7 +171,9 @@
               {/if}
               {#if photo.housekeepingScore != null}
                 <span class="housekeeping-score">
-                  Score: {photo.housekeepingScore.toFixed(0)}
+                  {$t('ui.housekeeping_score', { default: 'Score' })}: {photo.housekeepingScore.toFixed(
+                    0
+                  )}
                 </span>
               {/if}
             </span>
@@ -171,8 +183,8 @@
               type="button"
               class="card-action-btn keep-btn"
               data-action="keep"
-              title={$t('ui.yes', { default: 'Keep' })}
-              aria-label={$t('ui.yes', { default: 'Keep' })}
+              title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
+              aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
               onclick={() => keepPhoto(photo)}
             >
               <Icon name="check" width={18} height={18} />

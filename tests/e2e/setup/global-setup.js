@@ -338,6 +338,12 @@ async function startServer() {
 export default async function globalSetup() {
   console.log('\n=== TurboPix E2E Test Setup ===\n');
 
+  // Kill stale dev servers so the health check / port binding can't race a
+  // leftover process (AGENTS.md 'E2E port collision' learning). The pattern
+  // must match only the server binary: a broad 'turbo-pix' match also hits
+  // this runner (its argv contains the repo path via node_modules).
+  await execAsync("pkill -9 -f 'target/(debug|release)/turbo-pix' || true").catch(() => {});
+
   try {
     await buildBinary();
 

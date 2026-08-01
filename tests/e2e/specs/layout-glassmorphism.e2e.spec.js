@@ -39,25 +39,19 @@ test.describe('Layout Glassmorphism', () => {
   });
 
   test('indexing orbit should have saturate and blur in backdrop-filter', async ({ page }) => {
-    await page.evaluate(() => {
+    const backdropFilter = await page.evaluate(() => {
       document.querySelector('[data-phase-ring]').setAttribute('data-ring-mode', 'large');
+      return window.getComputedStyle(document.querySelector('[data-phase-ring]')).backdropFilter;
     });
-
-    const backdropFilter = await page.evaluate(
-      () => window.getComputedStyle(document.querySelector('[data-phase-ring]')).backdropFilter
-    );
 
     expect(backdropFilter).toContain('saturate');
     expect(backdropFilter).toContain('blur');
   });
 
   test('indexing orbit compact mode should be positioned at bottom-right', async ({ page }) => {
-    await page.evaluate(() => {
-      document.querySelector('[data-phase-ring]').setAttribute('data-ring-mode', 'compact');
-    });
-
     const styles = await page.evaluate(() => {
       const ring = document.querySelector('[data-phase-ring]');
+      ring.setAttribute('data-ring-mode', 'compact');
       const computed = window.getComputedStyle(ring);
       return {
         position: computed.position,
@@ -75,11 +69,8 @@ test.describe('Layout Glassmorphism', () => {
 
   test('sidebar should NOT be offset when indexing orbit is visible', async ({ page }) => {
     await TestHelpers.setDesktopViewport(page);
-    await page.evaluate(() => {
-      document.querySelector('[data-phase-ring]').setAttribute('data-ring-mode', 'compact');
-    });
-
     const result = await page.evaluate(() => {
+      document.querySelector('[data-phase-ring]').setAttribute('data-ring-mode', 'compact');
       const sidebarTop = parseFloat(
         window.getComputedStyle(document.querySelector('.sidebar')).top
       );

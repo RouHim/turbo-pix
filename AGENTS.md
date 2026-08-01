@@ -104,7 +104,7 @@ npm run test:e2e:report   # View test report
 
 ## Learnings
 
-**UI state desync:** Update both: `appState.value = x; domElement.value = x;`
+**UI state:** The `route` store (router.svelte.js) and the `$state` stores in state.svelte.js are the single source of truth; components render from them and must not mirror values into write-only fields.
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
@@ -118,23 +118,19 @@ npm run test:e2e:report   # View test report
 
 **Glassmorphism visibility:** `backdrop-filter` on CSS Grid children has no visible blur effect — the element must be `position: fixed` overlaying scrollable content for the blur to actually show. Header and sidebar need fixed positioning with content scrolling behind them.
 
-**InfiniteScroll layout dependency:** `infiniteScroll.js:9` binds to `.main-content` as the scroll container (`scrollTop`, `scrollHeight`, `clientHeight`). Any layout refactor must keep `.main-content` as a scrollable element with `overflow-y: auto` — removing this breaks infinite scroll silently.
+**InfiniteScroll layout dependency:** PhotoGrid.svelte binds to `.main-content` as the scroll container (`scrollTop`, `scrollHeight`, `clientHeight`). Any layout refactor must keep `.main-content` as a scrollable element with `overflow-y: auto` — removing this breaks infinite scroll silently.
 
-**Router static file order:** `router.js` must be listed in `handlers_static.rs` STATIC_FILES and loaded in `index.html` BEFORE `app.js` — `window.router` must exist when app.js initializes.
+**Router month-without-year guard:** In `router.svelte.js buildUrl()`, `?month=` must be nested inside the `year !== null` check. Writing `?month=3` without `?year=` is semantically invalid and the restore path already ignores it.
 
-**Router month-without-year guard:** In `router.js buildUrl()`, `?month=` must be nested inside the `year !== null` check. Writing `?month=3` without `?year=` is semantically invalid and the restore path already ignores it.
+**Router anti-loop pattern:** Components called from the `popstate` handler / route `$effect` must accept `updateUrl=false` to skip re-pushing to history. Pattern: `applyFilter(updateUrl=true)` normally, `applyFilter(updateUrl=false)` from popstate handler — prevents infinite push loops.
 
-**Router anti-loop pattern:** Components called from `onStateChange` (popstate) must accept `updateUrl=false` to skip re-pushing to history. Pattern: `applyFilter(updateUrl=true)` normally, `applyFilter(updateUrl=false)` from popstate handler — prevents infinite push loops.
+**E2E port collision:** `npm run test:e2e` global-setup may pass health check against a stale dev server on 18473, then `cargo run` fails with "port in use". Always run `pkill -9 -f turbo-pix` before the test suite to ensure a clean port. global-setup.js now runs `pkill -9 -f 'target/(debug|release)/turbo-pix'` itself before building — the pattern is deliberately narrow: a broad `-f turbo-pix` match kills the Playwright runner itself (its argv contains the repo path via node_modules).
 
-**E2E port collision:** `npm run test:e2e` global-setup may pass health check against a stale dev server on 18473, then `cargo run` fails with "port in use". Always run `pkill -9 -f turbo-pix` before the test suite to ensure a clean port.
-
-**i18n global name:** The app creates its translation manager as `window.i18nManager` (via `new window.I18nManager()` in `app.js`). `window.i18n` is never assigned — calling `window.i18n?.t()` silently falls back to hardcoded strings. Always use `window.i18nManager.t()` or `utils.t('key', 'fallback')`.
-
-**i18n key format:** Translation keys in `data-i18n` HTML attributes must use the exact flat key from the dictionary (e.g., `ui.indexing_phase_discovering`), not dot-path sub-objects (e.g., `ui.indexing.discovering`). The i18nManager does flat lookup, not nested object traversal.
+**i18n key format:** svelte-i18n keys are dot-paths into the nested JSON dictionaries (e.g. `ui.refresh`); en.json and de.json must stay structurally identical — every key in both.
 
 **Startup indexing isolation:** `src/main.rs:start_background_tasks()` must keep `run_startup_rescan()` on a dedicated `std::thread` with its own `tokio::runtime::Runtime`; moving startup indexing back onto the main async runtime starves HTTP requests and makes `/api/indexing/status` look hung.
 
-**Indexing empty-state contract:** `frontend/src/components/PhotoGrid.svelte` (template empty-state branch) must check `window.indexingStatus.isIndexing && !currentQuery` before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
+**Indexing empty-state contract:** `frontend/src/components/PhotoGrid.svelte` (template empty-state branch) must check `indexingState.isIndexing && !currentQuery` (frontend/src/lib/state.svelte.js) before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.
 
 **Video taken-at extraction order:** `src/metadata_extractor.rs:extract_taken_at_from_ffprobe_json()` must check `format.tags.creation_time` → `format.tags.com.apple.quicktime.creationdate` → `streams[].tags.creation_time` → `format.tags.date` / `format.tags.date-{lang}`, then fall back via `apply_file_creation_fallback()` using `created().or_else(modified)`; ffprobe metadata varies by container.
 
@@ -142,12 +138,18 @@ npm run test:e2e:report   # View test report
 
 **Svelte migration toolchain:** Vite 8.2's default CSS minifier (Lightning CSS) collapses adjacent `backdrop-filter` + `-webkit-backdrop-filter` pairs to the `-webkit-` form, which modern Chromium ignores (computed `backdrop-filter: none`). `vite.config.js` must keep `build.cssMinify: false`.
 
-**Svelte i18n:** svelte-i18n `$t(key, { values: {...} })` returns the raw message (ICU placeholders render literally) when `values` is omitted — always pass `values` for keys containing `{...}` placeholders.
+**Svelte i18n:** svelte-i18n `$t(key, { values: {...} })` returns the raw message (ICU placeholders render literally) when `values` is omitted — always pass `values` for keys containing `{...}` placeholders. `values` must be inside the options object — a third argument to `$t` is silently dropped and the raw message (literal `{…}` braces) is returned.
 
-**Svelte scoped CSS beats global media overrides:** Scoped styles (with the `svelte-*` hash attribute) outrank global `@media` rules of equal class specificity. The mobile `.viewer-content` single-column grid override in `app.css` was silently overridden by the scoped two-column `grid-template` in `PhotoViewer.svelte`, leaving the absolutely-positioned `.viewer-sidebar` anchored to an off-screen grid column. Mobile overrides that must win have to live in the scoped style too.
+**Svelte scoped CSS beats global media overrides:** Scoped styles (with the `svelte-*` hash attribute) outrank global `@media` rules of equal class specificity. The mobile `.viewer-content` single-column grid override in `app.css` was silently overridden by the scoped two-column `grid-template` in `PhotoViewer.svelte`, leaving the absolutely-positioned `.viewer-sidebar` anchored to an off-screen grid column. Mobile overrides that must win have to live in the scoped style too. Same for CSS layers: unlayered scoped rules beat `@layer utilities` helpers — add explicit scoped `.foo.hidden { display: none }` rules where needed.
 
 **`startViewTransition` defers its callback:** `document.startViewTransition(cb)` runs `cb` on the next frame. If the viewer is closed (Escape) inside that window, `close()` removes classes that were never added, then the deferred callback re-adds `active`/`fade-in` — viewer visibly open with `isOpen=false`, so Escape appears dead. Guard the callback with `if (!isOpen) return;`.
 
 **E2E server log strips query strings:** the warp access log shows `GET /api/photos` even when the request carries `?page=1&limit=50&q=...`. When debugging E2E request issues, trust the browser-side `page.on('request')`/`waitForResponse` URLs, not the server log.
 
 **Playwright click stability vs CSS animations:** an animated `transform: scale(...)` on the viewer (`.photo-viewer.fade-in`) makes every descendant's bounding box move every frame, so `locator.click()` on viewer children (e.g. the mobile sidebar close button) never stabilizes. Keep open/close animations opacity-only.
+
+**Viewer metadata sidebar starts hidden:** `showSidebar` is `false` when the viewer opens — the whole `.viewer-sidebar` (incl. the Edit Metadata button) sits at `x > viewport` with `width: 0; overflow: hidden`. Drive the `[title="View Details"]` (`metadata-btn`) toggle first, then wait for `.viewer-sidebar.show`, before clicking `#metadata-edit-btn` in E2E/manual checks.
+
+**Semantic search latency:** `/api/search/semantic` takes ~3s server-side per query (embedding generation) even on tiny collections. E2E/manual checks that search must allow ≥5-8s after the request fires; don't mistake the loading skeleton for a hang.
+
+**Rotate fails on housekeeping-candidate photos (known bug):** `image_editor::rotate_image` rewrites `hash_sha256` via `update_with_old_hash`; `housekeeping_candidates.photo_hash` has `FOREIGN KEY ... REFERENCES photos(hash_sha256) ON DELETE CASCADE`, and SQLite rejects updating a parent PK → `HTTP 500 FOREIGN KEY constraint failed` for any photo that is a housekeeping candidate. Fix direction: delete/repoint `housekeeping_candidates` rows or recreate the photo row instead of updating the PK.

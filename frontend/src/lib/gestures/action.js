@@ -22,6 +22,11 @@ export function gestures(node, handlers) {
 
   return {
     update(newHandlers) {
+      // Drop callbacks for events the new handler set no longer provides;
+      // on() overwrites per-event slots, so same-name handlers replace cleanly.
+      for (const event of Object.keys(handlers || {})) {
+        if (!newHandlers || !(event in newHandlers)) manager.off(event);
+      }
       registerHandlers(newHandlers);
     },
     destroy() {

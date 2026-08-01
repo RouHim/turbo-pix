@@ -170,15 +170,14 @@
         {$t('ui.no_pending_collages', { default: 'No pending collages' })}
       </p>
       <button type="button" class="btn" onclick={generateCollages}>
-        {$t('ui.refresh', { default: 'Generate' })}
+        {$t('ui.generate', { default: 'Generate' })}
       </button>
     </div>
   {:else}
     <div class="collages-header">
       <h2 class="view-title">{$t('ui.pending_collages', { default: 'Pending Collages' })}</h2>
       <button type="button" class="btn generate-btn" onclick={generateCollages}>
-        + {#if loading}<span class="spinner-sm"></span>{/if}
-        {$t('ui.refresh', { default: 'Generate' })}
+        {$t('ui.generate', { default: 'Generate' })}
       </button>
     </div>
 
@@ -301,21 +300,5 @@
 
   .reject-collage-btn:hover {
     background: var(--color-danger-hover, oklch(48% 0.2 25deg));
-  }
-
-  .spinner-sm {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
 </style>

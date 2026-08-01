@@ -166,6 +166,7 @@ jobs:
         run: npx semantic-release
 
   build-frontend:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

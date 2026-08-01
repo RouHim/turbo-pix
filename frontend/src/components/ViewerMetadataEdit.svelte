@@ -91,10 +91,10 @@
         updates.taken_at = localDate.toISOString();
       }
 
-      const lat = latitude.trim();
-      const lng = longitude.trim();
-      const hasLat = lat !== '' && lat != null;
-      const hasLng = lng !== '' && lng != null;
+      const lat = String(latitude ?? '').trim();
+      const lng = String(longitude ?? '').trim();
+      const hasLat = lat !== '';
+      const hasLng = lng !== '';
 
       if ((hasLat && !hasLng) || (!hasLat && hasLng)) {
         errorMessage = get(t)('ui.metadata.edit_validation_gps_pair', {

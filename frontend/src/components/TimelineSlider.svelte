@@ -4,7 +4,6 @@
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { appState } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
 
@@ -84,8 +83,6 @@
       // Never push month without year
       pushState({ year, month: year ? month : null });
     }
-    appState.selectedYear = currentFilter?.year ?? null;
-    appState.selectedMonth = currentFilter?.year ? (currentFilter.month ?? null) : null;
   }
 
   function resetFilter() {
@@ -264,8 +261,6 @@
         if (yearSelectEl) yearSelectEl.value = '';
         if (monthSelectEl) monthSelectEl.value = '';
         renderHeatmap();
-        appState.selectedYear = null;
-        appState.selectedMonth = null;
       }
     } else if (year) {
       const matchIndex = positions.findIndex((p) => p.year === year && p.month === month);
@@ -277,8 +272,6 @@
       if (yearSelectEl && year) yearSelectEl.value = String(year);
       if (monthSelectEl) monthSelectEl.value = String(month);
       renderHeatmap();
-      appState.selectedYear = year;
-      appState.selectedMonth = month || null;
     }
   });
 

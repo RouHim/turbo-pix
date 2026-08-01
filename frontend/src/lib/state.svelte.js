@@ -1,14 +1,6 @@
 export const appState = $state({
-  currentView: 'all',
-  searchQuery: '',
-  sortOrder: 'date_desc',
-  selectedYear: null,
-  selectedMonth: null,
-  isLoading: false,
-  isMobile: false,
   sidebarOpen: false,
   mobileSearchOpen: false,
-  totalPhotos: 0,
 });
 
 export const indexingState = $state({
@@ -43,4 +35,9 @@ export function addToast(title, message = '', type = 'info', duration = 4000) {
       if (idx !== -1) toasts.splice(idx, 1);
     }, duration);
   }
+}
+
+export function removeToast(id) {
+  const idx = toasts.findIndex((t) => t.id === id);
+  if (idx !== -1) toasts.splice(idx, 1);
 }

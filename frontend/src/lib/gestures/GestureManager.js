@@ -429,6 +429,18 @@ export class GestureManager {
     }
   }
 
+  off(event) {
+    const eventMap = {
+      pinch: 'onPinch',
+      pinchEnd: 'onPinchEnd',
+      swipe: 'onSwipe',
+      doubleTap: 'onDoubleTap',
+      pan: 'onPan',
+      panEnd: 'onPanEnd',
+    };
+    if (eventMap[event]) this.callbacks[eventMap[event]] = null;
+  }
+
   enablePan() {
     this.activeGesture = 'pan';
   }

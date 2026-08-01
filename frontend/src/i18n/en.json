@@ -183,11 +183,16 @@
     "indexing_status_geo_resolution": "Looking up where your photos were taken...",
     "indexing_status_collages": "Creating collages from your photos...",
     "indexing_status_housekeeping": "Looking for duplicates and issues...",
-    "indexing_counter": "{processed} / {total}",
     "indexing_sheet_title": "Indexing Progress",
     "indexing_sheet_photos_indexed": "photos indexed",
     "indexing_sheet_errors": "{count} error(s)",
-    "indexing_ring_tooltip": "{phase} — {processed}/{total}"
+    "indexing_ring_tooltip": "{phase} — {processed}/{total}",
+    "generate": "Generate",
+    "keep_photo": "Keep (Remove from housekeeping list)",
+    "housekeeping_score": "Score",
+    "cannot_rotate": "Cannot Rotate",
+    "raw_rotation_disabled": "RAW files cannot be rotated",
+    "video_rotation_disabled": "Video rotation is not supported"
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",
@@ -234,7 +239,12 @@
     "flipped": "Flipped",
     "deleted": "Deleted",
     "error": "Error",
-    "connection": "Connection"
+    "connection": "Connection",
+    "kept": "Kept",
+    "photoKept": "Photo removed from housekeeping candidates",
+    "accepted": "Accepted",
+    "rejected": "Rejected",
+    "keepFailed": "Failed to keep photo"
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

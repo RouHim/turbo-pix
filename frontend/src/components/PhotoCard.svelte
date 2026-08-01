@@ -106,7 +106,12 @@
     e.stopPropagation();
     try {
       await api.removeHousekeepingCandidate(photo.hash_sha256);
-      addToast('Kept', 'Photo removed from housekeeping candidates', 'success', 2000);
+      addToast(
+        $t('notifications.kept', { default: 'Kept' }),
+        $t('notifications.photoKept', { default: 'Photo removed from housekeeping candidates' }),
+        'success',
+        2000
+      );
       window.dispatchEvent(
         new CustomEvent('housekeepingCandidateRemoved', {
           detail: { hash: photo.hash_sha256 },
@@ -114,7 +119,12 @@
       );
     } catch (err) {
       console.error('Failed to keep photo:', err);
-      addToast('Error', 'Failed to keep photo', 'error', 4000);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('notifications.keepFailed', { default: 'Failed to keep photo' }),
+        'error',
+        4000
+      );
     }
   }
 
@@ -127,7 +137,12 @@
     if (!confirm(confirmMsg)) return;
     try {
       await api.deletePhoto(photo.hash_sha256);
-      addToast('Deleted', 'Photo deleted permanently', 'success', 2000);
+      addToast(
+        $t('notifications.deleted', { default: 'Deleted' }),
+        $t('notifications.photoDeleted', { default: 'Photo deleted successfully' }),
+        'success',
+        2000
+      );
       window.dispatchEvent(
         new CustomEvent('housekeepingCandidateRemoved', {
           detail: { hash: photo.hash_sha256 },
@@ -154,7 +169,12 @@
     e.stopPropagation();
     try {
       await api.acceptCollage(photo.collageId);
-      addToast('Accepted', 'Collage accepted', 'success', 2000);
+      addToast(
+        $t('notifications.accepted', { default: 'Accepted' }),
+        $t('notifications.collageAccepted', { default: 'Collage accepted' }),
+        'success',
+        2000
+      );
       window.dispatchEvent(
         new CustomEvent('collageAccepted', {
           detail: { collageId: photo.collageId },
@@ -162,7 +182,12 @@
       );
     } catch (err) {
       console.error('Failed to accept collage:', err);
-      addToast('Error', 'Failed to accept collage', 'error', 4000);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('notifications.collageAcceptFailed', { default: 'Failed to accept collage' }),
+        'error',
+        4000
+      );
     }
   }
 
@@ -174,7 +199,12 @@
     if (!confirm(confirmMessage)) return;
     try {
       await api.rejectCollage(photo.collageId);
-      addToast('Rejected', 'Collage rejected', 'success', 2000);
+      addToast(
+        $t('notifications.rejected', { default: 'Rejected' }),
+        $t('notifications.collageRejected', { default: 'Collage rejected' }),
+        'success',
+        2000
+      );
       window.dispatchEvent(
         new CustomEvent('collageRejected', {
           detail: { collageId: photo.collageId },
@@ -182,7 +212,12 @@
       );
     } catch (err) {
       console.error('Failed to reject collage:', err);
-      addToast('Error', 'Failed to reject collage', 'error', 4000);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('notifications.collageRejectFailed', { default: 'Failed to reject collage' }),
+        'error',
+        4000
+      );
     }
   }
 
@@ -297,8 +332,8 @@
       <!-- Housekeeping context -->
       <button
         class="card-action-btn keep-btn"
-        title="Keep (Remove from housekeeping list)"
-        aria-label="Keep (Remove from housekeeping list)"
+        title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
+        aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
         data-action="keep"
         style="color: #10b981"
         onclick={keepPhoto}
@@ -307,8 +342,8 @@
       </button>
       <button
         class="card-action-btn delete-btn"
-        title="Delete Photo"
-        aria-label="Delete Photo"
+        title={$t('ui.delete_photo', { default: 'Delete Photo' })}
+        aria-label={$t('ui.delete_photo', { default: 'Delete Photo' })}
         data-action="delete-housekeeping"
         style="color: #ef4444"
         onclick={deletePhoto}

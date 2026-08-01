@@ -6,8 +6,9 @@
   import { appState, addToast } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
-  import { throttle } from './lib/utils.js';
+  import { throttle, performance } from './lib/utils.js';
   import { APP_CONSTANTS } from './lib/constants.js';
+  import { logger } from './lib/logger.js';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import SortControls from './components/SortControls.svelte';
@@ -47,8 +48,8 @@
 
   onMount(() => {
     const updateMobile = throttle(() => {
-      appState.isMobile = window.innerWidth < APP_CONSTANTS.MOBILE_BREAKPOINT;
-      if (!appState.isMobile) appState.sidebarOpen = false;
+      const isMobile = window.innerWidth < APP_CONSTANTS.MOBILE_BREAKPOINT;
+      if (!isMobile) appState.sidebarOpen = false;
     }, 150);
 
     updateMobile();
@@ -72,6 +73,21 @@
       }
     }, 30000);
 
+    const perfTimer = setInterval(() => {
+      const apiCalls = performance
+        .getEntries()
+        .filter((e) => e.entryType === 'measure' && e.name.startsWith('api-'));
+      if (apiCalls.length > 0) {
+        const avg = apiCalls.reduce((sum, e) => sum + e.duration, 0) / apiCalls.length;
+        logger.info('Performance metrics', {
+          component: 'App',
+          metric: 'average_api_response_time',
+          averageDurationMs: avg,
+          apiCalls: apiCalls.length,
+        });
+      }
+    }, 60000);
+
     (async () => {
       let defaultLocale = 'en';
       try {
@@ -82,21 +98,14 @@
       }
       initI18n(defaultLocale);
       initRouter();
-      appState.currentView = route.view;
-      appState.sortOrder = route.sort;
-      appState.searchQuery = route.query || '';
       ready = true;
     })();
 
     return () => {
       window.removeEventListener('resize', updateMobile);
       clearInterval(healthTimer);
+      clearInterval(perfTimer);
     };
-  });
-
-  // Keep appState.currentView in sync with route
-  $effect(() => {
-    appState.currentView = route.view;
   });
 </script>
 

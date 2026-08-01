@@ -65,18 +65,26 @@
   const title = $derived(
     photo?.filename || (photo ? `Photo ${photo.hash_sha256?.substring(0, 8)}` : '-')
   );
-  const dateText = $derived(photo?.taken_at ? formatDate(photo.taken_at) : '-');
+  const dateText = $derived(
+    photo?.taken_at ? formatDate(photo.taken_at) : $t('ui.unknown', { default: 'Unknown' })
+  );
   const sizeText = $derived.by(() => {
-    if (!photo) return '-';
-    const sz = photo.file_size ? formatFileSize(photo.file_size) : '-';
+    if (!photo) return $t('ui.unknown', { default: 'Unknown' });
+    const sz = photo.file_size
+      ? formatFileSize(photo.file_size)
+      : $t('ui.unknown', { default: 'Unknown' });
     const dims = photo.width && photo.height ? ` \u2022 ${photo.width}\u00d7${photo.height}` : '';
     return sz + dims;
   });
-  const cameraText = $derived(camera.make && camera.model ? `${camera.make} ${camera.model}` : '-');
+  const cameraText = $derived(
+    camera.make && camera.model
+      ? `${camera.make} ${camera.model}`
+      : $t('ui.unknown', { default: 'Unknown' })
+  );
   const locationText = $derived(
     location.latitude && location.longitude
       ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-      : '-'
+      : $t('ui.no_location_data', { default: 'No location data' })
   );
 
   const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
@@ -302,7 +310,11 @@
             style="opacity: {fieldOpacity(settings.flash_used !== undefined)}"
             >{setField(
               'meta-flash',
-              settings.flash_used !== undefined ? (settings.flash_used ? 'Yes' : 'No') : null
+              settings.flash_used !== undefined
+                ? settings.flash_used
+                  ? $t('ui.yes', { default: 'Yes' })
+                  : $t('ui.no', { default: 'No' })
+                : null
             )}</span
           >
         </div>
@@ -339,11 +351,6 @@
                 : null
             )}</span
           >
-        </div>
-        <div class="meta-item">
-          <span class="meta-label"
-            >{$t('ui.metadata.location_name', { default: 'Location Name:' })}</span
-          ><span id="meta-location-name" style="opacity: 0.5">-</span>
         </div>
       </div>
     {/if}

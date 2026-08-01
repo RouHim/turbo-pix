@@ -6,20 +6,60 @@ import de from '../i18n/de.json';
 register('en', () => Promise.resolve(en));
 register('de', () => Promise.resolve(de));
 
+const SUPPORTED = ['en', 'de'];
+
+function readSavedLocale() {
+  try {
+    const saved = localStorage.getItem('turbo-pix-locale');
+    return SUPPORTED.includes(saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function detectBrowserLocale() {
+  try {
+    const nav = navigator;
+    const candidates = [
+      nav.language,
+      ...(nav.languages || []),
+      nav.userLanguage,
+      nav.browserLanguage,
+      nav.systemLanguage,
+    ];
+    for (const lang of candidates) {
+      if (!lang) continue;
+      const code = String(lang).split('-')[0].toLowerCase();
+      if (SUPPORTED.includes(code)) return code;
+    }
+  } catch {
+    /* navigator unavailable */
+  }
+  return null;
+}
+
 export function initI18n(defaultLocale) {
-  const saved = localStorage.getItem('turbo-pix-locale');
-  const initial = ['en', 'de'].includes(saved)
-    ? saved
-    : ['en', 'de'].includes(defaultLocale)
-      ? defaultLocale
-      : 'en';
+  const initial =
+    readSavedLocale() ||
+    detectBrowserLocale() ||
+    (SUPPORTED.includes(defaultLocale) ? defaultLocale : 'en');
   init({ fallbackLocale: 'en', initialLocale: initial });
+  try {
+    if (typeof document !== 'undefined') document.documentElement.lang = initial;
+  } catch {
+    /* ignore */
+  }
 }
 
 export function setLocale(l) {
-  if (!['en', 'de'].includes(l)) l = 'en';
+  if (!SUPPORTED.includes(l)) l = 'en';
   locale.set(l);
-  localStorage.setItem('turbo-pix-locale', l);
+  try {
+    localStorage.setItem('turbo-pix-locale', l);
+    if (typeof document !== 'undefined') document.documentElement.lang = l;
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 export { _ as t };

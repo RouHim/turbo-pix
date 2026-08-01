@@ -493,7 +493,11 @@
         photoHash: photo.hash_sha256,
         filename: photo.filename,
       });
-      showToast('Error', 'Failed to load photo', 'error');
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('errors.failedToLoadPhoto', { default: 'Failed to load photo' }),
+        'error'
+      );
     } finally {
       isLoading = false;
     }
@@ -502,7 +506,11 @@
   async function displayImage(photo) {
     const imageUrl = getMediaUrl(photo);
     if (!imageUrl) {
-      showToast('Error', 'Failed to load image', 'error');
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('errors.failedToLoadImage', { default: 'Failed to load image' }),
+        'error'
+      );
       return;
     }
 
@@ -518,7 +526,11 @@
       showImage(img.src);
     };
     img.onerror = () => {
-      showToast('Error', 'Failed to load image', 'error');
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('errors.failedToLoadImage', { default: 'Failed to load image' }),
+        'error'
+      );
     };
     img.src = imageUrl;
   }
@@ -689,9 +701,9 @@
     const isVid = isVideoFile(currentPhoto.filename);
     rotationDisabled = isRaw || isVid;
     rotationDisabledTitle = isRaw
-      ? 'RAW files cannot be rotated'
+      ? get(t)('ui.raw_rotation_disabled', { default: 'RAW files cannot be rotated' })
       : isVid
-        ? 'Video rotation is not supported'
+        ? get(t)('ui.video_rotation_disabled', { default: 'Video rotation is not supported' })
         : '';
   }
 
@@ -784,11 +796,21 @@
     if (!currentPhoto || isCollagePhoto(currentPhoto)) return;
 
     if (isRawFile(currentPhoto.filename)) {
-      addToast('Cannot Rotate', 'RAW files cannot be rotated.', 'error', 4000);
+      addToast(
+        get(t)('ui.cannot_rotate', { default: 'Cannot Rotate' }),
+        get(t)('ui.raw_rotation_disabled', { default: 'RAW files cannot be rotated' }),
+        'error',
+        4000
+      );
       return;
     }
     if (isVideoFile(currentPhoto.filename)) {
-      addToast('Cannot Rotate', 'Video rotation is not supported.', 'error', 4000);
+      addToast(
+        get(t)('ui.cannot_rotate', { default: 'Cannot Rotate' }),
+        get(t)('ui.video_rotation_disabled', { default: 'Video rotation is not supported' }),
+        'error',
+        4000
+      );
       return;
     }
 
@@ -797,6 +819,7 @@
       const updatedPhoto = await api.rotatePhoto(currentPhoto.hash_sha256, angle);
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
+      window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
 
       const timestamp = Date.now();
       const newUrl = `${getPhotoUrl(updatedPhoto.hash_sha256)}?t=${timestamp}`;
@@ -830,7 +853,12 @@
       isLoading = true;
       await api.deletePhoto(photoHash);
       window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
-      addToast('Deleted', 'Photo deleted successfully', 'success', 2000);
+      addToast(
+        get(t)('notifications.deleted', { default: 'Deleted' }),
+        get(t)('notifications.photoDeleted', { default: 'Photo deleted successfully' }),
+        'success',
+        2000
+      );
 
       photos = photos.filter((p) => p.hash_sha256 !== photoHash);
 
@@ -915,7 +943,9 @@
 
   function onMetadataSaved(updatedPhoto) {
     currentPhoto = updatedPhoto;
-    if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
+    const idx = photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
+    if (idx !== -1) photos[idx] = updatedPhoto;
+    window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
   }
 
   // ── Keyboard ───────────────────────────────────────────────────────────────
@@ -1312,6 +1342,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .viewer-prev.hidden,
+  .viewer-next.hidden {
+    display: none;
   }
 
   .viewer-prev:hover,

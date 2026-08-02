@@ -135,8 +135,12 @@ pub fn build_static_routes(
             } else {
                 // Serve index.html for all other GET requests (SPA routes)
                 Ok::<_, warp::Rejection>(
-                    warp::reply::with_header(index_html, "content-type", "text/html")
-                        .into_response(),
+                    warp::reply::with_header(
+                        warp::reply::with_header(index_html, "content-type", "text/html"),
+                        "cache-control",
+                        "no-cache",
+                    )
+                    .into_response(),
                 )
             }
         },

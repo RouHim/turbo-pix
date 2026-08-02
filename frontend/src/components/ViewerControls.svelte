@@ -20,6 +20,7 @@
     isAcceptingCollage = false,
     rotationDisabled = false,
     rotationDisabledTitle = '',
+    sidebarOpen = false,
   } = $props();
 </script>
 
@@ -86,6 +87,8 @@
       type="button"
       class="zoom-btn metadata-btn"
       title={$t('ui.view_details', { default: 'View Details' })}
+      aria-expanded={sidebarOpen}
+      aria-controls="viewer-sidebar"
       onclick={onMetadata}
     >
       <Icon name="info" width={18} height={18} />
@@ -164,6 +167,10 @@
   @media (width <= 768px) {
     .viewer-controls {
       bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
+    }
+
+    .viewer-controls-inner {
+      gap: var(--space-3);
     }
 
     .zoom-btn {

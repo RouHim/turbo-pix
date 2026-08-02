@@ -86,7 +86,7 @@ test.describe('Keyboard Shortcuts', () => {
 
     // WHEN: User presses Enter on the button
     const favoriteResponse = page.waitForResponse(
-      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT'
+      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT' && r.status() === 200
     );
     await page.keyboard.press('Enter');
 

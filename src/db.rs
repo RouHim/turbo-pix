@@ -1705,4 +1705,94 @@ mod tests {
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, berlin_photo.file_path);
     }
+
+    #[tokio::test]
+    async fn test_search_injection_shaped_tokens_are_literal() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut fav_photo = create_test_photo("sunset-fav.jpg".to_string(), "fav-hash".to_string());
+        fav_photo.is_favorite = Some(true);
+        fav_photo.create(&pool).await.unwrap();
+
+        for query in ["is_favorite:true' OR '1'='1", "sunset' OR '1'='1 --"] {
+            let (photos, total) =
+                Photo::search_photos(&pool, &create_search_query(query), 50, 0, None, None)
+                    .await
+                    .unwrap();
+            assert_eq!(total, 0, "query {query:?} must not match");
+            assert!(photos.is_empty(), "query {query:?} must not match");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_unknown_type_value_falls_back_to_general() {
+        let pool = create_test_db_pool().await.unwrap();
+        let raw_photo = create_test_photo("x_type:raw_y.jpg".to_string(), "raw-hash".to_string());
+        raw_photo.create(&pool).await.unwrap();
+        let plain_photo = create_test_photo("sunset.jpg".to_string(), "plain-hash".to_string());
+        plain_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("type:raw");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, raw_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_location_absorption_stops_at_prefix_token() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut ny_fav_photo = create_test_photo_with_metadata(
+            "ny-fav.jpg",
+            "ny-fav-hash",
+            json!({ "location": { "city": "New York" } }),
+        );
+        ny_fav_photo.is_favorite = Some(true);
+        ny_fav_photo.create(&pool).await.unwrap();
+        let ny_plain_photo = create_test_photo_with_metadata(
+            "ny-plain.jpg",
+            "ny-plain-hash",
+            json!({ "location": { "city": "New York" } }),
+        );
+        ny_plain_photo.create(&pool).await.unwrap();
+        let mut berlin_fav_photo = create_test_photo_with_metadata(
+            "berlin-fav.jpg",
+            "berlin-fav-hash",
+            json!({ "location": { "city": "Berlin" } }),
+        );
+        berlin_fav_photo.is_favorite = Some(true);
+        berlin_fav_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("location:New York is_favorite:true");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, ny_fav_photo.file_path);
+
+        let mut ny_video_photo = create_test_photo_with_metadata(
+            "ny-video.mp4",
+            "ny-video-hash",
+            json!({ "location": { "city": "New York" } }),
+        );
+        ny_video_photo.mime_type = Some("video/mp4".to_string());
+        ny_video_photo.create(&pool).await.unwrap();
+        let ny_image_photo = create_test_photo_with_metadata(
+            "ny-image.jpg",
+            "ny-image-hash",
+            json!({ "location": { "city": "New York" } }),
+        );
+        ny_image_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("location:New York type:video");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].file_path, ny_video_photo.file_path);
+    }
 }

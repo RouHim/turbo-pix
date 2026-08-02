@@ -39,4 +39,10 @@
     outline: none;
     border-color: var(--primary-color);
   }
+
+  @media (width <= 480px) {
+    .sort-select {
+      width: 100%;
+    }
+  }
 </style>

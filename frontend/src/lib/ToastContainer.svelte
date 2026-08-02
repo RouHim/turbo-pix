@@ -15,10 +15,10 @@
   {#snippet toastItem(toast)}
     <div class="toast toast-{toast.type}" class:leaving={toast.leaving}>
       <Icon name={typeIcons[toast.type] || 'info'} width={18} height={18} />
-      <span class="toast-content">
+      <div class="toast-content">
         {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
         {#if toast.message}<span class="toast-message">{toast.message}</span>{/if}
-      </span>
+      </div>
       <button
         type="button"
         class="toast-close"

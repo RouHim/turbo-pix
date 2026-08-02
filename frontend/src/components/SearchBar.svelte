@@ -339,7 +339,7 @@
 
   <!-- Search hint -->
   <div class="search-hint" class:visible={focused && !query} data-search-hint="true">
-    <Icon name="info" width={14} height={14} className="search-hint-icon" />
+    <Icon name="info" width={14} height={14} class="search-hint-icon" />
     <span
       >{$t('ui.search_hint', {
         default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true',
@@ -495,6 +495,7 @@
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-light);
     backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     background: var(--glass-bg, oklch(100% 0 0deg / 95%));
     margin-top: var(--space-2);
     overflow: hidden;

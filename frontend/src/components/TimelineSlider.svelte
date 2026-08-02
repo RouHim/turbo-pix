@@ -598,4 +598,21 @@
       font-size: 13px;
     }
   }
+
+  @media (width <= 480px) {
+    .timeline-dropdowns {
+      gap: var(--space-2);
+      padding: var(--space-3) var(--space-2);
+    }
+
+    .timeline-year-select,
+    .timeline-month-select {
+      min-width: 0;
+    }
+
+    .timeline-reset {
+      width: 36px;
+      height: 36px;
+    }
+  }
 </style>

@@ -186,3 +186,7 @@ npm run test:e2e:report   # View test report
 **Backend `q` is tokenized:** `db::search_photos` previously matched `type:`/`location:`/`is_favorite:` only when the whole query started with them; combined queries (`sunset is_favorite:true`) silently matched nothing. The parser now splits on whitespace and ANDs per-token; `location:` absorbs following words until the next prefix token.
 
 **Semantic mode must reset off the `all` view:** PhotoGrid's reset block exits `semanticSearchMode` when `route.view !== 'all'`; semantic results are unfilterable, so filtered views (favorites/videos) always use the regular path with the view filter merged into the query (`cat` + Favorites → `q=cat is_favorite:true`).
+
+**build.rs stale-dist guard:** `build.rs` walks `frontend/{index.html,src,public}` (emitting rerun-if-changed per entry) and panics when the newest frontend source is newer than `dist/index.html` — `cargo build` fails loudly instead of silently embedding a stale bundle. CI jobs must run `npm run build` before any cargo step that embeds dist/. Strict `>` comparison: equal mtimes count as fresh.
+
+**`$state` fields must use `let`, not `const`:** Svelte 5's `const x = $state(...)` trips eslint's `no-const-assign` (the assignment is emitted into the compiled output). PhotoCard's `let imageLoaded = $state(false)` is the pattern; ported code often copies the `const` form from older vanilla JS — use `let` for every `$state` field.

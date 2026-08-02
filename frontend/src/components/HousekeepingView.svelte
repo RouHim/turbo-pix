@@ -1,10 +1,10 @@
 <script>
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
-  import Icon from '../lib/Icon.svelte';
   import { api } from '../lib/api.js';
   import { addToast, indexingState } from '../lib/state.svelte.js';
-  import { getThumbnailUrl, formatDate, handleError } from '../lib/utils.js';
+  import { handleError } from '../lib/utils.js';
+  import HousekeepingCard from './HousekeepingCard.svelte';
 
   let candidates = $state([]);
   let loading = $state(true);
@@ -129,15 +129,6 @@
       busy = false;
     }
   }
-
-  function handleCardClick(e, photo) {
-    if (e.target.closest('.card-action-btn')) return;
-    window.dispatchEvent(
-      new CustomEvent('openViewer', {
-        detail: { photo, photos: candidates.map(enrichPhoto) },
-      })
-    );
-  }
 </script>
 
 <div class="housekeeping-view">
@@ -167,77 +158,19 @@
     <div class="photo-grid" id="photo-grid">
       {#each candidates as candidate (candidate.photo.hash_sha256)}
         {@const photo = enrichPhoto(candidate)}
-        <div
-          class="photo-card"
-          data-photo-id={photo.hash_sha256}
-          role="button"
-          tabindex="0"
-          onclick={(e) => handleCardClick(e, photo)}
-          onkeydown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
-              e.preventDefault();
-              handleCardClick(e, photo);
-            }
+        <HousekeepingCard
+          {photo}
+          {busy}
+          onKeep={() => keepPhoto(photo)}
+          onDelete={() => deletePhoto(photo)}
+          onOpen={(p) => {
+            window.dispatchEvent(
+              new CustomEvent('openViewer', {
+                detail: { photo: p, photos: candidates.map(enrichPhoto) },
+              })
+            );
           }}
-        >
-          <div class="photo-card-image-container image-loaded">
-            <img
-              class="photo-card-image"
-              src={getThumbnailUrl(photo, 'medium')}
-              alt={photo.filename || $t('ui.photo', { default: 'Photo' })}
-              loading="lazy"
-              style="opacity: 1"
-            />
-            {#if photo.metadata?.video?.codec}
-              <div class="video-play-icon" aria-hidden="true">
-                <Icon name="play" width={20} height={20} className="video-play-svg" />
-              </div>
-            {/if}
-          </div>
-          <div class="photo-card-overlay">
-            <span class="photo-card-title">
-              {photo.filename || $t('ui.photo', { default: 'Photo' })}
-            </span>
-            <span class="photo-card-meta">
-              <span>{formatDate(photo.taken_at || photo.date_modified)}</span>
-              {#if photo.housekeepingReason}
-                <span class="housekeeping-reason">{photo.housekeepingReason}</span>
-              {/if}
-              {#if photo.housekeepingScore != null}
-                <span class="housekeeping-score">
-                  {$t('ui.housekeeping_score', { default: 'Score' })}: {photo.housekeepingScore.toFixed(
-                    0
-                  )}
-                </span>
-              {/if}
-            </span>
-          </div>
-          <div class="photo-card-actions">
-            <button
-              type="button"
-              class="card-action-btn keep-btn"
-              data-action="keep"
-              title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-              aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-              disabled={busy}
-              onclick={() => keepPhoto(photo)}
-            >
-              <Icon name="check" width={18} height={18} />
-            </button>
-            <button
-              type="button"
-              class="card-action-btn delete-housekeeping-btn"
-              data-action="delete-housekeeping"
-              title={$t('ui.delete_photo', { default: 'Delete' })}
-              aria-label={$t('ui.delete_photo', { default: 'Delete' })}
-              disabled={busy}
-              onclick={() => deletePhoto(photo)}
-            >
-              <Icon name="trash-2" width={18} height={18} />
-            </button>
-          </div>
-        </div>
+        />
       {/each}
     </div>
   {/if}
@@ -264,57 +197,5 @@
     padding: var(--space-16) var(--space-4);
     color: var(--text-secondary);
     font-size: var(--font-lg);
-  }
-
-  .housekeeping-reason {
-    color: var(--color-danger, oklch(55% 0.2 25deg));
-    font-weight: var(--font-medium);
-  }
-
-  .housekeeping-score {
-    font-size: var(--font-xs);
-    opacity: 0.8;
-  }
-
-  .video-play-icon {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: var(--button-size-lg);
-    height: var(--button-size-lg);
-    background: oklch(0% 0 0deg / 55%);
-    border-radius: var(--radius-full);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    backdrop-filter: blur(8px);
-    box-shadow: var(--shadow-medium);
-    pointer-events: none;
-    color: white;
-    z-index: 5;
-  }
-
-  .video-play-icon :global(svg) {
-    fill: white;
-    stroke: white;
-  }
-
-  .keep-btn {
-    background: var(--color-success, oklch(65% 0.18 155deg));
-    color: white;
-  }
-
-  .keep-btn:hover {
-    background: var(--color-success-hover, oklch(58% 0.18 155deg));
-  }
-
-  .delete-housekeeping-btn {
-    background: var(--color-danger, oklch(55% 0.2 25deg));
-    color: white;
-  }
-
-  .delete-housekeeping-btn:hover {
-    background: var(--color-danger-hover, oklch(48% 0.2 25deg));
   }
 </style>

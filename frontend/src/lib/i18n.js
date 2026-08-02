@@ -41,8 +41,8 @@ function detectBrowserLocale() {
 export function initI18n(defaultLocale) {
   const initial =
     readSavedLocale() ||
-    (SUPPORTED.includes(defaultLocale) ? defaultLocale : null) ||
     detectBrowserLocale() ||
+    (SUPPORTED.includes(defaultLocale) ? defaultLocale : null) ||
     'en';
   init({ fallbackLocale: 'en', initialLocale: initial });
   try {

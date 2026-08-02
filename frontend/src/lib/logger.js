@@ -14,10 +14,7 @@ class TurboPixLogger {
       INFO: 1,
       WARN: 2,
       ERROR: 3,
-      FATAL: 4,
     };
-
-    this.reverseLevels = Object.keys(this.levels);
 
     // Initialize storage
     if (this.enablePersistence && typeof Storage !== 'undefined') {
@@ -93,7 +90,6 @@ class TurboPixLogger {
           console.warn(message, JSON.parse(JSON.stringify(entry.data)));
           break;
         case 'ERROR':
-        case 'FATAL':
           console.error(message, entry.error || JSON.parse(JSON.stringify(entry.data)));
           break;
       }
@@ -142,24 +138,6 @@ class TurboPixLogger {
     return this.storedLogs || [];
   }
 
-  exportLogs() {
-    const logs = this.getStoredLogs();
-    const dataStr = JSON.stringify(logs, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(dataBlob);
-    link.download = `turbopix_logs_${new Date().toISOString().split('T')[0]}.json`;
-    link.click();
-  }
-
-  clearStoredLogs() {
-    this.storedLogs = [];
-    if (typeof Storage !== 'undefined') {
-      localStorage.removeItem('turbopix_logs');
-    }
-  }
-
   // Convenience methods
   debug(message, data = {}) {
     return this.log('DEBUG', message, data);
@@ -175,49 +153,6 @@ class TurboPixLogger {
 
   error(message, error = null, data = {}) {
     return this.log('ERROR', message, data, error);
-  }
-
-  fatal(message, error = null, data = {}) {
-    return this.log('FATAL', message, data, error);
-  }
-
-  // Context management
-  withContext(newContext) {
-    const logger = new TurboPixLogger({
-      level: this.level,
-      enableConsole: this.enableConsole,
-      enablePersistence: this.enablePersistence,
-      maxStoredLogs: this.maxStoredLogs,
-    });
-    logger.context = { ...this.context, ...newContext };
-    logger.sessionId = this.sessionId;
-    logger.storedLogs = this.storedLogs;
-    return logger;
-  }
-
-  withComponent(component) {
-    return this.withContext({ component });
-  }
-
-  // Performance tracking
-  startTimer(name) {
-    const startTime = performance.now();
-    return {
-      end: (data = {}) => {
-        const duration = performance.now() - startTime;
-        this.info(`Timer: ${name}`, { duration, ...data });
-        return duration;
-      },
-    };
-  }
-
-  // User action tracking
-  trackUserAction(action, data = {}) {
-    this.info(`User Action: ${action}`, {
-      action,
-      timestamp: Date.now(),
-      ...data,
-    });
   }
 
   // Error boundary helper

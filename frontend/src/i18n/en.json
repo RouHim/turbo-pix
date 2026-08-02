@@ -149,6 +149,7 @@
     "photos_from_year": "Photos from {year}",
     "raw_files_only": "RAW files only",
     "photos_with_gps": "Photos with GPS",
+    "indexing_complete": "Indexing complete",
     "indexing_photos": "Processing your photos...",
     "housekeeping_scanning": "Looking for duplicates and issues...",
     "no_housekeeping_candidates": "No issues found. Your library is clean!",

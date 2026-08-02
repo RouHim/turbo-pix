@@ -178,7 +178,7 @@
 
     {#if isVideo}
       <div class="video-play-icon" aria-hidden="true">
-        <Icon name="play" width={20} height={20} className="video-play-svg" />
+        <Icon name="play" width={20} height={20} class="video-play-svg" />
       </div>
     {/if}
   </div>
@@ -336,6 +336,7 @@
     justify-content: flex-end;
     padding: var(--space-5);
     backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
   }
 
   .photo-card:hover .photo-card-overlay {
@@ -433,6 +434,7 @@
     align-items: center;
     justify-content: center;
     backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     box-shadow: var(--shadow-medium);
     pointer-events: none;
     color: white;

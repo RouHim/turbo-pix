@@ -428,13 +428,11 @@
       zoomAnimFrame = null;
       isZoomAnimating = false;
     }
-    if (transcodePollTimer) {
-      clearInterval(transcodePollTimer);
-      transcodePollTimer = null;
-    }
-    // Clearing the poll timer without hiding the toast would leave the
-    // transcode message visible forever (the polling handler is the only
-    // path that would have hidden it).
+    // The poll's next tick (<= 2s) hits bailIfStale (isOpen is false), which
+    // clears its own interval, nulls the shared timer only if still owned,
+    // hides the toast, and resolves the pending promise so displayPhoto's
+    // finally resets isLoading. No extra request: bailIfStale runs before
+    // the fetch.
     hideTranscodeToast();
     metadataEditRef?.close?.();
     isOpen = false;
@@ -801,6 +799,7 @@
     try {
       if (isFav) {
         await api.removeFromFavorites(photoHash);
+        if (currentPhoto?.hash_sha256 !== photoHash) return;
         currentPhoto = { ...currentPhoto, is_favorite: false };
         photos[currentIndex] = currentPhoto;
         addToast(
@@ -811,6 +810,7 @@
         );
       } else {
         await api.addToFavorites(photoHash);
+        if (currentPhoto?.hash_sha256 !== photoHash) return;
         currentPhoto = { ...currentPhoto, is_favorite: true };
         photos[currentIndex] = currentPhoto;
         addToast(
@@ -882,9 +882,12 @@
       return;
     }
 
+    const photoHash = currentPhoto.hash_sha256;
+
     try {
       isLoading = true;
-      const updatedPhoto = await api.rotatePhoto(currentPhoto.hash_sha256, angle);
+      const updatedPhoto = await api.rotatePhoto(photoHash, angle);
+      if (currentPhoto?.hash_sha256 !== photoHash) return;
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
       // The backend rewrites hash_sha256 on rotation; sync the URL so the
@@ -1066,7 +1069,7 @@
       case ' ':
         e.preventDefault();
         if (videoEl && !videoEl.paused) videoEl.pause();
-        else if (videoEl && videoEl.paused) videoEl.play();
+        else if (videoEl && videoEl.paused) videoEl.play().catch(() => {});
         break;
       case 'f':
         e.preventDefault();
@@ -1274,6 +1277,7 @@
       {isFavorite}
       {rotationDisabled}
       {rotationDisabledTitle}
+      sidebarOpen={showSidebar}
       showAcceptCollage={isPendingCollage}
       {isAcceptingCollage}
       onZoomIn={zoomIn}
@@ -1319,7 +1323,7 @@
       </div>
     </div>
 
-    <div class="viewer-sidebar" class:show={showSidebar}>
+    <div class="viewer-sidebar" id="viewer-sidebar" class:show={showSidebar}>
       <ViewerMetadata
         photo={currentPhoto}
         onEditMetadata={openMetadataEdit}
@@ -1605,6 +1609,19 @@
     .viewer-content {
       grid-template-areas: 'main';
       grid-template-columns: 1fr;
+    }
+
+    .viewer-close {
+      top: var(--space-3);
+      right: var(--space-3);
+    }
+
+    .viewer-prev {
+      left: var(--space-3);
+    }
+
+    .viewer-next {
+      right: var(--space-3);
     }
 
     .viewer-sidebar {

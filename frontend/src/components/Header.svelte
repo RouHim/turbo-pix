@@ -155,6 +155,14 @@
     .menu-btn,
     .mobile-search-btn {
       display: flex;
+      font-size: var(--font-2xl);
+      transition: var(--transition-fast);
+    }
+
+    .menu-btn:active,
+    .mobile-search-btn:active {
+      background: var(--surface-elevated);
+      transform: scale(0.95);
     }
 
     .header-actions {

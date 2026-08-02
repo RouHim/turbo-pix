@@ -473,19 +473,22 @@ export class SwipeableViewer {
     const width = this.getViewportWidth();
     const direction = this.getNavigationDirection(translateX);
 
-    this.adjacent.previous.style.transform = `translateX(${translateX - width}px)`;
-    this.adjacent.next.style.transform = `translateX(${translateX + width}px)`;
-
-    this.adjacent.previous.classList.toggle(
-      'visible',
-      translateX > 0 &&
-        direction === 'previous' &&
-        this.adjacent.previous.dataset.available === 'true'
-    );
-    this.adjacent.next.classList.toggle(
-      'visible',
-      translateX < 0 && direction === 'next' && this.adjacent.next.dataset.available === 'true'
-    );
+    if (this.adjacent.previous) {
+      this.adjacent.previous.style.transform = `translateX(${translateX - width}px)`;
+      this.adjacent.previous.classList.toggle(
+        'visible',
+        translateX > 0 &&
+          direction === 'previous' &&
+          this.adjacent.previous.dataset.available === 'true'
+      );
+    }
+    if (this.adjacent.next) {
+      this.adjacent.next.style.transform = `translateX(${translateX + width}px)`;
+      this.adjacent.next.classList.toggle(
+        'visible',
+        translateX < 0 && direction === 'next' && this.adjacent.next.dataset.available === 'true'
+      );
+    }
   }
 
   updateAdjacentSources() {

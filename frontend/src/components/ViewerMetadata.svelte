@@ -540,4 +540,14 @@
     background: var(--background-secondary);
     color: var(--text-primary);
   }
+
+  .btn-icon:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-icon:disabled:hover {
+    background: none;
+    color: var(--text-muted);
+  }
 </style>

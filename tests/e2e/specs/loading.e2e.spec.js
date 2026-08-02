@@ -82,6 +82,7 @@ test.describe('Startup loading behavior', () => {
   });
 
   test('shows error state on failed load and recovers via Try Again', async ({ page }) => {
+    TestHelpers.setupConsoleMonitoring(page);
     let failPhotos = true;
     await page.route(
       (url) => url.pathname === '/api/photos',

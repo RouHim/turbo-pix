@@ -56,7 +56,11 @@ export function parsePositiveInteger(value) {
   const trimmed = String(value).trim();
   const parsedValue = Number.parseInt(trimmed, 10);
 
-  if (!Number.isInteger(parsedValue) || parsedValue <= 0 || String(parsedValue) !== trimmed) {
+  if (
+    !Number.isInteger(parsedValue) ||
+    parsedValue <= 0 ||
+    String(parsedValue) !== trimmed.replace(/^0+(?=\d)/, '')
+  ) {
     return null;
   }
 

@@ -687,6 +687,7 @@ mod tests {
     /// THEN scanning should continue without crashing (graceful error handling)
     #[test]
     fn test_scan_moov_failure_recovery() {
+        let _env_lock = crate::video_processor::tests::acquire_test_env_lock();
         let temp_dir = TempDir::new().unwrap();
         let corrupted = temp_dir.path().join("corrupted.mp4");
         std::fs::write(&corrupted, b"this is not a valid video file").unwrap();

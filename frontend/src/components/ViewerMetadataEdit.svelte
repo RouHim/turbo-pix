@@ -31,6 +31,7 @@
   }
 
   function closeModal() {
+    editTargetHash = null;
     showModal = false;
     document.body.style.overflow = '';
     errorMessage = '';
@@ -334,6 +335,7 @@
   .modal-content {
     background: var(--glass-bg, oklch(100% 0 0deg / 90%));
     backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--divider-color);
     border-radius: var(--radius-lg);
     max-width: 500px;

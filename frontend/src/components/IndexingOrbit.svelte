@@ -399,9 +399,8 @@
           {@const pos = polarToCartesian(140, 140, 120, midpointAngle)}
           <g
             data-orbit-phase={phase.id}
-            style="transform-origin: 140px 140px; transform-box: view-box; animation: {prefersReducedMotion()
-              ? 'none'
-              : 'orbit-segment 2s ease-in-out infinite'}"
+            style="transform-origin: 140px 140px; transform-box: view-box"
+            class:orbit-segment-anim={!prefersReducedMotion()}
           >
             <circle cx={pos.x} cy={pos.y} class="orbit-dot" data-orbit-dot="true"></circle>
           </g>
@@ -461,7 +460,7 @@
         class:is-error={phase.isError}
         data-phase-id={phase.id}
       >
-        <Icon name={phase.icon} width={16} height={16} className="phase-icon" />
+        <Icon name={phase.icon} width={16} height={16} class="phase-icon" />
         <div class="phase-info">
           <span class="phase-name">{phase.phaseName}</span>
           <div class="phase-progress-bar">
@@ -639,6 +638,10 @@
       opacity: 0.6;
       r: 7px;
     }
+  }
+
+  .orbit-segment-anim {
+    animation: orbit-segment 2s ease-in-out infinite;
   }
 
   @keyframes orbit-segment {

@@ -239,4 +239,68 @@ test.describe('Photo Viewer', () => {
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
   });
+
+  test('should replace grid card with new hash after rotation', async ({ page }) => {
+    // GIVEN: At least one photo card is visible in stream
+    const cardsBefore = await TestHelpers.getPhotoCards(page);
+    expect(cardsBefore.length).toBeGreaterThan(0);
+
+    // Rotation is photo-only: pick the first non-video card (videos show a
+    // play icon and disable the rotate buttons).
+    let firstCard = null;
+    for (const card of cardsBefore) {
+      if ((await card.locator('.video-play-icon').count()) === 0) {
+        firstCard = card;
+        break;
+      }
+    }
+    expect(firstCard, 'at least one photo (non-video) card should be visible').toBeTruthy();
+
+    const oldHash = await firstCard.getAttribute('data-photo-id');
+    expect(oldHash).toBeTruthy();
+
+    // Capture everything needed to restore the photo afterwards: rotation
+    // rewrites the file bytes (new hash) and the DB row (hash_sha256), so
+    // the test would otherwise mutate shared server state for every
+    // subsequent test.
+    const dataManager = new TestDataManager();
+    const photos = await dataManager.fetchAllPhotos();
+    const photo = photos.find((p) => p.hash_sha256 === oldHash);
+    expect(photo, `photo ${oldHash} should be listed by the photos API`).toBeTruthy();
+
+    const fileBytes = await readFile(photo.file_path);
+    const fileStats = await stat(photo.file_path);
+
+    // WHEN: Open viewer and rotate the photo right
+    await firstCard.click();
+    await TestHelpers.verifyViewerOpen(page);
+    await page.locator('.rotate-right-btn').click();
+
+    // THEN: the old-hash card is replaced by a card with the new hash
+    // (rotation rewrites hash_sha256 — the backend returns the new hash and
+    // the grid must consume it via photoUpdated, otherwise the old card
+    // keeps a dead media URL).
+    await expect(page.locator(TestHelpers.selectors.photoCard(oldHash))).toHaveCount(0);
+    const photosAfter = await dataManager.fetchAllPhotos();
+    const rotated = photosAfter.find((p) => p.file_path === photo.file_path);
+    expect(rotated).toBeTruthy();
+    expect(rotated.hash_sha256).not.toBe(oldHash);
+    await expect(page.locator(TestHelpers.selectors.photoCard(rotated.hash_sha256))).toHaveCount(1);
+
+    // CLEANUP: restore the file bytes + mtime and revert the DB hash so
+    // shared server state is unchanged, even if an assertion above failed.
+    await writeFile(photo.file_path, fileBytes);
+    await utimes(photo.file_path, fileStats.atime, fileStats.mtime);
+
+    const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+    try {
+      db.prepare('UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ? AND file_path = ?').run(
+        oldHash,
+        rotated.hash_sha256,
+        photo.file_path
+      );
+    } finally {
+      db.close();
+    }
+  });
 });

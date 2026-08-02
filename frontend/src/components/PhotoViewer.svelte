@@ -855,6 +855,15 @@
     try {
       if (isFav) {
         await api.removeFromFavorites(photoHash);
+        // Grid sync fires even if the user navigated away mid-request: the
+        // backend row changed, so suppressing the event would leave the grid
+        // card with a stale favorite state until the next reload. Only the
+        // viewer-local state below is guarded.
+        window.dispatchEvent(
+          new CustomEvent('favoriteToggled', {
+            detail: { photoHash, isFavorite: false },
+          })
+        );
         if (currentPhoto?.hash_sha256 !== photoHash) return;
         currentPhoto = { ...currentPhoto, is_favorite: false };
         photos[currentIndex] = currentPhoto;
@@ -866,6 +875,11 @@
         );
       } else {
         await api.addToFavorites(photoHash);
+        window.dispatchEvent(
+          new CustomEvent('favoriteToggled', {
+            detail: { photoHash, isFavorite: true },
+          })
+        );
         if (currentPhoto?.hash_sha256 !== photoHash) return;
         currentPhoto = { ...currentPhoto, is_favorite: true };
         photos[currentIndex] = currentPhoto;
@@ -876,12 +890,6 @@
           2000
         );
       }
-
-      window.dispatchEvent(
-        new CustomEvent('favoriteToggled', {
-          detail: { photoHash, isFavorite: !isFav },
-        })
-      );
     } catch {
       addToast(
         get(t)('ui.fav_error', { default: 'Failed to update favorite status' }),
@@ -948,8 +956,13 @@
       // suppressing the event would leave a card whose media 404s. Only the
       // viewer-local state + URL rewrite below are guarded — a response
       // landing after close() must not reopen the dismissed viewer via the
-      // route effect.
-      window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
+      // route effect. oldHash lets the grid replace the card that carries
+      // the pre-rotation hash.
+      window.dispatchEvent(
+        new CustomEvent('photoUpdated', {
+          detail: { photo: updatedPhoto, oldHash: photoHash },
+        })
+      );
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;

@@ -1087,7 +1087,19 @@ fn create_collage_image(
                         Ok(img) => img,
                         Err(e) => {
                             error!("Failed to decode RAW file {}: {}", photo.file_path, e);
-                            continue;
+                            // Same permanence rule as the permit-contention
+                            // arm: committing a blank cell here would bake
+                            // the full-chunk signature into the collage and
+                            // block nightly regeneration forever
+                            // (exists_by_signature matches), even if the
+                            // failure is transient or the file is later
+                            // repaired. Abort so the collage is not
+                            // committed and the next run retries.
+                            return Err(format!(
+                                "Failed to decode RAW file {}: {}",
+                                photo.file_path, e
+                            )
+                            .into());
                         }
                     }
                 }
@@ -1111,7 +1123,11 @@ fn create_collage_image(
                 Ok(img) => img,
                 Err(e) => {
                     error!("Failed to load image {}: {}", image_path, e);
-                    continue;
+                    // Same permanence rule: a blank cell committed with the
+                    // full-chunk signature blocks nightly regeneration
+                    // forever even after the file is repaired; abort the
+                    // collage instead (no commit, next run retries).
+                    return Err(format!("Failed to load image {}: {}", image_path, e).into());
                 }
             }
         };

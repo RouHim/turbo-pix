@@ -363,7 +363,17 @@
   function handlePhotoUpdated(event) {
     const updatedPhoto = event.detail?.photo;
     if (!updatedPhoto?.hash_sha256) return;
-    const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
+    // Rotation rewrites hash_sha256: the grid card still carries the OLD
+    // hash (hash-embedded thumbnail URLs), so match by the event's oldHash
+    // first, then by the new hash (e.g. when the card was added after the
+    // rotation), then by file_path.
+    const oldHash = event.detail?.oldHash;
+    const idx = photoGridState.photos.findIndex(
+      (p) =>
+        (oldHash && p.hash_sha256 === oldHash) ||
+        p.hash_sha256 === updatedPhoto.hash_sha256 ||
+        (p.file_path && updatedPhoto.file_path && p.file_path === updatedPhoto.file_path)
+    );
     if (idx !== -1) photoGridState.photos[idx] = updatedPhoto;
   }
 

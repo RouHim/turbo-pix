@@ -30,6 +30,19 @@ pub struct ThumbnailGenerator {
 /// `turbo_pix_frame_*` construction in `generate_video_thumbnail`).
 static THUMBNAIL_FRAME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Removes the video-thumbnail temp frame on drop, on EVERY exit path: a
+/// failed `extract_frame_at_time` (after ffmpeg -y may have created a
+/// partial file), a corrupt frame, or an encode error would otherwise leak
+/// one file in $TMPDIR per failed request, accumulating without bound for
+/// a corrupt video (same RAII pattern as semantic_search's TempFrameDir).
+struct TempFrameGuard(PathBuf);
+
+impl Drop for TempFrameGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 impl ThumbnailGenerator {
     pub fn new(config: &Config, _db_pool: DbPool) -> CacheResult<Self> {
         let cache_dir = PathBuf::from(&config.cache.thumbnail_cache_path);
@@ -78,9 +91,9 @@ impl ThumbnailGenerator {
                 if !metadata.is_file() {
                     continue;
                 }
-                // Filename `{hash}_{size}.{format}` → index key
-                // `{hash}_{size}_{format}` (CacheKey Display). Hashes are
-                // hex so the last `_` split is unambiguous.
+                // Filename `{hash}[_{version}]_{size}.{format}` → index key
+                // `{hash}[_{version}]_{size}_{format}` (CacheKey Display,
+                // versioned and unversioned alike).
                 let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
@@ -258,7 +271,10 @@ impl ThumbnailGenerator {
                 .as_millis()
         ));
 
-        // Extract frame at calculated time
+        // Extract frame at calculated time. The guard removes the file on
+        // every exit path (extract failure with a partial file, corrupt
+        // frame, encode error) — success removes it via drop() too.
+        let _temp_guard = TempFrameGuard(temp_frame_path.clone());
         video_processor::extract_frame_at_time(video_path, frame_time, &temp_frame_path).await?;
 
         // Load the extracted frame and create thumbnail
@@ -269,11 +285,6 @@ impl ThumbnailGenerator {
         let img = self.apply_orientation(img, orientation);
         let thumbnail = self.resize_image(img, size);
         let thumbnail_data = self.encode_image(thumbnail, format)?;
-
-        // Clean up temporary file
-        if temp_frame_path.exists() {
-            let _ = std::fs::remove_file(&temp_frame_path);
-        }
 
         Ok(thumbnail_data)
     }
@@ -322,12 +333,7 @@ impl ThumbnailGenerator {
     }
 
     pub fn get_cache_path(&self, key: &CacheKey) -> PathBuf {
-        let filename = format!(
-            "{}_{}.{}",
-            key.content_hash,
-            key.size.as_str(),
-            key.format.as_str()
-        );
+        let filename = key.filename();
 
         // Use first 3 characters of hash for subdirectory distribution
         let subdir = if key.content_hash.len() >= 3 {
@@ -943,17 +949,12 @@ mod tests {
             .await
             .unwrap();
 
-        // THEN: Both formats should be cached with different filenames
-        let webp_key = CacheKey::new(
-            photo.hash_sha256.clone(),
-            ThumbnailSize::Medium,
-            ThumbnailFormat::Webp,
-        );
-        let jpeg_key = CacheKey::new(
-            photo.hash_sha256.clone(),
-            ThumbnailSize::Medium,
-            ThumbnailFormat::Jpeg,
-        );
+        // THEN: Both formats should be cached with different filenames (the
+        // versioned keys get_or_generate actually wrote).
+        let webp_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Medium, ThumbnailFormat::Webp).unwrap();
+        let jpeg_key =
+            CacheKey::from_photo(&photo, ThumbnailSize::Medium, ThumbnailFormat::Jpeg).unwrap();
 
         let webp_path = generator.get_cache_path(&webp_key);
         let jpeg_path = generator.get_cache_path(&jpeg_key);

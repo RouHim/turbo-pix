@@ -55,7 +55,7 @@ fn with_transcode_warning(
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
 use crate::video_processor::{
-    claim_transcode, get_transcode_status, get_transcoded_path, is_hevc_video,
+    claim_transcode, get_transcode_status, get_transcoded_path_versioned, is_hevc_video,
     set_transcode_status, transcode_hevc_to_h264, TranscodeClaim, TranscodeState, TranscodeStatus,
 };
 use crate::warp_helpers::{DatabaseError, NotFoundError};
@@ -133,7 +133,16 @@ pub async fn get_video_file(
         let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
             .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
         let cache_path = Path::new(&cache_dir);
-        let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
+        // Versioned by the source's size+mtime (the DB hash is path-derived,
+        // so an in-place edit keeps the hash while the bytes change — the
+        // version makes this miss after the rescan notices the edit instead
+        // of serving the stale H.264 transcode forever).
+        let transcoded_path = get_transcoded_path_versioned(
+            cache_path,
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
 
         // Check if transcoded version exists
         if !transcoded_path.exists() {
@@ -197,6 +206,34 @@ pub async fn get_video_file(
                     tokio::spawn(async move {
                         match transcode_hevc_to_h264(&input_path, &output_path).await {
                             Ok(_) => {
+                                // Only one transcode version file per hash:
+                                // remove older `{hash}_*.mp4` siblings now
+                                // that the new version is in place (the
+                                // versioned name folds in size+mtime, so an
+                                // in-place edit produces a new file rather
+                                // than overwriting).
+                                if let Some(parent) = output_path.parent() {
+                                    if let Ok(entries) = std::fs::read_dir(parent) {
+                                        let new_name = output_path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or_default();
+                                        for entry in entries.filter_map(|e| e.ok()) {
+                                            let path = entry.path();
+                                            let is_old_version = path
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .is_some_and(|n| {
+                                                    n.starts_with(&format!("{}_", hash))
+                                                        && n.ends_with(".mp4")
+                                                        && n != new_name
+                                                });
+                                            if is_old_version {
+                                                let _ = std::fs::remove_file(&path);
+                                            }
+                                        }
+                                    }
+                                }
                                 set_transcode_status(
                                     &hash,
                                     TranscodeStatus {
@@ -687,7 +724,18 @@ mod tests {
         let _cache_guard =
             EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
 
-        let transcoded_path = get_transcoded_path(temp_dir.path(), hash);
+        // Cache the transcode under the VERSIONED name (size + mtime are
+        // folded in, so the handler's lookup and this write must agree).
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let transcoded_path = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
         std::fs::create_dir_all(transcoded_path.parent().unwrap())
             .expect("failed to create cache dir");
         std::fs::write(&transcoded_path, b"cached-transcoded-video")
@@ -1047,8 +1095,18 @@ mod tests {
         let _cache_guard =
             EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
 
-        // A previous transcode attempt failed, leaving a corrupt file behind.
-        let transcoded_path = get_transcoded_path(temp_dir.path(), &hash);
+        // A previous transcode attempt failed, leaving a corrupt file behind
+        // (under the VERSIONED name the handler looks up).
+        let photo = Photo::find_by_hash(&db_pool, &hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let transcoded_path = get_transcoded_path_versioned(
+            temp_dir.path(),
+            &hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
         std::fs::create_dir_all(transcoded_path.parent().unwrap())
             .expect("failed to create cache dir");
         std::fs::write(&transcoded_path, b"partial-corrupt-output")
@@ -1170,8 +1228,18 @@ mod tests {
             EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
 
         // A previous transcode attempt failed after the temp+rename change, so
-        // no file exists at the cache path -- only a leftover temp sibling.
-        let transcoded_path = get_transcoded_path(temp_dir.path(), &hash);
+        // no file exists at the cache path -- only a leftover temp sibling
+        // (under the VERSIONED name the handler looks up).
+        let photo = Photo::find_by_hash(&db_pool, &hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let transcoded_path = get_transcoded_path_versioned(
+            temp_dir.path(),
+            &hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
         std::fs::create_dir_all(transcoded_path.parent().unwrap())
             .expect("failed to create cache dir");
         let temp_output_path = transcoded_path.with_extension("mp4.tmp");
@@ -1234,7 +1302,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let hash = "f2".repeat(32);
 
-        let _video_path = setup_test_video(&db_pool, &temp_dir, &hash).await;
+        let video_path = setup_test_video(&db_pool, &temp_dir, &hash).await;
 
         let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\n'\n");
@@ -1275,8 +1343,19 @@ mod tests {
         let status = get_transcode_status(&hash).expect("status should still be present");
         assert_eq!(status.state, TranscodeState::InProgress);
         assert_eq!(status.started_at, Some(started_at));
+        // Version args come from the REAL source file: the handler's lookup
+        // path folds in size+mtime, so asserting the matching path is
+        // meaningful (any file there would be the version the handler serves).
+        let meta = std::fs::metadata(&video_path).expect("source video should exist");
+        let mtime_ms = meta
+            .modified()
+            .expect("mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("post-epoch")
+            .as_millis() as i64;
         assert!(
-            !get_transcoded_path(temp_dir.path(), &hash).exists(),
+            !get_transcoded_path_versioned(temp_dir.path(), &hash, meta.len() as i64, mtime_ms)
+                .exists(),
             "no transcode output should exist"
         );
 

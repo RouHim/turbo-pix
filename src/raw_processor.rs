@@ -51,6 +51,44 @@ impl CFA {
             CFA::GRBG => CFA::BGGR,
         }
     }
+
+    /// Offset of this pattern's 2x2 basis relative to RGGB's. Every Bayer
+    /// pattern is a horizontal/vertical shift of the RGGB basis:
+    /// RGGB (0,0), GRBG (1,0), GBRG (0,1), BGGR (1,1). The channel at image
+    /// position (x, y) is the RGGB-basis channel at ((x+dx) % 2, (y+dy) % 2).
+    fn basis_offset(self) -> (usize, usize) {
+        match self {
+            CFA::RGGB => (0, 0),
+            CFA::GRBG => (1, 0),
+            CFA::GBRG => (0, 1),
+            CFA::BGGR => (1, 1),
+        }
+    }
+
+    /// Bayer channel role at image position (x, y) for this pattern.
+    fn channel_at(self, x: usize, y: usize) -> BayerChannel {
+        let (dx, dy) = self.basis_offset();
+        match ((x + dx) % 2, (y + dy) % 2) {
+            (0, 0) => BayerChannel::Red,
+            (0, 1) | (1, 0) => BayerChannel::Green,
+            _ => BayerChannel::Blue,
+        }
+    }
+
+    /// Basis-space coordinates of position (x, y): the 2x2 block's origin
+    /// (0,0) is the pattern's Red pixel, (1,1) its Blue pixel.
+    fn basis_coords(self, x: usize, y: usize) -> (usize, usize) {
+        let (dx, dy) = self.basis_offset();
+        ((x + dx) % 2, (y + dy) % 2)
+    }
+}
+
+/// Bayer channel role for a 2x2 position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BayerChannel {
+    Red,
+    Green,
+    Blue,
 }
 
 /// Decode a RAW image file to a DynamicImage
@@ -230,16 +268,13 @@ fn apply_white_balance(data: &mut [u16], width: usize, height: usize, wb_coeffs:
             let idx = y * width + x;
             let pixel = data[idx] as f32;
 
-            // Apply multiplier based on CFA position
-            let multiplier = match cfa {
-                CFA::RGGB => match (y % 2, x % 2) {
-                    (0, 0) => r_mult, // R pixel
-                    (0, 1) => g_mult, // G pixel
-                    (1, 0) => g_mult, // G pixel
-                    (1, 1) => b_mult, // B pixel
-                    _ => unreachable!(),
-                },
-                _ => 1.0, // Fallback for other CFA patterns
+            // Apply multiplier based on the channel role at this CFA position
+            // (works for all four Bayer patterns, not just RGGB — a wrong
+            // multiplier would tint the image).
+            let multiplier = match cfa.channel_at(x, y) {
+                BayerChannel::Red => r_mult,
+                BayerChannel::Green => g_mult,
+                BayerChannel::Blue => b_mult,
             };
 
             let adjusted = (pixel * multiplier).min(65535.0) as u16;
@@ -316,21 +351,31 @@ fn simple_demosaic_16bit(
         for x in 0..width {
             let idx = y * width + x;
             let pixel = get_pixel(x, y);
+            let (bx, by) = cfa.basis_coords(x, y);
 
-            // Determine RGB values based on CFA pattern and position
-            let (r, g, b) = match cfa {
-                CFA::RGGB => match (y % 2, x % 2) {
-                    (0, 0) => (pixel, get_pixel(x + 1, y), get_pixel(x, y + 1)), // R pixel
-                    (0, 1) => (get_pixel(x.wrapping_sub(1), y), pixel, get_pixel(x, y + 1)), // G pixel (R row)
-                    (1, 0) => (get_pixel(x, y.wrapping_sub(1)), pixel, get_pixel(x + 1, y)), // G pixel (B row)
-                    (1, 1) => (
-                        get_pixel(x, y.wrapping_sub(1)),
-                        get_pixel(x.wrapping_sub(1), y),
-                        pixel,
-                    ), // B pixel
-                    _ => unreachable!(),
-                },
-                _ => (pixel, pixel, pixel), // Fallback for other CFA patterns
+            // Nearest-neighbor demosaic for ALL four Bayer patterns: each
+            // channel reads the pixel whose basis position carries that
+            // channel. Basis coordinates map to image offsets: Red is at
+            // (-bx, -by), Blue at (1-bx, 1-by), and Green is the pixel
+            // itself on the green rows, else the nearest green basis
+            // position ((1-bx, -by) for Red positions, (-bx, 1-by) for
+            // Blue positions — matching the RGGB neighbor choices).
+            let (r, g, b) = match cfa.channel_at(x, y) {
+                BayerChannel::Red => (
+                    pixel,
+                    get_pixel(x + 1 - bx, y.wrapping_sub(by)),
+                    get_pixel(x + 1 - bx, y + 1 - by),
+                ),
+                BayerChannel::Green => (
+                    get_pixel(x.wrapping_sub(bx), y.wrapping_sub(by)),
+                    pixel,
+                    get_pixel(x + 1 - bx, y + 1 - by),
+                ),
+                BayerChannel::Blue => (
+                    get_pixel(x.wrapping_sub(bx), y.wrapping_sub(by)),
+                    get_pixel(x.wrapping_sub(bx), y + 1 - by),
+                    pixel,
+                ),
             };
 
             let out_idx = idx * 3;
@@ -430,6 +475,117 @@ mod tests {
         assert!(!is_raw_file(&PathBuf::from("photo.png")));
         assert!(!is_raw_file(&PathBuf::from("photo.webp")));
         assert!(!is_raw_file(&PathBuf::from("video.mp4")));
+    }
+
+    #[test]
+    fn test_channel_at_all_cfa_patterns() {
+        // The 2x2 block of each pattern must place R/G/G/B at the right
+        // positions: RGGB = [[R,G],[G,B]], BGGR = [[B,G],[G,R]],
+        // GRBG = [[G,R],[B,G]], GBRG = [[G,B],[R,G]].
+        use BayerChannel::{Blue, Green, Red};
+        let block = |cfa: CFA| -> Vec<BayerChannel> {
+            (0..2)
+                .flat_map(|y| (0..2).map(move |x| cfa.channel_at(x, y)))
+                .collect()
+        };
+        assert_eq!(block(CFA::RGGB), vec![Red, Green, Green, Blue]);
+        assert_eq!(block(CFA::BGGR), vec![Blue, Green, Green, Red]);
+        assert_eq!(block(CFA::GRBG), vec![Green, Red, Blue, Green]);
+        assert_eq!(block(CFA::GBRG), vec![Green, Blue, Red, Green]);
+
+        // Shift consistency: next_x/next_y must match the basis offsets.
+        assert_eq!(CFA::RGGB.next_x(), CFA::GRBG);
+        assert_eq!(CFA::RGGB.next_y(), CFA::GBRG);
+        assert_eq!(CFA::GRBG.next_x(), CFA::RGGB);
+        assert_eq!(CFA::GBRG.next_y(), CFA::RGGB);
+    }
+
+    #[test]
+    fn test_demosaic_all_cfa_patterns_are_colored() {
+        // A gray-ish flat field must demosaic to gray (r≈g≈b) for every
+        // pattern — the old fallback (pixel,pixel,pixel) also passed this,
+        // so additionally a pure-red corner (R pixel on) must produce a red
+        // channel in the right place for EVERY pattern, not just RGGB.
+        let width = 4usize;
+        let height = 4usize;
+        for cfa in [CFA::RGGB, CFA::BGGR, CFA::GRBG, CFA::GBRG] {
+            // All pixels 1000: demosaic should keep channels within 1% of
+            // each other (neighbors all read 1000).
+            let data = vec![1000u16; width * height];
+            let rgb = simple_demosaic_16bit(&data, width, height, cfa).unwrap();
+            // Border pixels lack their 2x2 block's far channels (nearest-
+            // neighbor reads out of bounds -> 0), so only interior pixels
+            // must be gray.
+            for y in 1..height - 1 {
+                for x in 1..width - 1 {
+                    let (r, g, b) = (
+                        rgb[(y * width + x) * 3],
+                        rgb[(y * width + x) * 3 + 1],
+                        rgb[(y * width + x) * 3 + 2],
+                    );
+                    assert!(
+                        (r as i64 - g as i64).abs() <= 10 && (g as i64 - b as i64).abs() <= 10,
+                        "flat field not gray for {cfa:?} at ({x},{y}): ({r},{g},{b})"
+                    );
+                }
+            }
+
+            // Light up ONLY the Red pixel of the 2x2 basis and check the
+            // demosaic puts the bright value in the red channel at that
+            // position for every pattern.
+            let mut data = vec![0u16; width * height];
+            let (dx, dy) = cfa.basis_offset();
+            for y in 0..height {
+                for x in 0..width {
+                    if ((x + dx) % 2, (y + dy) % 2) == (0, 0) {
+                        data[y * width + x] = 65535;
+                    }
+                }
+            }
+            let rgb = simple_demosaic_16bit(&data, width, height, cfa).unwrap();
+            // Image position of the pattern's Red pixel (basis (0,0)): the
+            // lit cells above are exactly where basis (0,0) lands.
+            let (rx, ry) = ((2 - dx) % 2, (2 - dy) % 2);
+            let out_idx = (ry * width + rx) * 3;
+            assert!(
+                rgb[out_idx] > 30000,
+                "red channel dim for {cfa:?}: {} at red pixel",
+                rgb[out_idx]
+            );
+            assert!(
+                rgb[out_idx + 2] < 1000,
+                "blue channel should be dark at red pixel for {cfa:?}: {}",
+                rgb[out_idx + 2]
+            );
+        }
+    }
+
+    #[test]
+    fn test_white_balance_applies_per_channel_all_cfa_patterns() {
+        // A hot R pixel must be scaled by r_mult and NOT by b_mult for every
+        // pattern — a pattern-blind multiplier would tint the image.
+        let width = 2usize;
+        let height = 2usize;
+        let wb = [2.0f32, 1.0, 0.5]; // r=2x, g=1x, b=0.5x (normalized below)
+        for cfa in [CFA::RGGB, CFA::BGGR, CFA::GRBG, CFA::GBRG] {
+            let mut data = vec![1000u16; width * height];
+            apply_white_balance(&mut data, width, height, &wb, cfa);
+            // r_mult = 2.0/1.0 = 2.0, b_mult = 0.5/1.0 = 0.5
+            for y in 0..height {
+                for x in 0..width {
+                    let expected = match cfa.channel_at(x, y) {
+                        BayerChannel::Red => 2000,
+                        BayerChannel::Green => 1000,
+                        BayerChannel::Blue => 500,
+                    };
+                    assert_eq!(
+                        data[y * width + x],
+                        expected,
+                        "WB multiplier wrong for {cfa:?} at ({x},{y})"
+                    );
+                }
+            }
+        }
     }
 
     // Note: CFA pattern parsing tests removed as parse_cfa_from_rawloader

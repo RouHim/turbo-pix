@@ -271,36 +271,48 @@ test.describe('Photo Viewer', () => {
     const fileBytes = await readFile(photo.file_path);
     const fileStats = await stat(photo.file_path);
 
-    // WHEN: Open viewer and rotate the photo right
-    await firstCard.click();
-    await TestHelpers.verifyViewerOpen(page);
-    await page.locator('.rotate-right-btn').click();
-
-    // THEN: the old-hash card is replaced by a card with the new hash
-    // (rotation rewrites hash_sha256 — the backend returns the new hash and
-    // the grid must consume it via photoUpdated, otherwise the old card
-    // keeps a dead media URL).
-    await expect(page.locator(TestHelpers.selectors.photoCard(oldHash))).toHaveCount(0);
-    const photosAfter = await dataManager.fetchAllPhotos();
-    const rotated = photosAfter.find((p) => p.file_path === photo.file_path);
-    expect(rotated).toBeTruthy();
-    expect(rotated.hash_sha256).not.toBe(oldHash);
-    await expect(page.locator(TestHelpers.selectors.photoCard(rotated.hash_sha256))).toHaveCount(1);
-
-    // CLEANUP: restore the file bytes + mtime and revert the DB hash so
-    // shared server state is unchanged, even if an assertion above failed.
-    await writeFile(photo.file_path, fileBytes);
-    await utimes(photo.file_path, fileStats.atime, fileStats.mtime);
-
-    const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+    let rotated = null;
     try {
-      db.prepare('UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ? AND file_path = ?').run(
-        oldHash,
-        rotated.hash_sha256,
-        photo.file_path
+      // WHEN: Open viewer and rotate the photo right
+      await firstCard.click();
+      await TestHelpers.verifyViewerOpen(page);
+      await page.locator('.rotate-right-btn').click();
+
+      // THEN: the old-hash card is replaced by a card with the new hash
+      // (rotation rewrites hash_sha256 — the backend returns the new hash
+      // and the grid must consume it via photoUpdated, otherwise the old
+      // card keeps a dead media URL).
+      await expect(page.locator(TestHelpers.selectors.photoCard(oldHash))).toHaveCount(0);
+      const photosAfter = await dataManager.fetchAllPhotos();
+      rotated = photosAfter.find((p) => p.file_path === photo.file_path);
+      expect(rotated).toBeTruthy();
+      expect(rotated.hash_sha256).not.toBe(oldHash);
+      await expect(page.locator(TestHelpers.selectors.photoCard(rotated.hash_sha256))).toHaveCount(
+        1
       );
     } finally {
-      db.close();
+      // CLEANUP: restore the file bytes + mtime and revert the DB hash so
+      // shared server state is unchanged, even if an assertion above failed
+      // (Playwright assertion failures throw — without the finally guard a
+      // failed assertion would leave the photo rotated with a new DB hash,
+      // and CI retries would then fail earlier on the stale-hash lookup,
+      // masking the real regression). The thumbnail cache self-heals:
+      // get_or_generate regenerates on cache miss, and no test asserts
+      // cache emptiness. If the rotation never happened (click failed),
+      // rotated stays null and the revert is a no-op.
+      await writeFile(photo.file_path, fileBytes);
+      await utimes(photo.file_path, fileStats.atime, fileStats.mtime);
+
+      if (rotated && rotated.hash_sha256 !== oldHash) {
+        const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+        try {
+          db.prepare(
+            'UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ? AND file_path = ?'
+          ).run(oldHash, rotated.hash_sha256, photo.file_path);
+        } finally {
+          db.close();
+        }
+      }
     }
   });
 });

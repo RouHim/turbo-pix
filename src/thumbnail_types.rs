@@ -89,6 +89,12 @@ impl fmt::Display for ThumbnailFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey {
     pub content_hash: String,
+    /// Content version (file size + mtime) folded into the cache filename:
+    /// the DB hash is derived from the FILE PATH (favorites survive
+    /// re-exports), so a file edited in place keeps its hash while its bytes
+    /// change — without a version, the old thumbnail would be served forever
+    /// from the disk cache. Empty for unversioned keys (tests, legacy).
+    pub content_version: String,
     pub size: ThumbnailSize,
     pub format: ThumbnailFormat,
 }
@@ -97,6 +103,7 @@ impl CacheKey {
     pub fn new(content_hash: String, size: ThumbnailSize, format: ThumbnailFormat) -> Self {
         Self {
             content_hash,
+            content_version: String::new(),
             size,
             format,
         }
@@ -107,13 +114,50 @@ impl CacheKey {
         size: ThumbnailSize,
         format: ThumbnailFormat,
     ) -> Result<Self, CacheError> {
-        Ok(Self::new(photo.hash_sha256.clone(), size, format))
+        let content_version = format!(
+            "{}_{}",
+            photo.file_size,
+            photo.date_modified.timestamp_millis()
+        );
+        Ok(Self {
+            content_hash: photo.hash_sha256.clone(),
+            content_version,
+            size,
+            format,
+        })
+    }
+
+    pub fn filename(&self) -> String {
+        if self.content_version.is_empty() {
+            format!(
+                "{}_{}.{}",
+                self.content_hash,
+                self.size.as_str(),
+                self.format.as_str()
+            )
+        } else {
+            format!(
+                "{}_{}_{}.{}",
+                self.content_hash,
+                self.content_version,
+                self.size.as_str(),
+                self.format.as_str()
+            )
+        }
     }
 }
 
 impl fmt::Display for CacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.content_hash, self.size, self.format)
+        if self.content_version.is_empty() {
+            write!(f, "{}_{}_{}", self.content_hash, self.size, self.format)
+        } else {
+            write!(
+                f,
+                "{}_{}_{}_{}",
+                self.content_hash, self.content_version, self.size, self.format
+            )
+        }
     }
 }
 

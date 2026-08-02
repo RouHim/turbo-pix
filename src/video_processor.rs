@@ -712,6 +712,29 @@ pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
     base.join(format!("{}.mp4", original_hash))
 }
 
+/// Transcode cache path versioned by the source's content fingerprint (file
+/// size + mtime millis). The DB hash is derived from the file PATH, so an
+/// in-place edit keeps the hash while the bytes change — the version makes
+/// the cache miss after the rescan notices the edit instead of serving the
+/// stale H.264 transcode forever. Only one version file is kept per hash:
+/// the transcode task removes older `{hash}_*.mp4` siblings on success.
+pub fn get_transcoded_path_versioned(
+    cache_dir: &Path,
+    original_hash: &str,
+    file_size: i64,
+    modified_millis: i64,
+) -> PathBuf {
+    let base = if cache_dir.file_name().is_some_and(|n| n == "transcoded") {
+        cache_dir.to_path_buf()
+    } else {
+        cache_dir.join("transcoded")
+    };
+    base.join(format!(
+        "{}_{}_{}.mp4",
+        original_hash, file_size, modified_millis
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

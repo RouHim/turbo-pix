@@ -94,11 +94,23 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn build_general_search_condition() -> &'static str {
-    "(filename LIKE ? OR json_extract(metadata, '$.camera.make') LIKE ? OR json_extract(metadata, '$.camera.model') LIKE ? OR json_extract(metadata, '$.location.city') LIKE ?)"
+    "(filename LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.make') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.model') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\')"
+}
+
+/// Escape LIKE wildcards (`%`, `_`) and the escape character itself so user
+/// input matches literally. Without this, a query like `IMG_2024` also matches
+/// `IMGX2024` (`_` = any single char) and a `%` in the query matches every row
+/// (LIKE '%%'). Backslash must be escaped FIRST or the other escapes would
+/// produce `\%` sequences that the ESCAPE clause then consumes.
+fn escape_like(token: &str) -> String {
+    token
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn add_general_search_params(params: &mut Vec<String>, query: &str) {
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", escape_like(query));
     params.push(pattern.clone());
     params.push(pattern.clone());
     params.push(pattern.clone());
@@ -602,7 +614,11 @@ impl Photo {
     /// # Behavior
     ///
     /// 1. Deletes any existing photo with the same `file_path` but different `hash_sha256`
-    ///    (handles the case where a file was modified and its hash changed)
+    ///    (the hash is derived from the file PATH, so an in-app rotation — which
+    ///    rewrites the bytes — produces a different content hash than the rescan's
+    ///    path hash; content changes at the same path keep the hash, so cache
+    ///    invalidation is handled by the size+mtime content version in the
+    ///    thumbnail/transcode/collage keys, NOT by this branch)
     /// 2. Uses UPSERT to insert if new, or update if `hash_sha256` already exists
     ///
     /// # Safety
@@ -776,9 +792,10 @@ impl Photo {
                         // space during absorption that would break the LIKE
                         // pattern ('% New York%' matches nothing).
                         let city = city.trim();
-                        where_clause
-                            .push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
-                        params.push(format!("%{}%", city));
+                        where_clause.push_str(
+                            " AND json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\'",
+                        );
+                        params.push(format!("%{}%", escape_like(city)));
                     }
                 } else {
                     // General search across multiple fields (filename + JSON metadata)
@@ -1731,6 +1748,67 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, berlin_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_like_wildcards_are_literal() {
+        let pool = create_test_db_pool().await.unwrap();
+        // `_` and `%` in user input must match literally: without the ESCAPE
+        // clause, `IMG_2024` also matches `IMGX2024` and a `%` matches every
+        // row (LIKE '%%').
+        let underscore_photo =
+            create_test_photo_with_metadata("IMG_2024.jpg", "underscore-hash", json!({}));
+        let x_photo = create_test_photo_with_metadata("IMGX2024.jpg", "x-hash", json!({}));
+        underscore_photo.create(&pool).await.unwrap();
+        x_photo.create(&pool).await.unwrap();
+
+        let query = create_search_query("IMG_2024");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1, "underscore must match literally");
+        assert_eq!(photos[0].file_path, underscore_photo.file_path);
+
+        // A literal % must match only rows whose filename contains '%'
+        let percent_photo =
+            create_test_photo_with_metadata("weird%name.jpg", "percent-hash", json!({}));
+        percent_photo.create(&pool).await.unwrap();
+        let query = create_search_query("100%");
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0, "'100%' must not match every row");
+
+        let query = create_search_query("weird%name");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos[0].file_path, percent_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_like_wildcards_literal_in_location() {
+        let pool = create_test_db_pool().await.unwrap();
+        let city_photo = create_test_photo_with_metadata(
+            "cologne.jpg",
+            "cologne-hash",
+            json!({
+                "location": {
+                    "city": "Cologne"
+                }
+            }),
+        );
+        city_photo.create(&pool).await.unwrap();
+
+        // `_` in a location token must not widen to a single-char wildcard
+        let query = create_search_query("location:Col_gne");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+        assert!(photos.is_empty());
     }
 
     #[tokio::test]

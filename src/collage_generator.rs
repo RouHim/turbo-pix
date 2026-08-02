@@ -190,24 +190,7 @@ impl Collage {
         Ok(id)
     }
 
-    /// Mark collage as accepted and update file path
-    pub async fn accept(
-        pool: &DbPool,
-        id: i64,
-        new_file_path: &str,
-        new_thumbnail_path: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        sqlx::query(
-            "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, rejected_at = NULL, file_path = ?, thumbnail_path = ? WHERE id = ?",
-        )
-        .bind(new_file_path)
-        .bind(new_thumbnail_path)
-        .bind(id)
-        .execute(pool)
-        .await?;
-        Ok(())
-    }
-
+    /// Mark collage as rejected to preserve signature and avoid regeneration
     pub async fn reject(pool: &DbPool, id: i64) -> Result<(), Box<dyn std::error::Error>> {
         sqlx::query(
             "UPDATE collages SET rejected_at = CURRENT_TIMESTAMP, accepted_at = NULL WHERE id = ?",
@@ -240,15 +223,32 @@ impl Collage {
     }
 }
 
-fn build_collage_signature(date: &str, photo_hashes: &[String]) -> String {
-    let mut hashes: Vec<&str> = photo_hashes.iter().map(|hash| hash.as_str()).collect();
-    hashes.sort_unstable();
-
+fn build_collage_signature(date: &str, photos: &[&Photo]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(date.as_bytes());
     hasher.update(b"|");
-    for hash in hashes {
+    // Sort by (hash, size, mtime) so chunk order doesn't affect the
+    // signature. The size+mtime version folds in content changes: the DB
+    // hash is path-derived, so an in-place edit keeps the hash while the
+    // bytes change — without the version, the nightly collage would never
+    // refresh after a re-export or sync overwrite.
+    let mut entries: Vec<(&str, i64, i64)> = photos
+        .iter()
+        .map(|p| {
+            (
+                p.hash_sha256.as_str(),
+                p.file_size,
+                p.date_modified.timestamp_millis(),
+            )
+        })
+        .collect();
+    entries.sort_unstable();
+    for (hash, file_size, modified_millis) in entries {
         hasher.update(hash.as_bytes());
+        hasher.update(b":");
+        hasher.update(file_size.to_string().as_bytes());
+        hasher.update(b":");
+        hasher.update(modified_millis.to_string().as_bytes());
         hasher.update(b",");
     }
 
@@ -1399,8 +1399,7 @@ pub async fn generate_collages(
         );
 
         for (collage_idx, chunk) in chunks.iter().enumerate() {
-            let photo_hashes: Vec<String> = chunk.iter().map(|p| p.hash_sha256.clone()).collect();
-            let signature = build_collage_signature(&date_str, &photo_hashes);
+            let signature = build_collage_signature(&date_str, chunk);
 
             if Collage::exists_by_signature(pool, &signature).await? {
                 info!(
@@ -1452,6 +1451,7 @@ pub async fn generate_collages(
                 };
 
             // Save to database
+            let photo_hashes: Vec<String> = chunk.iter().map(|p| p.hash_sha256.clone()).collect();
             match Collage::insert(
                 pool,
                 &date_str,
@@ -1520,7 +1520,42 @@ pub async fn accept_collage(
     let filename = source.file_name().ok_or("Invalid file path")?;
     let dest = dest_dir.join(filename);
 
-    std::fs::rename(&source, &dest)?;
+    // Atomic commit point: claim the accept slot with a conditional UPDATE.
+    // Two concurrent submits both pass the settled check above, but only the
+    // first conditional UPDATE matches (SQLite serializes writers) — the
+    // loser re-reads and returns the winner's destination instead of racing
+    // the rename and failing with a misleading 500 ("Failed to accept") for
+    // an operation that already succeeded. The claim is rolled back if the
+    // rename fails, so a retry can succeed.
+    let mut tx = pool.begin().await?;
+    let claimed = sqlx::query(
+        "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, rejected_at = NULL, file_path = ? \
+         WHERE id = ? AND accepted_at IS NULL AND rejected_at IS NULL",
+    )
+    .bind(dest.to_string_lossy().to_string())
+    .bind(collage_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if claimed.rows_affected() == 0 {
+        // Someone else accepted (or rejected) this collage in between:
+        // return the state it has now.
+        drop(tx); // rollback — nothing claimed
+        let current = Collage::get_by_id(pool, collage_id)
+            .await?
+            .ok_or("Collage not found")?;
+        return Ok(PathBuf::from(&current.file_path));
+    }
+
+    match std::fs::rename(&source, &dest) {
+        Ok(()) => {}
+        Err(e) => {
+            // Roll back the claim: the row stays pending and the next
+            // submit retries the move.
+            drop(tx);
+            return Err(format!("Failed to move collage file: {}", e).into());
+        }
+    }
 
     // Move thumbnail if exists — keep the DB thumbnail_path in sync so
     // consumers don't reference the old (moved-away) location.
@@ -1551,14 +1586,14 @@ pub async fn accept_collage(
     }
     let new_thumbnail_path = moved_thumb.map(|p| p.to_string_lossy().to_string());
 
-    // Mark as accepted and update file path
-    Collage::accept(
-        pool,
-        collage_id,
-        &dest.to_string_lossy(),
-        new_thumbnail_path.as_deref(),
-    )
-    .await?;
+    // Commit the claim with the moved thumbnail path, then release the
+    // transaction (the row is now settled; a later submit is a no-op).
+    sqlx::query("UPDATE collages SET thumbnail_path = ? WHERE id = ?")
+        .bind(new_thumbnail_path)
+        .bind(collage_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
 
     // Index the collage into photos table immediately
     if let Err(e) = index_collage_file(pool, &dest, semantic_search).await {
@@ -1687,6 +1722,26 @@ mod tests {
         img.save_with_format(path, ImageFormat::Jpeg).unwrap();
     }
 
+    /// Mock photos whose hashes come from a test vec (for signature tests).
+    fn mock_photos(hashes: &[String]) -> Vec<Photo> {
+        hashes
+            .iter()
+            .map(|h| {
+                let mut p = mock_photo("/test/photo.jpg", None);
+                p.hash_sha256 = h.clone();
+                p
+            })
+            .collect()
+    }
+
+    /// Test-only shim: signature from hash strings (all photos share the
+    /// mock content version).
+    fn test_signature(date: &str, hashes: &[String]) -> String {
+        let photos = mock_photos(hashes);
+        let refs: Vec<&Photo> = photos.iter().collect();
+        build_collage_signature(date, &refs)
+    }
+
     async fn insert_photo(
         pool: &DbPool,
         file_path: &Path,
@@ -1780,6 +1835,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_signature_changes_with_content_version() {
+        // The signature folds in file size + mtime: the DB hash is
+        // path-derived, so an in-place edit (re-export, sync overwrite)
+        // keeps the hash while the bytes change. Without the version the
+        // nightly collage would never refresh (exists_by_signature matches
+        // forever). Same hash, different size → different signature.
+        let date = "2025-03-21";
+        let mut a = mock_photo("/a.jpg", None);
+        a.hash_sha256 = "hash1".to_string();
+        let mut b = mock_photo("/b.jpg", None);
+        b.hash_sha256 = "hash1".to_string();
+        b.file_size += 1;
+
+        let refs_a: Vec<&Photo> = vec![&a];
+        let refs_b: Vec<&Photo> = vec![&b];
+        assert_ne!(
+            build_collage_signature(date, &refs_a),
+            build_collage_signature(date, &refs_b),
+            "size change must invalidate the collage signature"
+        );
+
+        // Order independence: same photos in different order → same signature
+        let mut c = mock_photo("/c.jpg", None);
+        c.hash_sha256 = "hash2".to_string();
+        let refs_ab: Vec<&Photo> = vec![&a, &c];
+        let refs_ba: Vec<&Photo> = vec![&c, &a];
+        assert_eq!(
+            build_collage_signature(date, &refs_ab),
+            build_collage_signature(date, &refs_ba),
+            "chunk order must not affect the signature"
+        );
+    }
+
     #[tokio::test]
     async fn test_list_pending_cleaned_removes_missing_and_duplicates() {
         let pool = crate::db::create_test_db_pool().await.unwrap();
@@ -1793,7 +1882,7 @@ mod tests {
         fs::write(&file_b, b"test").unwrap();
 
         let hashes_a = vec!["hash1".to_string()];
-        let signature_a = build_collage_signature("2025-03-21", &hashes_a);
+        let signature_a = test_signature("2025-03-21", &hashes_a);
         Collage::insert(
             &pool,
             "2025-03-21",
@@ -1806,7 +1895,7 @@ mod tests {
         .await
         .unwrap();
         let hashes_a_alt = vec!["hash2".to_string()];
-        let signature_a_alt = build_collage_signature("2025-03-21", &hashes_a_alt);
+        let signature_a_alt = test_signature("2025-03-21", &hashes_a_alt);
         Collage::insert(
             &pool,
             "2025-03-21",
@@ -1819,7 +1908,7 @@ mod tests {
         .await
         .unwrap();
         let hashes_b = vec!["hash3".to_string()];
-        let signature_b = build_collage_signature("2025-03-21", &hashes_b);
+        let signature_b = test_signature("2025-03-21", &hashes_b);
         Collage::insert(
             &pool,
             "2025-03-21",
@@ -1832,7 +1921,7 @@ mod tests {
         .await
         .unwrap();
         let hashes_missing = vec!["hash4".to_string()];
-        let signature_missing = build_collage_signature("2025-03-21", &hashes_missing);
+        let signature_missing = test_signature("2025-03-21", &hashes_missing);
         let missing = staging_dir.join("missing.jpg");
         Collage::insert(
             &pool,
@@ -1868,7 +1957,7 @@ mod tests {
         fs::write(&file_path, b"test").unwrap();
 
         let hashes = vec!["hash1".to_string()];
-        let signature = build_collage_signature("2025-03-21", &hashes);
+        let signature = test_signature("2025-03-21", &hashes);
         Collage::insert(
             &pool,
             "2025-03-21",
@@ -1902,7 +1991,7 @@ mod tests {
         fs::write(&file_path, b"test").unwrap();
 
         let hashes = vec!["hash1".to_string()];
-        let signature = build_collage_signature("2025-03-21", &hashes);
+        let signature = test_signature("2025-03-21", &hashes);
         let collage_id = Collage::insert(
             &pool,
             "2025-03-21",
@@ -1991,7 +2080,20 @@ mod tests {
 
         let date_str = base_time.format("%Y-%m-%d").to_string();
         let existing_path = staging_dir.join(format!("collage_{}_1.jpg", date_str));
-        let signature = build_collage_signature(&date_str, &first_chunk_hashes);
+        // The signature must match what generate_collages computes from the
+        // REAL DB rows (content version = file size + mtime of the test
+        // photos), not from mock photos — otherwise the pre-inserted collage
+        // is not skipped and a duplicate is generated.
+        let mut existing_photos: Vec<Photo> = Vec::new();
+        for h in &first_chunk_hashes {
+            let p = Photo::find_by_hash(&pool, h)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("photo {} should exist", h));
+            existing_photos.push(p);
+        }
+        let existing_refs: Vec<&Photo> = existing_photos.iter().collect();
+        let signature = build_collage_signature(&date_str, &existing_refs);
         Collage::insert(
             &pool,
             &date_str,

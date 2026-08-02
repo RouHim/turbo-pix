@@ -855,39 +855,44 @@
     try {
       if (isFav) {
         await api.removeFromFavorites(photoHash);
-        // Grid sync fires even if the user navigated away mid-request: the
-        // backend row changed, so suppressing the event would leave the grid
-        // card with a stale favorite state until the next reload. Only the
-        // viewer-local state below is guarded.
+        // Local write FIRST, then the (unconditional) grid event: the event
+        // synchronously splices the SHARED photos array (the viewer holds
+        // the same reference), so writing photos[currentIndex] after the
+        // dispatch would land on the shifted slot and drop the next card in
+        // the Favorites view. The dispatch still fires when the user
+        // navigated away mid-request — the backend row changed, so the grid
+        // card must sync either way.
+        if (currentPhoto?.hash_sha256 === photoHash) {
+          currentPhoto = { ...currentPhoto, is_favorite: false };
+          if (currentIndex !== -1) photos[currentIndex] = currentPhoto;
+          addToast(
+            get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }),
+            '',
+            'info',
+            2000
+          );
+        }
         window.dispatchEvent(
           new CustomEvent('favoriteToggled', {
             detail: { photoHash, isFavorite: false },
           })
         );
-        if (currentPhoto?.hash_sha256 !== photoHash) return;
-        currentPhoto = { ...currentPhoto, is_favorite: false };
-        photos[currentIndex] = currentPhoto;
-        addToast(
-          get(t)('ui.removed_from_favs', { default: 'Photo removed from favorites' }),
-          '',
-          'info',
-          2000
-        );
       } else {
         await api.addToFavorites(photoHash);
+        if (currentPhoto?.hash_sha256 === photoHash) {
+          currentPhoto = { ...currentPhoto, is_favorite: true };
+          if (currentIndex !== -1) photos[currentIndex] = currentPhoto;
+          addToast(
+            get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }),
+            '',
+            'success',
+            2000
+          );
+        }
         window.dispatchEvent(
           new CustomEvent('favoriteToggled', {
             detail: { photoHash, isFavorite: true },
           })
-        );
-        if (currentPhoto?.hash_sha256 !== photoHash) return;
-        currentPhoto = { ...currentPhoto, is_favorite: true };
-        photos[currentIndex] = currentPhoto;
-        addToast(
-          get(t)('ui.added_to_favs', { default: 'Photo added to favorites' }),
-          '',
-          'success',
-          2000
         );
       }
     } catch {

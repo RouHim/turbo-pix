@@ -32,6 +32,7 @@
   async function loadPendingCollages() {
     loading = true;
     error = false;
+    if (abortController) abortController.abort();
     abortController = new AbortController();
     try {
       collages = await api.getPendingCollages({ signal: abortController.signal });
@@ -85,6 +86,7 @@
   }
 
   async function generateCollages() {
+    if (abortController) abortController.abort();
     abortController = new AbortController();
     try {
       loading = true;
@@ -354,5 +356,24 @@
 
   .reject-collage-btn:hover {
     background: var(--color-danger-hover, oklch(48% 0.2 25deg));
+  }
+
+  /* Mobile compact grid: mirror PhotoGrid's scoped @container rules so the
+     collage grid keeps the compact 3-column layout on narrow containers.
+     Scoped rules are required — global @container rules lose the cascade to
+     scoped rules (see AGENTS.md). Triggered by the .main-content content
+     container (container-type: inline-size). */
+  @container (width <= 768px) {
+    .photo-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--space-1);
+    }
+  }
+
+  @container (width <= 480px) {
+    .photo-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
+    }
   }
 </style>

@@ -17,10 +17,17 @@ export class TestDataManager {
     const photos = await this.fetchAllPhotos();
 
     photos.forEach((photo) => {
-      if (photo.file_name) {
-        this.photoHashes.set(photo.file_name, photo.hash_sha256);
+      if (photo.filename) {
+        this.photoHashes.set(photo.filename, photo.hash_sha256);
       }
     });
+
+    if (this.photoHashes.size === 0) {
+      throw new Error(
+        'TestDataManager: no photos matched after fetch — the seed may be broken ' +
+          'or the photos API schema changed (expected photo.filename / photo.hash_sha256)'
+      );
+    }
 
     return this.photoHashes;
   }
@@ -120,8 +127,7 @@ export class TestDataManager {
         }
 
         if (i % 10 === 0) {
-          const progress = Math.round(status.progress * 100);
-          console.log(`Indexing progress: ${progress}%`);
+          console.log(`Indexing status: ${status.photos_indexed ?? 'unknown'} photos indexed`);
         }
       } catch (error) {
         console.error('Error checking indexing status:', error.message);
@@ -143,7 +149,12 @@ export class TestDataManager {
     }
 
     const firstEntry = this.photoHashes.entries().next().value;
-    return firstEntry ? firstEntry[1] : null;
+    if (!firstEntry) {
+      throw new Error(
+        'TestDataManager: photoHashes is empty — cannot determine the first photo hash'
+      );
+    }
+    return firstEntry[1];
   }
 
   async getFirstVideoHash() {

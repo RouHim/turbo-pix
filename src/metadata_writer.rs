@@ -87,20 +87,7 @@ pub fn update_metadata(
     // Copy existing fields if EXIF data exists, excluding ones we're updating
     if let Ok(exif) = exif_result {
         for field in exif.fields() {
-            let should_keep = match field.tag {
-                Tag::DateTimeOriginal if taken_at.is_some() => false,
-                Tag::GPSLatitudeRef
-                | Tag::GPSLatitude
-                | Tag::GPSLongitudeRef
-                | Tag::GPSLongitude
-                    if latitude.is_some() && longitude.is_some() =>
-                {
-                    false
-                }
-                _ => true,
-            };
-
-            if should_keep {
+            if should_copy_field(field, taken_at, latitude, longitude) {
                 new_fields.push(Field {
                     tag: field.tag,
                     ifd_num: field.ifd_num,
@@ -114,11 +101,15 @@ pub fn update_metadata(
     // Add updated taken_at if provided
     if let Some(dt) = taken_at {
         let datetime_str = dt.format("%Y:%m:%d %H:%M:%S").to_string();
-        new_fields.push(Field {
-            tag: Tag::DateTimeOriginal,
-            ifd_num: In::PRIMARY,
-            value: Value::Ascii(vec![datetime_str.as_bytes().to_vec()]),
-        });
+        // Rewrite all three EXIF datetime tags so the fallback chain in
+        // metadata_extractor (DateTimeOriginal -> DateTime) stays consistent.
+        for tag in [Tag::DateTimeOriginal, Tag::DateTime, Tag::DateTimeDigitized] {
+            new_fields.push(Field {
+                tag,
+                ifd_num: In::PRIMARY,
+                value: Value::Ascii(vec![datetime_str.as_bytes().to_vec()]),
+            });
+        }
     }
 
     // Add updated GPS coordinates if provided
@@ -198,6 +189,42 @@ pub fn update_metadata(
     // Generate new EXIF data and write it back into the image file
     let exif_bytes = crate::exif_helpers::build_exif_buffer(&new_fields)?;
     crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes)
+}
+
+/// Decides whether an existing EXIF field survives the rewrite.
+///
+/// Fields being updated (datetime tags when `taken_at` is provided, GPS tags
+/// when coordinates are provided) are dropped so the new values below replace
+/// them. Two field kinds are skipped regardless:
+/// - `Value::Unknown` (value type outside 1-12): the experimental Writer
+///   cannot re-emit them and hard-fails on them, so one exotic field would
+///   otherwise abort the whole edit with a 500.
+/// - `In::THUMBNAIL` (IFD1): the embedded thumbnail is a JPEG blob the
+///   experimental Writer cannot re-emit; dropping it deliberately avoids
+///   writing a corrupt IFD1 block.
+fn should_copy_field(
+    field: &Field,
+    taken_at: Option<DateTime<Utc>>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> bool {
+    if matches!(&field.value, Value::Unknown(..)) {
+        return false;
+    }
+    if field.ifd_num == In::THUMBNAIL {
+        return false;
+    }
+    match field.tag {
+        Tag::DateTimeOriginal | Tag::DateTime | Tag::DateTimeDigitized if taken_at.is_some() => {
+            false
+        }
+        Tag::GPSLatitudeRef | Tag::GPSLatitude | Tag::GPSLongitudeRef | Tag::GPSLongitude
+            if latitude.is_some() && longitude.is_some() =>
+        {
+            false
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -567,9 +594,10 @@ mod tests {
         // GIVEN: Image with EXIF (sample_with_exif.jpg) - we'll test updating it
         let temp_dir = TempDir::new().unwrap();
         let source_path = Path::new("test-data/sample_with_exif.jpg");
-        if !source_path.exists() {
-            return;
-        }
+        assert!(
+            source_path.exists(),
+            "test fixture missing: {source_path:?}"
+        );
 
         let image_path = temp_dir.path().join("test_partial_exif.jpg");
         std::fs::copy(source_path, &image_path).unwrap();
@@ -608,9 +636,10 @@ mod tests {
         // GIVEN: Image with complete EXIF data (Canon EOS 40D)
         let temp_dir = TempDir::new().unwrap();
         let source_path = Path::new("test-data/sample_with_exif.jpg");
-        if !source_path.exists() {
-            return;
-        }
+        assert!(
+            source_path.exists(),
+            "test fixture missing: {source_path:?}"
+        );
 
         let image_path = temp_dir.path().join("test_complete.jpg");
         std::fs::copy(source_path, &image_path).unwrap();
@@ -742,9 +771,10 @@ mod tests {
         // GIVEN: Image with EXIF containing datetime and GPS
         let temp_dir = TempDir::new().unwrap();
         let source_path = Path::new("test-data/sample_with_exif.jpg");
-        if !source_path.exists() {
-            return;
-        }
+        assert!(
+            source_path.exists(),
+            "test fixture missing: {source_path:?}"
+        );
 
         let image_path = temp_dir.path().join("test_overwrite.jpg");
         std::fs::copy(source_path, &image_path).unwrap();
@@ -812,9 +842,7 @@ mod tests {
 
         for (file_path, should_succeed, format) in test_cases {
             let path = Path::new(file_path);
-            if !path.exists() {
-                continue;
-            }
+            assert!(path.exists(), "test fixture missing: {path:?}");
 
             // WHEN: Attempt to write EXIF
             let new_date = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
@@ -871,5 +899,102 @@ mod tests {
 
         // THEN: PNG should still be valid
         assert!(image::open(&png_path).is_ok(), "PNG should still be valid");
+    }
+
+    #[test]
+    fn test_should_copy_field_skips_unknown_value() {
+        // GIVEN: A field whose value type is outside 1-12 (kamadak keeps it
+        // as Value::Unknown; the experimental Writer errors on it)
+        let field = Field {
+            tag: Tag::UserComment,
+            ifd_num: In::PRIMARY,
+            value: Value::Unknown(13, 1, 0),
+        };
+
+        // WHEN/THEN: It must not be copied, so one exotic field cannot abort
+        // the whole metadata edit.
+        assert!(!should_copy_field(&field, None, None, None));
+    }
+
+    #[test]
+    fn test_should_copy_field_skips_thumbnail_ifd() {
+        // GIVEN: A normal field located in the thumbnail IFD1 (embedded
+        // thumbnail JPEG data that cannot be re-emitted)
+        let field = Field {
+            tag: Tag::JPEGInterchangeFormat,
+            ifd_num: In::THUMBNAIL,
+            value: Value::Long(vec![0]),
+        };
+
+        // WHEN/THEN: It must be dropped deliberately to avoid a corrupt IFD1
+        // block; a regular PRIMARY field with the same tag must be kept.
+        assert!(!should_copy_field(&field, None, None, None));
+
+        let primary_field = Field {
+            tag: Tag::JPEGInterchangeFormat,
+            ifd_num: In::PRIMARY,
+            value: Value::Long(vec![0]),
+        };
+        assert!(should_copy_field(&primary_field, None, None, None));
+    }
+
+    #[test]
+    fn test_should_copy_field_drops_datetime_tags_when_rewriting() {
+        // GIVEN: taken_at is provided, so all three datetime tags are rewritten
+        let new_date = Utc.with_ymd_and_hms(2024, 3, 15, 14, 30, 0).unwrap();
+
+        for tag in [Tag::DateTimeOriginal, Tag::DateTime, Tag::DateTimeDigitized] {
+            let field = Field {
+                tag,
+                ifd_num: In::PRIMARY,
+                value: Value::Ascii(vec![b"2020:01:01 00:00:00".to_vec()]),
+            };
+            assert!(
+                !should_copy_field(&field, Some(new_date), None, None),
+                "{:?} should be dropped when taken_at is provided",
+                tag
+            );
+            // Without taken_at the same tag is preserved
+            assert!(
+                should_copy_field(&field, None, None, None),
+                "{:?} should be preserved when taken_at is None",
+                tag
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_rewrites_all_datetime_tags() {
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = create_test_image(&temp_dir);
+
+        // WHEN: Updating taken_at only
+        let new_date = Utc.with_ymd_and_hms(2024, 7, 4, 9, 15, 30).unwrap();
+        let result = update_metadata(&image_path, Some(new_date), None, None);
+        assert!(result.is_ok(), "Failed to update taken_at: {:?}", result);
+
+        // THEN: All three EXIF datetime tags carry the new value so the
+        // extractor's fallback chain (DateTimeOriginal -> DateTime) stays
+        // consistent.
+        let exif = read_exif(&image_path);
+        for tag in [Tag::DateTimeOriginal, Tag::DateTime, Tag::DateTimeDigitized] {
+            let date_field = exif.get_field(tag, In::PRIMARY);
+            assert!(
+                date_field.is_some(),
+                "{:?} tag should be present after update",
+                tag
+            );
+            let value_str = date_field.unwrap().display_value().to_string();
+            assert!(
+                value_str.contains("2024-07-04") || value_str.contains("2024:07:04"),
+                "{:?} should carry the new date, got: {}",
+                tag,
+                value_str
+            );
+        }
+
+        // THEN: Image integrity is preserved
+        assert!(is_valid_jpeg(&image_path));
+        assert!(can_decode_image(&image_path));
     }
 }

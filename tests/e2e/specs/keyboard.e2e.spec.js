@@ -20,17 +20,17 @@ test.describe('Keyboard Shortcuts', () => {
 
     // WHEN: User presses right arrow
     await page.keyboard.press('ArrowRight');
-    await page.waitForTimeout(500);
 
-    // THEN: Next photo is displayed
+    // THEN: Next photo is displayed (URL is updated synchronously via replaceState)
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
     const secondHash = await TestHelpers.getCurrentPhotoHash(page);
     expect(secondHash).not.toBe(firstHash);
 
     // WHEN: User presses left arrow
     await page.keyboard.press('ArrowLeft');
-    await page.waitForTimeout(500);
 
     // THEN: Previous photo is displayed
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(secondHash);
     const backToFirst = await TestHelpers.getCurrentPhotoHash(page);
     expect(backToFirst).toBe(firstHash);
   });

@@ -232,8 +232,10 @@ impl PhotoProcessor {
             }
 
             // Wait for at least one task to complete
-            if let Some(Ok(Some(photo))) = tasks.join_next().await {
-                photos.push(photo);
+            if let Some(outcome) = tasks.join_next().await {
+                if let Some(photo) = record_metadata_task_outcome(outcome, status) {
+                    photos.push(photo);
+                }
             }
         }
 
@@ -520,6 +522,29 @@ impl PhotoProcessor {
     }
 }
 
+/// Records one phase-1 metadata task outcome on `status` and returns the
+/// photo when the task produced one. Non-photo outcomes (unreadable file,
+/// task error/panic) are counted as metadata errors instead of being
+/// silently dropped.
+fn record_metadata_task_outcome(
+    outcome: Result<Option<ProcessedPhoto>, tokio::task::JoinError>,
+    status: &IndexingStatus,
+) -> Option<ProcessedPhoto> {
+    match outcome {
+        Ok(Some(photo)) => Some(photo),
+        Ok(None) => {
+            // File could not be processed (e.g. unreadable); count as error.
+            status.phases.metadata.add_errors(1);
+            None
+        }
+        Err(e) => {
+            error!("Metadata extraction task failed: {}", e);
+            status.phases.metadata.add_errors(1);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -700,5 +725,33 @@ mod tests {
             corrupted.exists(),
             "Corrupted file should still exist after failed MOOV fix"
         );
+    }
+
+    /// GIVEN a phase-1 metadata task outcome that is not a produced photo
+    /// WHEN it is recorded against the indexing status
+    /// THEN it is counted as a metadata error instead of being silently dropped
+    #[tokio::test]
+    async fn test_metadata_task_outcome_counts_failures() {
+        use crate::scheduler::IndexingStatus;
+
+        let status = IndexingStatus::new();
+
+        // Ok(None): file could not be processed (e.g. unreadable)
+        let photo = super::record_metadata_task_outcome(Ok(None), &status);
+        assert!(photo.is_none(), "Ok(None) should not yield a photo");
+
+        // Err(JoinError): task panicked while processing
+        let mut set = tokio::task::JoinSet::new();
+        set.spawn(async { panic!("task panicked") });
+        let outcome = set.join_next().await.unwrap();
+        let photo = super::record_metadata_task_outcome(outcome, &status);
+        assert!(photo.is_none(), "Panicked task should not yield a photo");
+
+        let snapshot = status.phases.metadata.snapshot();
+        assert_eq!(
+            snapshot.errors, 2,
+            "Both failed outcomes should be counted as errors"
+        );
+        assert_eq!(snapshot.processed, 0);
     }
 }

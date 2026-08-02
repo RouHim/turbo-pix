@@ -608,6 +608,21 @@ impl Photo {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // First, delete any existing photo with same file_path but different hash
         // This handles the case where a file was modified (hash changed)
+        //
+        // Capture user state from the row being replaced: the UPSERT below can
+        // only preserve is_favorite via COALESCE when the row still exists
+        // (same hash). After an in-app rotation the row is keyed by a content
+        // hash while the next rescan re-derives the path hash, so the row is
+        // deleted before the upsert — without this carry the favorite flag
+        // would silently reset on every rotated photo.
+        let replaced_favorite: Option<Option<bool>> = sqlx::query_scalar(
+            "SELECT is_favorite FROM photos WHERE file_path = ? AND hash_sha256 != ?",
+        )
+        .bind(&self.file_path)
+        .bind(&self.hash_sha256)
+        .fetch_optional(&mut **tx)
+        .await?;
+
         sqlx::query("DELETE FROM photos WHERE file_path = ? AND hash_sha256 != ?")
             .bind(&self.file_path)
             .bind(&self.hash_sha256)
@@ -659,7 +674,12 @@ impl Photo {
         .bind(&self.thumbnail_path)
         .bind(self.has_thumbnail)
         .bind(&self.blurhash)
-        .bind(self.is_favorite.unwrap_or(false))
+        .bind(
+            replaced_favorite
+                .flatten()
+                .or(self.is_favorite)
+                .unwrap_or(false),
+        )
         .bind(self.semantic_vector_indexed.unwrap_or(false))
         .bind(self.metadata.to_string())
         .bind(self.date_modified.to_rfc3339())
@@ -730,8 +750,14 @@ impl Photo {
                         city.push(' ');
                         city.push_str(tokens[i]);
                     }
-                    where_clause.push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
-                    params.push(format!("%{}%", city));
+                    if city.trim().is_empty() {
+                        // Bare "location:" token — no city to match, skip it
+                        // (LIKE '%%' would match every row with a city).
+                    } else {
+                        where_clause
+                            .push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
+                        params.push(format!("%{}%", city));
+                    }
                 } else {
                     // General search across multiple fields (filename + JSON metadata)
                     where_clause.push_str(" AND ");
@@ -1215,6 +1241,38 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(new_photos, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_preserves_favorite_across_hash_rekey() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // GIVEN: a favorited photo keyed by hash H1 at path rotate.jpg
+        let mut photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
+        photo.is_favorite = Some(true);
+        photo.create(&pool).await.unwrap();
+
+        // WHEN: the same path is re-keyed under a different hash (the
+        // rotate-then-rescan sequence: in-app rotation keys the row by the
+        // content hash, the next rescan re-derives the path hash)
+        let mut reprocessed = photo.clone();
+        reprocessed.hash_sha256 = "b".repeat(64);
+        reprocessed.is_favorite = None; // fresh extraction knows nothing about favorites
+        let mut tx = pool.begin().await.unwrap();
+        reprocessed
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // THEN: the favorite flag survived the re-key
+        let stored: Option<bool> =
+            sqlx::query_scalar("SELECT is_favorite FROM photos WHERE hash_sha256 = ?")
+                .bind("b".repeat(64))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, Some(true), "is_favorite must survive a hash re-key");
     }
 
     #[tokio::test]

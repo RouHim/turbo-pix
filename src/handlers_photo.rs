@@ -12,7 +12,9 @@ use crate::handlers_video::{get_video_file, get_video_status, VideoQuery};
 use crate::image_editor::{self, RotationAngle};
 use crate::metadata_writer;
 use crate::mimetype_detector;
-use crate::warp_helpers::{with_cache, with_db, DatabaseError, NotFoundError, PermissionError};
+use crate::warp_helpers::{
+    with_cache, with_db, DatabaseError, NotFoundError, PermissionError, ValidationError,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
@@ -71,16 +73,18 @@ async fn fetch_photos(
 }
 
 pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(50).min(100);
-    let offset = (page - 1) * limit;
+    // Client-supplied pagination must not underflow/overflow: page and limit
+    // are clamped to sane ranges before arithmetic.
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let offset = (page as u64 - 1) * limit as u64;
 
     // Dispatch to helper that selects search vs list
     let result = fetch_photos(&db_pool, &query, limit as i64, offset as i64).await;
 
     match result {
         Ok((photos, total)) => {
-            let has_next = offset + limit < total as u32;
+            let has_next = offset.saturating_add(limit as u64) < total as u64;
             let has_prev = page > 1;
 
             Ok(warp::reply::json(&PhotosResponse {
@@ -209,6 +213,66 @@ pub async fn get_photo_file(
     }
 }
 
+/// Build the response for a HEAD request on a file route: identical headers to
+/// the corresponding GET route (content-type, content-length, accept-ranges,
+/// cache-control) but an empty body. Content-length reflects the on-disk file
+/// size; no file content is read and no transcoding is triggered.
+fn file_head_reply(mime_type: Option<&str>, file_path: &Path, file_size: i64) -> impl Reply {
+    let content_type = mime_type
+        .map(|m| m.to_string())
+        .or_else(|| mimetype_detector::from_path(file_path).map(|m| m.to_string()))
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    // Empty body; the explicit content-length mirrors the file size reported by
+    // the GET route. The explicit content-length is what makes the HEAD reply
+    // useful (e.g. for range planning) without reading any file bytes.
+    let reply = warp::reply::with_header(Vec::<u8>::new(), "content-type", content_type);
+    let reply = warp::reply::with_header(reply, "content-length", file_size.to_string());
+    let reply = warp::reply::with_header(reply, "accept-ranges", "bytes");
+    warp::reply::with_header(reply, "cache-control", "public, max-age=31536000")
+}
+
+pub async fn head_photo_file(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    Ok(file_head_reply(
+        photo.mime_type.as_deref(),
+        Path::new(&photo.file_path),
+        photo.file_size,
+    ))
+}
+
+pub async fn head_photo_video(
+    photo_hash: String,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    Ok(file_head_reply(
+        photo.mime_type.as_deref(),
+        Path::new(&photo.file_path),
+        photo.file_size,
+    ))
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct FavoriteRequest {
     pub is_favorite: bool,
@@ -272,7 +336,7 @@ pub async fn update_photo_metadata(
         match dt_str.parse::<DateTime<Utc>>() {
             Ok(dt) => Some(dt),
             Err(e) => {
-                return Err(reject::custom(DatabaseError {
+                return Err(reject::custom(ValidationError {
                     message: format!("Invalid date format: {}", e),
                 }));
             }
@@ -305,7 +369,12 @@ pub async fn update_photo_metadata(
         updated_photo.taken_at = Some(dt);
     }
 
-    // Update GPS coordinates if provided
+    // GPS coordinates are stored inside the metadata JSON object; make sure the
+    // stored value is actually an object before mutating it.
+    if !updated_photo.metadata.is_object() {
+        updated_photo.metadata = serde_json::json!({});
+    }
+
     if metadata_req.latitude.is_some() || metadata_req.longitude.is_some() {
         let mut location = updated_photo
             .metadata
@@ -371,10 +440,7 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         Ok(f) => f,
         Err(e) => {
             log::error!("Failed to open {}: {}", photo.file_path, e);
-            return Ok(warp::reply::json(&json!({
-                "error": "Failed to open file",
-                "message": format!("{}", e)
-            })));
+            return Err(reject::custom(NotFoundError));
         }
     };
 
@@ -382,10 +448,9 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         Ok(e) => e,
         Err(e) => {
             log::error!("Failed to read EXIF from {}: {}", photo.file_path, e);
-            return Ok(warp::reply::json(&json!({
-                "error": "No EXIF data found",
-                "message": format!("{}", e)
-            })));
+            return Err(reject::custom(DatabaseError {
+                message: format!("Failed to read EXIF data: {}", e),
+            }));
         }
     };
 
@@ -446,7 +511,7 @@ pub async fn rotate_photo(
         180 => RotationAngle::Rotate180,
         270 => RotationAngle::Rotate270,
         _ => {
-            return Err(reject::custom(DatabaseError {
+            return Err(reject::custom(ValidationError {
                 message: format!(
                     "Invalid rotation angle: {}. Must be 90, 180, or 270",
                     rotate_req.angle
@@ -514,6 +579,17 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(list_photos);
 
+    let api_photo_timeline = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("timeline"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_db(db_pool.clone()))
+        .and_then(get_timeline);
+
+    // NOTE: the literal `/timeline` route must be registered BEFORE the
+    // parameterized `api_photo_get` route, otherwise `/api/photos/timeline` is
+    // first matched as `get_photo("timeline")`, wasting a database lookup.
     let api_photo_get = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -531,6 +607,15 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(get_photo_file);
 
+    let api_photo_file_head = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("file"))
+        .and(warp::path::end())
+        .and(warp::head())
+        .and(with_db(db_pool.clone()))
+        .and_then(head_photo_file);
+
     let api_photo_video = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -541,6 +626,15 @@ pub fn build_photo_routes(
         .and(warp::header::headers_cloned())
         .and(with_db(db_pool.clone()))
         .and_then(get_video_file);
+
+    let api_photo_video_head = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("video"))
+        .and(warp::path::end())
+        .and(warp::head())
+        .and(with_db(db_pool.clone()))
+        .and_then(head_photo_video);
 
     let api_photo_video_status = warp::path("api")
         .and(warp::path("photos"))
@@ -560,14 +654,6 @@ pub fn build_photo_routes(
         .and(warp::body::json::<FavoriteRequest>())
         .and(with_db(db_pool.clone()))
         .and_then(toggle_favorite);
-
-    let api_photo_timeline = warp::path("api")
-        .and(warp::path("photos"))
-        .and(warp::path("timeline"))
-        .and(warp::path::end())
-        .and(warp::get())
-        .and(with_db(db_pool.clone()))
-        .and_then(get_timeline);
 
     let api_photo_exif = warp::path("api")
         .and(warp::path("photos"))
@@ -608,12 +694,14 @@ pub fn build_photo_routes(
         .and_then(delete_photo);
 
     api_photos_list
+        .or(api_photo_timeline)
         .or(api_photo_get)
         .or(api_photo_file)
+        .or(api_photo_file_head)
         .or(api_photo_video)
+        .or(api_photo_video_head)
         .or(api_photo_video_status)
         .or(api_photo_favorite)
-        .or(api_photo_timeline)
         .or(api_photo_exif)
         .or(api_photo_metadata_update)
         .or(api_photo_rotate)
@@ -624,24 +712,28 @@ pub fn build_photo_routes(
 mod tests {
     use super::*;
     use crate::db::create_in_memory_pool;
+    use crate::warp_helpers::handle_rejection;
     use chrono::{Datelike, TimeZone};
+    use std::convert::Infallible;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    async fn setup_test_photo(
+    /// Insert a photo row backed by a copied JPEG with the given hash.
+    async fn create_photo_row(
         db_pool: &DbPool,
         temp_dir: &TempDir,
-    ) -> (String, std::path::PathBuf) {
+        hash: &str,
+    ) -> std::path::PathBuf {
         let test_image = Path::new("test-data/IMG_9377.jpg");
-        let temp_image = temp_dir.path().join("test.jpg");
+        let temp_image = temp_dir.path().join(format!("{}.jpg", hash));
         fs::copy(test_image, &temp_image).expect("Failed to copy test image");
 
         // Create a test photo in the database
         let photo = Photo {
-            hash_sha256: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-                .to_string(),
+            hash_sha256: hash.to_string(),
             file_path: temp_image.to_str().unwrap().to_string(),
-            filename: "test.jpg".to_string(),
+            filename: format!("{}.jpg", hash),
             file_size: 12345,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: Some(Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap()),
@@ -666,7 +758,25 @@ mod tests {
             .await
             .expect("Failed to create test photo");
 
-        (photo.hash_sha256.clone(), temp_image)
+        temp_image
+    }
+
+    async fn setup_test_photo(
+        db_pool: &DbPool,
+        temp_dir: &TempDir,
+    ) -> (String, std::path::PathBuf) {
+        let hash = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let temp_image = create_photo_row(db_pool, temp_dir, hash).await;
+        (hash.to_string(), temp_image)
+    }
+
+    /// Build the full photo route set with rejection handling applied, as the
+    /// real server does, so warp::test can exercise the HTTP contract.
+    fn build_test_routes(
+        db_pool: DbPool,
+        cache_dir: PathBuf,
+    ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
+        build_photo_routes(db_pool, CacheManager::new(cache_dir)).recover(handle_rejection)
     }
 
     #[tokio::test]
@@ -765,5 +875,262 @@ mod tests {
             result.is_err(),
             "Handler should fail when GPS coordinates are not paired"
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_photos_page_zero() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let routes = build_test_routes(db_pool, PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        // page=0 previously underflowed in `(page - 1)` (debug panic / release
+        // wrap); it must be clamped to page 1 and return 200, not 500.
+        let response = warp::test::request()
+            .path("/api/photos?page=0")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["page"], 1);
+        assert_eq!(body["limit"], 50);
+        assert_eq!(body["has_prev"], false);
+        assert!(body["photos"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_list_photos_limit_zero() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let routes = build_test_routes(db_pool, PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        // limit=0 would otherwise produce a degenerate page; it is clamped to 1.
+        let response = warp::test::request()
+            .path("/api/photos?limit=0")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["limit"], 1);
+        assert_eq!(body["page"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_timeline_route_not_shadowed() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (_photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        // /api/photos/timeline must be served by the literal timeline route,
+        // registered before the parameterized photo-get route (otherwise the
+        // request is first matched as get_photo("timeline"), wasting a database
+        // lookup before falling through).
+        let response = warp::test::request()
+            .path("/api/photos/timeline")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert!(body.get("min_date").is_some(), "timeline body has min_date");
+        assert!(body.get("max_date").is_some(), "timeline body has max_date");
+        assert!(body.get("density").is_some(), "timeline body has density");
+        assert!(
+            body.get("hash_sha256").is_none(),
+            "timeline route must not return photo JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_head_photo_file_returns_headers() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}/file", photo_hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.body().len(),
+            0,
+            "HEAD responses have an empty body"
+        );
+        assert_eq!(
+            response.headers()["content-length"].to_str().unwrap(),
+            "12345"
+        );
+        assert_eq!(
+            response.headers()["content-type"].to_str().unwrap(),
+            "image/jpeg"
+        );
+        assert_eq!(
+            response.headers()["accept-ranges"].to_str().unwrap(),
+            "bytes"
+        );
+        assert_eq!(
+            response.headers()["cache-control"].to_str().unwrap(),
+            "public, max-age=31536000"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_head_photo_video_returns_headers() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}/video", photo_hash))
+            .reply(&routes)
+            .await;
+
+        // The video HEAD handler only queries the photo row and must not start
+        // a transcode.
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.body().len(),
+            0,
+            "HEAD responses have an empty body"
+        );
+        assert_eq!(
+            response.headers()["content-length"].to_str().unwrap(),
+            "12345"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_head_not_allowed_on_json_routes() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        // HEAD mirrors exist only for the file/video routes; JSON routes keep
+        // returning 405.
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}", photo_hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 405);
+    }
+
+    #[tokio::test]
+    async fn test_rotate_invalid_angle_returns_bad_request() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        // Client-side validation errors (invalid rotation angle) must be 400,
+        // not 500.
+        let response = warp::test::request()
+            .method("POST")
+            .path(&format!("/api/photos/{}/rotate", photo_hash))
+            .json(&serde_json::json!({ "angle": 45 }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_update_metadata_invalid_date_returns_bad_request() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        // An unparseable ISO date is a client error: 400, not 500.
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", photo_hash))
+            .json(&serde_json::json!({ "taken_at": "not-a-date" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_query_param_returns_bad_request() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let routes = build_test_routes(db_pool, PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        // A malformed query parameter (warp's InvalidQuery rejection) must map
+        // to 400 instead of falling through to the generic 500.
+        let response = warp::test::request()
+            .path("/api/photos?page=abc")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_body_returns_bad_request() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        // A body that cannot be deserialized (warp's BodyDeserializeError) must
+        // map to 400 instead of falling through to the generic 500.
+        let response = warp::test::request()
+            .method("POST")
+            .path(&format!("/api/photos/{}/rotate", photo_hash))
+            .json(&serde_json::json!({ "angle": "not-a-number" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_exif_missing_file_returns_not_found() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        // Remove the backing file so the EXIF handler cannot open it; the route
+        // must return 404 (not 200 with an error body).
+        fs::remove_file(&temp_image).expect("Failed to remove test image");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .path(&format!("/api/photos/{}/exif", photo_hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 404);
     }
 }

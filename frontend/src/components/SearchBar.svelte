@@ -89,9 +89,11 @@
     photoGridState.currentPage = 1;
   }
 
-  // The flag clears once the grid finishes loading the search results.
+  // The flag clears once the grid finishes loading the search results — and
+  // immediately on non-grid views (housekeeping/collages), where PhotoGrid
+  // never mounts so photoGridState.loading never flips back.
   $effect(() => {
-    if (!photoGridState.loading) {
+    if (!photoGridState.loading || !['all', 'favorites', 'videos'].includes(route.view)) {
       searching = false;
     }
   });
@@ -206,34 +208,17 @@
       items.push(...dynamicSuggestions);
     }
 
-    // Quick filters (when empty)
+    // Quick filters (when empty) — only prefixes the backend tokenizer
+    // supports (type:/location:/is_favorite:). camera:*/date:*/has:* queries
+    // fall through to semantic search and can never filter, so they are not
+    // offered.
     if (!currentValue) {
-      items.push(
-        {
-          query: 'camera:canon',
-          text: get(t)('ui.canon_photos', { default: 'Canon photos' }),
-          icon: 'camera',
-          subtitle: get(t)('ui.filter_by_camera', { default: 'Filter by camera' }),
-        },
-        {
-          query: 'camera:nikon',
-          text: get(t)('ui.nikon_photos', { default: 'Nikon photos' }),
-          icon: 'camera',
-          subtitle: get(t)('ui.filter_by_camera', { default: 'Filter by camera' }),
-        },
-        {
-          query: 'has:gps',
-          text: get(t)('ui.photos_with_location', { default: 'Photos with location' }),
-          icon: 'map-pin',
-          subtitle: get(t)('ui.has_gps_data', { default: 'Has GPS data' }),
-        },
-        {
-          query: 'type:video',
-          text: get(t)('ui.videos_only', { default: 'Videos only' }),
-          icon: 'video',
-          subtitle: get(t)('ui.filter_by_type', { default: 'Filter by type' }),
-        }
-      );
+      items.push({
+        query: 'type:video',
+        text: get(t)('ui.videos_only', { default: 'Videos only' }),
+        icon: 'video',
+        subtitle: get(t)('ui.filter_by_type', { default: 'Filter by type' }),
+      });
     }
 
     suggestions = items.slice(0, 8);
@@ -242,45 +227,6 @@
   function getSearchSuggestions(value) {
     const items = [];
     const lowerValue = value.toLowerCase();
-
-    // Camera suggestions
-    if (lowerValue.includes('canon') || lowerValue.includes('camera')) {
-      items.push({
-        query: 'camera:canon',
-        text: get(t)('ui.canon_photos', { default: 'Canon photos' }),
-        icon: 'camera',
-      });
-    }
-    if (lowerValue.includes('nikon') || lowerValue.includes('camera')) {
-      items.push({
-        query: 'camera:nikon',
-        text: get(t)('ui.nikon_photos', { default: 'Nikon photos' }),
-        icon: 'camera',
-      });
-    }
-    if (lowerValue.includes('sony') || lowerValue.includes('camera')) {
-      items.push({
-        query: 'camera:sony',
-        text: get(t)('ui.sony_photos', { default: 'Sony photos' }),
-        icon: 'camera',
-      });
-    }
-
-    // Date suggestions
-    if (lowerValue.includes('2024') || lowerValue.includes('today')) {
-      items.push({
-        query: 'date:2024',
-        text: get(t)('ui.photos_from_year', { values: { year: '2024' }, default: '2024 photos' }),
-        icon: 'calendar',
-      });
-    }
-    if (lowerValue.includes('2023')) {
-      items.push({
-        query: 'date:2023',
-        text: get(t)('ui.photos_from_year', { values: { year: '2023' }, default: '2023 photos' }),
-        icon: 'calendar',
-      });
-    }
 
     // Type suggestions
     if (lowerValue.includes('video')) {
@@ -295,15 +241,6 @@
         query: 'type:raw',
         text: get(t)('ui.raw_files_only', { default: 'RAW files only' }),
         icon: 'image',
-      });
-    }
-
-    // Location suggestions
-    if (lowerValue.includes('gps') || lowerValue.includes('location')) {
-      items.push({
-        query: 'has:gps',
-        text: get(t)('ui.photos_with_gps', { default: 'Photos with GPS' }),
-        icon: 'map-pin',
       });
     }
 

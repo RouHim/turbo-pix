@@ -3,6 +3,7 @@
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
+  import { addToast } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import Icon from '../lib/Icon.svelte';
@@ -70,6 +71,12 @@
       }
     } catch (error) {
       console.error('Failed to initialize timeline:', error);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('errors.timeline_load_failed', { default: 'Failed to load timeline data' }),
+        'error',
+        4000
+      );
       initError = true;
     }
   }
@@ -344,6 +351,7 @@
         id="timeline-year-select"
         class="timeline-year-select"
         bind:this={yearSelectEl}
+        aria-label={$t('ui.year_select', { default: 'Year' })}
         onchange={handleDropdownChange}
       >
         <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
@@ -355,6 +363,7 @@
         id="timeline-month-select"
         class="timeline-month-select"
         bind:this={monthSelectEl}
+        aria-label={$t('ui.month_select', { default: 'Month' })}
         disabled={!currentFilter?.year}
         onchange={handleDropdownChange}
       >

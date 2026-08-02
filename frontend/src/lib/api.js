@@ -26,12 +26,17 @@ class TurboPixAPI {
     };
 
     try {
-      performance.mark(`api-start-${endpoint}`);
+      // Stable name: endpoints carry varying query strings (pagination, search,
+      // thumbnail sizes); using them verbatim would create unbounded
+      // mark/measure names.
+      const name = endpoint.split('?')[0];
+
+      performance.mark(`api-start-${name}`);
 
       const response = await fetch(url, config);
 
-      performance.mark(`api-end-${endpoint}`);
-      performance.measure(`api-${endpoint}`, `api-start-${endpoint}`, `api-end-${endpoint}`);
+      performance.mark(`api-end-${name}`);
+      performance.measure(`api-${name}`, `api-start-${name}`, `api-end-${name}`);
 
       if (!response.ok) {
         const errorText = await response.text();

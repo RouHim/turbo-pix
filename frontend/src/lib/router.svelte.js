@@ -1,5 +1,3 @@
-import { SvelteURL } from 'svelte/reactivity';
-
 const validViews = ['all', 'favorites', 'videos', 'collages', 'housekeeping'];
 const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
 
@@ -78,7 +76,9 @@ export function normalizeString(value) {
 
 export function buildUrl(state = {}) {
   const normalizedState = normalizeState({ ...defaultState, ...state });
-  const url = new SvelteURL(window.location.origin);
+  // SvelteURL adds reactivity this write-only builder URL doesn't need.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- URL is only mutated/serialized, never read reactively
+  const url = new URL(window.location.origin);
 
   url.pathname = normalizedState.view === 'all' ? '/' : `/${normalizedState.view}`;
 

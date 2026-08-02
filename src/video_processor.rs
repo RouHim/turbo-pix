@@ -32,6 +32,11 @@ pub struct TranscodeStatus {
 static TRANSCODE_STATUS_STORE: OnceLock<Mutex<HashMap<String, TranscodeStatus>>> = OnceLock::new();
 static TRANSCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
+/// Maximum number of transcode status entries kept in memory. The store is a
+/// status cache for polling clients; settled entries are evicted first when
+/// the cap is exceeded so the map cannot grow without bound.
+const TRANSCODE_STATUS_STORE_CAP: usize = 128;
+
 fn get_status_store() -> &'static Mutex<HashMap<String, TranscodeStatus>> {
     TRANSCODE_STATUS_STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -46,10 +51,45 @@ pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>>
     })
 }
 
+/// Evict entries from the status map until it is at or under
+/// [`TRANSCODE_STATUS_STORE_CAP`]. Settled entries (Completed/Failed/Timeout)
+/// are removed first so in-flight transcodes keep their pollable status;
+/// arbitrary entries are removed only if the map is still over the cap.
+fn evict_transcode_statuses(map: &mut HashMap<String, TranscodeStatus>) {
+    if map.len() <= TRANSCODE_STATUS_STORE_CAP {
+        return;
+    }
+
+    let settled: Vec<String> = map
+        .iter()
+        .filter(|(_, s)| {
+            matches!(
+                s.state,
+                TranscodeState::Completed | TranscodeState::Failed | TranscodeState::Timeout
+            )
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in settled {
+        map.remove(&key);
+        if map.len() <= TRANSCODE_STATUS_STORE_CAP {
+            return;
+        }
+    }
+
+    while map.len() > TRANSCODE_STATUS_STORE_CAP {
+        let Some(key) = map.keys().next().cloned() else {
+            return;
+        };
+        map.remove(&key);
+    }
+}
+
 pub fn set_transcode_status(hash: &str, status: TranscodeStatus) {
     let store = get_status_store();
     if let Ok(mut map) = store.lock() {
         map.insert(hash.to_string(), status);
+        evict_transcode_statuses(&mut map);
     }
 }
 
@@ -130,7 +170,7 @@ pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetad
                 "json",
                 "-show_format",
                 "-show_streams",
-                video_path.to_str().unwrap(),
+                video_path.to_string_lossy().as_ref(),
             ])
             .output()
     })
@@ -220,12 +260,12 @@ pub async fn extract_frame_at_time(
                 "-ss",
                 &time_str, // Fast seeking: place BEFORE -i for input-level seek
                 "-i",
-                video_path.to_str().unwrap(),
+                video_path.to_string_lossy().as_ref(),
                 "-frames:v",
                 "1",
                 "-q:v",
                 "5", // Lower quality (sufficient for semantic encoding, faster)
-                output_path.to_str().unwrap(),
+                output_path.to_string_lossy().as_ref(),
             ])
             .output()
     })
@@ -274,7 +314,7 @@ pub async fn extract_frames_batch(
             args.push("-ss".to_string());
             args.push(t.to_string());
             args.push("-i".to_string());
-            args.push(video_path.to_str().unwrap().to_string());
+            args.push(video_path.to_string_lossy().into_owned());
         }
 
         // Map inputs to outputs
@@ -294,9 +334,8 @@ pub async fn extract_frames_batch(
             args.push(
                 output_dir_path
                     .join(format!("frame_{}.jpg", i))
-                    .to_str()
-                    .unwrap()
-                    .to_string(),
+                    .to_string_lossy()
+                    .into_owned(),
             );
         }
 
@@ -340,7 +379,7 @@ pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
                 "stream=codec_name",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
-                video_path.to_str().unwrap(),
+                video_path.to_string_lossy().as_ref(),
             ])
             .output()
     })
@@ -381,7 +420,7 @@ fn parse_root_atom_offset(trace: &str, atom: &str) -> Option<u64> {
 pub fn has_moov_at_start(path: &Path) -> CacheResult<bool> {
     let ffprobe_path = get_ffprobe_path();
     let output = Command::new(&ffprobe_path)
-        .args(["-v", "trace", path.to_str().unwrap()])
+        .args(["-v", "trace", path.to_string_lossy().as_ref()])
         .output()
         .map_err(|e| {
             CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path, &e))
@@ -432,12 +471,12 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
         .args([
             "-y",
             "-i",
-            path.to_str().unwrap(),
+            path.to_string_lossy().as_ref(),
             "-c",
             "copy",
             "-movflags",
             "+faststart",
-            temp_path.to_str().unwrap(),
+            temp_path.to_string_lossy().as_ref(),
         ])
         .output()
         .map_err(|e| {
@@ -491,11 +530,18 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
     timeout_duration: Duration,
     ffmpeg_path: String,
 ) -> CacheResult<()> {
+    // Write to a temp file in the SAME directory as the final path so the
+    // completed file can be atomically renamed into place. A failed or
+    // timed-out transcode must never leave a partial file at `output_path`,
+    // which callers would otherwise treat as valid video.
+    let temp_output_path = output_path.with_extension("mp4.tmp");
+    let output_path_owned = output_path.to_path_buf();
+
     let inner = async {
         let _permit = acquire_transcode_permit().await?;
 
         // Create output directory if it doesn't exist
-        if let Some(parent) = output_path.parent() {
+        if let Some(parent) = temp_output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 CacheError::VideoProcessingError(format!(
                     "Failed to create output directory: {}",
@@ -512,7 +558,7 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             "-hwaccel",
             "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
             "-i",
-            input_path.to_str().unwrap(),
+            input_path.to_string_lossy().as_ref(),
             "-c:v",
             "libx264", // Use H.264 encoder (more widely available than libopenh264)
             "-preset",
@@ -524,7 +570,7 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             "-movflags",
             "+faststart", // Enable streaming-friendly format
             "-y",         // Overwrite output file
-            output_path.to_str().unwrap(),
+            temp_output_path.to_string_lossy().as_ref(),
         ]);
 
         let output = command.output().await.map_err(|e| {
@@ -541,21 +587,37 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             log::error!("FFmpeg transcoding failed!");
             log::error!("FFmpeg stderr: {}", stderr);
             log::error!("FFmpeg stdout: {}", stdout);
+            let _ = std::fs::remove_file(&temp_output_path);
             return Err(CacheError::VideoProcessingError(format!(
                 "ffmpeg transcode exited with status {}. stderr: {}",
                 output.status, stderr
             )));
         }
 
+        // Move the completed temp file into place (atomic on the same filesystem).
+        std::fs::rename(&temp_output_path, &output_path_owned).map_err(|e| {
+            let _ = std::fs::remove_file(&temp_output_path);
+            CacheError::VideoProcessingError(format!(
+                "Failed to move transcoded video into place: {}",
+                e
+            ))
+        })?;
+
         Ok::<(), CacheError>(())
     };
 
-    timeout(timeout_duration, inner).await.map_err(|_| {
-        CacheError::VideoProcessingError(format!(
-            "Transcoding timed out after {}s",
-            timeout_duration.as_secs()
-        ))
-    })?
+    match timeout(timeout_duration, inner).await {
+        Ok(result) => result,
+        Err(_) => {
+            // The inner future (and with it the ffmpeg child, via kill_on_drop)
+            // has been dropped; remove whatever partial output it wrote.
+            let _ = std::fs::remove_file(&temp_output_path);
+            Err(CacheError::VideoProcessingError(format!(
+                "Transcoding timed out after {}s",
+                timeout_duration.as_secs()
+            )))
+        }
+    }
 }
 
 /// Get the path for a transcoded video in the cache
@@ -1142,7 +1204,13 @@ pub(crate) mod tests {
     async fn test_transcode_timeout() {
         let temp_dir = TempDir::new().unwrap();
         let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_timeout.sh");
-        std::fs::write(&ffmpeg_script, "#!/usr/bin/env sh\nsleep 2\nexit 0\n").unwrap();
+        // Write a partial output file, then sleep past the timeout so the
+        // transcode is killed mid-write.
+        std::fs::write(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\necho partial > \"$last\"\nsleep 2\nexit 0\n",
+        )
+        .unwrap();
         make_executable(&ffmpeg_script);
 
         let input = temp_dir.path().join("input.mp4");
@@ -1163,6 +1231,52 @@ pub(crate) mod tests {
             error.contains("timed out"),
             "Error should mention timeout, got: {}",
             error
+        );
+        // The partial file written before the timeout must not survive, neither
+        // at the final path nor at the temp path.
+        assert!(
+            !output.exists(),
+            "partial output must be cleaned up on timeout"
+        );
+        assert!(
+            !output.with_extension("mp4.tmp").exists(),
+            "temp file must be cleaned up on timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transcode_failure_cleans_partial_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_fail.sh");
+        // Simulate ffmpeg failing mid-write: create a partial output file and
+        // exit non-zero.
+        std::fs::write(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\necho partial > \"$last\"\nexit 1\n",
+        )
+        .unwrap();
+        make_executable(&ffmpeg_script);
+
+        let input = temp_dir.path().join("input.mp4");
+        let output = temp_dir.path().join("output.mp4");
+        std::fs::write(&input, b"not-a-real-video").unwrap();
+
+        let result = transcode_hevc_to_h264_with_timeout_and_path(
+            &input,
+            &output,
+            Duration::from_secs(5),
+            ffmpeg_script.to_str().unwrap().to_string(),
+        )
+        .await;
+
+        assert!(result.is_err(), "Expected transcode failure");
+        assert!(
+            !output.exists(),
+            "partial output must not be left at the final path on failure"
+        );
+        assert!(
+            !output.with_extension("mp4.tmp").exists(),
+            "temp file must be cleaned up on failure"
         );
     }
 
@@ -1195,6 +1309,10 @@ pub(crate) mod tests {
             result
         );
         assert!(output.exists(), "Expected output file to be created");
+        assert!(
+            !output.with_extension("mp4.tmp").exists(),
+            "temp file must be renamed away on success"
+        );
     }
 
     #[test]
@@ -1369,5 +1487,64 @@ pub(crate) mod tests {
         clear_transcode_status("test_hash");
         let after_clear = get_transcode_status("test_hash");
         assert!(after_clear.is_none(), "Status should not exist after clear");
+    }
+
+    #[test]
+    fn test_status_store_eviction_caps_length() {
+        // GIVEN a map holding more entries than the cap, all settled
+        let mut map = HashMap::new();
+        for i in 0..(TRANSCODE_STATUS_STORE_CAP + 20) {
+            map.insert(
+                format!("settled-{}", i),
+                TranscodeStatus {
+                    state: TranscodeState::Completed,
+                    hash: format!("settled-{}", i),
+                    started_at: None,
+                    error: None,
+                },
+            );
+        }
+
+        // WHEN eviction runs
+        evict_transcode_statuses(&mut map);
+
+        // THEN the map is capped
+        assert_eq!(map.len(), TRANSCODE_STATUS_STORE_CAP);
+    }
+
+    #[test]
+    fn test_status_store_eviction_prefers_in_progress() {
+        // GIVEN a map over the cap with one in-progress entry among settled ones
+        let mut map = HashMap::new();
+        for i in 0..(TRANSCODE_STATUS_STORE_CAP + 20) {
+            map.insert(
+                format!("settled-{}", i),
+                TranscodeStatus {
+                    state: TranscodeState::Failed,
+                    hash: format!("settled-{}", i),
+                    started_at: None,
+                    error: None,
+                },
+            );
+        }
+        map.insert(
+            "in-flight".to_string(),
+            TranscodeStatus {
+                state: TranscodeState::InProgress,
+                hash: "in-flight".to_string(),
+                started_at: None,
+                error: None,
+            },
+        );
+
+        // WHEN eviction runs
+        evict_transcode_statuses(&mut map);
+
+        // THEN in-progress entries survive while settled entries are evicted first
+        assert_eq!(map.len(), TRANSCODE_STATUS_STORE_CAP);
+        assert!(
+            map.contains_key("in-flight"),
+            "in-progress entries must be evicted last"
+        );
     }
 }

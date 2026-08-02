@@ -305,8 +305,8 @@ impl MetadataExtractor {
                 "json",
                 "-show_format",
                 "-show_streams",
-                path.to_str().unwrap(),
             ])
+            .arg(path.as_os_str()) // non-UTF-8 paths must not panic
             .output()
         {
             Ok(output) if output.status.success() => {
@@ -324,39 +324,8 @@ impl MetadataExtractor {
 
                         metadata.taken_at = Self::extract_taken_at_from_ffprobe_json(&parsed);
 
-                        // Extract video codec and frame rate from streams
-                        if let Some(streams) = parsed["streams"].as_array() {
-                            for stream in streams {
-                                if stream["codec_type"].as_str() == Some("video") {
-                                    metadata.video_codec =
-                                        stream["codec_name"].as_str().map(String::from);
-
-                                    // Parse frame rate
-                                    if let Some(r_frame_rate) = stream["r_frame_rate"].as_str() {
-                                        if let Some((num, denom)) = r_frame_rate.split_once('/') {
-                                            if let (Ok(n), Ok(d)) =
-                                                (num.parse::<f64>(), denom.parse::<f64>())
-                                            {
-                                                if d != 0.0 {
-                                                    metadata.frame_rate = Some(n / d);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Extract dimensions
-                                    if let Some(width) = stream["width"].as_u64() {
-                                        metadata.width = Some(width as u32);
-                                    }
-                                    if let Some(height) = stream["height"].as_u64() {
-                                        metadata.height = Some(height as u32);
-                                    }
-                                } else if stream["codec_type"].as_str() == Some("audio") {
-                                    metadata.audio_codec =
-                                        stream["codec_name"].as_str().map(String::from);
-                                }
-                            }
-                        }
+                        // Extract codec/dimension/frame-rate info from streams
+                        Self::apply_stream_info(&parsed, metadata);
                     }
                 }
             }
@@ -374,6 +343,53 @@ impl MetadataExtractor {
                 );
                 debug!("  while extracting metadata for: {}", path.display());
             }
+        }
+    }
+
+    /// Applies codec/dimension/frame-rate info from the first real video
+    /// stream and the first audio stream of parsed ffprobe output.
+    ///
+    /// Attached cover pictures (`disposition.attached_pic`, e.g. the album art
+    /// embedded in MP3/M4A containers) are skipped: they are small JPEG
+    /// streams that would otherwise win over the actual video stream.
+    fn apply_stream_info(parsed: &serde_json::Value, metadata: &mut PhotoMetadata) {
+        let Some(streams) = parsed["streams"].as_array() else {
+            return;
+        };
+
+        // Prefer the first non-cover video stream (mirrors video_processor's
+        // `.find(|s| s["codec_type"] == "video")` semantics).
+        if let Some(video_stream) = streams.iter().find(|stream| {
+            stream["codec_type"].as_str() == Some("video")
+                && stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0
+        }) {
+            metadata.video_codec = video_stream["codec_name"].as_str().map(String::from);
+
+            // Parse frame rate
+            if let Some(r_frame_rate) = video_stream["r_frame_rate"].as_str() {
+                if let Some((num, denom)) = r_frame_rate.split_once('/') {
+                    if let (Ok(n), Ok(d)) = (num.parse::<f64>(), denom.parse::<f64>()) {
+                        if d != 0.0 {
+                            metadata.frame_rate = Some(n / d);
+                        }
+                    }
+                }
+            }
+
+            // Extract dimensions
+            if let Some(width) = video_stream["width"].as_u64() {
+                metadata.width = Some(width as u32);
+            }
+            if let Some(height) = video_stream["height"].as_u64() {
+                metadata.height = Some(height as u32);
+            }
+        }
+
+        if let Some(audio_stream) = streams
+            .iter()
+            .find(|stream| stream["codec_type"].as_str() == Some("audio"))
+        {
+            metadata.audio_codec = audio_stream["codec_name"].as_str().map(String::from);
         }
     }
 
@@ -403,7 +419,7 @@ impl MetadataExtractor {
                         .and_then(Self::parse_video_creation_time)
                         .or_else(|| {
                             tags.iter()
-                                .filter(|(k, _)| k.starts_with("date"))
+                                .filter(|(k, _)| *k == "date" || k.strip_prefix("date-").is_some())
                                 .find_map(|(_, v)| {
                                     v.as_str().and_then(Self::parse_video_creation_time)
                                 })
@@ -667,7 +683,10 @@ impl MetadataExtractor {
         let replaced = stem.replace(['/', ' ', '.', '-'], "_");
         let shards: Vec<&str> = replaced.split('_').collect();
 
-        let date_formats = ["%Y%m%d", "%F"]; // %F = %Y-%m-%d
+        // Shards are separator-normalized ('.', '-', '/', ' ' -> '_'), so a
+        // dashed date like "2024-02-15" can never survive as a single shard;
+        // the compact %Y%m%d form is the only reachable format here.
+        let date_formats = ["%Y%m%d"];
         let time_formats = ["%H%M%S", "%H-%M-%S"];
 
         for (i, shard) in shards.iter().enumerate() {
@@ -738,9 +757,7 @@ mod tests {
     fn test_extract_canon_exif() {
         // GIVEN: Canon EOS 40D image with complete EXIF data
         let path = Path::new("test-data/sample_with_exif.jpg");
-        if !path.exists() {
-            return; // Skip if test file not available
-        }
+        assert!(path.exists(), "test fixture missing: {path:?}");
 
         // WHEN: Extract metadata
         let metadata = MetadataExtractor::extract_with_metadata(path, None);
@@ -898,9 +915,7 @@ mod tests {
         // This would require a test image with GPS data
         // Currently our test images don't have GPS, so we verify the structure works
         let path = Path::new("test-data/sample_with_exif.jpg");
-        if !path.exists() {
-            return;
-        }
+        assert!(path.exists(), "test fixture missing: {path:?}");
 
         let metadata = MetadataExtractor::extract_with_metadata(path, None);
 
@@ -1089,6 +1104,84 @@ mod tests {
 
         // THEN: Should not parse invalid date values
         assert!(taken_at.is_none(), "Should ignore unparseable date tag");
+    }
+
+    #[test]
+    fn test_video_stream_info_skips_attached_cover() {
+        // GIVEN: ffprobe JSON with an attached cover picture stream (e.g.
+        // album art in an M4A container) before the real video stream
+        let json_str = r#"{
+            "format": {},
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "width": 640,
+                    "height": 640,
+                    "r_frame_rate": "0/0",
+                    "disposition": { "attached_pic": 1 }
+                },
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "r_frame_rate": "30000/1001"
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac"
+                }
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let mut metadata = PhotoMetadata::default();
+
+        // WHEN: Applying stream info from the parsed ffprobe output
+        MetadataExtractor::apply_stream_info(&parsed, &mut metadata);
+
+        // THEN: The cover stream must be ignored in favor of the real video
+        assert_eq!(metadata.video_codec, Some("h264".to_string()));
+        assert_eq!(metadata.width, Some(1920));
+        assert_eq!(metadata.height, Some(1080));
+        assert_eq!(metadata.frame_rate, Some(30000.0 / 1001.0));
+        assert_eq!(metadata.audio_codec, Some("aac".to_string()));
+    }
+
+    #[test]
+    fn test_video_stream_info_prefers_first_video_stream() {
+        // GIVEN: ffprobe JSON with two video streams and no attached cover
+        let json_str = r#"{
+            "format": {},
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 1280,
+                    "height": 720,
+                    "r_frame_rate": "25/1"
+                },
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 640,
+                    "height": 360,
+                    "r_frame_rate": "24/1"
+                }
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let mut metadata = PhotoMetadata::default();
+
+        // WHEN: Applying stream info from the parsed ffprobe output
+        MetadataExtractor::apply_stream_info(&parsed, &mut metadata);
+
+        // THEN: The first video stream wins (find() semantics)
+        assert_eq!(metadata.video_codec, Some("hevc".to_string()));
+        assert_eq!(metadata.width, Some(1280));
+        assert_eq!(metadata.height, Some(720));
+        assert_eq!(metadata.frame_rate, Some(25.0));
+        assert!(metadata.audio_codec.is_none());
     }
 
     #[test]
@@ -1537,9 +1630,7 @@ mod tests {
     fn test_extract_with_metadata_exif_priority_over_filename() {
         // GIVEN: Use an existing test image WITH EXIF (sample_with_exif.jpg)
         let path = Path::new("test-data/sample_with_exif.jpg");
-        if !path.exists() {
-            return; // Skip if test file not available
-        }
+        assert!(path.exists(), "test fixture missing: {path:?}");
         let file_meta = std::fs::metadata(path).ok();
 
         // WHEN: Extract metadata

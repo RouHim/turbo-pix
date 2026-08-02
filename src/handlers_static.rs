@@ -35,6 +35,29 @@ fn build_asset_response(
     .into_response()
 }
 
+/// Builds the HEAD mirror of an asset route: the same headers as the GET
+/// response (content-type, content-length, accept-ranges, cache-control) with
+/// an empty body.
+fn build_head_response(
+    content: &'static [u8],
+    content_type: &'static str,
+) -> warp::reply::Response {
+    warp::reply::with_header(
+        warp::reply::with_header(
+            warp::reply::with_header(
+                warp::reply::with_header(Vec::<u8>::new(), "content-type", content_type),
+                "content-length",
+                content.len().to_string(),
+            ),
+            "accept-ranges",
+            "bytes",
+        ),
+        "cache-control",
+        "no-cache",
+    )
+    .into_response()
+}
+
 fn build_route(
     path: &'static str,
     content: &'static [u8],
@@ -43,10 +66,13 @@ fn build_route(
     let content_type = content_type_from_path(path);
 
     if segments.len() == 1 && segments[0] == "index.html" {
-        return warp::path::end()
+        let get = warp::path::end()
             .and(warp::get())
-            .map(move || build_asset_response(content, content_type))
-            .boxed();
+            .map(move || build_asset_response(content, content_type));
+        let head = warp::path::end()
+            .and(warp::head())
+            .map(move || build_head_response(content, content_type));
+        return get.or(head).unify().boxed();
     }
 
     let mut filter = warp::path(segments[0]).boxed();
@@ -54,11 +80,17 @@ fn build_route(
         filter = filter.and(warp::path(*segment)).boxed();
     }
 
-    filter
+    let get = filter
+        .clone()
         .and(warp::path::end())
         .and(warp::get())
-        .map(move || build_asset_response(content, content_type))
-        .boxed()
+        .map(move || build_asset_response(content, content_type));
+    let head = filter
+        .and(warp::path::end())
+        .and(warp::head())
+        .map(move || build_head_response(content, content_type));
+
+    get.or(head).unify().boxed()
 }
 
 pub fn build_static_routes(
@@ -159,6 +191,39 @@ mod tests {
             assert_eq!(response.body(), content, "asset {path} body mismatch");
             assert_eq!(response.headers()["cache-control"], "no-cache");
         }
+
+        // HEAD requests on assets mirror the GET headers with an empty body
+        let (head_path, head_content) = STATIC_FILES
+            .iter()
+            .map(|(p, c)| (*p, c.as_bytes()))
+            .chain(STATIC_BINARY_FILES.iter().map(|(p, c)| (*p, *c)))
+            .find(|(p, _)| *p != "index.html")
+            .expect("at least one non-index asset is embedded");
+        let head = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/{head_path}"))
+            .reply(&routes)
+            .await;
+        assert_eq!(head.status(), 200, "HEAD {head_path} should succeed");
+        assert!(head.body().is_empty(), "HEAD body must be empty");
+        assert_eq!(
+            head.headers()["content-length"],
+            head_content.len().to_string().as_str()
+        );
+        assert_eq!(
+            head.headers()["content-type"],
+            content_type_from_path(head_path)
+        );
+        assert_eq!(head.headers()["accept-ranges"], "bytes");
+        assert_eq!(head.headers()["cache-control"], "no-cache");
+
+        // HEAD on unknown paths stays rejected (no SPA-fallback mirror)
+        let head_unknown = warp::test::request()
+            .method("HEAD")
+            .path("/some/client/route")
+            .reply(&routes)
+            .await;
+        assert_ne!(head_unknown.status(), 200);
 
         // Unknown paths fall back to index.html (SPA routing)
         let spa = warp::test::request()

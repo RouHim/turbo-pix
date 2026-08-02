@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use zerocopy::IntoBytes;
@@ -53,6 +53,39 @@ const MIN_SIMILARITY_SCORE: f32 = 0.615;
 // Video frame sampling configuration
 const VIDEO_FRAME_COUNT: usize = 3;
 const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
+
+/// RAII guard for a temporary frame-extraction directory: removes the
+/// directory and everything in it on drop, so error paths cannot leak frames
+/// under `$TMPDIR/turbopix_<pid>_<n>/`.
+struct TempFrameDir(PathBuf);
+
+impl TempFrameDir {
+    fn new(unique_id: u64) -> Self {
+        Self(std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id)))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFrameDir {
+    fn drop(&mut self) {
+        match std::fs::remove_dir_all(&self.0) {
+            Ok(()) => {}
+            // The directory may never have been created (e.g. ffmpeg failed
+            // before touching it) — that is not a leak, stay quiet.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                log::warn!(
+                    "Failed to cleanup temp directory {}: {}",
+                    self.0.display(),
+                    e
+                );
+            }
+        }
+    }
+}
 
 pub struct VideoSemanticMeta {
     pub num_frames: usize,
@@ -240,6 +273,13 @@ impl SemanticSearchEngine {
             );
         }
 
+        // Mark the photo as indexed so it is not re-scanned on the next run
+        // (mirrors batch_store_semantic_vectors).
+        sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
+            .bind(image_path)
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
         Ok(())
     }
@@ -296,13 +336,14 @@ impl SemanticSearchEngine {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir =
-            std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id));
+        // RAII guard: the directory (and any frames inside) is removed on
+        // drop, so the error paths below can never leak it.
+        let temp_dir = TempFrameDir::new(unique_id);
 
         // Step 1: Extract all frames in a single ffmpeg call (MUCH faster than parallel tasks)
         let extraction_start = std::time::Instant::now();
         let extracted_frames =
-            extract_frames_batch(Path::new(video_path), &frame_times, &temp_dir).await?;
+            extract_frames_batch(Path::new(video_path), &frame_times, temp_dir.path()).await?;
         log::debug!(
             "Extracted {} frames in {:?}",
             extracted_frames.len(),
@@ -318,25 +359,7 @@ impl SemanticSearchEngine {
             encode_image_batch(&model_read, &extracted_frames, &self.device)?
         };
 
-        // Step 3: Cleanup temp files
-        for temp_frame_path in &extracted_frames {
-            if let Err(e) = std::fs::remove_file(temp_frame_path) {
-                log::warn!(
-                    "Failed to cleanup temp frame {}: {}",
-                    temp_frame_path.display(),
-                    e
-                );
-            }
-        }
-
-        // Cleanup temp directory
-        if let Err(e) = std::fs::remove_dir(&temp_dir) {
-            log::warn!(
-                "Failed to cleanup temp directory {}: {}",
-                temp_dir.display(),
-                e
-            );
-        }
+        // Step 3: temp frames are cleaned up by TempFrameDir on drop.
 
         // Average pool all frame embeddings: [N, 512] -> [512]
         let video_embedding = batch_embeddings.mean(0)?;
@@ -370,6 +393,13 @@ impl SemanticSearchEngine {
                 video_path
             );
         }
+
+        // Mark the photo as indexed so it is not re-scanned on the next run
+        // (mirrors batch_store_semantic_vectors).
+        sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
+            .bind(video_path)
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
 
@@ -405,12 +435,13 @@ impl SemanticSearchEngine {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir =
-            std::env::temp_dir().join(format!("turbopix_{}_{}", std::process::id(), unique_id));
+        // RAII guard: the directory (and any frames inside) is removed on
+        // drop, so the error paths below can never leak it.
+        let temp_dir = TempFrameDir::new(unique_id);
 
         let extraction_start = std::time::Instant::now();
         let extracted_frames =
-            extract_frames_batch(Path::new(video_path), &frame_times, &temp_dir).await?;
+            extract_frames_batch(Path::new(video_path), &frame_times, temp_dir.path()).await?;
         log::debug!(
             "Extracted {} frames in {:?}",
             extracted_frames.len(),
@@ -425,23 +456,7 @@ impl SemanticSearchEngine {
             encode_image_batch(&model_read, &extracted_frames, &self.device)?
         };
 
-        for temp_frame_path in &extracted_frames {
-            if let Err(e) = std::fs::remove_file(temp_frame_path) {
-                log::warn!(
-                    "Failed to cleanup temp frame {}: {}",
-                    temp_frame_path.display(),
-                    e
-                );
-            }
-        }
-
-        if let Err(e) = std::fs::remove_dir(&temp_dir) {
-            log::warn!(
-                "Failed to cleanup temp directory {}: {}",
-                temp_dir.display(),
-                e
-            );
-        }
+        // Temp frames are cleaned up by TempFrameDir on drop.
 
         let video_embedding = batch_embeddings.mean(0)?;
         let normalized_embedding = normalize_vector(&video_embedding)?;
@@ -589,6 +604,11 @@ pub async fn batch_store_semantic_vectors(
 /// Downloads CLIP model files to the cache directory
 pub fn download_models(data_path: &str) -> Result<()> {
     log::info!("Downloading CLIP model to cache...");
+    // NOTE: the `..` is intentional — `data_path/../data/models` keeps the
+    // model cache in the repo-root ./data/models even when the app runs with a
+    // sandboxed data dir (the E2E suite sets TURBO_PIX_DATA_PATH=test-e2e-data
+    // while sharing the model cache; without the `..` the E2E server would
+    // hang trying to download the model into the sandbox).
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
     let model_repo = hf_hub::api::sync::ApiBuilder::new()
@@ -674,7 +694,11 @@ fn encode_text(
     if tokens.len() < CONTEXT_LENGTH {
         tokens.resize(CONTEXT_LENGTH, EOT_TOKEN);
     } else {
-        tokens.truncate(CONTEXT_LENGTH);
+        // The tokenizer already appended EOT, so truncating to
+        // CONTEXT_LENGTH would drop it; keep CONTEXT_LENGTH - 1 tokens and
+        // re-append EOT as the final token.
+        tokens.truncate(CONTEXT_LENGTH - 1);
+        tokens.push(EOT_TOKEN);
     }
 
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
@@ -1332,5 +1356,50 @@ mod tests {
         for (path, score) in &results {
             println!("  {}: {:.1}", path, score);
         }
+    }
+
+    #[test]
+    fn test_temp_frame_dir_cleans_up_on_drop() {
+        // GIVEN: a temp frame directory guard with a frame file inside
+        let temp_dir = TempFrameDir::new(0xdead_beef);
+        let path = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("frame_0.jpg"), b"jpeg").unwrap();
+
+        // WHEN: the guard goes out of scope (as it would on both success and
+        // error paths of video embedding)
+        drop(temp_dir);
+
+        // THEN: the directory and its contents are removed
+        assert!(
+            !path.exists(),
+            "temp dir should be removed on drop, even with frames inside"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compute_semantic_vector_marks_photo_indexed() {
+        // GIVEN: a photo row waiting for semantic indexing
+        let db_pool = create_test_db_pool().await.unwrap();
+        let path = "test-data/cat.jpg";
+        create_test_photo(path).create(&db_pool).await.unwrap();
+        let engine = create_test_engine_cached(db_pool.clone());
+
+        // WHEN: the single-image compute path runs (the production caller
+        // path, as opposed to the batch path)
+        engine.compute_semantic_vector(path).await.unwrap();
+
+        // THEN: the photo is no longer a perpetual re-scan candidate
+        let indexed: Option<bool> =
+            sqlx::query_scalar("SELECT semantic_vector_indexed FROM photos WHERE file_path = ?")
+                .bind(path)
+                .fetch_one(&db_pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            indexed,
+            Some(true),
+            "semantic_vector_indexed should be set to 1 after computing"
+        );
     }
 }

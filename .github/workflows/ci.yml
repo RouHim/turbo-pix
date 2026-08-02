@@ -2,8 +2,6 @@ name: CI/CD
 on:
   push:
   pull_request:
-    types:
-      - opened
   workflow_dispatch: # allow manual execution
 
 jobs:
@@ -243,8 +241,11 @@ jobs:
       - name: Get latest tag
         id: get_tag
         run: |
-          git ls-remote --tags https://github.com/${{ github.repository }} | grep -o 'refs/tags/[0-9]*\.[0-9]*\.[0-9]*$' | sort -V | tail -n1 | sed 's|refs/tags/||'
           TAG=$(git ls-remote --tags https://github.com/${{ github.repository }} | grep -o 'refs/tags/[0-9]*\.[0-9]*\.[0-9]*$' | sort -V | tail -n1 | sed 's|refs/tags/||')
+          if [ -z "$TAG" ]; then
+            echo '::error::No version tags found'
+            exit 1
+          fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Upload binary to release
@@ -257,6 +258,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-container:
+    if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     needs:
       - lint-format
@@ -316,6 +318,7 @@ jobs:
           podman push turbo-pix-${{ matrix.arch }}:latest docker.io/rouhim/turbo-pix:${{ matrix.arch }}-latest
 
   push-manifest:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: build-container
 

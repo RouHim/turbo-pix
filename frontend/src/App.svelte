@@ -48,7 +48,9 @@
 
   onMount(() => {
     const updateMobile = throttle(() => {
-      const isMobile = window.innerWidth < APP_CONSTANTS.MOBILE_BREAKPOINT;
+      // Matches the CSS breakpoint (max-width: 768px), so the sidebar state
+      // and the layout agree exactly at 768px.
+      const isMobile = window.innerWidth <= APP_CONSTANTS.MOBILE_BREAKPOINT;
       if (!isMobile) appState.sidebarOpen = false;
     }, 150);
 

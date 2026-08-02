@@ -3,6 +3,7 @@
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
+  import { isFormatSupported } from '../lib/utils.js';
   import Icon from '../lib/Icon.svelte';
 
   const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
@@ -15,18 +16,17 @@
   let longitude = $state('');
   let errorMessage = $state('');
   let saving = $state(false);
+  // Bumped on every open/close/submit; a PATCH response from a superseded
+  // session (modal closed and reopened for the same photo while in flight)
+  // must not act on the fresh session.
+  let saveToken = 0;
   // Set once the modal has actually been opened, so the focus-restore branch
   // below doesn't steal focus to the (hidden) edit button on initial mount.
   let wasOpen = false;
 
-  function isFormatSupported(p) {
-    if (!p?.mime_type) return false;
-    const supported = ['image/jpeg', 'image/jpg', 'image/png'];
-    return supported.includes(p.mime_type.toLowerCase());
-  }
-
   function openModal() {
     if (!photo || !isFormatSupported(photo)) return;
+    saveToken++;
     wasOpen = true;
     editTargetHash = photo.hash_sha256;
     populateForm();
@@ -35,6 +35,7 @@
   }
 
   function closeModal() {
+    saveToken++;
     editTargetHash = null;
     showModal = false;
     document.body.style.overflow = '';
@@ -166,6 +167,22 @@
     return { updates };
   }
 
+  /**
+   * True when the user cleared a field the photo previously had a value for
+   * (date taken / GPS). The backend cannot clear these fields, so such a save
+   * must fail honestly instead of silently no-oping with a success toast.
+   */
+  function formHasClearedFields() {
+    if (!photo) return false;
+    const hadTakenAt = Boolean(photo.taken_at);
+    const hadLat = photo.metadata?.location?.latitude != null;
+    const hadLng = photo.metadata?.location?.longitude != null;
+    const hasTakenAt = String(takenAt ?? '').trim() !== '';
+    const hasLat = String(latitude ?? '').trim() !== '';
+    const hasLng = String(longitude ?? '').trim() !== '';
+    return (hadTakenAt && !hasTakenAt) || (hadLat && !hasLat) || (hadLng && !hasLng);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!photo) return;
@@ -174,18 +191,36 @@
     saving = true;
 
     try {
+      // Clearing a previously-set field cannot be saved by the backend; keep
+      // the modal open with an honest error instead of a fake success toast.
+      if (formHasClearedFields()) {
+        errorMessage = get(t)('messages.metadata_clear_unsupported', {
+          default: 'Clearing metadata fields is not supported',
+        });
+        return;
+      }
+
       const { updates, error } = buildUpdatesFromForm();
       if (error) {
         errorMessage = error;
         return;
       }
 
+      // Nothing changed: don't PATCH and don't claim success.
+      if (Object.keys(updates).length === 0) {
+        closeModal();
+        return;
+      }
+
+      const token = ++saveToken;
       const updatedPhoto = await api.updatePhotoMetadata(editTargetHash, updates);
 
       // Stale-save guard: the modal can be closed (Escape / overlay / X) and
       // the viewer navigated while the PATCH is in flight — a stale response
-      // must not overwrite the photo now on screen.
+      // must not overwrite the photo now on screen. The session token also
+      // catches a reopen of the same photo while the PATCH is still in flight.
       if (photo?.hash_sha256 !== editTargetHash) return;
+      if (token !== saveToken) return;
 
       // Update photo refs
       if (onSaved) {

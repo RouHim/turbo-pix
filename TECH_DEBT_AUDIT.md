@@ -16,7 +16,7 @@ Audit mode: full (audit + fixes, everything except F9 by user decision)
 
 TurboPix is a self-hosted photo/video gallery: a single Rust binary (warp + sqlx/SQLite + sqlite-vec + candle ML) that scans photo directories, extracts EXIF/ffprobe metadata, generates CLIP embeddings and thumbnails, and serves an embedded SPA. The frontend is Svelte 5 (runes) + Vite, freshly migrated from vanilla JS (this branch), embedded into the binary via `build.rs` (which panics on stale dist — deliberate guard).
 
-Key hot paths: the indexing pipeline (`scheduler.rs` → `photo_processor`/`metadata_extractor`/`video_processor`/`semantic_search`), photo listing/search (`db.rs`), collage generation (`collage_generator.rs`, the largest file at 2126 lines but well-structured), and the viewer (`PhotoViewer.svelte`, 1760 lines, the largest component — video transcoding + gestures + zoom, heavily pinned by E2E).
+Key hot paths: the indexing pipeline (`scheduler.rs` → `photo_processor`/`metadata_extractor`/`video_processor`/`semantic_search`), photo listing/search (`db.rs`), collage generation (`collage_generator.rs`, the largest file at 2126 lines but well-structured), and the viewer (`PhotoViewer.svelte`, 1794 lines, the largest component — video transcoding + gestures + zoom, heavily pinned by E2E).
 
 The repo has been through 7+ adversarial review rounds; most architectural debt was already paid. What remained was the residue: stale dead files from the migration, duplicated EXIF plumbing that had started to drift, and a few genuinely branchy functions.
 
@@ -32,7 +32,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 | F6 | Dead code | `src/db.rs:935` | Low | S | **FIXED** | Empty `#[cfg(test)] impl Photo {}` block | Remove |
 | F7 | Duplication | `PhotoViewer.svelte:67-81`, `ViewerMetadata.svelte:14-22` | Low | S | **FIXED** | `isVideoFile`/`isRawFile`/`isCollagePhoto` defined twice (plus a third definition consumed via `this.viewer.isVideoFile`) | Move to `utils.js` |
 | F8 | Dead code | `blurhash.js:212` | Low | S | **FIXED** | `createCanvas` exported but only used internally by `toDataURL` | Drop `export` |
-| F9 | Consistency rot | `app.css` (1765 lines) | Low | L | **REJECTED (user decision)** | Global `.viewer-*`/`.sidebar`/`.photo-card-*` rules coexist with scoped styles; learnings document hard-won battles over this split | Move into scoped styles — not worth the risk now; E2E pins behavior, payoff small |
+| F9 | Consistency rot | `app.css` (1761 lines) | Low | L | **REJECTED (user decision)** | Global `.viewer-*`/`.sidebar`/`.photo-card-*` rules coexist with scoped styles; learnings document hard-won battles over this split | Move into scoped styles — not worth the risk now; E2E pins behavior, payoff small |
 | F10 | Duplication | `handlers_static.rs:27-89` | Low | S | **FIXED** | `build_route_for_file`/`build_route_for_binary_file` identical except str/bytes body | Merge into one byte-based builder |
 | F11 | Duplication | `handlers_photo.rs:382`, `image_editor.rs:265`, `metadata_extractor.rs:103`, `metadata_writer.rs:88/284/919` | Med | M | **FIXED** (with F4) | `exif::Reader::new()` + `read_from_container` boilerplate at 6 sites | Shared reader helper |
 | F12 | Deps | `Cargo.toml` `kamadak-exif` | — | — | **REJECTED** | cargo-machete false positive: crate's lib name is `exif`, used in 4 files | Add to machete ignore list if it annoys |
@@ -50,7 +50,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 - Dropped the `export` from `createCanvas` in `frontend/src/lib/blurhash.js`.
 - Verification: `cargo check --all-targets`, `cargo clippy -- -D warnings` clean (unused imports would have errored).
 
-### F4+F11 — Shared EXIF helpers (`src/exif_helpers.rs`, new, 100 lines)
+### F4+F11 — Shared EXIF helpers (`src/exif_helpers.rs`, new, 76 lines)
 - `read_exif<R: BufRead + Seek>` / `read_exif_from_path` / `build_exif_buffer` / `write_exif_to_image`.
 - Updated 4 callers: `metadata_extractor.rs` (1 site), `handlers_photo.rs` (1 site, preserved distinct open-vs-read error responses), `image_editor.rs` (2 blocks), `metadata_writer.rs` (2 blocks).
 - Error messages preserved byte-for-byte; `write_exif_to_image` accepts `jpg`|`jpeg`|`png` (both caller dialects).
@@ -80,7 +80,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 ## Top 5 remaining
 
 1. **F9 — Global vs scoped CSS split (`app.css`).** The only L-effort item. The viewer/sidebar/card layout lives partly in global CSS, partly in component scoped styles, and AGENTS.md documents repeated regressions when the two fight (scoped beats global of equal specificity). Consolidating into scoped styles is a large, E2E-pinned effort with no functional payoff — revisit only when touching those components for feature work.
-2. **PhotoViewer.svelte (1760 lines).** The god component of the app. Splitting it further (e.g. a video-transcode composable) is the natural next structural step, but every async continuation inside carries a documented staleness guard (AGENTS.md) and the component is the most E2E-pinned file. Extract only alongside a feature touch, never as a standalone refactor.
+2. **PhotoViewer.svelte (1794 lines).** The god component of the app. Splitting it further (e.g. a video-transcode composable) is the natural next structural step, but every async continuation inside carries a documented staleness guard (AGENTS.md) and the component is the most E2E-pinned file. Extract only alongside a feature touch, never as a standalone refactor.
 3. **collage_generator.rs (2126 lines).** Largest Rust file; well-organized (template scoring/layout/rendering sections) and 23 tests. The `generate_collages` orchestration (1292-1420) is the only dense region. Same verdict as PhotoViewer: split when touched.
 4. **Zero-test leaf modules** (`housekeeping_manager.rs`, `file_scanner.rs`, `cache_manager.rs`). Cheap to cover with unit tests when next modified.
 5. **Machete ignore list for `kamadak-exif`.** One line in Cargo.toml (`[package.metadata.cargo-machete] ignored = ["kamadak-exif"]`) so future machete runs don't re-flag it.
@@ -96,7 +96,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 
 ## Things that look bad but are actually fine
 
-- **`app.css` at 1765 lines with global `.viewer-*` rules while components are scoped.** Deliberate migration state; learnings document exactly which global rules are live vs shadowed. Flagged as F9 anyway (the split is drift-prone) but not fixed.
+- **`app.css` at 1761 lines with global `.viewer-*` rules while components are scoped.** Deliberate migration state; learnings document exactly which global rules are live vs shadowed. Flagged as F9 anyway (the split is drift-prone) but not fixed.
 - **`kamadak-exif` "unused" per machete.** False positive — lib name is `exif`; used in 4 files.
 - **CHANGELOG.md with dozens of empty release sections.** semantic-release autogenerates entries for dep bumps; conventional for this toolchain.
 - **`db.rs` thin test helpers delegating to `db_pool`** (`create_test_db_pool` → `create_in_memory_pool` → `db_pool`). Two-line indirection with a purpose (test-module visibility).

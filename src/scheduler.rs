@@ -175,6 +175,7 @@ impl IndexingStatus {
     pub async fn stop_indexing(&self) {
         self.is_indexing.store(false, Ordering::SeqCst);
         *self.current_phase.lock().await = String::from("idle");
+        *self.started_at.lock().await = None;
     }
 
     pub fn mark_complete(&self) {

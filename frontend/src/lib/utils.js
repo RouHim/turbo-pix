@@ -50,6 +50,17 @@ export function isCollagePhoto(photo) {
 }
 
 /**
+ * True for photo records whose metadata can be edited (JPEG/PNG).
+ * @param {object|null} p - Photo record with a mime_type field
+ * @returns {boolean}
+ */
+export function isFormatSupported(p) {
+  if (!p?.mime_type) return false;
+  const supported = ['image/jpeg', 'image/jpg', 'image/png'];
+  return supported.includes(p.mime_type.toLowerCase());
+}
+
+/**
  * Format a file size in bytes to a human-readable string.
  * @param {number} bytes
  * @returns {string}
@@ -61,7 +72,7 @@ export function formatFileSize(bytes) {
   if (bytes === 0) return get(t)('ui.file_size_zero', { default: '0 Bytes' });
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 

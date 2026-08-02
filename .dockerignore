@@ -3,3 +3,8 @@ target/
 dist/
 .git/
 test-data/
+data/
+photos/
+collages/
+playwright-report/
+test-results/

@@ -60,18 +60,20 @@ mod tests {
     fn test_enhanced_exif_date_extraction_with_sample_file() {
         // Test with the sample EXIF file we downloaded
         let sample_path = std::path::Path::new("test-data/sample_with_exif.jpg");
+        assert!(
+            sample_path.exists(),
+            "test fixture missing: {sample_path:?}"
+        );
 
-        if sample_path.exists() {
-            let metadata = MetadataExtractor::extract_with_metadata(sample_path, None);
+        let metadata = MetadataExtractor::extract_with_metadata(sample_path, None);
 
-            // The sample file should have EXIF date information
-            // This verifies our enhanced extraction is working
-            if let Some(taken_at) = metadata.taken_at {
-                // Sample file (Canon EOS 1100D) has date 2024-01-01
-                assert_eq!(taken_at.year(), 2024);
-                assert_eq!(taken_at.month(), 1);
-                assert_eq!(taken_at.day(), 1);
-            }
+        // The sample file should have EXIF date information
+        // This verifies our enhanced extraction is working
+        if let Some(taken_at) = metadata.taken_at {
+            // Sample file (Canon EOS 1100D) has date 2024-01-01
+            assert_eq!(taken_at.year(), 2024);
+            assert_eq!(taken_at.month(), 1);
+            assert_eq!(taken_at.day(), 1);
         }
     }
 
@@ -111,19 +113,20 @@ mod tests {
     fn test_file_creation_date_fallback_exif_takes_priority() {
         // Test with the sample EXIF file - should NOT use file creation time
         let sample_path = std::path::Path::new("test-data/sample_with_exif.jpg");
+        assert!(
+            sample_path.exists(),
+            "test fixture missing: {sample_path:?}"
+        );
 
-        if sample_path.exists() {
-            let file_metadata = std::fs::metadata(sample_path).unwrap();
-            let metadata =
-                MetadataExtractor::extract_with_metadata(sample_path, Some(&file_metadata));
+        let file_metadata = std::fs::metadata(sample_path).unwrap();
+        let metadata = MetadataExtractor::extract_with_metadata(sample_path, Some(&file_metadata));
 
-            // Should use EXIF date (2024-01-01), not file creation time
-            assert!(metadata.taken_at.is_some());
-            let taken_at = metadata.taken_at.unwrap();
-            assert_eq!(taken_at.year(), 2024);
-            assert_eq!(taken_at.month(), 1);
-            assert_eq!(taken_at.day(), 1);
-        }
+        // Should use EXIF date (2024-01-01), not file creation time
+        assert!(metadata.taken_at.is_some());
+        let taken_at = metadata.taken_at.unwrap();
+        assert_eq!(taken_at.year(), 2024);
+        assert_eq!(taken_at.month(), 1);
+        assert_eq!(taken_at.day(), 1);
     }
 
     #[test]

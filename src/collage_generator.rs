@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Locale, NaiveDate, Utc};
+use chrono::{DateTime, Duration, Locale, NaiveDate, NaiveDateTime, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info, warn};
 use rand::rng;
@@ -32,6 +32,20 @@ pub struct Collage {
     pub created_at: DateTime<Utc>,
 }
 
+/// Parses a collage timestamp, accepting both RFC3339 ("2026-01-04T16:17:10Z")
+/// and SQLite's format ("2026-01-04 16:17:10", produced by `datetime('now')`
+/// and `CURRENT_TIMESTAMP`).
+fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+        })
+}
+
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Collage {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         let photo_hashes_json: String = row.try_get("photo_hashes")?;
@@ -47,17 +61,20 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Collage {
             photo_hashes,
             accepted_at: row
                 .try_get::<Option<String>, _>("accepted_at")?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
+                .and_then(|s| parse_datetime(&s)),
             rejected_at: row
                 .try_get::<Option<String>, _>("rejected_at")?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
+                .and_then(|s| parse_datetime(&s)),
             created_at: row
                 .try_get::<Option<String>, _>("created_at")?
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(Utc::now),
+                .and_then(|s| parse_datetime(&s))
+                .unwrap_or_else(|| {
+                    warn!(
+                        "Unparseable created_at for collage id {}; using now",
+                        row.try_get::<i64, _>("id").unwrap_or(-1)
+                    );
+                    Utc::now()
+                }),
         })
     }
 }
@@ -178,11 +195,13 @@ impl Collage {
         pool: &DbPool,
         id: i64,
         new_file_path: &str,
+        new_thumbnail_path: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         sqlx::query(
-            "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, rejected_at = NULL, file_path = ? WHERE id = ?",
+            "UPDATE collages SET accepted_at = CURRENT_TIMESTAMP, rejected_at = NULL, file_path = ?, thumbnail_path = ? WHERE id = ?",
         )
         .bind(new_file_path)
+        .bind(new_thumbnail_path)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1023,6 +1042,7 @@ fn create_collage_image(
 
         // Only use thumbnail if it exists and is accessible
         let using_thumbnail = !is_raw
+            && photo.has_thumbnail.unwrap_or(false)
             && photo
                 .thumbnail_path
                 .as_ref()
@@ -1402,8 +1422,11 @@ pub async fn generate_collages(
                 }
                 Err(e) => {
                     error!("Failed to insert collage into database: {}", e);
-                    // Clean up file
+                    // Clean up file and thumbnail
                     let _ = std::fs::remove_file(&file_path);
+                    if let Some(thumb_path) = &thumbnail_path {
+                        let _ = std::fs::remove_file(thumb_path);
+                    }
                     error_count += 1;
                 }
             }
@@ -1440,19 +1463,30 @@ pub async fn accept_collage(
 
     std::fs::rename(&source, &dest)?;
 
-    // Move thumbnail if exists
+    // Move thumbnail if exists — keep the DB thumbnail_path in sync so
+    // consumers don't reference the old (moved-away) location.
+    let mut moved_thumb = None;
     if let Some(thumb_path) = &collage.thumbnail_path {
         let thumb_source = PathBuf::from(thumb_path);
         if thumb_source.exists() {
             if let Some(thumb_filename) = thumb_source.file_name() {
                 let thumb_dest = dest_dir.join(thumb_filename);
-                let _ = std::fs::rename(&thumb_source, &thumb_dest);
+                if std::fs::rename(&thumb_source, &thumb_dest).is_ok() {
+                    moved_thumb = Some(thumb_dest);
+                }
             }
         }
     }
+    let new_thumbnail_path = moved_thumb.map(|p| p.to_string_lossy().to_string());
 
     // Mark as accepted and update file path
-    Collage::accept(pool, collage_id, &dest.to_string_lossy()).await?;
+    Collage::accept(
+        pool,
+        collage_id,
+        &dest.to_string_lossy(),
+        new_thumbnail_path.as_deref(),
+    )
+    .await?;
 
     // Index the collage into photos table immediately
     if let Err(e) = index_collage_file(pool, &dest, semantic_search).await {

@@ -52,6 +52,7 @@ rayon = "1.11.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["fs", "macros", "process", "rt", "rt-multi-thread", "signal"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # Logging
 log = "0.4"

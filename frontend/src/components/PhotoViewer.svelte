@@ -116,6 +116,14 @@
   }
 
   function resetZoom() {
+    // Stop any in-flight zoom/momentum animation: displayPhoto calls resetZoom
+    // for the new photo, and the rAF loop must not keep writing stale zoom/
+    // transform state afterwards.
+    if (zoomAnimFrame) {
+      cancelAnimationFrame(zoomAnimFrame);
+      zoomAnimFrame = null;
+      isZoomAnimating = false;
+    }
     fitToScreen();
     gestureBaseZoom = 1;
   }
@@ -593,8 +601,9 @@
   async function tryStartTranscode(videoUrl, photo) {
     try {
       const response = await fetch(videoUrl);
-      // A newer photo may have been requested while the transcode was starting.
-      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return true;
+      // The viewer may have been closed, or a newer photo requested, while the
+      // transcode was starting — a hidden viewer must not show a transcode toast.
+      if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return true;
       if (response.status === 202) {
         const data = await response.json();
         const pollUrl = data.poll_url;
@@ -639,8 +648,9 @@
       needsTranscode = !supportsHEVC;
     }
 
-    // A newer photo may have been requested while HEVC support was being probed.
-    if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    // The viewer may have been closed, or a newer photo requested, while HEVC
+    // support was being probed — a hidden viewer must not start playback.
+    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
     const videoUrl = getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
 
@@ -977,11 +987,15 @@
 
       photos = photos.filter((p) => p.hash_sha256 !== photoHash);
 
-      if (photos.length > 0) {
-        if (currentIndex >= photos.length) currentIndex = photos.length - 1;
-        await showPhotoAtIndex(currentIndex);
-      } else {
-        close();
+      // The user may have navigated to another photo while the delete was in
+      // flight; keep the list update, but only re-navigate when the viewer
+      // still shows the deleted photo.
+      if (currentPhoto?.hash_sha256 === photoHash) {
+        if (photos.length > 0) {
+          await showPhotoAtIndex(Math.min(currentIndex, photos.length - 1));
+        } else {
+          close();
+        }
       }
       isLoading = false;
     } catch (error) {

@@ -32,7 +32,6 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
-data/
 
 # CLI Rules files
 *.clinerules*

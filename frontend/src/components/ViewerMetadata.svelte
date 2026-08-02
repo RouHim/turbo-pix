@@ -1,11 +1,11 @@
 <script>
-  import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import {
     formatDate,
     formatFileSize,
     formatDuration,
     isCollagePhoto,
+    isFormatSupported,
     isVideoFile,
   } from '../lib/utils.js';
   import Icon from '../lib/Icon.svelte';
@@ -15,12 +15,6 @@
   const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
   const isCollage = $derived(photo ? isCollagePhoto(photo) : false);
-
-  function isFormatSupported(p) {
-    if (!p?.mime_type) return false;
-    const supported = ['image/jpeg', 'image/jpg', 'image/png'];
-    return supported.includes(p.mime_type.toLowerCase());
-  }
 
   function getFormatName(p) {
     if (!p?.mime_type) return 'file';
@@ -62,7 +56,7 @@
     () =>
       photo?.filename ||
       (photo
-        ? `${get(t)('ui.photo', { default: 'Photo' })} ${photo.hash_sha256?.substring(0, 8)}`
+        ? `${$t('ui.photo', { default: 'Photo' })} ${photo.hash_sha256?.substring(0, 8)}`
         : '-')
   );
   const dateText = $derived(

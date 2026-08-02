@@ -341,6 +341,7 @@ test.describe('Indexing orbit', () => {
     await TestHelpers.goto(page);
     await expect(ringSegment(page, 'metadata')).toHaveAttribute('data-phase-state', 'active');
 
+    await page.waitForFunction(() => window.indexingStatus?.checkStatus != null);
     await page.evaluate(async () => {
       await window.indexingStatus.checkStatus();
     });
@@ -717,6 +718,7 @@ test.describe('Indexing orbit', () => {
         window.__indexingOrbitEventSeen = true;
       });
     });
+    await page.waitForFunction(() => window.indexingStatus?.checkStatus != null);
     await page.evaluate(async () => {
       await window.indexingStatus.checkStatus();
     });

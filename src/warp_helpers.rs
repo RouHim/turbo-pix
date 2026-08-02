@@ -91,6 +91,15 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
         code = warp::http::StatusCode::METHOD_NOT_ALLOWED;
         message = "Method not allowed".to_string();
+    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
+        code = warp::http::StatusCode::BAD_REQUEST;
+        message = "Invalid query parameters".to_string();
+    } else if err
+        .find::<warp::filters::body::BodyDeserializeError>()
+        .is_some()
+    {
+        code = warp::http::StatusCode::BAD_REQUEST;
+        message = "Invalid request body".to_string();
     } else {
         log::error!("Unhandled rejection: {:?}", err);
         code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;

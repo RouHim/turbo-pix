@@ -29,21 +29,17 @@
   let sheetCloseButton = $state(null);
   let ringTrigger = $state(null);
   let sheetHasOpened = false;
-  // Only user-initiated opens may yank focus into the sheet; the auto-open
-  // path (checkStatus → openSheet(true)) must not steal focus from the page.
-  let sheetOpenedByUser = false;
 
-  // Move focus into the bottom sheet when it opens and back to the ring on close.
-  // The ring is only refocused while interactive — never when data-ring-mode='hidden'.
+  // Move focus into the bottom sheet whenever it opens (the dialog is
+  // aria-modal, so focus must not stay behind the backdrop) and back to the
+  // ring on close. The ring is only refocused while interactive — never
+  // when data-ring-mode='hidden'.
   $effect(() => {
     if (sheetOpen) {
-      if (sheetOpenedByUser) {
-        sheetHasOpened = true;
-        sheetCloseButton?.focus();
-      }
+      sheetHasOpened = true;
+      sheetCloseButton?.focus();
     } else if (sheetHasOpened) {
       sheetHasOpened = false;
-      sheetOpenedByUser = false;
       if (ringMode !== 'hidden') {
         ringTrigger?.focus();
       }
@@ -237,6 +233,32 @@
     if (e.key === 'Escape') closeSheet();
   }
 
+  // Trap Tab/Shift+Tab inside the open bottom sheet: it is aria-modal, so
+  // focus must cycle among its focusable descendants instead of wrapping to
+  // page controls behind the backdrop. Attached to the sheet element, so no
+  // listener lifecycle management is needed.
+  function onSheetKeydown(e) {
+    if (e.key !== 'Tab' || !sheetOpen) return;
+    const focusables = Array.from(
+      e.currentTarget.querySelectorAll(
+        'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.disabled);
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
   onMount(() => {
     window.indexingStatus = {
       async checkStatus() {
@@ -365,13 +387,11 @@
   aria-expanded={sheetOpen}
   title={tooltipText}
   onclick={() => {
-    sheetOpenedByUser = true;
     toggleSheet();
   }}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      sheetOpenedByUser = true;
       toggleSheet();
     }
   }}
@@ -447,6 +467,7 @@
   aria-modal="true"
   aria-label={$t('ui.indexing_photos', { default: 'Processing your photos...' })}
   aria-hidden={!sheetOpen}
+  onkeydown={onSheetKeydown}
 >
   <div class="indexing-sheet-handle"></div>
   <div class="indexing-sheet-header">

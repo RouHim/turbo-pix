@@ -95,6 +95,57 @@ pub fn get_transcode_status(hash: &str) -> Option<TranscodeStatus> {
     store.lock().ok().and_then(|map| map.get(hash).cloned())
 }
 
+/// Outcome of atomically claiming the transcode slot for a hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscodeClaim {
+    /// This caller owns the slot and must spawn the transcode job.
+    Started,
+    /// A transcode for this hash is already running; return the poll response
+    /// without starting a second job.
+    AlreadyInProgress,
+    /// A previous attempt failed or timed out; remove any leftover temp file
+    /// and serve the original.
+    PreviouslyFailedOrTimedOut,
+}
+
+/// Atomically consults and claims the transcode slot for `hash` under the
+/// status-store lock, closing the check-then-act window where two concurrent
+/// requests for the same hash could both read "no status" and each spawn an
+/// ffmpeg job. The global transcode semaphore would only serialize the jobs,
+/// not prevent the duplicate spawn.
+pub fn claim_transcode(hash: &str) -> TranscodeClaim {
+    let store = get_status_store();
+    let mut map = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match map.get(hash) {
+        Some(status) if matches!(status.state, TranscodeState::InProgress) => {
+            TranscodeClaim::AlreadyInProgress
+        }
+        Some(status)
+            if matches!(
+                status.state,
+                TranscodeState::Failed | TranscodeState::Timeout
+            ) =>
+        {
+            TranscodeClaim::PreviouslyFailedOrTimedOut
+        }
+        _ => {
+            map.insert(
+                hash.to_string(),
+                TranscodeStatus {
+                    state: TranscodeState::InProgress,
+                    hash: hash.to_string(),
+                    started_at: Some(Utc::now()),
+                    error: None,
+                },
+            );
+            evict_transcode_statuses(&mut map);
+            TranscodeClaim::Started
+        }
+    }
+}
+
 pub fn clear_transcode_status(hash: &str) {
     let store = get_status_store();
     if let Ok(mut map) = store.lock() {
@@ -567,6 +618,12 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             "-movflags",
             "+faststart", // Enable streaming-friendly format
             "-y",         // Overwrite output file
+            // Force the muxer explicitly: the temp output path ends in
+            // `.mp4.tmp`, so ffmpeg cannot infer the format from the
+            // extension and otherwise fails with "Error initializing the
+            // muxer: Invalid argument".
+            "-f",
+            "mp4",
             temp_output_path.to_string_lossy().as_ref(),
         ]);
 
@@ -965,6 +1022,7 @@ pub(crate) mod tests {
             .to_string();
 
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,
@@ -1280,10 +1338,14 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_transcode_happy_path() {
         let temp_dir = TempDir::new().unwrap();
+        let args_file = temp_dir.path().join("args.txt");
         let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_ok.sh");
         std::fs::write(
             &ffmpeg_script,
-            "#!/usr/bin/env sh\nfor last; do :; done\ntouch \"$last\"\nexit 0\n",
+            format!(
+                "#!/usr/bin/env sh\nfor last; do :; done\nprintf '%s\\n' \"$@\" > '{}'\ntouch \"$last\"\nexit 0\n",
+                args_file.display()
+            ),
         )
         .unwrap();
         make_executable(&ffmpeg_script);
@@ -1309,6 +1371,22 @@ pub(crate) mod tests {
         assert!(
             !output.with_extension("mp4.tmp").exists(),
             "temp file must be renamed away on success"
+        );
+
+        // Regression: the temp output path ends in `.mp4.tmp`, so ffmpeg
+        // cannot infer the format from the extension — the command must pass
+        // `-f mp4` explicitly or the real ffmpeg fails with "Error
+        // initializing the muxer: Invalid argument".
+        let recorded_args = std::fs::read_to_string(&args_file).unwrap();
+        let args: Vec<&str> = recorded_args.lines().collect();
+        let f_index = args
+            .iter()
+            .position(|a| *a == "-f")
+            .unwrap_or_else(|| panic!("ffmpeg args missing `-f` flag: {:?}", args));
+        assert_eq!(
+            args.get(f_index + 1).copied(),
+            Some("mp4"),
+            "ffmpeg must be told the mp4 muxer explicitly"
         );
     }
 
@@ -1484,6 +1562,63 @@ pub(crate) mod tests {
         clear_transcode_status("test_hash");
         let after_clear = get_transcode_status("test_hash");
         assert!(after_clear.is_none(), "Status should not exist after clear");
+    }
+
+    #[test]
+    fn test_claim_transcode_starts_and_deduplicates() {
+        // GIVEN no known status for the hash
+        clear_transcode_status("claim-hash-1");
+
+        // WHEN the slot is claimed twice in a row
+        let first = claim_transcode("claim-hash-1");
+        let second = claim_transcode("claim-hash-1");
+
+        // THEN only the first caller owns the slot; the second sees it in
+        // progress instead of spawning a duplicate ffmpeg job (TOCTOU fix).
+        assert_eq!(first, TranscodeClaim::Started);
+        assert_eq!(second, TranscodeClaim::AlreadyInProgress);
+        assert!(matches!(
+            get_transcode_status("claim-hash-1").map(|s| s.state),
+            Some(TranscodeState::InProgress)
+        ));
+
+        // And a cleared slot can be claimed again
+        clear_transcode_status("claim-hash-1");
+        assert_eq!(claim_transcode("claim-hash-1"), TranscodeClaim::Started);
+        clear_transcode_status("claim-hash-1");
+    }
+
+    #[test]
+    fn test_claim_transcode_reports_previous_failure() {
+        clear_transcode_status("claim-hash-2");
+        set_transcode_status(
+            "claim-hash-2",
+            TranscodeStatus {
+                state: TranscodeState::Failed,
+                hash: "claim-hash-2".to_string(),
+                started_at: None,
+                error: Some("boom".to_string()),
+            },
+        );
+        assert_eq!(
+            claim_transcode("claim-hash-2"),
+            TranscodeClaim::PreviouslyFailedOrTimedOut
+        );
+
+        set_transcode_status(
+            "claim-hash-2",
+            TranscodeStatus {
+                state: TranscodeState::Timeout,
+                hash: "claim-hash-2".to_string(),
+                started_at: None,
+                error: Some("timed out".to_string()),
+            },
+        );
+        assert_eq!(
+            claim_transcode("claim-hash-2"),
+            TranscodeClaim::PreviouslyFailedOrTimedOut
+        );
+        clear_transcode_status("claim-hash-2");
     }
 
     #[test]

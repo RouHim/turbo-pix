@@ -54,12 +54,8 @@ test.describe('Videos', () => {
     await TestHelpers.verifyViewerOpen(page);
 
     // WHEN: Viewer loads
-    const hasVideo = await TestHelpers.elementExists(page, TestHelpers.selectors.viewerVideo);
-
-    // THEN: Video element should be present
-    if (hasVideo) {
-      await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
-    }
+    // THEN: Video element should be present (seeded videos are always indexed)
+    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
   });
 
   test('should use correct selectors for video cards', async ({ page }) => {

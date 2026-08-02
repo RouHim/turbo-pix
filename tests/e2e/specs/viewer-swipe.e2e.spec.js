@@ -23,11 +23,9 @@ test.describe('Viewer Swipe Gestures', () => {
 
     // WHEN: User swipes left
     await TestHelpers.swipeLeft(page);
-    await page.waitForTimeout(500);
 
-    // THEN: Viewer shows the next photo
-    const newHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(newHash).not.toBe(firstHash);
+    // THEN: Viewer shows the next photo (URL hash updates asynchronously — poll)
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
   });
 
   test('swipe right navigates to previous photo', async ({ page }) => {
@@ -42,18 +40,13 @@ test.describe('Viewer Swipe Gestures', () => {
 
     // Navigate to second photo via swipe left
     await TestHelpers.swipeLeft(page);
-    await page.waitForTimeout(500);
-
-    const secondHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(secondHash).not.toBe(firstHash);
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
 
     // WHEN: User swipes right
     await TestHelpers.swipeRight(page);
-    await page.waitForTimeout(500);
 
     // THEN: Viewer shows the previous (first) photo again
-    const backHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(backHash).toBe(firstHash);
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
   });
 
   test('swipe down past threshold dismisses viewer', async ({ page }) => {
@@ -66,10 +59,11 @@ test.describe('Viewer Swipe Gestures', () => {
 
     // WHEN: User swipes down past the 150px dismiss threshold
     await TestHelpers.swipeDown(page, { distance: 200 });
-    await page.waitForTimeout(500);
 
     // THEN: Viewer is dismissed (no .active class)
-    await expect(page.locator('#photo-viewer')).not.toHaveClass(/active/);
+    await expect
+      .poll(async () => (await page.locator('#photo-viewer').getAttribute('class')) ?? '')
+      .not.toContain('active');
   });
 
   test('short swipe snaps back to same photo', async ({ page }) => {
@@ -84,11 +78,9 @@ test.describe('Viewer Swipe Gestures', () => {
 
     // WHEN: User performs a slow short swipe (40px at 50ms/step → velocity ~0.08 px/ms, below 0.3 threshold)
     await TestHelpers.swipeLeft(page, { distance: 40, stepDelay: 50 });
-    await page.waitForTimeout(500);
 
     // THEN: Viewer stays on the same photo
-    const afterHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(afterHash).toBe(originalHash);
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(originalHash);
     await TestHelpers.verifyViewerOpen(page);
   });
 
@@ -104,19 +96,15 @@ test.describe('Viewer Swipe Gestures', () => {
 
     // WHEN: User presses ArrowRight
     await page.keyboard.press('ArrowRight');
-    await page.waitForTimeout(500);
 
     // THEN: Next photo is displayed
-    const secondHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(secondHash).not.toBe(firstHash);
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
 
     // WHEN: User presses ArrowLeft
     await page.keyboard.press('ArrowLeft');
-    await page.waitForTimeout(500);
 
     // THEN: Previous photo is displayed again
-    const backHash = await TestHelpers.getCurrentPhotoHash(page);
-    expect(backHash).toBe(firstHash);
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
   });
 
   test('click navigation still works', async ({ page }) => {
@@ -133,21 +121,17 @@ test.describe('Viewer Swipe Gestures', () => {
     const nextBtn = page.locator('.viewer-next');
     if (await nextBtn.isVisible()) {
       await nextBtn.click();
-      await page.waitForTimeout(500);
 
       // THEN: Next photo is displayed
-      const nextHash = await TestHelpers.getCurrentPhotoHash(page);
-      expect(nextHash).not.toBe(firstHash);
+      await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
 
       // WHEN: User clicks the prev button
       const prevBtn = page.locator('.viewer-prev');
       if (await prevBtn.isVisible()) {
         await prevBtn.click();
-        await page.waitForTimeout(500);
 
         // THEN: Back to first photo
-        const backHash = await TestHelpers.getCurrentPhotoHash(page);
-        expect(backHash).toBe(firstHash);
+        await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
       }
     }
 
@@ -155,10 +139,11 @@ test.describe('Viewer Swipe Gestures', () => {
     const closeBtn = page.locator('.viewer-close');
     if (await closeBtn.isVisible()) {
       await closeBtn.click();
-      await page.waitForTimeout(300);
 
       // THEN: Viewer is closed
-      await expect(page.locator('#photo-viewer')).not.toHaveClass(/active/);
+      await expect
+        .poll(async () => (await page.locator('#photo-viewer').getAttribute('class')) ?? '')
+        .not.toContain('active');
     }
   });
 });

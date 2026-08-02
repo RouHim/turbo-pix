@@ -156,23 +156,35 @@ test.describe('URL Routing', () => {
     const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
     const recentYear = recentDate.getFullYear();
     const recentMonth = recentDate.getMonth() + 1;
-    const archiveYear = archiveDate.getFullYear();
-    const archiveMonth = archiveDate.getMonth() + 1;
 
     test('should write ?year= and ?month= on timeline selection', async ({ page }) => {
       // GIVEN: User is on the homepage with timeline visible
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
 
-      // WHEN: User selects a year/month on the timeline
-      // (Simulate via URL since timeline interaction is complex)
-      await TestHelpers.goto(page, `/?year=${archiveYear}&month=${archiveMonth}`);
-      await TestHelpers.waitForPhotosToLoad(page);
+      // WHEN: User drags the timeline slider to the oldest month bucket
+      const density = await page.evaluate(() =>
+        fetch('/api/photos/timeline')
+          .then((response) => response.json())
+          .then((data) => data.density || [])
+      );
+      test.skip(density.length < 2, 'Timeline needs at least two month buckets to select');
 
-      // THEN: URL contains year and month params
+      const target = density[0];
+
+      const slider = page.locator('.timeline-input');
+      await expect(slider).toHaveAttribute('max', String(density.length - 1));
+      await slider.evaluate((el) => {
+        el.value = '0';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      // THEN: URL contains year and month params matching the selected bucket
+      await TestHelpers.waitForUrlParam(page, 'year', String(target.year));
+      await TestHelpers.waitForUrlParam(page, 'month', String(target.month));
       const state = TestHelpers.getUrlState(page);
-      expect(state.year).toBe(archiveYear);
-      expect(state.month).toBe(archiveMonth);
+      expect(state.year).toBe(target.year);
+      expect(state.month).toBe(target.month);
     });
 
     test('should restore timeline from URL on page load', async ({ page }) => {

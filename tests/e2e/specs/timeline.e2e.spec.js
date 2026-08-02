@@ -32,18 +32,52 @@ test.describe('Timeline', () => {
   });
 
   test('should filter photos by date range', async ({ page }) => {
-    // GIVEN: Timeline slider exists
-    const sliderExists = (await page.locator('.timeline-slider').count()) > 0;
+    // GIVEN: Timeline slider is rendered with at least two month buckets
+    const slider = page.locator('.timeline-input');
+    await expect(slider).toHaveCount(1);
 
-    expect(sliderExists).toBe(true);
+    // Learn the month buckets from the same API the slider renders
+    const density = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) => data.density || [])
+    );
+    test.skip(density.length < 2, 'Timeline needs at least two month buckets to filter');
 
-    // WHEN: User interacts with timeline
-    const initialPhotoCount = (await TestHelpers.getPhotoCards(page)).length;
+    await expect(slider).toHaveAttribute('max', String(density.length - 1));
 
-    // THEN: Initial photos are displayed
-    expect(initialPhotoCount).toBeGreaterThan(0);
+    const initialIds = await page
+      .locator('[data-photo-id]')
+      .evaluateAll((elements) => elements.map((el) => el.getAttribute('data-photo-id')));
+    expect(initialIds.length).toBeGreaterThan(0);
 
-    // Note: Actual slider interaction would require specific implementation details
-    // This test verifies the timeline infrastructure exists
+    // WHEN: User drags the slider to the oldest month bucket (index 0)
+    const target = density[0];
+    const filteredResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/photos') &&
+        response.url().includes(`year=${target.year}`) &&
+        response.url().includes(`month=${target.month}`)
+    );
+    await slider.evaluate((el) => {
+      el.value = '0';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // THEN: The URL reflects the selection and the grid re-queries with the filter
+    await TestHelpers.waitForUrlParam(page, 'year', String(target.year));
+    await TestHelpers.waitForUrlParam(page, 'month', String(target.month));
+    await filteredResponse;
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // AND: The grid shows only photos from the selected bucket
+    const filteredIds = await page
+      .locator('[data-photo-id]')
+      .evaluateAll((elements) => elements.map((el) => el.getAttribute('data-photo-id')));
+    expect(filteredIds.length).toBeGreaterThan(0);
+    expect(filteredIds.length).toBeLessThanOrEqual(initialIds.length);
+    for (const id of filteredIds) {
+      expect(initialIds).toContain(id);
+    }
   });
 });

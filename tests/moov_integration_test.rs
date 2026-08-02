@@ -4,6 +4,18 @@ use std::process::Command;
 use tempfile::TempDir;
 use turbo_pix::video_processor::{fix_moov_atom, has_moov_at_start};
 
+/// Mirrors the in-crate video test gate (video_processor.rs / photo_processor.rs):
+/// these tests need ffmpeg with libx265 to generate HEVC test videos, which is
+/// not available on every machine, so they only run when RUN_VIDEO_TESTS is set.
+fn should_run_video_tests() -> bool {
+    let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
+    if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+        eprintln!("RUN_VIDEO_TESTS not set to '1' or 'true'; skipping MOOV integration tests");
+        return false;
+    }
+    true
+}
+
 /// Helper: create a short test video via ffmpeg (HEVC, 3 seconds, blue frame).
 /// Returns the path to the generated video inside the given directory.
 fn create_test_video(dir: &Path, filename: &str) -> std::path::PathBuf {
@@ -74,6 +86,9 @@ fn assert_video_valid(path: &Path) {
 
 #[test]
 fn test_fix_moov_atom_moves_moov_to_start() {
+    if !should_run_video_tests() {
+        return;
+    }
     // GIVEN: A video file with MOOV atom at the end (default ffmpeg output without faststart)
     let tmp_dir = TempDir::new().expect("Failed to create temp dir");
     let video_path = create_test_video(tmp_dir.path(), "moov_at_end.mp4");
@@ -104,6 +119,9 @@ fn test_fix_moov_atom_moves_moov_to_start() {
 
 #[test]
 fn test_fix_moov_atom_noop_when_already_at_start() {
+    if !should_run_video_tests() {
+        return;
+    }
     // GIVEN: A video file with MOOV already at start (using +faststart)
     let tmp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -172,6 +190,9 @@ fn test_fix_moov_atom_noop_when_already_at_start() {
 
 #[test]
 fn test_has_moov_at_start_detects_moov_at_end() {
+    if !should_run_video_tests() {
+        return;
+    }
     // GIVEN: A video with MOOV at end
     let tmp_dir = TempDir::new().expect("Failed to create temp dir");
     let video_path = create_test_video(tmp_dir.path(), "detect_moov_end.mp4");

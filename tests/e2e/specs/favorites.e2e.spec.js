@@ -1,14 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
-import { TestDataManager } from '../setup/test-data-manager.js';
 
 test.describe('Favorites', () => {
-  let dataManager;
-
-  test.beforeAll(async () => {
-    dataManager = new TestDataManager();
-  });
-
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
     await TestHelpers.goto(page);
@@ -42,18 +35,29 @@ test.describe('Favorites', () => {
     const photos = await TestHelpers.getPhotoCards(page);
     expect(photos.length).toBeGreaterThan(0);
 
-    // WHEN: User clicks favorite button
-    const favoriteBtn = photos[0].locator(TestHelpers.selectors.favoriteBtn).first();
+    const photoId = await photos[0].getAttribute('data-photo-id');
+    expect(photoId).toBeTruthy();
 
+    const favoriteBtn = photos[0].locator(TestHelpers.selectors.favoriteBtn).first();
     const initialClass = await favoriteBtn.getAttribute('class');
+
+    // WHEN: User clicks favorite button
+    const favoriteResponse = page.waitForResponse(
+      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT' && r.status() === 200
+    );
     await favoriteBtn.click();
 
-    // THEN: Favorite status changes
-    await page.waitForTimeout(500);
-    const newClass = await favoriteBtn.getAttribute('class');
+    // THEN: Favorite status changes — await the API response: the optimistic
+    // class flip alone would pass even if the favorite endpoint were broken
+    await favoriteResponse;
+    await expect.poll(() => favoriteBtn.getAttribute('class')).not.toBe(initialClass);
 
-    // Note: The actual class change depends on the implementation
-    // This test verifies the click is successful
-    expect(newClass).toBeDefined();
+    // AND: Toggle back so shared server state is untouched
+    const restoreResponse = page.waitForResponse(
+      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT' && r.status() === 200
+    );
+    await favoriteBtn.click();
+    await restoreResponse;
+    await expect.poll(() => favoriteBtn.getAttribute('class')).toBe(initialClass);
   });
 });

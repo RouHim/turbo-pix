@@ -437,12 +437,23 @@
       zoomAnimFrame = null;
       isZoomAnimating = false;
     }
-    // The poll's next tick (<= 2s) hits bailIfStale (isOpen is false), which
-    // clears its own interval, nulls the shared timer only if still owned,
-    // hides the toast, and resolves the pending promise so displayPhoto's
-    // finally resets isLoading. No extra request: bailIfStale runs before
-    // the fetch.
-    hideTranscodeToast();
+    // Stop the transcode poll immediately instead of waiting for the next
+    // tick's bailIfStale: reopening the same photo within that window would
+    // let the old poll run alongside the new one (same hash + viewer open
+    // again means it is not stale) and act on the new session. The interval
+    // id is shared across polls — clear only the interval this viewer owns,
+    // and only null the shared field / hide the shared toast while it still
+    // points at us.
+    const pollTimer = transcodePollTimer;
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      if (transcodePollTimer === pollTimer) {
+        transcodePollTimer = null;
+        hideTranscodeToast();
+      }
+    } else {
+      hideTranscodeToast();
+    }
     metadataEditRef?.close?.();
     isOpen = false;
     isPendingCollage = false;
@@ -1104,7 +1115,18 @@
       showNext();
     },
     ' ': (e) => {
+      // Space on a focused interactive element must keep its native
+      // activation (close/prev/next/favorite/rotate/delete buttons).
+      if (
+        e.target instanceof HTMLElement &&
+        e.target.closest('button, a, input, select, textarea, [role="button"]')
+      )
+        return;
       e.preventDefault();
+      // Only video photos toggle playback: for an image the hidden videoEl
+      // still holds the previous video's src, and play() would resume
+      // audible playback over the image.
+      if (!isVideo) return;
       if (videoEl?.paused) videoEl.play().catch(() => {});
       else videoEl?.pause();
     },
@@ -1212,6 +1234,25 @@
       // Browser Back: only auto-close when the open photo was reflected in the
       // URL. Viewers opened without a URL param (collages) must not be closed.
       close(false);
+    }
+  });
+
+  // The viewer shares the grid's photos array; when the grid splices it in
+  // place (unfavorite in the Favorites view, photo removal), currentIndex
+  // must follow or hasPrev/hasNext and photos[currentIndex] writes point at
+  // the wrong photo. Only re-sync when the index derived from the current
+  // photo's hash differs from the stored one — never fight user navigation.
+  $effect(() => {
+    if (!isOpen || !currentPhoto) return;
+    if (photos.length === 0) return;
+    const idx = photos.findIndex((p) => p.hash_sha256 === currentPhoto.hash_sha256);
+    if (idx !== -1) {
+      if (idx !== currentIndex) currentIndex = idx;
+    } else {
+      // Photo gone from the array: clamp to the last valid index (mirrors
+      // deletePhoto's re-sync) so the viewer keeps working.
+      const clamped = Math.min(currentIndex, photos.length - 1);
+      if (clamped !== currentIndex) currentIndex = clamped;
     }
   });
 

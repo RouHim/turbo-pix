@@ -169,6 +169,19 @@ impl MetadataExtractor {
         }
     }
 
+    /// Converts a rational EXIF value to f64, rejecting zero denominators and
+    /// non-finite results. Corrupt/crafted EXIF can encode 0/0 → NaN or
+    /// x/0 → ±inf; those flow into serde_json's `json!` conversion when the
+    /// photo is stored, which panics on non-finite floats and aborts the whole
+    /// rescan. Returns `None` so callers skip the field instead.
+    fn rational_to_f64(rational: &exif::Rational) -> Option<f64> {
+        if rational.denom == 0 {
+            return None;
+        }
+        let value = rational.num as f64 / rational.denom as f64;
+        value.is_finite().then_some(value)
+    }
+
     fn extract_camera_info(exif: &exif::Exif, metadata: &mut PhotoMetadata) {
         // Camera make/model
         if let Some(field) = exif.get_field(Tag::Make, In::PRIMARY) {
@@ -198,7 +211,7 @@ impl MetadataExtractor {
         if let Some(field) = exif.get_field(Tag::FNumber, In::PRIMARY) {
             if let Value::Rational(ref vec) = field.value {
                 if let Some(rational) = vec.first() {
-                    metadata.aperture = Some(rational.num as f64 / rational.denom as f64);
+                    metadata.aperture = Self::rational_to_f64(rational);
                 }
             }
         }
@@ -212,7 +225,7 @@ impl MetadataExtractor {
         if let Some(field) = exif.get_field(Tag::FocalLength, In::PRIMARY) {
             if let Value::Rational(ref vec) = field.value {
                 if let Some(rational) = vec.first() {
-                    metadata.focal_length = Some(rational.num as f64 / rational.denom as f64);
+                    metadata.focal_length = Self::rational_to_f64(rational);
                 }
             }
         }
@@ -252,19 +265,23 @@ impl MetadataExtractor {
             if let Some(lat_ref_field) = exif.get_field(Tag::GPSLatitudeRef, In::PRIMARY) {
                 if let Value::Rational(ref lat_vals) = lat_field.value {
                     if lat_vals.len() >= 3 {
-                        let degrees = lat_vals[0].num as f64 / lat_vals[0].denom as f64;
-                        let minutes = lat_vals[1].num as f64 / lat_vals[1].denom as f64;
-                        let seconds = lat_vals[2].num as f64 / lat_vals[2].denom as f64;
+                        let degrees = Self::rational_to_f64(&lat_vals[0]);
+                        let minutes = Self::rational_to_f64(&lat_vals[1]);
+                        let seconds = Self::rational_to_f64(&lat_vals[2]);
 
-                        let mut lat = degrees + minutes / 60.0 + seconds / 3600.0;
+                        if let (Some(degrees), Some(minutes), Some(seconds)) =
+                            (degrees, minutes, seconds)
+                        {
+                            let mut lat = degrees + minutes / 60.0 + seconds / 3600.0;
 
-                        // Apply hemisphere
-                        let lat_ref = lat_ref_field.display_value().to_string();
-                        if lat_ref.contains('S') {
-                            lat = -lat;
+                            // Apply hemisphere
+                            let lat_ref = lat_ref_field.display_value().to_string();
+                            if lat_ref.contains('S') {
+                                lat = -lat;
+                            }
+
+                            metadata.latitude = Some(lat);
                         }
-
-                        metadata.latitude = Some(lat);
                     }
                 }
             }
@@ -275,19 +292,23 @@ impl MetadataExtractor {
             if let Some(lon_ref_field) = exif.get_field(Tag::GPSLongitudeRef, In::PRIMARY) {
                 if let Value::Rational(ref lon_vals) = lon_field.value {
                     if lon_vals.len() >= 3 {
-                        let degrees = lon_vals[0].num as f64 / lon_vals[0].denom as f64;
-                        let minutes = lon_vals[1].num as f64 / lon_vals[1].denom as f64;
-                        let seconds = lon_vals[2].num as f64 / lon_vals[2].denom as f64;
+                        let degrees = Self::rational_to_f64(&lon_vals[0]);
+                        let minutes = Self::rational_to_f64(&lon_vals[1]);
+                        let seconds = Self::rational_to_f64(&lon_vals[2]);
 
-                        let mut lon = degrees + minutes / 60.0 + seconds / 3600.0;
+                        if let (Some(degrees), Some(minutes), Some(seconds)) =
+                            (degrees, minutes, seconds)
+                        {
+                            let mut lon = degrees + minutes / 60.0 + seconds / 3600.0;
 
-                        // Apply hemisphere
-                        let lon_ref = lon_ref_field.display_value().to_string();
-                        if lon_ref.contains('W') {
-                            lon = -lon;
+                            // Apply hemisphere
+                            let lon_ref = lon_ref_field.display_value().to_string();
+                            if lon_ref.contains('W') {
+                                lon = -lon;
+                            }
+
+                            metadata.longitude = Some(lon);
                         }
-
-                        metadata.longitude = Some(lon);
                     }
                 }
             }
@@ -729,6 +750,31 @@ mod tests {
     use super::*;
     use crate::video_processor::tests::acquire_test_env_lock;
     use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn rational_to_f64_rejects_zero_denominators_and_non_finite() {
+        // GIVEN a corrupt/crafted rational with denominator 0
+        let zero_denom = exif::Rational { num: 1, denom: 0 };
+        // WHEN converted
+        let result = MetadataExtractor::rational_to_f64(&zero_denom);
+        // THEN it is rejected (NaN/inf would panic serde_json's json! later)
+        assert!(result.is_none());
+
+        let zero_num = exif::Rational { num: 0, denom: 7 };
+        assert_eq!(MetadataExtractor::rational_to_f64(&zero_num), Some(0.0));
+
+        let normal = exif::Rational { num: 3, denom: 2 };
+        assert_eq!(MetadataExtractor::rational_to_f64(&normal), Some(1.5));
+
+        // u32::MAX/u32::MAX is exactly 1.0; u32::MAX/1 stays finite
+        let huge = exif::Rational {
+            num: u32::MAX,
+            denom: 1,
+        };
+        assert!(MetadataExtractor::rational_to_f64(&huge)
+            .unwrap()
+            .is_finite());
+    }
 
     #[test]
     fn test_ffprobe_is_installed() {

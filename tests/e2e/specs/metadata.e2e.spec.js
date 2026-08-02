@@ -16,14 +16,12 @@ test.describe('Metadata', () => {
     await photos[0].click();
     await TestHelpers.verifyViewerOpen(page);
 
-    // WHEN: Viewer is open
-    // THEN: Metadata elements should be available
-    const metadataExists =
-      (await page.locator('.viewer-metadata, .photo-info, .info-panel').count()) > 0;
+    // WHEN: User opens the metadata sidebar (it starts hidden per viewer contract)
+    await page.locator('.metadata-btn').click();
+    await page.locator('.viewer-sidebar.show').waitFor();
 
-    if (metadataExists) {
-      expect(metadataExists).toBe(true);
-    }
+    // THEN: The metadata panel is displayed
+    await expect(page.locator('.photo-info')).toBeVisible();
   });
 
   test('should show photo information', async ({ page }) => {
@@ -34,13 +32,12 @@ test.describe('Metadata', () => {
     await photos[0].click();
     await TestHelpers.verifyViewerOpen(page);
 
-    // WHEN: User checks photo info
-    const infoExists = (await page.locator('.photo-info, .metadata-container').count()) > 0;
+    // WHEN: User opens the metadata sidebar
+    await page.locator('.metadata-btn').click();
+    await page.locator('.viewer-sidebar.show').waitFor();
 
-    // THEN: Photo info should be present
-    if (infoExists) {
-      expect(infoExists).toBe(true);
-    }
+    // THEN: Photo info rows (date/size/camera/location) are present
+    await expect(page.locator('.photo-meta .meta-item')).toHaveCount(4);
   });
 
   test('should display EXIF data when available', async ({ page }) => {
@@ -51,14 +48,14 @@ test.describe('Metadata', () => {
     await photos[0].click();
     await TestHelpers.verifyViewerOpen(page);
 
-    // WHEN: User checks for EXIF data
-    const exifExists =
-      (await page.locator('.exif-data, .metadata-item, .photo-details').count()) > 0;
+    // WHEN: User opens the metadata sidebar
+    await page.locator('.metadata-btn').click();
+    await page.locator('.viewer-sidebar.show').waitFor();
 
-    // THEN: EXIF elements may be present
-    // Note: Not all photos have EXIF data
-    if (exifExists) {
-      expect(exifExists).toBe(true);
-    }
+    // THEN: EXIF-driven sections render when the photo carries EXIF data
+    // Note: not every photo has EXIF — skip the whole test when this one doesn't
+    const hasCameraSection = (await page.locator('#camera-section').count()) > 0;
+    test.skip(!hasCameraSection, 'Selected photo has no EXIF camera data to display');
+    await expect(page.locator('#camera-section')).toBeVisible();
   });
 });

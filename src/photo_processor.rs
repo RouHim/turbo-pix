@@ -29,6 +29,15 @@ fn calculate_optimal_semantic_concurrency() -> usize {
     cpu_cores.min(2)
 }
 
+/// Calculate optimal concurrency for the phase-1 metadata scan.
+/// Phase-1 tasks fully decode full-resolution images for blurhash (RAW
+/// demosaic can peak at ~8 bytes/pixel), so the same OOM reasoning as the
+/// semantic phase applies; capped at 4 to keep multi-core scans fast without
+/// N simultaneous multi-hundred-MB decodes.
+fn calculate_optimal_metadata_concurrency() -> usize {
+    num_cpus::get().min(4)
+}
+
 #[derive(Debug)]
 pub struct ProcessedPhoto {
     pub file_path: String,
@@ -106,8 +115,11 @@ impl PhotoProcessor {
         cache_manager: &CacheManager,
         status: &IndexingStatus,
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
-        // Step 1: Get all photo files on disk
-        let photo_files = self.scanner.scan();
+        // Step 1: Get all photo files on disk. A partial scan (missing or
+        // unreadable directory) must NOT trigger orphan cleanup — files that
+        // are merely temporarily unreachable would be deleted from the DB,
+        // permanently losing favorites and manual metadata edits.
+        let (photo_files, scan_complete) = self.scanner.scan();
         let total_files = photo_files.len() as u64;
         status.phases.discovering.set_total(total_files);
         status.phases.discovering.set_processed(total_files);
@@ -124,22 +136,34 @@ impl PhotoProcessor {
             .collect();
 
         // Step 3: Delete orphaned photos (in database but not on disk) and clear their caches
-        let deleted_paths = crate::db::delete_orphaned_photos(db_pool, &existing_paths)
-            .await
-            .unwrap_or_else(|e| {
-                error!("Failed to delete orphaned photos: {}", e);
-                Vec::new()
-            });
+        let deleted_paths = if scan_complete {
+            crate::db::delete_orphaned_photos(db_pool, &existing_paths)
+                .await
+                .unwrap_or_else(|e| {
+                    error!("Failed to delete orphaned photos: {}", e);
+                    Vec::new()
+                })
+        } else {
+            warn!(
+                "Skipping orphan cleanup: scan was partial (missing/unreadable photo directories)"
+            );
+            Vec::new()
+        };
 
-        for path in deleted_paths {
-            if let Err(e) = cache_manager.clear_for_path(&path).await {
-                error!("Failed to clear cache for {}: {}", path, e);
+        // Thumbnails are keyed by content hash ({hash[..3]}/{hash}_{size}.{format})
+        for (_, hash) in &deleted_paths {
+            if let Err(e) = cache_manager.clear_for_hash(hash).await {
+                error!("Failed to clear cache for {}: {}", hash, e);
             }
         }
 
         // Step 4: Process all files found on disk (with pre-check for unchanged files)
-        // Process with controlled concurrency (based on CPU cores)
-        let max_concurrent_tasks = crate::db_pool::max_concurrent_photo_tasks();
+        // Process with controlled concurrency: phase-1 tasks fully decode
+        // full-resolution images (blurhash; RAW demosaic can peak at ~8
+        // bytes/pixel), so uncapped parallelism means N simultaneous
+        // multi-hundred-MB decodes on high-core machines — the same OOM risk
+        // the semantic phase avoids by capping at 2.
+        let max_concurrent_tasks = calculate_optimal_metadata_concurrency();
         let mut tasks = tokio::task::JoinSet::new();
         let mut photos = Vec::new();
         let mut photo_files_iter = photo_files.into_iter();

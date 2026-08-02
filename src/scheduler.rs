@@ -450,7 +450,9 @@ impl PhotoScheduler {
             rt.block_on(async {
                 match crate::db::vacuum_database(&db_pool_vacuum).await {
                     Ok(_) => info!("Database vacuum completed successfully"),
-                    Err(e) => error!("Database vacuum failed: {}", e),
+                    // A locked database (live API traffic) is the expected
+                    // skip case — VACUUM retries on the next night.
+                    Err(e) => warn!("Scheduled vacuum skipped: {}", e),
                 }
             });
         });

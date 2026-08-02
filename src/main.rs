@@ -22,7 +22,7 @@ use turbo_pix::scheduler::PhotoScheduler;
 use turbo_pix::semantic_search::{self, SemanticSearch, SemanticSearchEngine};
 use turbo_pix::thumbnail_generator::ThumbnailGenerator;
 use turbo_pix::video_processor;
-use turbo_pix::warp_helpers::{cors, handle_rejection};
+use turbo_pix::warp_helpers::{handle_rejection, require_same_origin};
 
 // Avoid musl's default allocator due to lackluster performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -51,6 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let port = config.port;
+    // The API is unauthenticated and exposes destructive endpoints; parse the
+    // bind host early so an invalid TURBO_PIX_HOST fails fast before any
+    // service is started.
+    let host: std::net::IpAddr = config
+        .host
+        .parse()
+        .map_err(|_| format!("Invalid TURBO_PIX_HOST: '{}'", config.host))?;
 
     info!("Starting TurboPix server on Port {}", port);
     info!("Photo paths: {:?}", config.photo_paths);
@@ -60,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Default locale: {}", config.locale);
 
     // Check if port is available before initializing services
-    if let Some(value) = check_port(port) {
+    if let Some(value) = check_port(&config.host, port) {
         return value;
     }
 
@@ -89,31 +96,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
-    let routes = health_routes
-        .or(photo_routes)
-        .or(thumbnail_routes)
-        .or(search_routes)
-        .or(indexing_routes)
-        .or(collage_routes)
-        .or(housekeeping_routes)
-        .or(config_routes)
-        .or(static_routes)
-        .with(cors())
+    // Security posture: reject cross-origin browser requests (no CORS
+    // allowance at all). Request bodies are capped at 1 MiB on the JSON
+    // routes in build_photo_routes — warp's content_length_limit requires a
+    // Content-Length header on every request, so it cannot be global
+    // middleware (plain GETs would 411).
+    let routes = require_same_origin()
+        .and(
+            health_routes
+                .or(photo_routes)
+                .or(thumbnail_routes)
+                .or(search_routes)
+                .or(indexing_routes)
+                .or(collage_routes)
+                .or(housekeeping_routes)
+                .or(config_routes)
+                .or(static_routes),
+        )
         .with(warp::log("turbo_pix"))
         .recover(handle_rejection);
 
     info!(
-        "Server started successfully, listening on http://localhost:{}",
-        port
+        "Server started successfully, listening on http://{}:{}",
+        host, port
     );
 
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).run((host, port)).await;
 
     Ok(())
 }
 
-fn check_port(port: u16) -> Option<Result<(), Box<dyn Error>>> {
-    if TcpListener::bind(("0.0.0.0", port)).is_err() {
+fn check_port(host: &str, port: u16) -> Option<Result<(), Box<dyn Error>>> {
+    if TcpListener::bind((host, port)).is_err() {
         error!(
             "Port {} is already in use. Please stop any existing TurboPix instances or use a different port.",
             port

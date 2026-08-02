@@ -10,4 +10,5 @@ services:
       - /home/rouven/Pictures:/photos:ro
     environment:
       - RUST_LOG=info
+      - TURBO_PIX_HOST=0.0.0.0
     restart: unless-stopped

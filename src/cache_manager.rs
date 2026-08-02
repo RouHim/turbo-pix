@@ -13,27 +13,23 @@ impl CacheManager {
         }
     }
 
-    pub async fn clear_for_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Clearing cache for deleted photo: {}", path);
+    /// Removes all cached thumbnails for a photo hash.
+    ///
+    /// Thumbnails live at `{cache_dir}/{hash[..3]}/{hash}_{size}.{format}`
+    /// (ThumbnailGenerator::get_cache_path), keyed by content hash. The
+    /// previous implementation deleted flat `{stem}_{size}.{format}` files
+    /// that the hash-based layout never produces, so orphan cleanup and
+    /// rotation left stale thumbnails on disk forever (and the LRU index
+    /// never saw them, so the cache grew without bound across restarts).
+    pub async fn clear_for_hash(&self, hash: &str) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Clearing cache for photo hash: {}", hash);
 
-        // Clear thumbnail files that might exist for this path
-        let filename = std::path::Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown");
-
-        info!("Looking for thumbnails with filename: {}", filename);
-        info!(
-            "Thumbnail cache directory: {}",
-            self.thumbnail_cache_dir.display()
-        );
+        let subdir = if hash.len() >= 3 { &hash[..3] } else { hash };
+        let hash_dir = self.thumbnail_cache_dir.join(subdir);
 
         for size in ["small", "medium", "large"] {
             for format in ["jpeg", "webp"] {
-                let thumbnail_path = self
-                    .thumbnail_cache_dir
-                    .join(format!("{}_{}.{}", filename, size, format));
-                info!("Checking thumbnail path: {}", thumbnail_path.display());
+                let thumbnail_path = hash_dir.join(format!("{}_{}.{}", hash, size, format));
                 if thumbnail_path.exists() {
                     if let Err(e) = std::fs::remove_file(&thumbnail_path) {
                         error!(
@@ -44,9 +40,16 @@ impl CacheManager {
                     } else {
                         info!("Removed thumbnail: {}", thumbnail_path.display());
                     }
-                } else {
-                    info!("Thumbnail does not exist: {}", thumbnail_path.display());
                 }
+            }
+        }
+
+        // Remove the now-empty hash subdirectory.
+        if hash_dir.exists() {
+            if let Err(e) = std::fs::remove_dir(&hash_dir) {
+                // Only a non-empty dir fails here; stale entries from other
+                // hashes are legitimate, so this is not an error.
+                log::debug!("Left cache subdirectory {}: {}", hash_dir.display(), e);
             }
         }
 
@@ -75,5 +78,72 @@ impl CacheManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_file(dir: &std::path::Path, rel: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"thumb").unwrap();
+    }
+
+    #[tokio::test]
+    async fn clear_for_hash_removes_hash_layout_thumbnails() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CacheManager::new(temp.path().to_path_buf());
+        let hash = "abcdef0123456789";
+
+        // GIVEN thumbnails in the real hash-based layout
+        // ({hash[..3]}/{hash}_{size}.{format})
+        for size in ["small", "medium", "large"] {
+            for format in ["jpeg", "webp"] {
+                create_test_file(
+                    temp.path(),
+                    &format!("{}/{}_{}.{}", &hash[..3], hash, size, format),
+                );
+            }
+        }
+        // A different hash must survive
+        create_test_file(temp.path(), &format!("xyz/{}", "xyz".repeat(8)));
+
+        // WHEN the cache is cleared for this hash
+        manager.clear_for_hash(hash).await.unwrap();
+
+        // THEN all six thumbnails and the subdirectory are gone, and the
+        // unrelated hash's entry is untouched
+        for size in ["small", "medium", "large"] {
+            for format in ["jpeg", "webp"] {
+                assert!(
+                    !temp
+                        .path()
+                        .join(&hash[..3])
+                        .join(format!("{}_{}.{}", hash, size, format))
+                        .exists(),
+                    "thumbnail should be removed"
+                );
+            }
+        }
+        assert!(
+            !temp.path().join(&hash[..3]).exists(),
+            "subdir should be removed"
+        );
+        assert!(temp
+            .path()
+            .join("xyz")
+            .join("xyzxyzxyzxyzxyzxyzxyzxyz")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn clear_for_hash_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CacheManager::new(temp.path().to_path_buf());
+        // No thumbnails exist — must not error
+        manager.clear_for_hash("deadbeef").await.unwrap();
+        manager.clear_for_hash("ab").await.unwrap(); // short-hash path
     }
 }

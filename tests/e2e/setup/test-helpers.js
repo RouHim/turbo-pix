@@ -1,5 +1,3 @@
-import { writeFile } from 'fs/promises';
-
 export class TestHelpers {
   static selectors = {
     navItem: (view) => `button[data-view="${view}"]`,
@@ -128,18 +126,6 @@ export class TestHelpers {
     return await page.waitForResponse((response) => response.url().includes(endpoint));
   }
 
-  static async takeDebugScreenshot(page, name) {
-    const timestamp = Date.now();
-    const filename = `test-results/debug-${name}-${timestamp}.png`;
-    await writeFile(filename, await page.screenshot({ fullPage: true }));
-    console.log(`Screenshot saved: ${filename}`);
-    return filename;
-  }
-
-  static async waitForNetworkIdle(page) {
-    await page.waitForLoadState('networkidle', { timeout: 5000 });
-  }
-
   static async scrollToBottom(page) {
     await page.evaluate(() => {
       window.scrollTo(0, document.body.scrollHeight);
@@ -165,21 +151,6 @@ export class TestHelpers {
   static async clearSearch(page) {
     await page.fill(this.selectors.searchInput, '');
     await page.keyboard.press('Escape');
-  }
-
-  static async waitForServer(baseURL, maxRetries = 60) {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const response = await fetch(`${baseURL}/health`);
-        if (response.ok) {
-          return true;
-        }
-      } catch {
-        // Continue waiting
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    throw new Error('Server not ready after max retries');
   }
 
   static async addToFavorites(page, photoHash) {
@@ -250,54 +221,6 @@ export class TestHelpers {
     const startY = options.startY ?? Math.floor(viewport.height / 2);
     const distance = options.distance ?? 200;
     await this.performSwipe(page, startX, startY, startX, startY + distance, options.stepDelay);
-  }
-
-  static async doubleTap(page, x, y) {
-    await page.evaluate(
-      ({ tx, ty }) => {
-        const target = document.querySelector('.viewer-main') || document.body;
-
-        const createTouch = (id, cx, cy) =>
-          new Touch({
-            identifier: id,
-            target,
-            clientX: cx,
-            clientY: cy,
-            pageX: cx,
-            pageY: cy,
-            radiusX: 2,
-            radiusY: 2,
-            rotationAngle: 0,
-            force: 0.5,
-          });
-
-        const tap = (id) => {
-          const touch = createTouch(id, tx, ty);
-          target.dispatchEvent(
-            new TouchEvent('touchstart', {
-              bubbles: true,
-              cancelable: true,
-              touches: [touch],
-              changedTouches: [touch],
-            })
-          );
-          target.dispatchEvent(
-            new TouchEvent('touchend', {
-              bubbles: true,
-              cancelable: true,
-              touches: [],
-              changedTouches: [touch],
-            })
-          );
-        };
-
-        tap(1);
-        setTimeout(() => tap(2), 50);
-      },
-      { tx: x, ty: y }
-    );
-    // Wait for the setTimeout + gesture processing
-    await page.waitForTimeout(200);
   }
 
   // Target .viewer-main so events bubble: .viewer-main (SwipeableViewer enablePan) → #photo-viewer (GestureManager)

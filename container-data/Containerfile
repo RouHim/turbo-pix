@@ -61,6 +61,7 @@ ARG TARGETARCH
 
 # Set environment variables in one layer
 ENV USER="1000" \
+    TURBO_PIX_HOST="0.0.0.0" \
     TURBO_PIX_PHOTO_PATHS="/photos" \
     TURBO_PIX_DATA_PATH="/data" \
     RUST_LOG="info" \

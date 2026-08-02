@@ -27,7 +27,14 @@ fn main() {
     let frontend_root = Path::new(&manifest_dir).join("frontend");
     let mut newest_frontend = None;
     for source in [
+        // Bundle-shaping configs are frontend sources too: editing them
+        // changes dist/ without touching index.html/src/public, so without
+        // tracking them here a stale bundle would embed silently (the exact
+        // failure the guard exists to prevent).
+        Path::new(&manifest_dir).join("vite.config.js"),
+        Path::new(&manifest_dir).join("package.json"),
         frontend_root.join("index.html"),
+        frontend_root.join("svelte.config.js"),
         frontend_root.join("src"),
         frontend_root.join("public"),
     ] {

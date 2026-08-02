@@ -61,12 +61,15 @@ test.describe('Location Search', () => {
   test('UI: nonexistent city returns empty results', async ({ page }) => {
     // GIVEN: User on homepage
     // WHEN: User types `location:Atlantis` and searches
+    const searchResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/photos') && response.url().includes('location%3AAtlantis')
+    );
     await TestHelpers.performSearch(page, 'location:Atlantis');
+    await searchResponse;
 
     // THEN: No [data-photo-id] elements visible
-    await page.waitForTimeout(2000);
-    const cards = await page.locator('[data-photo-id]').all();
-    expect(cards.length).toBe(0);
+    await expect.poll(() => page.locator('[data-photo-id]').count()).toBe(0);
   });
 
   test('UI: search hint tooltip appears on focus', async ({ page }) => {
@@ -103,9 +106,11 @@ test.describe('Location Search', () => {
     });
 
     // WHEN: User types "location:Berlin" and submits search
+    const textSearchResponse = page.waitForResponse(
+      (response) => response.url().includes('/api/photos') && response.url().includes('location')
+    );
     await TestHelpers.performSearch(page, 'location:Berlin');
-
-    await page.waitForTimeout(2000);
+    await textSearchResponse;
 
     // THEN: A request to /api/photos is made (containing "location:Berlin")
     const textSearchRequest = requests.find(
@@ -114,6 +119,8 @@ test.describe('Location Search', () => {
     expect(textSearchRequest).toBeDefined();
 
     // AND: NO request to /api/search/semantic is made
+    // (requests are recorded at initiation, i.e. at submit time, so once the
+    // text-search response has resolved no semantic request can still appear)
     const semanticRequest = requests.find((url) => url.includes('/api/search/semantic'));
     expect(semanticRequest).toBeUndefined();
   });

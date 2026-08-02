@@ -199,15 +199,19 @@ impl SemanticSearchEngine {
         // Convert to similarity score (1 = identical, 0 = orthogonal, -1 = opposite)
         let db_start = std::time::Instant::now();
 
-        // Fetch all results at once since sqlx doesn't support streaming parameter binding easily
+        // Fetch results via sqlite-vec's KNN search with the score threshold
+        // applied BEFORE LIMIT/OFFSET: filtering after pagination truncates
+        // results — a page whose raw window holds fewer than `limit`
+        // above-threshold rows would end pagination early even though further
+        // valid matches exist.
+        // vec_distance_cosine returns distance (0 = identical, 2 = opposite);
+        // similarity = 1 - distance / 2 (1 = identical, -1 = opposite).
         let raw_results = sqlx::query_as::<_, (String, f32)>(
-            "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity
-             FROM media_semantic_vectors msv
-             JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id
-             ORDER BY vec_distance_cosine(msv.semantic_vector, ?)
-             LIMIT ? OFFSET ?",
+            "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity\n             FROM media_semantic_vectors msv\n             JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id\n             WHERE 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) >= ?\n             ORDER BY vec_distance_cosine(msv.semantic_vector, ?)\n             LIMIT ? OFFSET ?",
         )
         .bind(&vector_bytes)
+        .bind(&vector_bytes)
+        .bind(MIN_SIMILARITY_SCORE)
         .bind(&vector_bytes)
         .bind(limit as i64)
         .bind(offset as i64)
@@ -216,7 +220,6 @@ impl SemanticSearchEngine {
 
         let results: Vec<(String, f32)> = raw_results
             .into_iter()
-            .filter(|(_, score)| *score >= MIN_SIMILARITY_SCORE)
             .map(|(path, score)| (path, score * 100.0))
             .collect();
         log::debug!("Database query took: {:?}", db_start.elapsed());
@@ -691,6 +694,23 @@ pub(crate) fn load_clip_model(
     Ok((model, tokenizer))
 }
 
+/// Ensures exactly `CONTEXT_LENGTH` tokens: pads short inputs with EOT and
+/// truncates long inputs to `CONTEXT_LENGTH - 1` tokens plus a re-appended
+/// EOT (the tokenizer's own trailing EOT would otherwise be dropped by a
+/// plain truncate).
+fn pad_or_truncate_tokens(mut tokens: Vec<u32>) -> Vec<u32> {
+    if tokens.len() < CONTEXT_LENGTH {
+        tokens.resize(CONTEXT_LENGTH, EOT_TOKEN);
+    } else {
+        // The tokenizer already appended EOT, so truncating to
+        // CONTEXT_LENGTH would drop it; keep CONTEXT_LENGTH - 1 tokens and
+        // re-append EOT as the final token.
+        tokens.truncate(CONTEXT_LENGTH - 1);
+        tokens.push(EOT_TOKEN);
+    }
+    tokens
+}
+
 /// Encodes text into a normalized 512-dimensional semantic vector
 fn encode_text(
     model: &clip::ClipModel,
@@ -704,15 +724,7 @@ fn encode_text(
         .get_ids()
         .to_vec();
 
-    if tokens.len() < CONTEXT_LENGTH {
-        tokens.resize(CONTEXT_LENGTH, EOT_TOKEN);
-    } else {
-        // The tokenizer already appended EOT, so truncating to
-        // CONTEXT_LENGTH would drop it; keep CONTEXT_LENGTH - 1 tokens and
-        // re-append EOT as the final token.
-        tokens.truncate(CONTEXT_LENGTH - 1);
-        tokens.push(EOT_TOKEN);
-    }
+    tokens = pad_or_truncate_tokens(tokens);
 
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
     let features = model.get_text_features(&token_ids)?;
@@ -947,6 +959,37 @@ mod tests {
     fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
         let (model, tokenizer, device) = get_cached_model();
         SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+    }
+
+    #[test]
+    fn pads_short_token_sequences_with_eot() {
+        let tokens = pad_or_truncate_tokens(vec![1, 2, 3]);
+        assert_eq!(tokens.len(), CONTEXT_LENGTH);
+        assert_eq!(tokens[..3], [1, 2, 3]);
+        assert_eq!(tokens[3], EOT_TOKEN);
+        assert_eq!(tokens.last(), Some(&EOT_TOKEN));
+    }
+
+    #[test]
+    fn truncates_long_token_sequences_and_reappends_eot() {
+        let long: Vec<u32> = (0..200).map(|i| i as u32).collect();
+        let tokens = pad_or_truncate_tokens(long);
+        assert_eq!(tokens.len(), CONTEXT_LENGTH);
+        assert_eq!(
+            tokens[..CONTEXT_LENGTH - 1],
+            (0..76).map(|i| i as u32).collect::<Vec<u32>>()
+        );
+        assert_eq!(tokens[CONTEXT_LENGTH - 1], EOT_TOKEN);
+    }
+
+    #[test]
+    fn leaves_exact_length_sequences_alone() {
+        let exact: Vec<u32> = (0..CONTEXT_LENGTH).map(|i| i as u32).collect();
+        let tokens = pad_or_truncate_tokens(exact.clone());
+        // CONTEXT_LENGTH input: keep first CONTEXT_LENGTH - 1, re-append EOT.
+        assert_eq!(tokens.len(), CONTEXT_LENGTH);
+        assert_eq!(tokens[..CONTEXT_LENGTH - 1], exact[..CONTEXT_LENGTH - 1]);
+        assert_eq!(tokens[CONTEXT_LENGTH - 1], EOT_TOKEN);
     }
 
     fn create_test_photo(path: &str) -> Photo {

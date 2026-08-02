@@ -50,15 +50,22 @@
       pushState({ query: q || null });
     }
 
-    if (!q || q === currentQuery) return;
+    if (!q) return;
 
-    currentQuery = q;
-    query = q;
-
+    // Record history BEFORE the dedupe early return: type-then-Enter and
+    // selectSuggestion reach this with q === currentQuery (the live-search
+    // debounce already set it) and would otherwise silently drop the entry.
+    // addToSearchHistory dedupes internally, so a repeat call for the same
+    // query only bumps its recency — no duplicate entries.
     if (addToHistory) {
       api.addToSearchHistory(q);
       searchHistory = api.getSearchHistory() || [];
     }
+
+    if (q === currentQuery) return;
+
+    currentQuery = q;
+    query = q;
 
     searching = true;
 

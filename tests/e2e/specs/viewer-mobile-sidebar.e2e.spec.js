@@ -18,7 +18,7 @@ test.describe('Mobile Viewer Sidebar', () => {
     await TestHelpers.verifyViewerOpen(page);
   };
 
-  test('sidebar z-index should be 15 on mobile viewport', async ({ page }) => {
+  test('sidebar should float above viewer controls on mobile viewport', async ({ page }) => {
     // GIVEN: Mobile viewport + viewer open
     await TestHelpers.setMobileViewport(page);
     await openViewerOnFirstPhoto(page);
@@ -27,17 +27,14 @@ test.describe('Mobile Viewer Sidebar', () => {
     await page.locator('.metadata-btn').click();
     await page.locator('.viewer-sidebar.show').waitFor();
 
-    // THEN: Sidebar z-index is 15
+    // THEN: Sidebar z-index is greater than the controls' z-index
     const sidebarZIndex = await page.evaluate(
       () => window.getComputedStyle(document.querySelector('.viewer-sidebar')).zIndex
     );
-    expect(sidebarZIndex).toBe('15');
-
-    // AND: Sidebar z-index > controls z-index
     const controlsZIndex = await page.evaluate(
       () => window.getComputedStyle(document.querySelector('.viewer-controls')).zIndex
     );
-    expect(parseInt(sidebarZIndex)).toBeGreaterThan(parseInt(controlsZIndex));
+    expect(parseInt(sidebarZIndex, 10)).toBeGreaterThan(parseInt(controlsZIndex, 10));
   });
 
   test('close button should dismiss sidebar without closing viewer', async ({ page }) => {

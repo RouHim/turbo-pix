@@ -16,6 +16,10 @@ use crate::warp_helpers::{
     with_cache, with_db, DatabaseError, NotFoundError, PermissionError, ValidationError,
 };
 
+/// Cap for JSON request bodies (favorite/metadata/rotate). All three payloads
+/// are a handful of fields; anything larger is a memory-exhaustion attempt.
+const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
     pub page: Option<u32>,
@@ -194,7 +198,11 @@ pub async fn get_photo_file(
         }
     }
 
-    // For non-RAW files, serve directly
+    // For non-RAW files, serve the file contents. (Streaming is not
+    // possible through warp 0.4's public reply API — warp::fs::file requires
+    // the path at filter-construction time — so a single file is buffered;
+    // the 1 MiB request-body limit and the loopback-only default bind bound
+    // the exposure.)
     match std::fs::read(&photo.file_path) {
         Ok(file_data) => {
             let content_type = photo.mime_type.unwrap_or_else(|| {
@@ -416,6 +424,13 @@ pub async fn update_photo_metadata(
         metadata_req.longitude,
     ) {
         log::error!("Failed to update EXIF: {}", e);
+        // Out-of-range/unpaired GPS coordinates are client input errors, not
+        // server failures — the metadata_writer rejects them before touching
+        // the file ("Latitude out of range…", "…without longitude",
+        // "…without latitude").
+        if e.starts_with("Latitude") || e.starts_with("Longitude") {
+            return Err(reject::custom(ValidationError { message: e }));
+        }
         return Err(reject::custom(DatabaseError {
             message: format!("Failed to update EXIF: {}", e),
         }));
@@ -551,10 +566,19 @@ pub struct RotateRequest {
     pub angle: i32, // 90, 180, or 270
 }
 
+/// Serializes all photo rotations. Two concurrent rotate requests for the
+/// same photo would otherwise interleave temp-file writes/renames and DB
+/// dimension updates, leaving the stored width/height/hash inconsistent with
+/// the actual file (the last rename wins independently of the last DB write).
+/// Rotation is a rare user action and the critical section is short.
+static ROTATE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 pub async fn rotate_photo(
     photo_hash: String,
     rotate_req: RotateRequest,
     db_pool: DbPool,
+    cache_manager: CacheManager,
 ) -> Result<impl Reply, Rejection> {
     // Find photo
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
@@ -583,9 +607,19 @@ pub async fn rotate_photo(
         }
     };
 
-    // Rotate image
+    // Rotate image (serialized per the ROTATE_LOCK comment above)
+    let _rotate_guard = ROTATE_LOCK.lock().await;
+    let old_hash = photo.hash_sha256.clone();
     match image_editor::rotate_image(&photo, angle, &db_pool).await {
-        Ok(updated_photo) => Ok(warp::reply::json(&updated_photo)),
+        Ok(updated_photo) => {
+            // The content hash changed, so all thumbnails under the old hash
+            // are stale; remove them so the thumbnail cache cannot grow
+            // without bound (they are keyed by hash, see clear_for_hash).
+            if let Err(e) = cache_manager.clear_for_hash(&old_hash).await {
+                log::warn!("Failed to clear cache for {}: {}", old_hash, e);
+            }
+            Ok(warp::reply::json(&updated_photo))
+        }
         Err(e) => {
             log::error!("Failed to rotate image: {}", e);
             Err(reject::custom(DatabaseError {
@@ -714,6 +748,7 @@ pub fn build_photo_routes(
         .and(warp::path("favorite"))
         .and(warp::path::end())
         .and(warp::put())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
         .and(warp::body::json::<FavoriteRequest>())
         .and(with_db(db_pool.clone()))
         .and_then(toggle_favorite);
@@ -733,6 +768,7 @@ pub fn build_photo_routes(
         .and(warp::path("metadata"))
         .and(warp::path::end())
         .and(warp::patch())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
         .and(warp::body::json::<MetadataUpdateRequest>())
         .and(with_db(db_pool.clone()))
         .and_then(update_photo_metadata);
@@ -743,8 +779,10 @@ pub fn build_photo_routes(
         .and(warp::path("rotate"))
         .and(warp::path::end())
         .and(warp::post())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
         .and(warp::body::json::<RotateRequest>())
         .and(with_db(db_pool.clone()))
+        .and(with_cache(cache_manager.clone()))
         .and_then(rotate_photo);
 
     let api_photo_delete = warp::path("api")

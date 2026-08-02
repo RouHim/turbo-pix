@@ -91,81 +91,82 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
 pub async fn delete_orphaned_photos(
     pool: &DbPool,
     existing_paths: &[String],
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
     if existing_paths.is_empty() {
         warn!("No files found on disk — skipping orphan cleanup to prevent accidental data loss");
         return Ok(Vec::new());
     }
 
-    // Build placeholders for IN clause
-    let placeholders = existing_paths
-        .iter()
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(",");
+    // Chunked temp-table approach: a single NOT IN with one bound parameter
+    // per on-disk file would exceed SQLite's SQLITE_MAX_VARIABLE_NUMBER
+    // (32766) for large libraries, making the statements fail to prepare and
+    // silently killing nightly orphan cleanup forever.
+    const CHUNK_SIZE: usize = 500;
 
-    let select_sql = format!(
-        "SELECT file_path FROM photos WHERE file_path NOT IN ({})",
-        placeholders
-    );
-
-    // Build query with dynamic parameters
-    let mut select_query = sqlx::query_scalar::<_, String>(&select_sql);
-    for path in existing_paths {
-        select_query = select_query.bind(path);
-    }
-    let deleted_paths: Vec<String> = select_query.fetch_all(pool).await?;
-
-    // Helper to delete rows from a table where a column is NOT IN the provided paths
-    async fn delete_not_in(
-        pool: &DbPool,
-        table: &str,
-        column: &str,
-        placeholders: &str,
-        existing_paths: &[String],
-    ) -> Result<u64, Box<dyn std::error::Error>> {
-        let sql = format!(
-            "DELETE FROM {} WHERE {} NOT IN ({})",
-            table, column, placeholders
-        );
+    // All statements run on one held connection because the temp table is
+    // per-connection. Autocommit (no explicit transaction): the temp-table
+    // inserts never touch the main database, so no write lock is held while
+    // they run and concurrent API traffic stays responsive.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("CREATE TEMP TABLE scanned_paths (path TEXT PRIMARY KEY)")
+        .execute(&mut *conn)
+        .await?;
+    for chunk in existing_paths.chunks(CHUNK_SIZE) {
+        let rows = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
+        let sql = format!("INSERT OR IGNORE INTO scanned_paths (path) VALUES {}", rows);
         let mut query = sqlx::query(&sql);
-        for path in existing_paths {
+        for path in chunk {
             query = query.bind(path);
         }
-        let result = query.execute(pool).await?;
-        Ok(result.rows_affected())
+        query.execute(&mut *conn).await?;
     }
+
+    // Return (path, hash) pairs so callers can clear the hash-based
+    // thumbnail cache for each deleted photo.
+    let deleted_paths: Vec<(String, String)> = sqlx::query_as(
+        "SELECT file_path, hash_sha256 FROM photos \
+         WHERE file_path NOT IN (SELECT path FROM scanned_paths)",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
 
     // Delete orphaned photos
     let deleted_photos =
-        delete_not_in(pool, "photos", "file_path", &placeholders, existing_paths).await?;
+        sqlx::query("DELETE FROM photos WHERE file_path NOT IN (SELECT path FROM scanned_paths)")
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
 
     // Delete orphaned vectors
-    let deleted_vectors = delete_not_in(
-        pool,
-        "semantic_vector_path_mapping",
-        "path",
-        &placeholders,
-        existing_paths,
+    let deleted_vectors = sqlx::query(
+        "DELETE FROM semantic_vector_path_mapping \
+         WHERE path NOT IN (SELECT path FROM scanned_paths)",
     )
-    .await?;
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
 
     // Delete orphaned video metadata (ignore rows affected)
-    let _ = delete_not_in(
-        pool,
-        "video_semantic_metadata",
-        "path",
-        &placeholders,
-        existing_paths,
+    sqlx::query(
+        "DELETE FROM video_semantic_metadata \
+         WHERE path NOT IN (SELECT path FROM scanned_paths)",
     )
+    .execute(&mut *conn)
     .await?;
 
     // Clean up orphaned vectors
     sqlx::query(
-        "DELETE FROM media_semantic_vectors WHERE rowid NOT IN (SELECT id FROM semantic_vector_path_mapping)"
+        "DELETE FROM media_semantic_vectors \
+         WHERE rowid NOT IN (SELECT id FROM semantic_vector_path_mapping)",
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
+
+    // Temp tables live on the pooled connection; drop it so a later call
+    // (possibly on the same connection) can recreate it.
+    sqlx::query("DROP TABLE scanned_paths")
+        .execute(&mut *conn)
+        .await?;
 
     info!(
         "Deleted {} orphaned photos and {} orphaned semantic vectors from database",
@@ -176,7 +177,15 @@ pub async fn delete_orphaned_photos(
 }
 
 pub async fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-    sqlx::query("VACUUM").execute(pool).await?;
+    // The nightly vacuum runs while API handlers may still be writing; in WAL
+    // mode VACUUM needs exclusive access and would otherwise block all DB
+    // writes for its full duration. A short busy timeout makes it fail fast
+    // (and be skipped for the night) instead of stalling requests.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA busy_timeout = 1000")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("VACUUM").execute(&mut *conn).await?;
     info!("Database vacuum completed");
     Ok(())
 }
@@ -334,5 +343,43 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(feature_vector_count, 1, "Data should be preserved");
+    }
+
+    #[tokio::test]
+    async fn test_delete_orphaned_photos_chunks_above_sqlite_variable_limit() {
+        // GIVEN a library larger than SQLITE_MAX_VARIABLE_NUMBER (32766)
+        // plus one DB row whose file has vanished
+        let pool = create_in_memory_pool().await.unwrap();
+        let orphan_path = "/path/to/orphan.jpg";
+        sqlx::query(
+            "INSERT INTO photos (hash_sha256, file_path, filename, file_size, file_modified) \
+             VALUES (?, ?, 'orphan.jpg', 0, ?)",
+        )
+        .bind("0".repeat(64))
+        .bind(orphan_path)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let existing_paths: Vec<String> = (0..33_000)
+            .map(|i| format!("/path/to/existing/{}.jpg", i))
+            .collect();
+
+        // WHEN orphan cleanup runs with a single NOT IN over all of them
+        let deleted = delete_orphaned_photos(&pool, &existing_paths)
+            .await
+            .unwrap();
+
+        // THEN the orphan is found and removed (the old single-statement
+        // placeholder list would fail to prepare at 33000 bound parameters)
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].0, orphan_path);
+        assert_eq!(deleted[0].1, "0".repeat(64));
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 }

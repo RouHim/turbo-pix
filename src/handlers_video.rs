@@ -55,8 +55,8 @@ fn with_transcode_warning(
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
 use crate::video_processor::{
-    get_transcode_status, get_transcoded_path, is_hevc_video, set_transcode_status,
-    transcode_hevc_to_h264, TranscodeState, TranscodeStatus,
+    claim_transcode, get_transcode_status, get_transcoded_path, is_hevc_video,
+    set_transcode_status, transcode_hevc_to_h264, TranscodeClaim, TranscodeState, TranscodeStatus,
 };
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 
@@ -134,12 +134,15 @@ pub async fn get_video_file(
 
         // Check if transcoded version exists
         if !transcoded_path.exists() {
-            // Consult the in-memory status first: a previous attempt may
-            // have failed/timed out (serve the original instead of
-            // re-spawning a doomed 300s job) or still be running (hand
-            // back the poll response without starting a second transcode).
-            match get_transcode_status(&photo.hash_sha256).map(|s| s.state) {
-                Some(TranscodeState::Failed | TranscodeState::Timeout) => {
+            // Atomically claim the transcode slot: the claim and the status
+            // insert happen under one lock, so two concurrent requests for
+            // the same hash cannot both spawn an ffmpeg job (check-then-act
+            // race). A previous attempt may have failed/timed out (serve the
+            // original instead of re-spawning a doomed 300s job) or still be
+            // running (hand back the poll response without starting a
+            // second transcode).
+            match claim_transcode(&photo.hash_sha256) {
+                TranscodeClaim::PreviouslyFailedOrTimedOut => {
                     // A transcode writes to a temp file and renames it into
                     // place only on success, so a failure/timeout leaves no
                     // file at `transcoded_path`. Remove any leftover temp
@@ -159,7 +162,7 @@ pub async fn get_video_file(
                     );
                     (video_path.to_path_buf(), true)
                 }
-                Some(TranscodeState::InProgress) => {
+                TranscodeClaim::AlreadyInProgress => {
                     // A transcode spawned by a previous request is still
                     // running: return the poll response without spawning a
                     // second job.
@@ -173,9 +176,9 @@ pub async fn get_video_file(
                     );
                     return Ok(Box::new(response));
                 }
-                _ => {
-                    // No known status, or a stale Completed entry with no
-                    // file on disk: start a fresh transcode.
+                TranscodeClaim::Started => {
+                    // We own the slot (claim_transcode inserted the
+                    // InProgress status): start a fresh transcode.
                     let hash_short = photo.hash_sha256.get(..12).unwrap_or(&photo.hash_sha256);
                     log::info!(
                         "Transcoding HEVC video to H.264: {} (hash: {})",
@@ -185,15 +188,6 @@ pub async fn get_video_file(
 
                     let started_at = Utc::now();
                     let hash = photo.hash_sha256.clone();
-                    set_transcode_status(
-                        &hash,
-                        TranscodeStatus {
-                            state: TranscodeState::InProgress,
-                            hash: hash.clone(),
-                            started_at: Some(started_at),
-                            error: None,
-                        },
-                    );
 
                     let input_path = video_path.to_path_buf();
                     let output_path = transcoded_path.clone();
@@ -563,14 +557,9 @@ mod tests {
 
         let mut body = response.into_body();
         let mut out = Vec::new();
-        loop {
-            match poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
-                Some(Ok(frame)) => {
-                    if let Ok(data) = frame.into_data() {
-                        out.extend_from_slice(&data);
-                    }
-                }
-                Some(Err(_)) | None => break,
+        while let Some(Ok(frame)) = poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+            if let Ok(data) = frame.into_data() {
+                out.extend_from_slice(&data);
             }
         }
         out

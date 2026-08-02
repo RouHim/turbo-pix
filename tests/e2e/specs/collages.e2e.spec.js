@@ -52,17 +52,9 @@ test.describe('Collages', () => {
     const acceptBtn = page.locator(TestHelpers.selectors.action('accept-collage')).first();
     const rejectBtn = page.locator(TestHelpers.selectors.action('reject-collage')).first();
 
-    // THEN: Action buttons should exist
-    const hasAcceptBtn = (await acceptBtn.count()) > 0;
-    const hasRejectBtn = (await rejectBtn.count()) > 0;
-
-    if (hasAcceptBtn) {
-      expect(hasAcceptBtn).toBe(true);
-    }
-
-    if (hasRejectBtn) {
-      expect(hasRejectBtn).toBe(true);
-    }
+    // THEN: Both action buttons are rendered on the collage card (pending collages are seeded)
+    await expect(acceptBtn).toHaveCount(1);
+    await expect(rejectBtn).toHaveCount(1);
   });
 
   test('should open standard viewer for collages', async ({ page }) => {

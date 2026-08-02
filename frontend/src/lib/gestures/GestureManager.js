@@ -106,8 +106,17 @@ export class GestureManager {
     });
 
     // Detect gesture type
-    if (this.touches.size === 2 && this.options.enablePinch && this.activeGesture !== 'pan') {
-      this.startPinchGesture();
+    if (this.touches.size === 2) {
+      // A second finger landing starts a multi-touch session — drop any
+      // pending double-tap state so the finger lifted at the end of a
+      // pinch/pan is never counted as the first tap of a sequence (a phantom
+      // tap after tap-to-zoom then quick pinch would otherwise fire a
+      // spurious onDoubleTap → doubleTapZoom).
+      this.resetRecognizers();
+
+      if (this.options.enablePinch && this.activeGesture !== 'pan') {
+        this.startPinchGesture();
+      }
     } else if (this.touches.size === 1) {
       // Could be tap, swipe, or pan - wait for movement
       this.gestureState = 'recognizing';

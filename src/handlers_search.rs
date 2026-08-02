@@ -49,9 +49,13 @@ pub async fn semantic_search(
         query.offset
     );
 
-    // Perform semantic search
+    // Perform semantic search. Clamp the client-supplied pagination: an
+    // unbounded limit would stream the whole vector index back in one
+    // response.
+    let limit = query.limit.clamp(1, 200);
+    let offset = query.offset.min(1_000_000);
     let results = semantic_search
-        .search(&query.q, query.limit, query.offset)
+        .search(&query.q, limit, offset)
         .await
         .map_err(|e| {
             log::error!("Semantic search error: {}", e);

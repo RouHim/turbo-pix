@@ -8,6 +8,11 @@ pub struct CacheConfig {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Bind address. Defaults to loopback: the API is unauthenticated and
+    /// exposes destructive operations, so it must not listen on all
+    /// interfaces unless the operator explicitly opts in (Docker sets
+    /// TURBO_PIX_HOST=0.0.0.0).
+    pub host: String,
     pub port: u16,
     pub photo_paths: Vec<String>,
     pub data_path: String,
@@ -31,6 +36,8 @@ impl Config {
             .unwrap_or_else(|_| "18473".to_string())
             .parse()?;
 
+        let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
         let photo_paths = env::var("TURBO_PIX_PHOTO_PATHS")
             .unwrap_or_else(|_| "./photos".to_string())
             .split(',')
@@ -49,6 +56,7 @@ impl Config {
         };
 
         Ok(Config {
+            host,
             port,
             photo_paths,
             data_path,
@@ -80,6 +88,38 @@ mod tests {
         let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
         let _guard = lock.lock().unwrap();
         f()
+    }
+
+    #[test]
+    fn uses_loopback_host_by_default() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_HOST").ok();
+            env::remove_var("TURBO_PIX_HOST");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.host, "127.0.0.1");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_HOST", value);
+            }
+        });
+    }
+
+    #[test]
+    fn reads_custom_host_from_env() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_HOST").ok();
+            env::set_var("TURBO_PIX_HOST", "0.0.0.0");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.host, "0.0.0.0");
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_HOST", value);
+            } else {
+                env::remove_var("TURBO_PIX_HOST");
+            }
+        });
     }
 
     #[test]

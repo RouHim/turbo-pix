@@ -389,6 +389,7 @@ mod tests {
             .to_string();
 
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,
@@ -638,6 +639,7 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -694,6 +696,7 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -787,6 +790,7 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -895,6 +899,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
         let config = Config {
+            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),

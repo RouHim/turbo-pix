@@ -32,16 +32,6 @@ export class TestDataManager {
     return this.photoHashes;
   }
 
-  async printTestPhotoHashes() {
-    const hashes = await this.fetchTestPhotoHashes();
-
-    console.log('\n=== Test Photo Hashes ===\n');
-    hashes.forEach((hash, fileName) => {
-      console.log(`${fileName}: ${hash}`);
-    });
-    console.log('\n========================\n');
-  }
-
   async addToFavorites(photoHash) {
     const response = await fetch(`${this.baseURL}/api/photos/${photoHash}/favorite`, {
       method: 'PUT',
@@ -70,75 +60,6 @@ export class TestDataManager {
     return await response.json();
   }
 
-  async seedFavorites(photoHashes) {
-    console.log(`Seeding ${photoHashes.length} favorites...`);
-
-    const promises = photoHashes.map((hash) => this.addToFavorites(hash));
-    await Promise.all(promises);
-
-    console.log('Favorites seeded successfully');
-  }
-
-  async clearAllFavorites() {
-    console.log('Clearing all favorites...');
-
-    const photos = await this.fetchAllPhotos();
-    const favoritePhotos = photos.filter((photo) => photo.is_favorite);
-
-    const promises = favoritePhotos.map((photo) => this.removeFromFavorites(photo.hash_sha256));
-
-    await Promise.all(promises);
-
-    console.log(`Cleared ${favoritePhotos.length} favorites`);
-  }
-
-  async deletePhoto(photoHash) {
-    const response = await fetch(`${this.baseURL}/api/photos/${photoHash}`, {
-      method: 'DELETE',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to delete photo: ${response.statusText}`);
-    }
-
-    return await response.json();
-  }
-
-  async getIndexingStatus() {
-    const response = await fetch(`${this.baseURL}/api/indexing/status`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get indexing status: ${response.statusText}`);
-    }
-
-    return await response.json();
-  }
-
-  async waitForIndexing(maxRetries = 180, delayMs = 1000) {
-    console.log('Waiting for indexing to complete...');
-
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const status = await this.getIndexingStatus();
-
-        if (status.is_complete) {
-          console.log('Indexing complete');
-          return true;
-        }
-
-        if (i % 10 === 0) {
-          console.log(`Indexing status: ${status.photos_indexed ?? 'unknown'} photos indexed`);
-        }
-      } catch (error) {
-        console.error('Error checking indexing status:', error.message);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-
-    throw new Error('Indexing did not complete within timeout');
-  }
-
   getPhotoHash(fileName) {
     return this.photoHashes.get(fileName);
   }
@@ -155,11 +76,5 @@ export class TestDataManager {
       );
     }
     return firstEntry[1];
-  }
-
-  async getFirstVideoHash() {
-    const photos = await this.fetchAllPhotos();
-    const video = photos.find((photo) => photo.mime_type?.startsWith('video/'));
-    return video?.hash_sha256 || null;
   }
 }

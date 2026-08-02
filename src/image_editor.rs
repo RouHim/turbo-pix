@@ -202,8 +202,18 @@ pub async fn rotate_image(
         RotationAngle::Rotate270 => img.rotate270(),
     };
 
-    // Save rotated image to temporary location first (to avoid corruption)
-    let temp_path = file_path.with_extension(format!("tmp.{}", extension));
+    // Save rotated image to temporary location first (to avoid corruption).
+    // The temp name ends in the real extension so `image::save` can infer the
+    // format, and carries a monotonic counter so two concurrent rotations of
+    // the same photo cannot both write (and then rename away) the same temp
+    // path — a deterministic collision that made the loser fail with a
+    // spurious error or leave interleaved temp content.
+    static ROTATE_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let temp_path = file_path.with_extension(format!(
+        "tmp.{}.{}",
+        ROTATE_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        extension
+    ));
     rotated_img
         .save(&temp_path)
         .map_err(|e| ImageEditError::WriteError(format!("Failed to save rotated image: {}", e)))?;
@@ -321,6 +331,13 @@ fn carry_exif_with_reset_orientation(
                 ifd_num: In::PRIMARY,
                 value: Value::Short(vec![1]),
             });
+        } else if field.ifd_num == In::THUMBNAIL {
+            // The experimental EXIF writer drops JPEGInterchangeFormat/
+            // Length and never receives the thumbnail JPEG blob, so carrying
+            // IFD1 entries would emit a dangling/corrupt IFD1 block with
+            // entries but no image data. metadata_writer deliberately skips
+            // these for the same reason (should_copy_field).
+            continue;
         } else if matches!(field.value, Value::Unknown(..)) {
             // The experimental EXIF writer cannot serialize unknown value
             // types; skip them rather than failing the whole rotation.
@@ -407,12 +424,12 @@ pub async fn delete_photo(
     }
 
     // Delete thumbnails - spawn async task to avoid blocking
-    // Clear cache for this photo's path
-    let file_path_clone = photo.file_path.clone();
+    // Thumbnails are keyed by content hash, not file path
+    let photo_hash = photo.hash_sha256.clone();
     let cache_manager_clone = cache_manager.clone();
     tokio::spawn(async move {
-        if let Err(e) = cache_manager_clone.clear_for_path(&file_path_clone).await {
-            log::warn!("Failed to clear cache for {}: {}", file_path_clone, e);
+        if let Err(e) = cache_manager_clone.clear_for_hash(&photo_hash).await {
+            log::warn!("Failed to clear cache for {}: {}", photo_hash, e);
         }
     });
 

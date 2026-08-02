@@ -1,14 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
-import { TestDataManager } from '../setup/test-data-manager.js';
 
 test.describe('Critical User Paths', () => {
-  let dataManager;
-
-  test.beforeAll(async () => {
-    dataManager = new TestDataManager();
-  });
-
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
     await TestHelpers.goto(page);
@@ -49,7 +42,7 @@ test.describe('Critical User Paths', () => {
     // WHEN: User performs a search
     await TestHelpers.performSearch(page, 'type:video');
 
-    // THEN: Search results are displayed
+    // THEN: Search results are displayed (seeded videos are always indexed)
     await page.waitForResponse(
       (response) =>
         response.url().includes('/api/photos') && response.url().includes('q=type%3Avideo')
@@ -58,22 +51,20 @@ test.describe('Critical User Paths', () => {
       state: 'attached',
     });
     const photos = await TestHelpers.getPhotoCards(page);
+    expect(photos.length).toBeGreaterThan(0);
 
-    // Note: If no photos match search, test should still pass
-    if (photos.length > 0) {
-      // WHEN: User opens a search result
-      await photos[0].click();
+    // WHEN: User opens a search result
+    await photos[0].click();
 
-      // THEN: Viewer opens with the photo
-      await TestHelpers.verifyViewerOpen(page);
+    // THEN: Viewer opens with the photo
+    await TestHelpers.verifyViewerOpen(page);
 
-      // WHEN: User clears the search
-      await TestHelpers.closeViewer(page);
-      await TestHelpers.clearSearch(page);
+    // WHEN: User clears the search
+    await TestHelpers.closeViewer(page);
+    await TestHelpers.clearSearch(page);
 
-      // THEN: All photos are shown again
-      await TestHelpers.waitForPhotosToLoad(page);
-    }
+    // THEN: All photos are shown again
+    await TestHelpers.waitForPhotosToLoad(page);
   });
 
   test('should complete video discovery and playback workflow', async ({ page }) => {
@@ -99,13 +90,8 @@ test.describe('Critical User Paths', () => {
     // THEN: Video viewer opens
     await TestHelpers.verifyViewerOpen(page);
 
-    // WHEN: User checks if video element exists
-    const hasVideo = await TestHelpers.elementExists(page, TestHelpers.selectors.viewerVideo);
-
-    // THEN: Video element should be present
-    if (hasVideo) {
-      await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
-    }
+    // THEN: Video element is present (seeded videos are always indexed)
+    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
 
     // WHEN: User closes the viewer
     await TestHelpers.closeViewer(page);

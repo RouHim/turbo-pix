@@ -364,6 +364,11 @@ async function startServer() {
     TURBO_PIX_DATA_PATH: TEST_DATA_DIR,
     TURBO_PIX_PHOTO_PATHS: path.join(TEST_DATA_DIR, 'photos'),
     TURBO_PIX_PORT: SERVER_PORT,
+    // Dedicated per-run transcode cache inside the wiped test dir: the
+    // default /tmp/turbo-pix survives between runs, so a previously
+    // transcoded HEVC file would short-circuit the transcode flow and the
+    // HEVC spec would never see the transcode toast (its whole point).
+    TRANSCODE_CACHE_DIR: path.join(TEST_DATA_DIR, 'transcode-cache'),
     RUST_LOG: 'info',
   };
 

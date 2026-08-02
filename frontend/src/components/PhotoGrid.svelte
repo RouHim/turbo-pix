@@ -59,6 +59,129 @@
    * Loads photos with pagination and filtering.
    * @param {boolean} reset - Whether to reset pagination and clear the grid
    */
+  /**
+   * Resets pagination and reconciles semantic-search mode with the route.
+   * Filtered views (favorites/videos) always use the regular search path:
+   * semantic results are unfilterable and must not leak into them.
+   */
+  function applyResetState() {
+    photoGridState.photos = [];
+    photoGridState.currentPage = 1;
+    photoGridState.hasMore = true;
+    if (route.view !== 'all') {
+      photoGridState.semanticSearchMode = false;
+    } else if (route.query && !isPrefixQuery(route.query)) {
+      // Returning to 'all' with a non-prefix query: SearchBar routes every
+      // non-prefix query semantically, so a Back from a filtered view must
+      // restore semantic mode — otherwise the same URL degrades to a
+      // regular text search (route-sync effect no-ops: query unchanged).
+      photoGridState.semanticSearchMode = true;
+    }
+    if (!photoGridState.semanticSearchMode) {
+      photoGridState.currentQuery = route.query || null;
+    }
+    if (!route.query && photoGridState.semanticSearchMode) {
+      // URL-driven navigation to a query-less URL must end semantic search
+      // (Back from a search). Safety net: works even if PhotoGrid's route
+      // effect runs before SearchBar's (SearchBar mounts first — Header
+      // precedes <main> in App.svelte — so the pipeline normally wins).
+      photoGridState.semanticSearchMode = false;
+      photoGridState.currentQuery = null;
+    }
+  }
+
+  /**
+   * Loads one page of semantic results (embeddings are slow, ~3s). Returns
+   * null when the response is stale (a newer query/load superseded it) — the
+   * caller must no-op instead of polluting the fresh grid.
+   * @param {AbortSignal} signal
+   * @returns {Promise<Array|null>}
+   */
+  async function loadSemanticPage(signal) {
+    const queryAtStart = photoGridState.currentQuery;
+    const offset = (photoGridState.currentPage - 1) * DEFAULT_BATCH_SIZE;
+    const result = await api.semanticSearch(
+      photoGridState.currentQuery,
+      DEFAULT_BATCH_SIZE,
+      offset,
+      {
+        signal,
+      }
+    );
+
+    if (!result.results || result.results.length === 0) return [];
+
+    const photoHashes = result.results.map((r) => r.hash);
+    const photosData = await Promise.all(
+      photoHashes.map(async (hash) => {
+        try {
+          return await api.getPhoto(hash, { signal });
+        } catch (e) {
+          if (e?.name === 'AbortError') throw e;
+          logger.warn(`Failed to load photo ${hash}`, { component: 'PhotoGrid' }, e);
+          return null;
+        }
+      })
+    );
+    const photosList = photosData.filter((p) => p !== null);
+    // Stale ~3s semantic response: a newer query/load superseded this one.
+    if (queryAtStart !== photoGridState.currentQuery || signal.aborted) {
+      return null;
+    }
+    if (logger) {
+      logger.info('Semantic search results loaded', {
+        component: 'PhotoGrid',
+        photosCount: photosList.length,
+        offset,
+        query: queryAtStart,
+      });
+    }
+    return photosList;
+  }
+
+  /**
+   * Loads one page through the regular search API, merging the user's search
+   * term with the view filter (e.g. Favorites + "cat" → "cat is_favorite:true");
+   * the backend ANDs the tokens.
+   * @param {AbortSignal} signal
+   * @returns {Promise<Array>}
+   */
+  async function loadRegularPage(signal) {
+    const { query: viewQuery, ...filters } = buildFilters();
+    const params = {
+      page: photoGridState.currentPage,
+      limit: DEFAULT_BATCH_SIZE,
+      query: [photoGridState.currentQuery, viewQuery].filter(Boolean).join(' ') || null,
+      ...filters,
+    };
+    const response = await api.getPhotos(params, { signal });
+    return response.photos || [];
+  }
+
+  /**
+   * Appends a page to the grid and advances pagination state.
+   * @param {Array} photosList
+   */
+  function appendPhotos(photosList) {
+    if (photosList.length > 0) {
+      photoGridState.photos.push(...photosList);
+      photoGridState.currentPage++;
+      photoGridState.hasMore = photosList.length === DEFAULT_BATCH_SIZE;
+
+      if (logger) {
+        logger.info('Photos loaded successfully', {
+          component: 'PhotoGrid',
+          photosCount: photosList.length,
+          totalPhotos: photosList.length,
+          page: photoGridState.currentPage - 1,
+          hasMore: photoGridState.hasMore,
+        });
+      }
+    } else {
+      photoGridState.hasMore = false;
+    }
+  }
+
   async function loadPhotos(reset = true) {
     // Dedupe identical concurrent loads (effect + onMount can both fire);
     // reloadToken is bumped by handleIndexingCompleted so a completion
@@ -87,107 +210,19 @@
     loadError = null;
 
     try {
-      if (reset) {
-        photoGridState.photos = [];
-        photoGridState.currentPage = 1;
-        photoGridState.hasMore = true;
-        // Filtered views (favorites/videos) always use the regular search
-        // path: semantic results are unfilterable and must not leak into them.
-        if (route.view !== 'all') {
-          photoGridState.semanticSearchMode = false;
-        } else if (route.query && !isPrefixQuery(route.query)) {
-          // Returning to 'all' with a non-prefix query: SearchBar routes every
-          // non-prefix query semantically, so a Back from a filtered view must
-          // restore semantic mode — otherwise the same URL degrades to a
-          // regular text search (route-sync effect no-ops: query unchanged).
-          photoGridState.semanticSearchMode = true;
-        }
-        if (!photoGridState.semanticSearchMode) {
-          photoGridState.currentQuery = route.query || null;
-        }
-        if (!route.query && photoGridState.semanticSearchMode) {
-          // URL-driven navigation to a query-less URL must end semantic search
-          // (Back from a search). Safety net: works even if PhotoGrid's route
-          // effect runs before SearchBar's (SearchBar mounts first — Header
-          // precedes <main> in App.svelte — so the pipeline normally wins).
-          photoGridState.semanticSearchMode = false;
-          photoGridState.currentQuery = null;
-        }
-      }
-      let photosList = [];
+      if (reset) applyResetState();
 
-      // Semantic search path
+      let photosList;
       if (photoGridState.semanticSearchMode && photoGridState.currentQuery) {
-        const queryAtStart = photoGridState.currentQuery;
-        const offset = (photoGridState.currentPage - 1) * DEFAULT_BATCH_SIZE;
-        const result = await api.semanticSearch(
-          photoGridState.currentQuery,
-          DEFAULT_BATCH_SIZE,
-          offset,
-          { signal }
-        );
-
-        if (result.results && result.results.length > 0) {
-          const photoHashes = result.results.map((r) => r.hash);
-          const photosData = await Promise.all(
-            photoHashes.map(async (hash) => {
-              try {
-                return await api.getPhoto(hash, { signal });
-              } catch (e) {
-                if (e?.name === 'AbortError') throw e;
-                logger.warn(`Failed to load photo ${hash}`, { component: 'PhotoGrid' }, e);
-                return null;
-              }
-            })
-          );
-          photosList = photosData.filter((p) => p !== null);
-          // Stale ~3s semantic response: a newer query/load superseded this one.
-          // No-op instead of polluting the fresh grid and corrupting page state.
-          if (queryAtStart !== photoGridState.currentQuery || signal.aborted) {
-            return;
-          }
-          if (logger) {
-            logger.info('Semantic search results loaded', {
-              component: 'PhotoGrid',
-              photosCount: photosList.length,
-              offset,
-              query: queryAtStart,
-            });
-          }
-        }
+        photosList = await loadSemanticPage(signal);
+        // Stale semantic response: no-op instead of polluting the fresh grid
+        // and corrupting page state.
+        if (photosList === null) return;
       } else {
-        // Regular photo loading
-        const { query: viewQuery, ...filters } = buildFilters();
-        const params = {
-          page: photoGridState.currentPage,
-          limit: DEFAULT_BATCH_SIZE,
-          // Merge the user's search term with the view filter (e.g. Favorites
-          // + "cat" → "cat is_favorite:true"); the backend ANDs the tokens.
-          query: [photoGridState.currentQuery, viewQuery].filter(Boolean).join(' ') || null,
-          ...filters,
-        };
-
-        const response = await api.getPhotos(params, { signal });
-        photosList = response.photos || [];
+        photosList = await loadRegularPage(signal);
       }
 
-      if (photosList.length > 0) {
-        photoGridState.photos.push(...photosList);
-        photoGridState.currentPage++;
-        photoGridState.hasMore = photosList.length === DEFAULT_BATCH_SIZE;
-
-        if (logger) {
-          logger.info('Photos loaded successfully', {
-            component: 'PhotoGrid',
-            photosCount: photosList.length,
-            totalPhotos: photosList.length,
-            page: photoGridState.currentPage - 1,
-            hasMore: photoGridState.hasMore,
-          });
-        }
-      } else {
-        photoGridState.hasMore = false;
-      }
+      appendPhotos(photosList);
       // Backend recovered: allow the next scroll-triggered retry immediately.
       lastLoadErrorAt = null;
     } catch (error) {

@@ -1,8 +1,13 @@
 <script>
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
-  import { formatDate, formatFileSize, formatDuration } from '../lib/utils.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
+  import {
+    formatDate,
+    formatFileSize,
+    formatDuration,
+    isCollagePhoto,
+    isVideoFile,
+  } from '../lib/utils.js';
   import Icon from '../lib/Icon.svelte';
 
   const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
@@ -10,16 +15,6 @@
   const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
   const isCollage = $derived(photo ? isCollagePhoto(photo) : false);
-
-  function isVideoFile(filename) {
-    if (!filename) return false;
-    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-    return APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
-  }
-
-  function isCollagePhoto(photo) {
-    return Boolean(photo?.isCollage || photo?.collageId != null);
-  }
 
   function isFormatSupported(p) {
     if (!p?.mime_type) return false;

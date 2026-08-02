@@ -209,7 +209,7 @@ export const decode = (blurhash, width, height, punch = 1) => {
  * @param {number} punch - Contrast adjustment (default: 1)
  * @returns {HTMLCanvasElement} Canvas element with the decoded image
  */
-export const createCanvas = (blurhash, width, height, punch = 1) => {
+const createCanvas = (blurhash, width, height, punch = 1) => {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;

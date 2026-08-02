@@ -262,42 +262,57 @@
     }
   });
 
+  /**
+   * Progress percent for a phase: 100 during the completion pulse, otherwise
+   * the processed/total ratio for determinate phases with a known total.
+   */
+  function phasePercent(phase, isDeterminate, completionPulse) {
+    if (completionPulse) return 100;
+    const total = phase.total || 0;
+    const processed = phase.processed || 0;
+    if (isDeterminate && total > 0) return Math.round((processed / total) * 100);
+    return 0;
+  }
+
+  /**
+   * Maps a raw backend phase snapshot to its display form: resolved icon and
+   * name, progress percent, error text, and completion flags (completionPulse
+   * temporarily marks every phase as done/100%).
+   */
+  function buildSheetPhase(phase, completionPulse) {
+    const def = PHASES.find((p) => p.id === phase.id);
+    const phaseName = $t(`ui.indexing_phase_${phase.id}`, {
+      default: def?.id || phase.id,
+    });
+    const isDeterminate = phase.kind === 'determinate';
+    const total = phase.total || 0;
+    const processed = phase.processed || 0;
+    const percent = phasePercent(phase, isDeterminate, completionPulse);
+    const errorsText =
+      phase.errors && phase.errors > 0
+        ? $t('ui.indexing_sheet_errors', {
+            values: { count: phase.errors },
+            default: `${phase.errors} error(s)`,
+          })
+        : '';
+    return {
+      ...phase,
+      icon: def?.icon || 'camera',
+      phaseName,
+      isDeterminate,
+      total,
+      processed,
+      percent,
+      errorsText,
+      countLabel: isDeterminate ? `${processed}/${total}` : '—',
+      isActive: completionPulse ? false : phase.state === 'active',
+      isDone: completionPulse ? true : phase.state === 'done',
+      isError: completionPulse ? false : phase.state === 'error',
+    };
+  }
+
   const sheetPhases = $derived(
-    indexingState.phases.map((phase) => {
-      const def = PHASES.find((p) => p.id === phase.id);
-      const phaseName = $t(`ui.indexing_phase_${phase.id}`, {
-        default: def?.id || phase.id,
-      });
-      const isDeterminate = phase.kind === 'determinate';
-      const total = phase.total || 0;
-      const processed = phase.processed || 0;
-      const percent = completionPulse
-        ? 100
-        : isDeterminate && total > 0
-          ? Math.round((processed / total) * 100)
-          : 0;
-      const errorsText =
-        phase.errors && phase.errors > 0
-          ? $t('ui.indexing_sheet_errors', {
-              values: { count: phase.errors },
-              default: `${phase.errors} error(s)`,
-            })
-          : '';
-      return {
-        ...phase,
-        icon: def?.icon || 'camera',
-        phaseName,
-        isDeterminate,
-        total,
-        processed,
-        percent,
-        errorsText,
-        countLabel: isDeterminate ? `${processed}/${total}` : '—',
-        isActive: completionPulse ? false : phase.state === 'active',
-        isDone: completionPulse ? true : phase.state === 'done',
-        isError: completionPulse ? false : phase.state === 'error',
-      };
-    })
+    indexingState.phases.map((phase) => buildSheetPhase(phase, completionPulse))
   );
 
   const activePhaseName = $derived(

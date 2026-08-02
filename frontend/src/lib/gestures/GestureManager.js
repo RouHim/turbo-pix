@@ -184,28 +184,7 @@ export class GestureManager {
     } else if (this.touches.size === 1 && endedTouches.length === 1) {
       // Single touch ended - check for tap or swipe
       const touch = this.touches.get(endedTouches[0]);
-      if (!touch) return;
-
-      touch.lastTime = timestamp;
-
-      const deltaX = touch.currentX - touch.startX;
-      const deltaY = touch.currentY - touch.startY;
-      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      const duration = timestamp - touch.startTime;
-
-      // Check for tap
-      if (distance < 10 && duration < 300) {
-        this.handleTap(touch);
-      }
-      // Check for swipe
-      else if (this.options.enableSwipe) {
-        const swipeTouch = this.createTouchWithSmoothedVelocity(touch);
-        const swipe = this.recognizers.swipe.recognize(swipeTouch, this.getSwipeOptions());
-
-        if (swipe?.type === 'swipe' && this.callbacks.onSwipe) {
-          this.callbacks.onSwipe(swipe.data);
-        }
-      }
+      if (touch) this.handleSingleTouchEnd(touch, timestamp);
     }
 
     // Clean up ended touches
@@ -216,6 +195,32 @@ export class GestureManager {
     // Reset state if no touches remain
     if (this.touches.size === 0) {
       this.resetGestureTracking();
+    }
+  }
+
+  /**
+   * Classifies an ended single touch as a tap or a swipe.
+   */
+  handleSingleTouchEnd(touch, timestamp) {
+    touch.lastTime = timestamp;
+
+    const deltaX = touch.currentX - touch.startX;
+    const deltaY = touch.currentY - touch.startY;
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    const duration = timestamp - touch.startTime;
+
+    // Check for tap
+    if (distance < 10 && duration < 300) {
+      this.handleTap(touch);
+    }
+    // Check for swipe
+    else if (this.options.enableSwipe) {
+      const swipeTouch = this.createTouchWithSmoothedVelocity(touch);
+      const swipe = this.recognizers.swipe.recognize(swipeTouch, this.getSwipeOptions());
+
+      if (swipe?.type === 'swipe' && this.callbacks.onSwipe) {
+        this.callbacks.onSwipe(swipe.data);
+      }
     }
   }
 

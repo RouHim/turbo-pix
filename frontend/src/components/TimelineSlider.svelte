@@ -249,14 +249,11 @@
     });
   }
 
-  // Restore filter from route state (URL restore / popstate)
-  $effect(() => {
-    // Read route BEFORE the drag guard: an early return that reads nothing
-    // empties the effect's dependency set and permanently unsubscribes it
-    // (Svelte 5 replaces deps with what this run read).
-    const year = route.year;
-    const month = route.month;
-    if (dragInProgress) return;
+  /**
+   * Applies a route-driven filter (URL restore / popstate). Must run before
+   * the drag guard in the effect below — see the comment there.
+   */
+  function restoreFilterFromRoute(year, month) {
     if (!year && !month) {
       // Reset to no filter (only if we have a current filter)
       if (currentFilter) {
@@ -280,6 +277,17 @@
       if (monthSelectEl) monthSelectEl.value = month ? String(month) : '';
       renderHeatmap();
     }
+  }
+
+  // Restore filter from route state (URL restore / popstate)
+  $effect(() => {
+    // Read route BEFORE the drag guard: an early return that reads nothing
+    // empties the effect's dependency set and permanently unsubscribes it
+    // (Svelte 5 replaces deps with what this run read).
+    const year = route.year;
+    const month = route.month;
+    if (dragInProgress) return;
+    restoreFilterFromRoute(year, month);
   });
 
   onDestroy(() => {

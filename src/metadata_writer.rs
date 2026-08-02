@@ -1,11 +1,7 @@
-use std::io::Cursor;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use exif::{Field, In, Rational, Tag, Value};
-use img_parts::jpeg::Jpeg;
-use img_parts::png::Png;
-use img_parts::{Bytes, ImageEXIF};
 
 /// Updates EXIF metadata in an image file
 /// Only updates the specified fields, preserves all other EXIF data and image content
@@ -82,12 +78,8 @@ pub fn update_metadata(
         }
     };
 
-    // Read existing EXIF data (or create empty if none exists)
-    let file = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut bufreader = std::io::BufReader::new(&file);
-    let exifreader = exif::Reader::new();
-
-    let exif_result = exifreader.read_from_container(&mut bufreader);
+    // Read existing EXIF data (or treat as empty if none exists)
+    let exif_result = crate::exif_helpers::read_exif_from_path(file_path);
 
     // Collect all fields we want to keep (excluding ones we're updating)
     let mut new_fields: Vec<Field> = Vec::new();
@@ -203,61 +195,9 @@ pub fn update_metadata(
         });
     }
 
-    // Generate new EXIF data using kamadak-exif Writer
-    let mut exif_buffer = Cursor::new(Vec::new());
-    let mut writer = exif::experimental::Writer::new();
-
-    // Push all fields into the writer
-    for field in &new_fields {
-        writer.push_field(field);
-    }
-
-    // Write EXIF as TIFF to buffer (false = big-endian, standard EXIF format)
-    writer
-        .write(&mut exif_buffer, false)
-        .map_err(|e| format!("Failed to generate EXIF data: {}", e))?;
-
-    let exif_bytes = Bytes::from(exif_buffer.into_inner());
-
-    // Handle different image formats based on detected format
-    match format {
-        "jpeg" => {
-            let image_bytes =
-                std::fs::read(file_path).map_err(|e| format!("Failed to read JPEG: {}", e))?;
-
-            let mut jpeg = Jpeg::from_bytes(image_bytes.into())
-                .map_err(|e| format!("Failed to parse JPEG: {}", e))?;
-
-            // Set the new EXIF data (replaces APP1 segment while preserving image data)
-            jpeg.set_exif(Some(exif_bytes));
-
-            // Write the complete JPEG back to file
-            let output_bytes = jpeg.encoder().bytes();
-            std::fs::write(file_path, output_bytes)
-                .map_err(|e| format!("Failed to write JPEG: {}", e))?;
-        }
-        "png" => {
-            let image_bytes =
-                std::fs::read(file_path).map_err(|e| format!("Failed to read PNG: {}", e))?;
-
-            let mut png = Png::from_bytes(image_bytes.into())
-                .map_err(|e| format!("Failed to parse PNG: {}", e))?;
-
-            // Set the new EXIF data
-            png.set_exif(Some(exif_bytes));
-
-            // Write the complete PNG back to file
-            let output_bytes = png.encoder().bytes();
-            std::fs::write(file_path, output_bytes)
-                .map_err(|e| format!("Failed to write PNG: {}", e))?;
-        }
-        _ => {
-            // This should never happen due to earlier validation
-            return Err(format!("Unsupported format: {}", format));
-        }
-    }
-
-    Ok(())
+    // Generate new EXIF data and write it back into the image file
+    let exif_bytes = crate::exif_helpers::build_exif_buffer(&new_fields)?;
+    crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes)
 }
 
 #[cfg(test)]

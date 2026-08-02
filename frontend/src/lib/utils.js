@@ -19,6 +19,37 @@ export function isPrefixQuery(q) {
 }
 
 /**
+ * True for filenames whose extension is a supported video container.
+ * @param {string} filename
+ * @returns {boolean}
+ */
+export function isVideoFile(filename) {
+  if (!filename) return false;
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+  return APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
+}
+
+/**
+ * True for filenames whose extension is a supported RAW format.
+ * @param {string} filename
+ * @returns {boolean}
+ */
+export function isRawFile(filename) {
+  if (!filename) return false;
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+  return APP_CONSTANTS.RAW_EXTENSIONS.includes(ext);
+}
+
+/**
+ * True for photos that are actually collage records (isCollage flag or a collage id).
+ * @param {object|null} photo
+ * @returns {boolean}
+ */
+export function isCollagePhoto(photo) {
+  return Boolean(photo?.isCollage || photo?.collageId != null);
+}
+
+/**
  * Format a file size in bytes to a human-readable string.
  * @param {number} bytes
  * @returns {string}

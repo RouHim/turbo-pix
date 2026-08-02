@@ -3,8 +3,8 @@ pub mod collage_generator;
 pub mod config;
 pub mod db;
 pub mod db_pool;
-// pub mod db_schema; // Replaced by sqlx migrations
 pub mod db_types;
+pub mod exif_helpers;
 pub mod file_scanner;
 pub mod geo_location;
 pub mod handlers_collage;
@@ -31,10 +31,3 @@ pub mod thumbnail_generator;
 pub mod thumbnail_types;
 pub mod video_processor;
 pub mod warp_helpers;
-
-// Re-export common types if needed
-pub use config::Config;
-pub use db::create_db_pool;
-pub use semantic_search::{SemanticSearch, SemanticSearchEngine};
-pub use video_processor::extract_frames_batch;
-pub use video_processor::extract_video_metadata;

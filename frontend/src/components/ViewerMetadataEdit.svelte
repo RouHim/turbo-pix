@@ -113,6 +113,59 @@
     longitude = loc.longitude != null ? String(loc.longitude) : '';
   }
 
+  /**
+   * Builds the metadata update payload from the form, validating GPS pairing
+   * and ranges. Returns { updates } on success or { error } on validation
+   * failure (translated message for the form).
+   */
+  function buildUpdatesFromForm() {
+    const updates = {};
+
+    if (takenAt) {
+      const localDate = new Date(takenAt);
+      updates.taken_at = localDate.toISOString();
+    }
+
+    const lat = String(latitude ?? '').trim();
+    const lng = String(longitude ?? '').trim();
+    const hasLat = lat !== '';
+    const hasLng = lng !== '';
+
+    if ((hasLat && !hasLng) || (!hasLat && hasLng)) {
+      return {
+        error: get(t)('ui.metadata.edit_validation_gps_pair', {
+          default: 'Both latitude and longitude must be provided together',
+        }),
+      };
+    }
+
+    if (hasLat) {
+      const latVal = parseFloat(lat);
+      if (latVal < -90 || latVal > 90) {
+        return {
+          error: get(t)('ui.metadata.edit_validation_gps', {
+            default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
+          }),
+        };
+      }
+      updates.latitude = latVal;
+    }
+
+    if (hasLng) {
+      const lngVal = parseFloat(lng);
+      if (lngVal < -180 || lngVal > 180) {
+        return {
+          error: get(t)('ui.metadata.edit_validation_gps', {
+            default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
+          }),
+        };
+      }
+      updates.longitude = lngVal;
+    }
+
+    return { updates };
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!photo) return;
@@ -121,48 +174,10 @@
     saving = true;
 
     try {
-      const updates = {};
-
-      if (takenAt) {
-        const localDate = new Date(takenAt);
-        updates.taken_at = localDate.toISOString();
-      }
-
-      const lat = String(latitude ?? '').trim();
-      const lng = String(longitude ?? '').trim();
-      const hasLat = lat !== '';
-      const hasLng = lng !== '';
-
-      if ((hasLat && !hasLng) || (!hasLat && hasLng)) {
-        errorMessage = get(t)('ui.metadata.edit_validation_gps_pair', {
-          default: 'Both latitude and longitude must be provided together',
-        });
-        saving = false;
+      const { updates, error } = buildUpdatesFromForm();
+      if (error) {
+        errorMessage = error;
         return;
-      }
-
-      if (hasLat) {
-        const latVal = parseFloat(lat);
-        if (latVal < -90 || latVal > 90) {
-          errorMessage = get(t)('ui.metadata.edit_validation_gps', {
-            default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
-          });
-          saving = false;
-          return;
-        }
-        updates.latitude = latVal;
-      }
-
-      if (hasLng) {
-        const lngVal = parseFloat(lng);
-        if (lngVal < -180 || lngVal > 180) {
-          errorMessage = get(t)('ui.metadata.edit_validation_gps', {
-            default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
-          });
-          saving = false;
-          return;
-        }
-        updates.longitude = lngVal;
       }
 
       const updatedPhoto = await api.updatePhotoMetadata(editTargetHash, updates);

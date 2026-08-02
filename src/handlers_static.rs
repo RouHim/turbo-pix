@@ -20,9 +20,24 @@ fn content_type_from_path(path: &str) -> &'static str {
     }
 }
 
-fn build_route_for_file(
+/// Builds the response for an embedded asset. Vite emits unhashed filenames
+/// (index.js/index.css), so the browser must revalidate on every load and a
+/// frontend update cannot be served stale from a heuristic cache.
+fn build_asset_response(
+    content: &'static [u8],
+    content_type: &'static str,
+) -> warp::reply::Response {
+    warp::reply::with_header(
+        warp::reply::with_header(content.to_vec(), "content-type", content_type),
+        "cache-control",
+        "no-cache",
+    )
+    .into_response()
+}
+
+fn build_route(
     path: &'static str,
-    content: &'static str,
+    content: &'static [u8],
 ) -> warp::filters::BoxedFilter<(warp::reply::Response,)> {
     let segments: Vec<&str> = path.split('/').collect();
     let content_type = content_type_from_path(path);
@@ -30,16 +45,7 @@ fn build_route_for_file(
     if segments.len() == 1 && segments[0] == "index.html" {
         return warp::path::end()
             .and(warp::get())
-            .map(move || {
-                warp::reply::with_header(
-                    warp::reply::with_header(content, "content-type", content_type),
-                    "cache-control",
-                    // Vite emits unhashed filenames (index.js/index.css), so
-                    // the browser must revalidate on every load.
-                    "no-cache",
-                )
-                .into_response()
-            })
+            .map(move || build_asset_response(content, content_type))
             .boxed();
     }
 
@@ -51,42 +57,7 @@ fn build_route_for_file(
     filter
         .and(warp::path::end())
         .and(warp::get())
-        .map(move || {
-            warp::reply::with_header(
-                warp::reply::with_header(content, "content-type", content_type),
-                "cache-control",
-                // Asset names are unhashed — always revalidate so a frontend
-                // update cannot be served stale from a heuristic cache.
-                "no-cache",
-            )
-            .into_response()
-        })
-        .boxed()
-}
-
-fn build_route_for_binary_file(
-    path: &'static str,
-    content: &'static [u8],
-) -> warp::filters::BoxedFilter<(warp::reply::Response,)> {
-    let segments: Vec<&str> = path.split('/').collect();
-    let content_type = content_type_from_path(path);
-
-    let mut filter = warp::path(segments[0]).boxed();
-    for segment in segments.iter().skip(1) {
-        filter = filter.and(warp::path(*segment)).boxed();
-    }
-
-    filter
-        .and(warp::path::end())
-        .and(warp::get())
-        .map(move || {
-            warp::reply::with_header(
-                warp::reply::with_header(content.to_vec(), "content-type", content_type),
-                "cache-control",
-                "no-cache",
-            )
-            .into_response()
-        })
+        .map(move || build_asset_response(content, content_type))
         .boxed()
 }
 
@@ -94,7 +65,7 @@ pub fn build_static_routes(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let mut iter = STATIC_FILES
         .iter()
-        .map(|(path, content)| build_route_for_file(path, content));
+        .map(|(path, content)| build_route(path, content.as_bytes()));
     let first = iter
         .next()
         .expect("At least one static file must be defined");
@@ -103,7 +74,7 @@ pub fn build_static_routes(
 
     let all_binary_opt = STATIC_BINARY_FILES
         .iter()
-        .map(|(path, content)| build_route_for_binary_file(path, content))
+        .map(|(path, content)| build_route(path, content))
         .fold(
             None::<warp::filters::BoxedFilter<(warp::reply::Response,)>>,
             |acc, route| {
@@ -160,6 +131,53 @@ pub fn build_static_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn static_routes_serve_index_assets_and_spa_fallback() {
+        let routes = build_static_routes();
+
+        // index.html is served at the root with a no-cache header
+        let index = warp::test::request().path("/").reply(&routes).await;
+        assert_eq!(index.status(), 200);
+        assert!(index.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"));
+        assert_eq!(index.headers()["cache-control"], "no-cache");
+
+        // Every embedded asset is served at its path
+        for (path, content) in STATIC_FILES
+            .iter()
+            .map(|(p, c)| (*p, c.as_bytes()))
+            .chain(STATIC_BINARY_FILES.iter().map(|(p, c)| (*p, *c)))
+        {
+            let response = warp::test::request()
+                .path(&format!("/{path}"))
+                .reply(&routes)
+                .await;
+            assert_eq!(response.status(), 200, "asset {path} should be served");
+            assert_eq!(response.body(), content, "asset {path} body mismatch");
+            assert_eq!(response.headers()["cache-control"], "no-cache");
+        }
+
+        // Unknown paths fall back to index.html (SPA routing)
+        let spa = warp::test::request()
+            .path("/some/client/route")
+            .reply(&routes)
+            .await;
+        assert_eq!(spa.status(), 200);
+        assert!(spa.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"));
+
+        // API paths are rejected, not swallowed by the SPA fallback
+        let api = warp::test::request()
+            .path("/api/photos")
+            .reply(&routes)
+            .await;
+        assert_eq!(api.status(), 404);
+    }
 
     #[test]
     fn content_type_covers_embedded_assets() {

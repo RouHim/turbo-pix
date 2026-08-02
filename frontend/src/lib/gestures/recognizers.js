@@ -49,44 +49,45 @@ export class SwipeRecognizer {
 
     if (duration > this.maxDuration) return null;
 
-    const velocity = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+    const totalVelocity = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
 
-    // Determine primary direction
+    // Determine primary direction and classify against that axis
     if (absDeltaX > absDeltaY) {
-      // Horizontal swipe
-      if (!allowHorizontal) return null;
-
-      const threshold = window.innerWidth * 0.2;
-      if (absDeltaX > threshold || Math.abs(velocityX) > this.velocityThreshold) {
-        return {
-          type: 'swipe',
-          confidence: Math.min(velocity / 2, 1.0),
-          data: {
-            direction: deltaX > 0 ? 'right' : 'left',
-            distance: absDeltaX,
-            velocity: Math.abs(velocityX),
-          },
-        };
-      }
-    } else {
-      // Vertical swipe
-      if (!allowVertical) return null;
-
-      const threshold = window.innerHeight * 0.2;
-      if (absDeltaY > threshold || Math.abs(velocityY) > this.velocityThreshold) {
-        return {
-          type: 'swipe',
-          confidence: Math.min(velocity / 2, 1.0),
-          data: {
-            direction: deltaY > 0 ? 'down' : 'up',
-            distance: absDeltaY,
-            velocity: Math.abs(velocityY),
-          },
-        };
-      }
+      return this.classifySwipe(
+        absDeltaX,
+        velocityX,
+        window.innerWidth * 0.2,
+        allowHorizontal,
+        deltaX > 0 ? 'right' : 'left',
+        totalVelocity
+      );
     }
+    return this.classifySwipe(
+      absDeltaY,
+      velocityY,
+      window.innerHeight * 0.2,
+      allowVertical,
+      deltaY > 0 ? 'down' : 'up',
+      totalVelocity
+    );
+  }
 
-    return null;
+  /**
+   * Builds a swipe result when the movement along one axis exceeds the
+   * distance threshold or the axis velocity exceeds the velocity threshold.
+   */
+  classifySwipe(absDelta, axisVelocity, threshold, allow, direction, totalVelocity) {
+    if (!allow) return null;
+    if (absDelta <= threshold && Math.abs(axisVelocity) <= this.velocityThreshold) return null;
+    return {
+      type: 'swipe',
+      confidence: Math.min(totalVelocity / 2, 1.0),
+      data: {
+        direction,
+        distance: absDelta,
+        velocity: Math.abs(axisVelocity),
+      },
+    };
   }
 }
 

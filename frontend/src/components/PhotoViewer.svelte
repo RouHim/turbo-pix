@@ -5,8 +5,15 @@
   import { route, replaceState } from '../lib/router.svelte.js';
   import { photoGridState } from '../lib/state.svelte.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { getPhotoUrl, getVideoUrl, showToast, videoCodecSupport } from '../lib/utils.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
+  import {
+    getPhotoUrl,
+    getVideoUrl,
+    isCollagePhoto,
+    isRawFile,
+    isVideoFile,
+    showToast,
+    videoCodecSupport,
+  } from '../lib/utils.js';
   import { logger } from '../lib/logger.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
@@ -64,22 +71,6 @@
   let metadataEditRef = $state(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  function isVideoFile(filename) {
-    if (!filename) return false;
-    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-    return APP_CONSTANTS.VIDEO_EXTENSIONS.includes(ext);
-  }
-
-  function isRawFile(filename) {
-    if (!filename) return false;
-    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-    return APP_CONSTANTS.RAW_EXTENSIONS.includes(ext);
-  }
-
-  function isCollagePhoto(photo) {
-    return Boolean(photo?.isCollage || photo?.collageId != null);
-  }
-
   function getMediaUrl(photo) {
     if (!photo) return null;
     if (isCollagePhoto(photo)) {
@@ -320,24 +311,34 @@
     doubleTapZoom(x, y);
   }
 
-  function onPan(data) {
+  /**
+   * Handles a pan while zoomed: pans the image, but at the zoom edge the
+   * pan becomes a horizontal swipe to the adjacent photo. Returns true when
+   * the pan was consumed (zoomed state), false to let the swipe viewer
+   * handle it.
+   */
+  function handleZoomedPan(data) {
     const { deltaX, deltaY } = data;
+    const panBoundary = isAtPanBoundary();
+    const isHorizontalSwipe = mainEl?.__gestureManager?.gestureAxis === 'horizontal';
+    const isSwipeToPrevious = isHorizontalSwipe && deltaX > 0 && panBoundary.left;
+    const isSwipeToNext = isHorizontalSwipe && deltaX < 0 && panBoundary.right;
 
-    if (isZoomed()) {
-      const panBoundary = isAtPanBoundary();
-      const isHorizontalSwipe = mainEl?.__gestureManager?.gestureAxis === 'horizontal';
-      const isSwipeToPrevious = isHorizontalSwipe && deltaX > 0 && panBoundary.left;
-      const isSwipeToNext = isHorizontalSwipe && deltaX < 0 && panBoundary.right;
-
-      if (isSwipeToPrevious || isSwipeToNext) {
-        if (swipeableViewer?.startZoomEdgeSwipe(data)) {
-          if (imageEl) imageEl.classList.remove('gesture-active');
-          return;
-        }
+    if (isSwipeToPrevious || isSwipeToNext) {
+      if (swipeableViewer?.startZoomEdgeSwipe(data)) {
+        if (imageEl) imageEl.classList.remove('gesture-active');
+        return true;
       }
+    }
 
-      updateTouchPan(deltaX, deltaY);
-      if (imageEl) imageEl.classList.add('gesture-active');
+    updateTouchPan(deltaX, deltaY);
+    if (imageEl) imageEl.classList.add('gesture-active');
+    return true;
+  }
+
+  function onPan(data) {
+    if (isZoomed()) {
+      handleZoomedPan(data);
       return;
     }
 
@@ -583,6 +584,47 @@
     swipeableViewer?.reset();
   }
 
+  /**
+   * Kicks off a server-side transcode for a video the browser cannot play.
+   * Returns true when a transcode flow was started (polling completes via
+   * pollTranscodeStatus), a hard failure was reported, or the photo went
+   * stale — the caller must not set the video source in any of these cases.
+   */
+  async function tryStartTranscode(videoUrl, photo) {
+    try {
+      const response = await fetch(videoUrl);
+      // A newer photo may have been requested while the transcode was starting.
+      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return true;
+      if (response.status === 202) {
+        const data = await response.json();
+        const pollUrl = data.poll_url;
+        showTranscodeToast(
+          get(t)('video.transcoding.started', {
+            default: 'Video is being converted for playback...',
+          })
+        );
+        await pollTranscodeStatus(pollUrl, photo);
+        return true;
+      }
+      const warningHeader = response.headers.get('X-Transcode-Warning');
+      if (warningHeader && warningHeader.trim() !== '') {
+        showTranscodeToast(
+          get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+          true
+        );
+        showToast(
+          get(t)('notifications.error', { default: 'Error' }),
+          get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+          'error'
+        );
+        return true;
+      }
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+
   async function displayVideo(photo, forceTranscode = false) {
     if (!videoEl) return;
 
@@ -602,38 +644,8 @@
 
     const videoUrl = getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
 
-    if (needsTranscode) {
-      try {
-        const response = await fetch(videoUrl);
-        // A newer photo may have been requested while the transcode was starting.
-        if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-        if (response.status === 202) {
-          const data = await response.json();
-          const pollUrl = data.poll_url;
-          showTranscodeToast(
-            get(t)('video.transcoding.started', {
-              default: 'Video is being converted for playback...',
-            })
-          );
-          await pollTranscodeStatus(pollUrl, photo);
-          return;
-        }
-        const warningHeader = response.headers.get('X-Transcode-Warning');
-        if (warningHeader && warningHeader.trim() !== '') {
-          showTranscodeToast(
-            get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
-            true
-          );
-          showToast(
-            get(t)('notifications.error', { default: 'Error' }),
-            get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
-            'error'
-          );
-          return;
-        }
-      } catch {
-        /* ignore */
-      }
+    if (needsTranscode && (await tryStartTranscode(videoUrl, photo))) {
+      return;
     }
 
     setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC);
@@ -1055,46 +1067,46 @@
   }
 
   // ── Keyboard ───────────────────────────────────────────────────────────────
+  const viewerKeyHandlers = {
+    Escape: (e) => {
+      e.preventDefault();
+      close();
+    },
+    ArrowLeft: (e) => {
+      e.preventDefault();
+      showPrevious();
+    },
+    ArrowRight: (e) => {
+      e.preventDefault();
+      showNext();
+    },
+    ' ': (e) => {
+      e.preventDefault();
+      if (videoEl?.paused) videoEl.play().catch(() => {});
+      else videoEl?.pause();
+    },
+    f: (e) => {
+      e.preventDefault();
+      toggleFavorite();
+    },
+    d: (e) => {
+      e.preventDefault();
+      downloadPhoto();
+    },
+  };
+
   function onKeydown(e) {
     if (!isOpen) return;
     // Events originating inside the metadata edit modal are handled by the
     // modal itself; the global search input must still close the viewer.
-    if (e.target instanceof HTMLElement) {
-      if (e.target.closest('#metadata-edit-modal')) return;
-    }
+    if (e.target instanceof HTMLElement && e.target.closest('#metadata-edit-modal')) return;
     // Typing in inputs must not trigger viewer shortcuts (Escape still closes
     // the viewer from the search input).
     if (e.key !== 'Escape') {
       const tag = e.target instanceof HTMLElement ? e.target.tagName : '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     }
-    switch (e.key) {
-      case 'Escape':
-        e.preventDefault();
-        close();
-        break;
-      case 'ArrowLeft':
-        e.preventDefault();
-        showPrevious();
-        break;
-      case 'ArrowRight':
-        e.preventDefault();
-        showNext();
-        break;
-      case ' ':
-        e.preventDefault();
-        if (videoEl && !videoEl.paused) videoEl.pause();
-        else if (videoEl && videoEl.paused) videoEl.play().catch(() => {});
-        break;
-      case 'f':
-        e.preventDefault();
-        toggleFavorite();
-        break;
-      case 'd':
-        e.preventDefault();
-        downloadPhoto();
-        break;
-    }
+    viewerKeyHandlers[e.key]?.(e);
   }
 
   // ── External event listeners ───────────────────────────────────────────────

@@ -9,7 +9,7 @@ default-run = "turbo-pix"
 mimalloc = "0.1.48"
 
 # Web framework
-warp = { version = "0.4.2", features = ["server", "multipart"] }
+warp = { version = "0.4.2", features = ["server", "multipart", "test"] }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }

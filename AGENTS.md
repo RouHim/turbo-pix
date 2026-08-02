@@ -198,3 +198,15 @@ npm run test:e2e:report   # View test report
 **Gesture manager touch scope:** `GestureManager` listens on a sub-element (`.viewer-main`) but `e.touches` is document-global — a simultaneous touch on chrome outside the element is tracked and its `touchend` never arrives, leaving a stale touch that breaks double-tap/pinch until unmount. Filter tracked touches with `this.element.contains(touch.target)`.
 
 **`$state` fields must use `let`, not `const`:** Svelte 5's `const x = $state(...)` trips eslint's `no-const-assign` (the assignment is emitted into the compiled output). PhotoCard's `let imageLoaded = $state(false)` is the pattern; ported code often copies the `const` form from older vanilla JS — use `let` for every `$state` field.
+
+**EXIF read/write lives in `src/exif_helpers.rs`:** `read_exif_from_path` / `read_exif` / `build_exif_buffer` / `write_exif_to_image` are the only sanctioned way to touch EXIF — the old per-file copies had already drifted (`"jpg" | "jpeg"` vs `"jpeg"` format strings). New EXIF consumers must call these helpers, never hand-roll `exif::Reader::new()`; `write_exif_to_image` accepts `jpg`/`jpeg`/`png`.
+
+**Frontend/backend extension lists are pinned by a parity test:** `mimetype_detector.rs::frontend_extension_lists_match_backend` parses `frontend/src/lib/constants.js` and asserts `VIDEO_EXTENSIONS`/`RAW_EXTENSIONS` match the backend detector (and `raw_processor::is_raw_file`) exactly, in both directions. Adding a media format means updating BOTH `constants.js` and the backend lists — the test fails otherwise.
+
+**`kamadak-exif` is a cargo-machete false positive:** the crate's lib name is `exif` (used in `metadata_extractor`, `metadata_writer`, `image_editor`, `handlers_photo`, and now `exif_helpers`), so machete reports it as unused. Don't remove it; add `ignored = ["kamadak-exif"]` to `[package.metadata.cargo-machete]` if the report annoys.
+
+**warp `test` feature is enabled for route smoke tests:** `handlers_static.rs` uses `warp::test::request()` (async — tests must be `#[tokio::test]` and `.reply(&routes).await`). Cargo.toml has `features = ["server", "multipart", "test"]`; don't remove the feature or the smoke test stops compiling.
+
+**File-type helpers are in `utils.js`:** `isVideoFile`/`isRawFile`/`isCollagePhoto` live in `frontend/src/lib/utils.js`; components must import them, not re-define them (PhotoViewer and ViewerMetadata both had copies). `SwipeableViewer` still calls `this.viewer.isVideoFile` through the viewer's exposed API — keep that surface intact when refactoring.
+
+**PhotoGrid loading is factored; keep the contracts:** `loadPhotos` delegates to `applyResetState` / `loadSemanticPage` / `loadRegularPage` / `appendPhotos`. `loadSemanticPage` returns `null` for stale responses and the caller no-ops (skip append AND the `lastLoadErrorAt` reset). The dedupe signature, semantic staleness guard, and retry-cooldown reset semantics from the earlier learnings are spread across these helpers — edits must preserve them.

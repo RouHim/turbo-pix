@@ -378,10 +378,7 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
         }
     };
 
-    let mut bufreader = std::io::BufReader::new(&file);
-    let exifreader = exif::Reader::new();
-
-    let exif_metadata = match exifreader.read_from_container(&mut bufreader) {
+    let exif_metadata = match crate::exif_helpers::read_exif(&mut std::io::BufReader::new(&file)) {
         Ok(e) => e,
         Err(e) => {
             log::error!("Failed to read EXIF from {}: {}", photo.file_path, e);

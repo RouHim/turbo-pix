@@ -932,9 +932,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
 }
 
 #[cfg(test)]
-impl Photo {}
-
-#[cfg(test)]
 pub async fn create_test_db_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     crate::db_pool::create_in_memory_pool().await
 }

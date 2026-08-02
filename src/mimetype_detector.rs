@@ -172,6 +172,63 @@ mod tests {
         assert_eq!(raw_file.type_(), "image");
     }
 
+    /// Parses the entries of a `const NAME = ['.ext', ...]` list from the
+    /// frontend constants file, returning bare extensions without the dot.
+    fn parse_extension_list<'a>(js: &'a str, list_name: &str) -> Vec<&'a str> {
+        let start_marker = format!("const {list_name} = [");
+        let start = js.find(&start_marker).expect("list not found") + start_marker.len();
+        let end = js[start..].find(']').expect("unterminated list") + start;
+        js[start..end]
+            .split(',')
+            .filter_map(|entry| {
+                entry
+                    .trim()
+                    .strip_prefix('\'')
+                    .and_then(|rest| rest.strip_suffix('\''))
+                    .and_then(|ext| ext.strip_prefix('.'))
+            })
+            .collect()
+    }
+
+    /// The frontend's VIDEO_EXTENSIONS/RAW_EXTENSIONS lists (constants.js)
+    /// and the backend's supported sets must stay in sync: a format added on
+    /// one side only silently breaks detection (backend) or the UI's video
+    /// flagging (frontend).
+    #[test]
+    fn frontend_extension_lists_match_backend() {
+        let constants_js = include_str!("../frontend/src/lib/constants.js");
+        let video_exts = parse_extension_list(constants_js, "VIDEO_EXTENSIONS");
+        let raw_exts = parse_extension_list(constants_js, "RAW_EXTENSIONS");
+
+        assert_eq!(
+            video_exts,
+            vec!["mp4", "mov", "avi", "mkv", "webm", "m4v"],
+            "frontend VIDEO_EXTENSIONS drifted from the backend video set"
+        );
+        assert_eq!(
+            raw_exts,
+            vec![
+                "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "dng", "pef"
+            ],
+            "frontend RAW_EXTENSIONS drifted from the backend RAW set"
+        );
+
+        // Reverse direction: every extension the frontend knows must be
+        // detected by the backend (mimetype_detector AND raw_processor).
+        for ext in video_exts.iter().chain(raw_exts.iter()) {
+            assert!(
+                from_extension(ext).is_some(),
+                "backend mimetype_detector is missing extension '{ext}'"
+            );
+            if raw_exts.contains(ext) {
+                assert!(
+                    crate::raw_processor::is_raw_file(std::path::Path::new(&format!("x.{ext}"))),
+                    "backend raw_processor is missing RAW extension '{ext}'"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_unknown_type() {
         assert!(from_path(&PathBuf::from("file.xyz")).is_none());

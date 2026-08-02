@@ -98,12 +98,7 @@ impl MetadataExtractor {
 
     /// Extract all EXIF metadata using kamadak-exif
     fn extract_exif_metadata(path: &Path, metadata: &mut PhotoMetadata) -> Result<(), String> {
-        let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let mut bufreader = std::io::BufReader::new(&file);
-        let exifreader = exif::Reader::new();
-        let exif = exifreader
-            .read_from_container(&mut bufreader)
-            .map_err(|e| format!("Failed to read EXIF: {}", e))?;
+        let exif = crate::exif_helpers::read_exif_from_path(path)?;
 
         Self::extract_basic_info(&exif, metadata);
         Self::extract_camera_info(&exif, metadata);

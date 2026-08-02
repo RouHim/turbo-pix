@@ -11,9 +11,6 @@ use std::path::Path;
 
 use exif::{Field, In, Tag, Value};
 use image::GenericImageView;
-use img_parts::jpeg::Jpeg;
-use img_parts::png::Png;
-use img_parts::{Bytes, ImageEXIF};
 use sha2::{Digest, Sha256};
 
 use crate::cache_manager::CacheManager;
@@ -259,17 +256,10 @@ pub async fn rotate_image(
 
 /// Resets EXIF orientation tag to 1 (standard orientation)
 fn reset_exif_orientation(file_path: &Path, format: &str) -> Result<(), String> {
-    // Read existing EXIF data
-    let file = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut bufreader = std::io::BufReader::new(&file);
-    let exifreader = exif::Reader::new();
-
-    let exif = match exifreader.read_from_container(&mut bufreader) {
+    // Read existing EXIF data; no EXIF data means nothing to reset
+    let exif = match crate::exif_helpers::read_exif_from_path(file_path) {
         Ok(exif) => exif,
-        Err(_) => {
-            // No EXIF data - nothing to reset
-            return Ok(());
-        }
+        Err(_) => return Ok(()),
     };
 
     // Collect all fields, setting orientation to 1
@@ -302,52 +292,9 @@ fn reset_exif_orientation(file_path: &Path, format: &str) -> Result<(), String> 
         });
     }
 
-    // Generate new EXIF data
-    let mut exif_buffer = std::io::Cursor::new(Vec::new());
-    let mut writer = exif::experimental::Writer::new();
-
-    for field in &new_fields {
-        writer.push_field(field);
-    }
-
-    writer
-        .write(&mut exif_buffer, false)
-        .map_err(|e| format!("Failed to generate EXIF data: {}", e))?;
-
-    let exif_bytes = Bytes::from(exif_buffer.into_inner());
-
-    // Write EXIF based on format
-    match format {
-        "jpg" | "jpeg" => {
-            let image_bytes =
-                std::fs::read(file_path).map_err(|e| format!("Failed to read JPEG: {}", e))?;
-
-            let mut jpeg = Jpeg::from_bytes(image_bytes.into())
-                .map_err(|e| format!("Failed to parse JPEG: {}", e))?;
-
-            jpeg.set_exif(Some(exif_bytes));
-
-            let output_bytes = jpeg.encoder().bytes();
-            std::fs::write(file_path, output_bytes)
-                .map_err(|e| format!("Failed to write JPEG: {}", e))?;
-        }
-        "png" => {
-            let image_bytes =
-                std::fs::read(file_path).map_err(|e| format!("Failed to read PNG: {}", e))?;
-
-            let mut png = Png::from_bytes(image_bytes.into())
-                .map_err(|e| format!("Failed to parse PNG: {}", e))?;
-
-            png.set_exif(Some(exif_bytes));
-
-            let output_bytes = png.encoder().bytes();
-            std::fs::write(file_path, output_bytes)
-                .map_err(|e| format!("Failed to write PNG: {}", e))?;
-        }
-        _ => return Err(format!("Unsupported format: {}", format)),
-    }
-
-    Ok(())
+    // Generate new EXIF data and write it back
+    let exif_bytes = crate::exif_helpers::build_exif_buffer(&new_fields)?;
+    crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes)
 }
 
 /// Computes SHA256 hash of file

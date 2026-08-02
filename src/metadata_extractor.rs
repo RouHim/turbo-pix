@@ -1558,6 +1558,10 @@ mod tests {
 
     #[test]
     fn test_extract_with_metadata_video_filename_fallback() {
+        // Hold the shared test env lock: this test spawns ffprobe via
+        // extract_with_metadata, and a concurrent module's fake FFPROBE_PATH
+        // must not race it.
+        let _env_lock = acquire_test_env_lock();
         // GIVEN: A temp video file with date-like name (empty file, no ffprobe metadata)
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("20240215_185056_test.mp4");

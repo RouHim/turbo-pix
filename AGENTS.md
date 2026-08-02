@@ -109,7 +109,9 @@ npm run test:e2e:report   # View test report
 
 **Video bugs:** Use `[data-photo-id]` selectors, test GET/HEAD requests, verify `mime_type` in DB
 
-**Icons:** Do not use emojis, use feather icons instead
+**Icons:** Do not use emojis, use feather icons instead. `Icon.svelte` imports them per-icon via `feather-icons/dist/icons/<name>.svg?raw` (feather-icons@4.29.2 has no `exports` field, so subpaths resolve and only the used icons enter the bundle). The raw opening tag carries `class="feather feather-*"` — the runtime regex must strip `width|height|class|aria-hidden` from the opening tag before injecting props (browsers keep the FIRST duplicate attribute). Consequence: the bundle still contains the `feather feather-*` class strings (raw source literals), so `grep -c` against `dist/assets/index.js` counts lines, not occurrences — rendered output has no feather class thanks to the strip.
+
+**`sqlx::Query::execute` needs no `Executor` import:** passing `&mut *tx` (or `&mut **tx` for `&mut Transaction`) as the executor argument resolves via the inherent method's `E: Executor` bound — `use sqlx::Executor;` is NOT required and would be an unused-import warning. This applies to `db.rs` and `image_editor.rs` alike.
 
 **Indexing phases:** When adding a new indexing phase to scheduler.rs, also update: (1) CANONICAL*PHASES in handlers_indexing.rs, (2) the PHASES array + phase UI in frontend/src/components/IndexingOrbit.svelte, (3) indexing_phase*\* keys in both i18n files (en + de). Add a regression test for the new phase.
 
@@ -153,9 +155,9 @@ npm run test:e2e:report   # View test report
 
 **Semantic search latency:** `/api/search/semantic` takes ~3s server-side per query (embedding generation) even on tiny collections. E2E/manual checks that search must allow ≥5-8s after the request fires; don't mistake the loading skeleton for a hang.
 
-**Rotate fails on housekeeping-candidate photos (known bug):** `image_editor::rotate_image` rewrites `hash_sha256` via `update_with_old_hash`; `housekeeping_candidates.photo_hash` has `FOREIGN KEY ... REFERENCES photos(hash_sha256) ON DELETE CASCADE`, and SQLite rejects updating a parent PK → `HTTP 500 FOREIGN KEY constraint failed` for any photo that is a housekeeping candidate. Fix direction: delete/repoint `housekeeping_candidates` rows or recreate the photo row instead of updating the PK.
+**Rotate on housekeeping-candidate photos:** rewriting `photos.hash_sha256` violates `housekeeping_candidates.photo_hash`'s FK (`ON DELETE CASCADE`, no `ON UPDATE`) — SQLite rejects the parent-PK update with `FOREIGN KEY constraint failed`. Fix (implemented in `image_editor::rotate_image`): delete the stale candidate row inside the SAME transaction as the PK rewrite. `Photo::update_with_old_hash` therefore requires a `&mut sqlx::Transaction` (it cannot run against a bare pool). Regression test: `test_rotate_db_update_removes_housekeeping_candidate`.
 
-**Card-level keydown vs inner buttons:** card-level keydown handlers (PhotoCard, HousekeepingView, CollagesView) must NOT `preventDefault` bubbled Enter/Space from inner action buttons — that kills the button's native click. Guard with `if (e.target !== e.currentTarget) return;` before `preventDefault`.
+**Card-level keydown vs inner buttons:** card-level keydown handlers (HousekeepingCard, and any card whose root still owns click/keyboard) must NOT `preventDefault` bubbled Enter/Space from inner action buttons — that kills the button's native click. Guard with `if (e.target !== e.currentTarget) return;` before `preventDefault`. PhotoCard and CollagesView avoid the problem structurally: the card root is plain and a stretched `.photo-card-open-layer` (`position: absolute; inset: 0; z-index: 3; role="button"`) owns the open action with no focusable descendants — action buttons are siblings at z-index 15 (`.photo-card-actions` global rule) and never bubble through the layer.
 
 **Semantic search staleness:** the semantic path needs its own AbortController signal AND a staleness guard: capture `queryAtStart` before `api.semanticSearch(query, limit, offset, options)` and bail out (`queryAtStart !== currentQuery || signal.aborted`) before pushing results — a ~3s embedding response can otherwise pollute a grid the user has already navigated away from.
 
@@ -165,7 +167,7 @@ npm run test:e2e:report   # View test report
 
 **Global media overrides lose to scoped styles:** IndexingOrbit ring mobile sizing/placement and PhotoViewer sidebar mobile transition must live in the component's scoped `<style>` — global `@media (width <= 768px)` rules are outranked by scoped rules of equal specificity and silently no-op.
 
-**Load-more dedupe must reset on failure:** PhotoGrid's `lastLoadSignature` dedupe (guards concurrent duplicate loads) is set before the request and MUST be cleared in the error path — otherwise every retry of a failed page load (scroll-triggered `loadMore()` and the Load More button) rebuilds the identical signature and is silently swallowed until a route change or reload.
+**Load-more dedupe must reset on failure:** PhotoGrid's `lastLoadSignature` dedupe (guards concurrent duplicate loads) is set before the request and MUST be cleared in the error path — otherwise every retry of a failed page load (scroll-triggered `loadMore()` and the Load More button) rebuilds the identical signature and is silently swallowed until a route change or reload. Scroll-triggered retries additionally respect a 5s `LOAD_RETRY_COOLDOWN_MS` after a failure (toast/request spam with a dead backend); manual retry paths bypass the cooldown and the success path resets `lastLoadErrorAt` so a recovered backend is retried immediately.
 
 **Test-env lock needs a drop-guarded depth wrapper:** `video_processor::tests::acquire_test_env_lock()` returns a `TestEnvGuard` whose `Drop` decrements the thread-local nesting depth. A plain acquire + manual `release_test_env_lock()` leaks the depth: after the first locked test per thread, every later acquire on that thread silently returns without locking, so the FFPROBE_PATH/FFMPEG_PATH race between test modules quietly returns. Regression test: `test_env_lock_guard_drop_resets_nesting_depth`.
 

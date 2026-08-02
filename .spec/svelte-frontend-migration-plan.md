@@ -2,7 +2,7 @@
 
 ## Context
 
-Replace the TurboPix vanilla-JS frontend (~15,400 LOC, 28 script files under `static/`, no bundler, embedded into the Rust binary via `include_static!` in `src/handlers_static.rs`) with a Svelte 5 (runes) + Vite build pipeline. Every user-facing feature, behavior, DOM hook, and visual detail is preserved identically; the Rust backend, REST API, and database are untouched. Approved spec: `.spec/svelte-frontend-migration.md`.
+Replace the TurboPix vanilla-JS frontend (~10,900 lines of vanilla JavaScript across 24 script files, no bundler, embedded into the Rust binary via `include_static!` in `src/handlers_static.rs`) with a Svelte 5 (runes) + Vite build pipeline. Every user-facing feature, behavior, DOM hook, and visual detail is preserved identically; the Rust backend, REST API, and database are untouched. Approved spec: `.spec/svelte-frontend-migration.md`.
 
 Locked decisions (from spec, do not reopen): Svelte 5 runes, Vite, no SvelteKit/SSR; Vite outputs to `dist/` at repo root, Rust embeds from there; full CSS migration to component-scoped `<style>` blocks plus one global token stylesheet; `svelte-i18n` as the i18n library (plan decision — the spec leaves the library open); big-bang cutover, no hybrid mode.
 

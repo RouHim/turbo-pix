@@ -196,9 +196,10 @@
   .content-header h2 {
     margin: 0;
     font-family: var(--font-heading);
-    font-size: var(--font-3xl);
-    font-weight: var(--font-bold);
+    font-size: var(--font-4xl);
+    font-weight: var(--font-semibold);
     color: var(--text-primary);
+    text-wrap: balance;
   }
 
   .content-actions {

@@ -124,21 +124,20 @@
   }
 </script>
 
-<div
-  class="photo-card"
-  data-photo-id={photo?.hash_sha256}
-  aria-label={title}
-  onclick={handleCardClick}
-  onkeydown={(e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
-      e.preventDefault();
-      handleCardClick(e);
-    }
-  }}
-  role="button"
-  tabindex="0"
->
+<div class="photo-card" data-photo-id={photo?.hash_sha256}>
+  <div
+    class="photo-card-open-layer"
+    role="button"
+    tabindex="0"
+    aria-label={title}
+    onclick={handleCardClick}
+    onkeydown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleCardClick(e);
+      }
+    }}
+  ></div>
   <div class="photo-card-image-container" class:image-loaded={imageLoaded}>
     {#if blurhashUrl && !imageLoaded && !imageError}
       <img class="photo-card-blurhash" src={blurhashUrl} alt="" aria-hidden="true" />
@@ -246,6 +245,18 @@
   .photo-card:hover {
     box-shadow: var(--shadow-heavy);
     border-color: var(--primary-light);
+  }
+
+  .photo-card-open-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: inherit;
+  }
+
+  .photo-card-open-layer:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
   }
 
   .photo-card-image-container {
@@ -479,26 +490,13 @@
   }
 
   /* Mobile compact grid: must live in scoped styles — global @container rules
-     lose the cascade to scoped rules (see AGENTS.md). */
-  @media (width <= 768px) {
+     lose the cascade to scoped rules (see AGENTS.md). Triggered by the
+     .main-content content container (container-type: inline-size), matching
+     the pre-migration @container (width <= 768px) behavior. */
+  @container (width <= 768px) {
     .photo-card {
       border-radius: 0;
       border: none;
-      aspect-ratio: 1;
-      overflow: hidden;
-    }
-
-    .photo-card-image-container {
-      height: 100%;
-      width: 100%;
-      position: absolute;
-      inset: 0;
-    }
-
-    .photo-card-image {
-      height: 100%;
-      width: 100%;
-      object-fit: cover;
     }
 
     .photo-card-overlay,

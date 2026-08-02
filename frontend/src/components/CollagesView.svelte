@@ -206,20 +206,23 @@
 
     <div class="photo-grid" id="photo-grid">
       {#each collages as collage (collage.id)}
-        <div
-          class="photo-card collage-card"
-          data-photo-id={collage.id}
-          role="button"
-          tabindex="0"
-          onclick={(e) => handleCardClick(e, collage)}
-          onkeydown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              if (e.target !== e.currentTarget) return; // let action buttons handle their own keys
-              e.preventDefault();
-              openViewer(collage);
-            }
-          }}
-        >
+        <div class="photo-card collage-card" data-photo-id={collage.id}>
+          <div
+            class="photo-card-open-layer"
+            role="button"
+            tabindex="0"
+            aria-label={$t('ui.collage_for', {
+              default: `Collage for ${formatCollageDate(collage.date)}`,
+              values: { date: formatCollageDate(collage.date) },
+            })}
+            onclick={(e) => handleCardClick(e, collage)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openViewer(collage);
+              }
+            }}
+          ></div>
           <div class="photo-card-image-container">
             <img
               class="photo-card-image"
@@ -316,6 +319,18 @@
   .collage-actions {
     display: flex;
     gap: var(--space-2);
+  }
+
+  .photo-card-open-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: inherit;
+  }
+
+  .photo-card-open-layer:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
   }
 
   .collage-actions .card-action-btn:disabled {

@@ -18,6 +18,7 @@
   let lastLoadSignature = '';
   let loadingStartTime = 0;
   let loadError = $state(null);
+  let lastLoadErrorAt = $state(null);
 
   // --- Derived state ---
   const loading = $derived(photoGridState.loading);
@@ -29,6 +30,7 @@
   let scrollContainer = null;
   let throttleTimer = null;
   const THROTTLE_DELAY = 250;
+  const LOAD_RETRY_COOLDOWN_MS = 5000;
   const SCROLL_THRESHOLD = 800;
 
   // ===========================================================================
@@ -179,6 +181,8 @@
       } else {
         photoGridState.hasMore = false;
       }
+      // Backend recovered: allow the next scroll-triggered retry immediately.
+      lastLoadErrorAt = null;
     } catch (error) {
       if (error.name === 'AbortError') {
         if (logger)
@@ -192,6 +196,10 @@
       // (scroll-triggered loadMore, Load More button) rebuilds the same
       // signature and is silently swallowed until a route change or reload.
       lastLoadSignature = null;
+      // Cooldown for scroll-triggered retries: a dead backend would otherwise
+      // spawn a toast + request per scroll event. Manual retry paths bypass
+      // checkScrollPosition and stay immediate.
+      lastLoadErrorAt = Date.now();
       if (logger) {
         logger.error('Error loading photos', error, {
           component: 'PhotoGrid',
@@ -254,6 +262,9 @@
 
   function checkScrollPosition() {
     if (photoGridState.loading || !photoGridState.hasMore) return;
+    // Rate-limit scroll-triggered retries after a failed load (toast/request
+    // spam on scroll with a dead backend); manual retries bypass this path.
+    if (lastLoadErrorAt && Date.now() - lastLoadErrorAt < LOAD_RETRY_COOLDOWN_MS) return;
     if (!scrollContainer) return;
 
     const scrollTop = scrollContainer.scrollTop;
@@ -698,8 +709,10 @@
   }
 
   /* Mobile compact grid: must live in scoped styles — global @container rules
-     lose the cascade to scoped rules (see AGENTS.md). */
-  @media (width <= 768px) {
+     lose the cascade to scoped rules (see AGENTS.md). Triggered by the
+     .main-content content container (container-type: inline-size), matching
+     the pre-migration @container (width <= 768px) behavior. */
+  @container (width <= 768px) {
     .photo-grid,
     .loading-skeleton {
       grid-template-columns: repeat(3, 1fr);
@@ -707,7 +720,7 @@
     }
   }
 
-  @media (width <= 480px) {
+  @container (width <= 480px) {
     .photo-grid,
     .loading-skeleton {
       grid-template-columns: repeat(3, 1fr);

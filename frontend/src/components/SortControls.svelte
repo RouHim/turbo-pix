@@ -17,7 +17,13 @@
   }
 </script>
 
-<select id="sort-select" class="sort-select" value={route.sort} onchange={onChange}>
+<select
+  id="sort-select"
+  class="sort-select"
+  value={route.sort}
+  onchange={onChange}
+  aria-label={$t('ui.sort_by', { default: 'Sort by' })}
+>
   {#each options as opt (opt.value)}
     <option value={opt.value}>{$t(opt.key, { default: opt.fallback })}</option>
   {/each}

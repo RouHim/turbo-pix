@@ -223,11 +223,25 @@ pub async fn rotate_image(
     updated_photo.semantic_vector_indexed = Some(false); // Semantic vector invalidated
     updated_photo.updated_at = chrono::Utc::now();
 
-    // Use update_with_old_hash to find record by old hash and update to new hash
+    // Rewriting hash_sha256 violates housekeeping_candidates' FK (no ON UPDATE);
+    // drop the stale candidate row inside the same transaction (AGENTS.md known bug).
+    let mut tx = db_pool.begin().await.map_err(|e| {
+        ImageEditError::DatabaseError(format!("Failed to begin transaction: {}", e))
+    })?;
+    sqlx::query("DELETE FROM housekeeping_candidates WHERE photo_hash = ?")
+        .bind(&old_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            ImageEditError::DatabaseError(format!("Failed to delete housekeeping candidate: {}", e))
+        })?;
     updated_photo
-        .update_with_old_hash(db_pool, &old_hash)
+        .update_with_old_hash(&mut tx, &old_hash)
         .await
         .map_err(|e| ImageEditError::DatabaseError(format!("Failed to update database: {}", e)))?;
+    tx.commit().await.map_err(|e| {
+        ImageEditError::DatabaseError(format!("Failed to commit transaction: {}", e))
+    })?;
 
     log::info!(
         "Rotated image {:?}: {} -> {} ({}x{} -> {}x{})",

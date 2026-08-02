@@ -58,10 +58,12 @@
   async function loadAndRender() {
     loading = true;
     error = false;
-    abortController = new AbortController();
+    const controller = new AbortController();
+    abortController?.abort();
+    abortController = controller;
     try {
       const response = await api.getHousekeepingCandidates({
-        signal: abortController.signal,
+        signal: controller.signal,
       });
       if (response && response.candidates) {
         candidates = response.candidates;
@@ -74,7 +76,8 @@
       console.error('Failed to load housekeeping candidates:', e);
       error = true;
     } finally {
-      loading = false;
+      // A superseded (aborted) request must not clear the newer request's flag.
+      if (abortController === controller) loading = false;
     }
   }
 

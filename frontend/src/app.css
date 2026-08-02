@@ -223,15 +223,6 @@
       justify-content: space-between;
       margin-bottom: var(--space-6);
 
-      & h2 {
-        font-size: var(--font-4xl);
-        font-weight: var(--font-semibold);
-        margin: 0;
-        color: var(--text-primary);
-        font-family: var(--font-heading);
-        text-wrap: balance;
-      }
-
       & .content-actions {
         display: flex;
         gap: var(--space-4);

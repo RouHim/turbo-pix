@@ -136,6 +136,7 @@
       "edit_longitude_placeholder": "-180 to 180"
     },
     "search_hint": "Try: type:video · location:city · is_favorite:true",
+    "sort_by": "Sort by",
     "search_results": "Search: \"{query}\"",
     "recent_search": "Recent search",
     "filter_by_camera": "Filter by camera",

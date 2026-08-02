@@ -523,9 +523,16 @@ impl Photo {
     }
 
     /// Update photo using old hash in WHERE clause (for operations that change the hash)
+    ///
+    /// # Transaction Requirement
+    ///
+    /// Caller must provide an active transaction: rewriting `hash_sha256` (the parent
+    /// PK referenced by `housekeeping_candidates.photo_hash` via `ON DELETE CASCADE`
+    /// with no `ON UPDATE`) requires deleting/repainting the stale candidate rows
+    /// inside the same transaction (see `image_editor::rotate_image`).
     pub async fn update_with_old_hash(
         &self,
-        pool: &DbPool,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         old_hash: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         sqlx::query(
@@ -559,7 +566,7 @@ impl Photo {
         .bind(self.date_modified.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(old_hash)
-        .execute(pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
@@ -1162,6 +1169,55 @@ mod tests {
             .find(|d| d.year == 2024 && d.month == 1)
             .unwrap();
         assert_eq!(jan_2024.count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_rotate_db_update_removes_housekeeping_candidate() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        // Create a photo and a stale housekeeping candidate referencing its hash
+        let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
+        photo.create(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO housekeeping_candidates (photo_hash, reason, score) VALUES (?, 'test', 0.5)",
+        )
+        .bind(&photo.hash_sha256)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Simulate rotate_image's DB sequence: delete the stale candidate row and
+        // rewrite the PK inside one transaction (AGENTS.md known bug: FK has no
+        // ON UPDATE, so a bare PK rewrite fails)
+        let mut updated = photo.clone();
+        updated.hash_sha256 = "b".repeat(64);
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("DELETE FROM housekeeping_candidates WHERE photo_hash = ?")
+            .bind(&photo.hash_sha256)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        updated
+            .update_with_old_hash(&mut tx, &photo.hash_sha256)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Old candidate row is gone; photo lives under the new hash
+        let old_candidates: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM housekeeping_candidates WHERE photo_hash = ?")
+                .bind(&photo.hash_sha256)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(old_candidates, 0);
+        let new_photos: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE hash_sha256 = ?")
+                .bind(&updated.hash_sha256)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(new_photos, 1);
     }
 
     #[tokio::test]

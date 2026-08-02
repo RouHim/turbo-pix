@@ -316,7 +316,7 @@
   });
 </script>
 
-<div class="search-container" class:mobile-show={appState.mobileSearchOpen}>
+<div id="search-bar" class="search-container" class:mobile-show={appState.mobileSearchOpen}>
   <input
     type="text"
     id="search-input"
@@ -348,15 +348,9 @@
   </div>
 
   {#if showSuggestions}
-    <div id="search-suggestions" class="search-suggestions show" role="listbox">
+    <div id="search-suggestions" class="search-suggestions show">
       {#each suggestions as s (s.query + s.icon)}
-        <button
-          type="button"
-          class="suggestion-item"
-          role="option"
-          aria-selected={false}
-          onclick={() => selectSuggestion(s)}
-        >
+        <button type="button" class="suggestion-item" onclick={() => selectSuggestion(s)}>
           <span class="suggestion-icon">
             <Icon name={s.icon} width={16} height={16} />
           </span>

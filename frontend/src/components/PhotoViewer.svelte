@@ -524,7 +524,10 @@
         'error'
       );
     } finally {
-      isLoading = false;
+      // A stale poll (photo already superseded) must not hide the new photo's spinner.
+      if (currentPhoto?.hash_sha256 === photo.hash_sha256) {
+        isLoading = false;
+      }
     }
   }
 

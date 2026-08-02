@@ -43,6 +43,8 @@
       title={$t('ui.search', { default: 'Search' })}
       onclick={toggleMobileSearch}
       aria-label={$t('ui.search', { default: 'Search' })}
+      aria-expanded={appState.mobileSearchOpen}
+      aria-controls="search-bar"
     >
       <Icon name="search" width={20} height={20} />
     </button>

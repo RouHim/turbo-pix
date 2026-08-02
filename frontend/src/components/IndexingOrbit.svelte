@@ -265,7 +265,9 @@
   const sheetPhases = $derived(
     indexingState.phases.map((phase) => {
       const def = PHASES.find((p) => p.id === phase.id);
-      const phaseName = $t(`ui.indexing_phase_${phase.id}`) || def?.id || phase.id;
+      const phaseName = $t(`ui.indexing_phase_${phase.id}`, {
+        default: def?.id || phase.id,
+      });
       const isDeterminate = phase.kind === 'determinate';
       const total = phase.total || 0;
       const processed = phase.processed || 0;

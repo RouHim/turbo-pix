@@ -418,6 +418,13 @@
     letter-spacing: -0.02em;
   }
 
+  @media (width <= 480px) {
+    .photo-info h3 {
+      font-size: var(--font-xl);
+      margin-bottom: var(--space-4);
+    }
+  }
+
   .photo-info-header {
     display: flex;
     justify-content: space-between;

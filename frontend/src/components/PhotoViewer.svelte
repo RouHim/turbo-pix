@@ -943,10 +943,13 @@
     try {
       isLoading = true;
       const updatedPhoto = await api.rotatePhoto(photoHash, angle);
-      // The user may have closed the viewer while the request was in flight:
-      // close() clears the URL photo param but not currentPhoto, so without
-      // this guard the URL rewrite below would deterministically reopen the
-      // dismissed viewer via the route-sync effect.
+      // Grid sync fires regardless of viewer state: the backend row changed
+      // and the grid's card is keyed by the OLD hash (now rewritten), so
+      // suppressing the event would leave a card whose media 404s. Only the
+      // viewer-local state + URL rewrite below are guarded — a response
+      // landing after close() must not reopen the dismissed viewer via the
+      // route effect.
+      window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
@@ -954,7 +957,6 @@
       // route effect doesn't treat the old hash as missing (spurious 404)
       // and Back/Forward doesn't land on a dead hash.
       replaceState({ photo: updatedPhoto.hash_sha256 });
-      window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
 
       const timestamp = Date.now();
       const newUrl = `${getPhotoUrl(updatedPhoto.hash_sha256)}?t=${timestamp}`;
@@ -1003,9 +1005,11 @@
     try {
       isLoading = true;
       await api.deletePhoto(photoHash);
-      // Same staleness contract as rotate: a response landing after the user
-      // closed the viewer must not re-navigate or rewrite the URL.
-      if (!isOpen) return;
+      // The grid-sync event, toast and list update must fire even if the
+      // viewer was closed mid-request (the deleted card would otherwise stay
+      // in the grid and open a dead viewer). Only the re-navigation below is
+      // guarded by isOpen — a response landing after close() must not
+      // rewrite the URL and reopen the dismissed viewer via the route effect.
       window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
       addToast(
         get(t)('notifications.deleted', { default: 'Deleted' }),
@@ -1015,6 +1019,8 @@
       );
 
       photos = photos.filter((p) => p.hash_sha256 !== photoHash);
+
+      if (!isOpen) return;
 
       // The user may have navigated to another photo while the delete was in
       // flight; keep the list update, but only re-navigate when the viewer

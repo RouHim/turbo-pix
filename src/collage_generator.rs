@@ -1092,11 +1092,17 @@ fn create_collage_image(
                     }
                 }
                 Err(_) => {
-                    warn!(
-                        "Skipping RAW photo {} in collage: RAW decode concurrency limit reached",
+                    // Abort THIS collage instead of committing blank cells:
+                    // the full-chunk signature would block nightly
+                    // regeneration forever (exists_by_signature matches),
+                    // making the skipped photo permanent. Returning Err lets
+                    // the caller skip the commit; the next nightly run
+                    // regenerates it once permits are free.
+                    return Err(format!(
+                        "RAW decode concurrency limit reached while loading {}",
                         photo.file_path
-                    );
-                    continue;
+                    )
+                    .into());
                 }
             }
         } else {

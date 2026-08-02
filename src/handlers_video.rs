@@ -1058,7 +1058,7 @@ mod tests {
             TranscodeStatus {
                 state: TranscodeState::Failed,
                 hash: hash.clone(),
-                started_at: None,
+                started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
             },
         );
@@ -1182,7 +1182,7 @@ mod tests {
             TranscodeStatus {
                 state: TranscodeState::Failed,
                 hash: hash.clone(),
-                started_at: None,
+                started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
             },
         );

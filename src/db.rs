@@ -381,10 +381,14 @@ impl Photo {
             _ => "DESC", // default
         };
 
-        // Get paginated results
+        // Deterministic pagination: `hash_sha256` (unique) breaks ties on the
+        // primary sort key — camera bursts share the identical EXIF second,
+        // and SQLite's tie order follows scan/rowid order, which shifts when
+        // a background rescan inserts/updates rows between page fetches
+        // (photos then appear on two pages or get skipped).
         let query_str = format!(
-            "SELECT * FROM photos ORDER BY {} {} LIMIT ? OFFSET ?",
-            sort_field, sort_order
+            "SELECT * FROM photos ORDER BY {} {}, hash_sha256 {} LIMIT ? OFFSET ?",
+            sort_field, sort_order, sort_order
         );
 
         let photos = sqlx::query_as::<_, Photo>(&query_str)
@@ -819,8 +823,8 @@ impl Photo {
         };
 
         let data_sql = format!(
-            "SELECT * FROM photos{} ORDER BY {} {} LIMIT ? OFFSET ?",
-            where_clause, sort_field, sort_order
+            "SELECT * FROM photos{} ORDER BY {} {}, hash_sha256 {} LIMIT ? OFFSET ?",
+            where_clause, sort_field, sort_order, sort_order
         );
 
         let mut data_query = sqlx::query_as::<_, Photo>(&data_sql);

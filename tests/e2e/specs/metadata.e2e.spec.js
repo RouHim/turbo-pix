@@ -41,21 +41,27 @@ test.describe('Metadata', () => {
   });
 
   test('should display EXIF data when available', async ({ page }) => {
-    // GIVEN: Viewer is open with a photo
-    const photos = await TestHelpers.getPhotoCards(page);
-    expect(photos.length).toBeGreaterThan(0);
+    // GIVEN: a photo with camera EXIF exists (sample_with_exif.jpg is seeded
+    // by global-setup). It sorts LAST in taken_at-DESC (EXIF date 2011), so
+    // locate it by hash instead of clicking photos[0].
+    const photosResponse = await page.request.get('/api/photos?page=1&limit=100');
+    expect(photosResponse.ok()).toBeTruthy();
+    const photosData = await photosResponse.json();
+    const exifPhoto = (photosData.photos || []).find((photo) => {
+      const camera = photo.metadata?.camera || {};
+      return camera.make || camera.model || camera.lens_make || camera.lens_model;
+    });
+    test.skip(!exifPhoto, 'No seeded photo carries camera EXIF (sample_with_exif.jpg missing)');
 
-    await photos[0].click();
+    const exifCard = page.locator(TestHelpers.selectors.photoCard(exifPhoto.hash_sha256));
+    await exifCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
     // WHEN: User opens the metadata sidebar
     await page.locator('.metadata-btn').click();
     await page.locator('.viewer-sidebar.show').waitFor();
 
-    // THEN: EXIF-driven sections render when the photo carries EXIF data
-    // Note: not every photo has EXIF — skip the whole test when this one doesn't
-    const hasCameraSection = (await page.locator('#camera-section').count()) > 0;
-    test.skip(!hasCameraSection, 'Selected photo has no EXIF camera data to display');
+    // THEN: EXIF-driven sections render
     await expect(page.locator('#camera-section')).toBeVisible();
   });
 });

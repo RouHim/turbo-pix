@@ -108,6 +108,12 @@ pub enum TranscodeClaim {
     PreviouslyFailedOrTimedOut,
 }
 
+/// How long a Failed/Timeout transcode status blocks re-spawning the same
+/// hash. Immediately repeating a doomed request should keep serving the
+/// original, but a permanently blocked hash would never recover from a
+/// transient failure (OOM, codec hiccup, disk-full) without a server restart.
+const TRANSCODE_RETRY_COOLDOWN: chrono::Duration = chrono::Duration::minutes(15);
+
 /// Atomically consults and claims the transcode slot for `hash` under the
 /// status-store lock, closing the check-then-act window where two concurrent
 /// requests for the same hash could both read "no status" and each spawn an
@@ -128,7 +134,26 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
                 TranscodeState::Failed | TranscodeState::Timeout
             ) =>
         {
-            TranscodeClaim::PreviouslyFailedOrTimedOut
+            // A failure older than the cooldown is retried (transient
+            // failures heal); a fresh one keeps serving the original.
+            let stale = status
+                .started_at
+                .is_none_or(|started| started + TRANSCODE_RETRY_COOLDOWN < Utc::now());
+            if stale {
+                map.insert(
+                    hash.to_string(),
+                    TranscodeStatus {
+                        state: TranscodeState::InProgress,
+                        hash: hash.to_string(),
+                        started_at: Some(Utc::now()),
+                        error: None,
+                    },
+                );
+                evict_transcode_statuses(&mut map);
+                TranscodeClaim::Started
+            } else {
+                TranscodeClaim::PreviouslyFailedOrTimedOut
+            }
         }
         _ => {
             map.insert(
@@ -1592,12 +1617,13 @@ pub(crate) mod tests {
     #[test]
     fn test_claim_transcode_reports_previous_failure() {
         clear_transcode_status("claim-hash-2");
+        // A FRESH failure (within the retry cooldown) blocks re-claiming
         set_transcode_status(
             "claim-hash-2",
             TranscodeStatus {
                 state: TranscodeState::Failed,
                 hash: "claim-hash-2".to_string(),
-                started_at: None,
+                started_at: Some(Utc::now()),
                 error: Some("boom".to_string()),
             },
         );
@@ -1611,7 +1637,7 @@ pub(crate) mod tests {
             TranscodeStatus {
                 state: TranscodeState::Timeout,
                 hash: "claim-hash-2".to_string(),
-                started_at: None,
+                started_at: Some(Utc::now()),
                 error: Some("timed out".to_string()),
             },
         );
@@ -1620,6 +1646,35 @@ pub(crate) mod tests {
             TranscodeClaim::PreviouslyFailedOrTimedOut
         );
         clear_transcode_status("claim-hash-2");
+    }
+
+    #[test]
+    fn test_claim_transcode_retries_after_cooldown() {
+        clear_transcode_status("claim-hash-3");
+        // GIVEN a failure older than TRANSCODE_RETRY_COOLDOWN (transient
+        // failures must heal without a server restart)
+        set_transcode_status(
+            "claim-hash-3",
+            TranscodeStatus {
+                state: TranscodeState::Failed,
+                hash: "claim-hash-3".to_string(),
+                started_at: Some(
+                    Utc::now() - TRANSCODE_RETRY_COOLDOWN - chrono::Duration::seconds(1),
+                ),
+                error: Some("boom".to_string()),
+            },
+        );
+
+        // WHEN the slot is claimed again
+        let claim = claim_transcode("claim-hash-3");
+
+        // THEN the stale failure is superseded by a fresh start
+        assert_eq!(claim, TranscodeClaim::Started);
+        assert!(matches!(
+            get_transcode_status("claim-hash-3").map(|s| s.state),
+            Some(TranscodeState::InProgress)
+        ));
+        clear_transcode_status("claim-hash-3");
     }
 
     #[test]

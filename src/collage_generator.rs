@@ -1462,6 +1462,14 @@ pub async fn accept_collage(
         .await?
         .ok_or("Collage not found")?;
 
+    // A second submit (second tab, stale view) must not rename a source the
+    // first request already moved away — that would 500 with a misleading
+    // "Failed to accept" for an operation that already succeeded. Treat a
+    // settled collage as a no-op returning the destination it already has.
+    if collage.accepted_at.is_some() || collage.rejected_at.is_some() {
+        return Ok(PathBuf::from(&collage.file_path));
+    }
+
     // Create destination directory (separate from staging to avoid premature indexing)
     let dest_dir = data_path.join("collages").join("accepted");
     std::fs::create_dir_all(&dest_dir)?;

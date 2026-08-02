@@ -28,18 +28,6 @@ test.describe('Transcoding', () => {
     // The server-side transcode + 2s status poll can take a while on slow CI.
     test.setTimeout(120_000);
 
-    // CI retries re-run this test against the SAME server: a completed
-    // transcode leaves its cached file behind, and the server then serves it
-    // directly (200, no 202/toast) — the retry would fail deterministically
-    // at the toast assertion. Clear the per-run cache so every attempt
-    // re-exercises the 202 → poll → video flow.
-    const transcodeCache = path.join('test-e2e-data', 'transcode-cache');
-    await fs.promises.rm(transcodeCache, { recursive: true, force: true });
-    await fs.promises.mkdir(transcodeCache, { recursive: true });
-
-    await TestHelpers.navigateToView(page, 'videos');
-    await TestHelpers.waitForPhotosToLoad(page);
-
     // Target the HEVC card explicitly: cards sort by taken_at, and the HEVC
     // fixture is pinned to an old date so it never displaces test_video.mp4
     // as the first card (which the h264 test above relies on).
@@ -50,6 +38,28 @@ test.describe('Transcoding', () => {
       (photo) => photo.filename === 'test_video_hevc.mp4'
     );
     expect(hevcPhoto, 'HEVC test video (test_video_hevc.mp4) must be seeded').toBeTruthy();
+
+    // CI retries re-run this test against the SAME server: a completed
+    // transcode leaves its cached file behind, and the server then serves it
+    // directly (200, no 202/toast) — the retry would fail deterministically
+    // at the toast assertion. Clear the per-run cache so every attempt
+    // re-exercises the 202 → poll → video flow — but ONLY when no transcode
+    // job is in flight (a running job writes its temp file there; removing
+    // it would make the job's final rename fail and the retry's poll end in
+    // Failed).
+    const hevcCardStatus = await page.request
+      .get(`/api/photos/${hevcPhoto.hash_sha256}/video/status`)
+      .catch(() => null);
+    const statusData = hevcCardStatus?.ok() ? await hevcCardStatus.json() : null;
+    const inFlight = statusData?.state === 'InProgress';
+    if (!inFlight) {
+      const transcodeCache = path.join('test-e2e-data', 'transcode-cache');
+      await fs.promises.rm(transcodeCache, { recursive: true, force: true });
+      await fs.promises.mkdir(transcodeCache, { recursive: true });
+    }
+
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
 
     const hevcCard = page.locator(TestHelpers.selectors.photoCard(hevcPhoto.hash_sha256));
     await expect(hevcCard).toBeVisible();

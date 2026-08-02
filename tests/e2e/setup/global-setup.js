@@ -94,6 +94,20 @@ async function seedTestMedia() {
     console.warn(`Receipt fixture not found at ${receiptSrc}`);
   }
 
+  // Camera-EXIF fixture: the metadata EXIF test needs a photo whose EXIF
+  // carries Make/Model. Its EXIF taken_at (2011) is preserved by the
+  // extractor (EXIF wins over file mtime), so it sorts LAST in taken_at-DESC
+  // and never disturbs photos[0]-based tests — the EXIF test targets it by
+  // hash instead.
+  const exifSrc = path.join('test-data', 'sample_with_exif.jpg');
+  const exifDest = path.join(photosDir, 'sample_with_exif.jpg');
+  if (existsSync(exifSrc)) {
+    await copyFile(exifSrc, exifDest);
+    await utimes(exifDest, recentDate, recentDate);
+  } else {
+    console.warn(`EXIF fixture not found at ${exifSrc}`);
+  }
+
   const videoSrc = path.join('test-data', 'test_video.mp4');
   const videoDest = path.join(photosDir, 'test_video.mp4');
   if (existsSync(videoSrc)) {

@@ -279,7 +279,18 @@ impl ThumbnailGenerator {
             fs::create_dir_all(parent).await?;
         }
 
-        fs::write(&cache_path, data).await?;
+        // Atomic write: sibling temp + rename (the codebase-wide pattern). A
+        // crash/ENOSPC mid-write would otherwise leave a truncated file that
+        // the cache-hit path serves forever as valid.
+        let temp_path = cache_path.with_extension(format!(
+            "tmp.{}",
+            THUMBNAIL_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        fs::write(&temp_path, data).await?;
+        if let Err(e) = fs::rename(&temp_path, &cache_path).await {
+            let _ = fs::remove_file(&temp_path).await;
+            return Err(CacheError::IoError(e));
+        }
 
         let file_size = data.len() as u64;
         let now = SystemTime::now();

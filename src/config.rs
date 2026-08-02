@@ -42,12 +42,25 @@ impl Config {
 
         let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-        let allowed_hosts = env::var("TURBO_PIX_ALLOWED_HOSTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        // DNS-rebinding hardening (see require_same_origin): when no explicit
+        // allowlist is configured, pin the Host header to loopback names for
+        // loopback binds. Non-loopback binds (0.0.0.0 for LAN/Docker) must
+        // set TURBO_PIX_ALLOWED_HOSTS explicitly — otherwise every LAN host
+        // would be rejected.
+        let allowed_hosts = if let Ok(raw) = env::var("TURBO_PIX_ALLOWED_HOSTS") {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else if host == "127.0.0.1" || host == "::1" {
+            vec![
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                "::1".to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
 
         let photo_paths = env::var("TURBO_PIX_PHOTO_PATHS")
             .unwrap_or_else(|_| "./photos".to_string())

@@ -27,6 +27,7 @@
   let destroyed = false;
   let sheetOpen = $state(false);
   let sheetCloseButton = $state(null);
+  let bottomSheetRef = $state(null);
   let ringTrigger = $state(null);
   let sheetHasOpened = false;
 
@@ -229,18 +230,20 @@
     }
   }
 
-  function onKeydown(e) {
-    if (e.key === 'Escape') closeSheet();
-  }
-
-  // Trap Tab/Shift+Tab inside the open bottom sheet: it is aria-modal, so
-  // focus must cycle among its focusable descendants instead of wrapping to
-  // page controls behind the backdrop. Attached to the sheet element, so no
-  // listener lifecycle management is needed.
-  function onSheetKeydown(e) {
+  // Trap Tab/Shift+Tab while the bottom sheet is open: the sheet is
+  // aria-modal, so focus must cycle among its focusable descendants instead
+  // of wrapping to page controls behind the backdrop. Handled at DOCUMENT
+  // level because keydown events dispatch to the focused element and bubble
+  // through ITS ancestors — when focus sits on document.body (clicked
+  // non-focusable sheet content) or on the ring trigger, a sheet-level
+  // listener never fires. The in-sheet cycling cases are identical here:
+  // first/last wrap, and any focus outside the sheet is pulled back in.
+  function trapTabFocus(e) {
     if (e.key !== 'Tab' || !sheetOpen) return;
+    const sheet = bottomSheetRef;
+    if (!sheet) return;
     const focusables = Array.from(
-      e.currentTarget.querySelectorAll(
+      sheet.querySelectorAll(
         'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])'
       )
     ).filter((el) => !el.disabled);
@@ -251,10 +254,10 @@
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
     const active = document.activeElement;
-    // Focus can sit outside the sheet (e.g. document.body after clicking
-    // non-focusable sheet content); contain it instead of letting Tab roam
-    // to page controls behind the aria-modal backdrop.
-    const outside = !(active instanceof HTMLElement) || !e.currentTarget.contains(active);
+    const inside = active instanceof HTMLElement && sheet.contains(active);
+    // "Inside but not focusable" (Firefox keeps focus on clicked non-
+    // focusable content) counts as outside: send focus to first/last.
+    const outside = !inside || !focusables.includes(active);
     if (outside) {
       e.preventDefault();
       (e.shiftKey ? last : first).focus();
@@ -265,6 +268,11 @@
       e.preventDefault();
       first.focus();
     }
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') closeSheet();
+    trapTabFocus(e);
   }
 
   onMount(() => {
@@ -469,13 +477,13 @@
 
 <!-- Bottom Sheet -->
 <div
+  bind:this={bottomSheetRef}
   data-bottom-sheet
   class="indexing-bottom-sheet"
   role="dialog"
   aria-modal="true"
   aria-label={$t('ui.indexing_photos', { default: 'Processing your photos...' })}
   aria-hidden={!sheetOpen}
-  onkeydown={onSheetKeydown}
 >
   <div class="indexing-sheet-handle"></div>
   <div class="indexing-sheet-header">

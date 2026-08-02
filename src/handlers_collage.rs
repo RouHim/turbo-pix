@@ -97,19 +97,19 @@ pub async fn get_collage_image(id: i64, db_pool: DbPool) -> Result<impl Reply, R
         return Err(reject::not_found());
     }
 
-    // Read file contents
-    let contents = match tokio::fs::read(file_path).await {
-        Ok(contents) => contents,
-        Err(e) => {
-            log::error!("Failed to read collage file: {}", e);
-            return Err(reject::custom(DatabaseError {
-                message: format!("Failed to read collage file: {}", e),
-            }));
-        }
+    // Stream the file instead of buffering it (same pattern as the photo
+    // file route): unauthenticated clients could otherwise force unbounded
+    // per-request allocations with many concurrent requests.
+    let file = match tokio::fs::File::open(file_path).await {
+        Ok(file) => file,
+        Err(_) => return Err(reject::not_found()),
     };
+    let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
 
     // Return image with appropriate headers
-    let reply = warp::reply::with_header(contents, "content-type", "image/jpeg");
+    let reply = warp::reply::stream(tokio_util::io::ReaderStream::new(file));
+    let reply = warp::reply::with_header(reply, "content-type", "image/jpeg");
+    let reply = warp::reply::with_header(reply, "content-length", file_size.to_string());
     let reply = warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
 
     Ok(reply)

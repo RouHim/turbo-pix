@@ -103,6 +103,15 @@ async function seedTestMedia() {
     console.warn(`Video fixture not found at ${videoSrc}`);
   }
 
+  const hevcVideoSrc = path.join('test-data', 'test_video_hevc.mp4');
+  const hevcVideoDest = path.join(photosDir, 'test_video_hevc.mp4');
+  if (existsSync(hevcVideoSrc)) {
+    await copyFile(hevcVideoSrc, hevcVideoDest);
+    await utimes(hevcVideoDest, recentDate, recentDate);
+  } else {
+    console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
+  }
+
   console.log('Generated test media ready');
 }
 
@@ -167,6 +176,42 @@ async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
 
   throw new Error(
     `Indexing phases did not complete after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
+  );
+}
+
+async function waitForIndexingComplete(baseURL, maxRetries = 120) {
+  console.log('Waiting for indexing to fully complete (is_complete)...');
+
+  // The housekeeping phase runs LAST and starts with DELETE FROM
+  // housekeeping_candidates, so the seeded candidate only survives once the
+  // whole indexing run (incl. semantic_vectors, collages, housekeeping) has
+  // finished. waitForIndexing() above deliberately returns early on
+  // metadata + geo_resolution — this wait is only for the deterministic seed.
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const indexingResponse = await fetch(`${baseURL}/api/indexing/status`);
+      if (indexingResponse.ok) {
+        const data = await indexingResponse.json();
+        if (data.is_complete === true) {
+          console.log(`Indexing fully complete - ${data.photos_indexed} photos indexed`);
+          return true;
+        }
+
+        if (i % 10 === 0) {
+          console.log(
+            `Indexing not complete yet - ${data.photos_indexed} photos, is_indexing=${data.is_indexing}`
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error checking indexing completion:', error.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  }
+
+  throw new Error(
+    `Indexing did not reach is_complete after ${maxRetries} retries (${maxRetries * RETRY_DELAY_MS}ms)`
   );
 }
 
@@ -279,25 +324,35 @@ async function ensureHousekeepingCandidate(baseURL) {
 
 async function seedPendingCollages() {
   const collageSource = path.join(TEST_DATA_DIR, 'photos', 'cluster_01.jpg');
-  const collagePath = path.join(TEST_DATA_DIR, 'collages', 'staging', 'collage_seed_01.jpg');
 
   if (!existsSync(collageSource)) {
     throw new Error(`Missing collage source image at ${collageSource}`);
   }
 
-  await copyFile(collageSource, collagePath);
+  // Seed TWO pending collages: the viewer-accept test consumes one, and the
+  // arrow-key navigation test needs >= 2 to run. Distinct signatures + staging
+  // paths so both rows insert (the collages table has no unique constraint).
+  const collageSeeds = [
+    { filename: 'collage_seed_01.jpg', signature: 'seed-collage-01' },
+    { filename: 'collage_seed_02.jpg', signature: 'seed-collage-02' },
+  ];
 
-  const sql =
-    `PRAGMA busy_timeout=5000; ` +
-    `INSERT OR IGNORE INTO collages ` +
-    `(date, file_path, thumbnail_path, photo_count, photo_hashes, signature) ` +
-    `VALUES ('${new Date().toISOString().split('T')[0]}', ` +
-    `'${collagePath}', NULL, 6, '[]', 'seed-collage-01');`;
+  for (const seed of collageSeeds) {
+    const collagePath = path.join(TEST_DATA_DIR, 'collages', 'staging', seed.filename);
+    await copyFile(collageSource, collagePath);
 
-  try {
-    await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);
-  } catch (error) {
-    throw new Error(`Failed to seed pending collages: ${error.message}`);
+    const sql =
+      `PRAGMA busy_timeout=5000; ` +
+      `INSERT OR IGNORE INTO collages ` +
+      `(date, file_path, thumbnail_path, photo_count, photo_hashes, signature) ` +
+      `VALUES ('${new Date().toISOString().split('T')[0]}', ` +
+      `'${collagePath}', NULL, 6, '[]', '${seed.signature}');`;
+
+    try {
+      await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);
+    } catch (error) {
+      throw new Error(`Failed to seed pending collages: ${error.message}`);
+    }
   }
 }
 
@@ -359,6 +414,10 @@ export default async function globalSetup() {
     await waitForPhotosTable();
     await updateTestPhotoDates(baseURL);
     await verifyTestPhotoDates(baseURL);
+    // The housekeeping phase runs after metadata+geo as the LAST indexing
+    // phase and starts with DELETE FROM housekeeping_candidates — wait for
+    // full completion so the seeded candidate is not wiped by the scan.
+    await waitForIndexingComplete(baseURL);
     await ensureHousekeepingCandidate(baseURL);
     await seedPendingCollages();
 

@@ -229,7 +229,7 @@ npm run test:e2e:report   # View test report
 
 **Transcode spawn consults status first:** `get_video_file` checks `get_transcode_status` BEFORE spawning: `Failed`/`Timeout` → remove any leftover `*.mp4.tmp` and serve the ORIGINAL with `X-Transcode-Warning` (works even when no stale file exists); `InProgress` → return 202/poll_url WITHOUT spawning a second job; only absent/`Completed`-with-no-file spawns. The status-store cap (128) is a SOFT limit: eviction never removes `InProgress` entries (a polled status must not 404), so a burst can exceed the cap.
 
-**0-byte and range responses:** a plain GET of a 0-byte video → 200 with content-length 0; only a Range request against it → 416 `Content-Range: bytes */0`. Both the no-range arm AND the range arm stream (`tokio::fs::File` + `ReaderStream` + `warp::reply::stream`) — never `std::fs::read`/`vec![0u8; n]` for the whole file.
+**0-byte and range responses:** a plain GET of a 0-byte video → 200 with content-length 0; only a Range request against it → 416 `Content-Range: bytes */0`. Both the no-range arm AND the range arm stream (`tokio::fs::File` + `ReaderStream` + `warp::reply::stream`) — never `std::fs::read`/`vec![0u8; n]` for the whole file. Content-length is derived from a RE-STAT of the open handle (`file.metadata()`) — the file may be replaced/shrunk between the pre-open stat and the open, and an over-advertised length truncates the transfer.
 
 **`/exif` endpoint status codes:** `exif_helpers::read_exif*` now return `Result<Exif, exif::Error>` (original kamadak error preserved). A photo WITHOUT an EXIF segment (`exif::Error::NotFound`, normal for screenshots/generated images) → 404 via `get_photo_exif`; genuine read/parse corruption → 500. No frontend consumer exists for /exif.
 

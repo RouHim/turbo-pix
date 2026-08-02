@@ -1486,14 +1486,15 @@ pub async fn accept_collage(
                     Err(e) => {
                         // The DB thumbnail_path is set to NULL below, which is
                         // the safe outcome (consumers fall back to the collage
-                        // file itself); the orphaned thumbnail in staging is a
-                        // silent leak worth surfacing.
+                        // file itself); remove the staging orphan and surface
+                        // the failure.
                         warn!(
                             "Failed to move collage thumbnail {} to {}: {}",
                             thumb_source.display(),
                             thumb_dest.display(),
                             e
                         );
+                        let _ = std::fs::remove_file(&thumb_source);
                     }
                 }
             }

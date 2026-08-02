@@ -343,6 +343,19 @@ pub async fn get_video_file(
                 Err(_) => return Err(reject::custom(NotFoundError)),
             };
 
+            // The file may have been replaced or shrunk between the stat
+            // above and the open; re-stat the open handle so the advertised
+            // content-range/content-length match the bytes actually streamed
+            // (an over-advertised length truncates the transfer).
+            let actual_len = file.metadata().await.map(|m| m.len()).unwrap_or(file_size);
+            if start >= actual_len {
+                return Ok(unsatisfiable_range_response(&content_type, actual_len));
+            }
+            let end = end.min(actual_len - 1);
+            if start > end {
+                return Ok(unsatisfiable_range_response(&content_type, actual_len));
+            }
+
             if file.seek(SeekFrom::Start(start)).await.is_err() {
                 return Err(reject::custom(NotFoundError));
             }
@@ -358,7 +371,7 @@ pub async fn get_video_file(
             let response = warp::reply::with_header(
                 response,
                 "content-range",
-                format!("bytes {}-{}/{}", start, end, file_size),
+                format!("bytes {}-{}/{}", start, end, actual_len),
             );
             let response =
                 warp::reply::with_header(response, "content-length", bytes_to_read.to_string());
@@ -376,6 +389,9 @@ pub async fn get_video_file(
                 Ok(f) => f,
                 Err(_) => return Err(reject::custom(NotFoundError)),
             };
+            // Re-stat the open handle (the file may have changed since the
+            // pre-open stat) so content-length matches the streamed bytes.
+            let actual_len = file.metadata().await.map(|m| m.len()).unwrap_or(file_size);
             let stream = tokio_util::io::ReaderStream::new(file);
             let response = warp::reply::stream(stream);
             let response = warp::reply::with_header(response, "content-type", content_type);
@@ -383,7 +399,7 @@ pub async fn get_video_file(
                 warp::reply::with_header(response, "cache-control", "public, max-age=31536000");
             let response = warp::reply::with_header(response, "accept-ranges", "bytes");
             let response =
-                warp::reply::with_header(response, "content-length", file_size.to_string());
+                warp::reply::with_header(response, "content-length", actual_len.to_string());
 
             // Only attach the warning header when transcoding actually failed
             Ok(with_transcode_warning(response, transcoding_failed))

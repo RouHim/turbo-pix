@@ -1869,6 +1869,19 @@ mod tests {
             }),
         );
         photo.create(&pool).await.unwrap();
+        // A second photo with a city that does NOT match the general token:
+        // under the old LIKE '%%' behavior the bare location: token would
+        // match BOTH rows (total 2); with the skip it contributes nothing.
+        let other = create_test_photo_with_metadata(
+            "other.jpg",
+            "other-hash",
+            json!({
+                "location": {
+                    "city": "Hamburg"
+                }
+            }),
+        );
+        other.create(&pool).await.unwrap();
 
         // A bare "location:" token must not filter (previously it emitted
         // LIKE '%%' which matched every row with a city).

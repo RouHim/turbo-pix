@@ -1297,6 +1297,7 @@
       type="button"
       class="viewer-close close-viewer"
       title={$t('ui.close', { default: 'Close' })}
+      aria-label={$t('ui.close', { default: 'Close' })}
       onclick={() => close()}
     >
       <Icon name="x" width={24} height={24} />
@@ -1307,6 +1308,7 @@
       class="viewer-prev"
       class:hidden={!hasPrev}
       title={$t('ui.previous', { default: 'Previous' })}
+      aria-label={$t('ui.previous', { default: 'Previous' })}
       onclick={showPrevious}
     >
       <Icon name="chevron-left" width={28} height={28} />
@@ -1317,6 +1319,7 @@
       class="viewer-next"
       class:hidden={!hasNext}
       title={$t('ui.next', { default: 'Next' })}
+      aria-label={$t('ui.next', { default: 'Next' })}
       onclick={showNext}
     >
       <Icon name="chevron-right" width={28} height={28} />

@@ -64,9 +64,10 @@
   );
   const sizeText = $derived.by(() => {
     if (!photo) return $t('ui.unknown', { default: 'Unknown' });
-    const sz = photo.file_size
-      ? formatFileSize(photo.file_size)
-      : $t('ui.unknown', { default: 'Unknown' });
+    const sz =
+      photo.file_size != null
+        ? formatFileSize(photo.file_size)
+        : $t('ui.unknown', { default: 'Unknown' });
     const dims = photo.width && photo.height ? ` \u2022 ${photo.width}\u00d7${photo.height}` : '';
     return sz + dims;
   });
@@ -117,6 +118,11 @@
               : $t('ui.metadata.edit_unsupported', {
                   default: 'Editing this file type is not supported',
                 })}
+          aria-label={showEditBtn
+            ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
+            : $t('ui.metadata.edit_unsupported', {
+                default: 'Editing this file type is not supported',
+              })}
           onclick={onEditMetadata}
         >
           <Icon name="edit-2" width={16} height={16} />
@@ -127,6 +133,7 @@
         id="sidebar-close-btn"
         class="btn-icon"
         title={$t('ui.close', { default: 'Close' })}
+        aria-label={$t('ui.close', { default: 'Close' })}
         onclick={onCloseSidebar}
       >
         <Icon name="x" width={16} height={16} />
@@ -169,7 +176,7 @@
       <div class="meta-item">
         <span class="meta-label">{$t('ui.metadata.file_size', { default: 'File Size:' })}</span
         ><span id="meta-filesize" style="opacity: {fieldOpacity(photo?.file_size)}"
-          >{setField(photo?.file_size ? formatFileSize(photo.file_size) : null)}</span
+          >{setField(photo?.file_size != null ? formatFileSize(photo.file_size) : null)}</span
         >
       </div>
       <div class="meta-item">

@@ -16,7 +16,7 @@ Audit mode: full (audit + fixes, everything except F9 by user decision)
 
 TurboPix is a self-hosted photo/video gallery: a single Rust binary (warp + sqlx/SQLite + sqlite-vec + candle ML) that scans photo directories, extracts EXIF/ffprobe metadata, generates CLIP embeddings and thumbnails, and serves an embedded SPA. The frontend is Svelte 5 (runes) + Vite, freshly migrated from vanilla JS (this branch), embedded into the binary via `build.rs` (which panics on stale dist — deliberate guard).
 
-Key hot paths: the indexing pipeline (`scheduler.rs` → `photo_processor`/`metadata_extractor`/`video_processor`/`semantic_search`), photo listing/search (`db.rs`), collage generation (`collage_generator.rs`, the largest file at 2160 lines but well-structured), and the viewer (`PhotoViewer.svelte`, 1794 lines, the largest component — video transcoding + gestures + zoom, heavily pinned by E2E).
+Key hot paths: the indexing pipeline (`scheduler.rs` → `photo_processor`/`metadata_extractor`/`video_processor`/`semantic_search`), photo listing/search (`db.rs`), collage generation (`collage_generator.rs`, the largest file at 2182 lines but well-structured), and the viewer (`PhotoViewer.svelte`, 1794 lines, the largest component — video transcoding + gestures + zoom, heavily pinned by E2E).
 
 The repo has been through 7+ adversarial review rounds; most architectural debt was already paid. What remained was the residue: stale dead files from the migration, duplicated EXIF plumbing that had started to drift, and a few genuinely branchy functions.
 
@@ -81,7 +81,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 
 1. **F9 — Global vs scoped CSS split (`app.css`).** The only L-effort item. The viewer/sidebar/card layout lives partly in global CSS, partly in component scoped styles, and AGENTS.md documents repeated regressions when the two fight (scoped beats global of equal specificity). Consolidating into scoped styles is a large, E2E-pinned effort with no functional payoff — revisit only when touching those components for feature work.
 2. **PhotoViewer.svelte (1794 lines).** The god component of the app. Splitting it further (e.g. a video-transcode composable) is the natural next structural step, but every async continuation inside carries a documented staleness guard (AGENTS.md) and the component is the most E2E-pinned file. Extract only alongside a feature touch, never as a standalone refactor.
-3. **collage_generator.rs (2160 lines).** Largest Rust file; well-organized (template scoring/layout/rendering sections) and 23 tests. The `generate_collages` orchestration (1312-1441) is the only dense region. Same verdict as PhotoViewer: split when touched.
+3. **collage_generator.rs (2182 lines).** Largest Rust file; well-organized (template scoring/layout/rendering sections) and 23 tests. The `generate_collages` orchestration (1322-1451) is the only dense region. Same verdict as PhotoViewer: split when touched.
 4. **Zero-test leaf modules** (`housekeeping_manager.rs`, `file_scanner.rs`, `cache_manager.rs`). Cheap to cover with unit tests when next modified.
 5. **Machete ignore list for `kamadak-exif`.** One line in Cargo.toml (`[package.metadata.cargo-machete] ignored = ["kamadak-exif"]`) so future machete runs don't re-flag it.
 

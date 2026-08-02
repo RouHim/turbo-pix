@@ -310,6 +310,7 @@
         type="button"
         class="timeline-reset"
         title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+        aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
         onclick={resetFilter}
       >
         <Icon name="x" width={14} height={14} />
@@ -380,6 +381,7 @@
         type="button"
         class="timeline-reset"
         title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+        aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
         onclick={resetFilter}
       >
         <Icon name="x" width={14} height={14} />

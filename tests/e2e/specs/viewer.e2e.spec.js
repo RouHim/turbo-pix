@@ -306,9 +306,32 @@ test.describe('Photo Viewer', () => {
       if (rotated && rotated.hash_sha256 !== oldHash) {
         const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
         try {
+          // Rotation also swapped width/height, reset orientation to 1,
+          // cleared has_thumbnail and semantic_vector_indexed, and rewrote
+          // file_modified — restore all of them so the shared DB row agrees
+          // with the restored file bytes (the restored mtime means the
+          // rescan would never re-detect the photo).
           db.prepare(
-            'UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ? AND file_path = ?'
-          ).run(oldHash, rotated.hash_sha256, photo.file_path);
+            `UPDATE photos SET
+              hash_sha256 = ?,
+              file_modified = ?,
+              width = ?,
+              height = ?,
+              orientation = ?,
+              has_thumbnail = ?,
+              semantic_vector_indexed = ?
+            WHERE hash_sha256 = ? AND file_path = ?`
+          ).run(
+            oldHash,
+            photo.file_modified ?? new Date().toISOString(),
+            photo.width ?? null,
+            photo.height ?? null,
+            photo.orientation ?? null,
+            photo.has_thumbnail ? 1 : 0,
+            photo.semantic_vector_indexed ? 1 : 0,
+            rotated.hash_sha256,
+            photo.file_path
+          );
         } finally {
           db.close();
         }

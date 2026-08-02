@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { TestDataManager } from '../setup/test-data-manager.js';
 
 test.describe('Favorites', () => {
   test.beforeEach(async ({ page }) => {
@@ -59,5 +60,49 @@ test.describe('Favorites', () => {
     await favoriteBtn.click();
     await restoreResponse;
     await expect.poll(() => favoriteBtn.getAttribute('class')).toBe(initialClass);
+  });
+
+  test('should un-favorite from viewer without dropping the next card', async ({ page }) => {
+    // Regression: the viewer's toggleFavorite dispatched the grid event
+    // BEFORE writing photos[currentIndex]; the synchronous handler splices
+    // the SHARED array, so the write landed on the shifted slot and the next
+    // card vanished from the Favorites grid (round 17 reorder, fixed in 18).
+    // GIVEN: two favorite photos (absolute PUTs — a retry must not toggle
+    // already-favorited photos back off)
+    const dataManager = new TestDataManager();
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThanOrEqual(2);
+    const firstId = await cards[0].getAttribute('data-photo-id');
+    const secondId = await cards[1].getAttribute('data-photo-id');
+    expect(firstId).toBeTruthy();
+    expect(secondId).toBeTruthy();
+
+    await dataManager.addToFavorites(firstId);
+    await dataManager.addToFavorites(secondId);
+    // Reload so the grid reflects the seeded favorites before navigating
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // WHEN: In the favorites view, open the first card and un-favorite it
+    // from the viewer (click the card BY HASH — sort order must not matter)
+    await TestHelpers.navigateToView(page, 'favorites');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator(TestHelpers.selectors.photoCard(firstId)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    const unFavResponse = page.waitForResponse(
+      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT' && r.status() === 200
+    );
+    // Scope to the viewer: the grid cards carry the same .favorite-btn class
+    await page.locator('#photo-viewer .favorite-btn').click();
+    await unFavResponse;
+
+    // THEN: the un-favorited card is removed from the favorites grid AND the
+    // next card is still present (the round-18 regression assertion)
+    await expect(page.locator(TestHelpers.selectors.photoCard(firstId))).toHaveCount(0);
+    await expect(page.locator(TestHelpers.selectors.photoCard(secondId))).toHaveCount(1);
+
+    // AND: restore shared server state — re-favorite the photo (absolute PUT)
+    await dataManager.addToFavorites(firstId);
   });
 });

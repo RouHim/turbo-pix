@@ -1073,10 +1073,29 @@ fn create_collage_image(
         };
 
         let mut img = if is_raw {
-            match raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path)) {
-                Ok(img) => img,
-                Err(e) => {
-                    error!("Failed to decode RAW file {}: {}", photo.file_path, e);
+            // Full-resolution RAW decodes are capped by the shared
+            // RAW_DECODE_LIMIT (this fn is sync, so a non-blocking try is
+            // used): under concurrent collage-generation load, the photo is
+            // skipped for this run rather than exhausting memory. Collage
+            // generation retries nightly, so the degradation is temporary.
+            match raw_processor::RAW_DECODE_LIMIT.try_acquire() {
+                Ok(permit) => {
+                    let decoded =
+                        raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path));
+                    drop(permit);
+                    match decoded {
+                        Ok(img) => img,
+                        Err(e) => {
+                            error!("Failed to decode RAW file {}: {}", photo.file_path, e);
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    warn!(
+                        "Skipping RAW photo {} in collage: RAW decode concurrency limit reached",
+                        photo.file_path
+                    );
                     continue;
                 }
             }

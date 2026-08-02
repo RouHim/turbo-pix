@@ -943,7 +943,11 @@
     try {
       isLoading = true;
       const updatedPhoto = await api.rotatePhoto(photoHash, angle);
-      if (currentPhoto?.hash_sha256 !== photoHash) return;
+      // The user may have closed the viewer while the request was in flight:
+      // close() clears the URL photo param but not currentPhoto, so without
+      // this guard the URL rewrite below would deterministically reopen the
+      // dismissed viewer via the route-sync effect.
+      if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
       currentPhoto = updatedPhoto;
       if (currentIndex !== -1) photos[currentIndex] = updatedPhoto;
       // The backend rewrites hash_sha256 on rotation; sync the URL so the
@@ -999,6 +1003,9 @@
     try {
       isLoading = true;
       await api.deletePhoto(photoHash);
+      // Same staleness contract as rotate: a response landing after the user
+      // closed the viewer must not re-navigate or rewrite the URL.
+      if (!isOpen) return;
       window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
       addToast(
         get(t)('notifications.deleted', { default: 'Deleted' }),
@@ -1093,7 +1100,16 @@
         detail: { collageId: emittedCollageId },
       })
     );
-    close();
+    // Only close the viewer if it still shows this collage: the user may
+    // have swiped to another photo while the request was in flight, and an
+    // unconditional close() would yank them out of the viewer over the
+    // wrong photo. Compare NORMALIZED ids — collageId may arrive as a number.
+    if (isOpen && getNormalizedCollageId(currentPhoto) === collageId) {
+      close();
+    } else {
+      isAcceptingCollage = false;
+      isPendingCollage = isPendingCollagePhoto(currentPhoto);
+    }
   }
 
   // ── Metadata edit handlers ─────────────────────────────────────────────────

@@ -251,9 +251,12 @@
 
   // Restore filter from route state (URL restore / popstate)
   $effect(() => {
-    if (dragInProgress) return;
+    // Read route BEFORE the drag guard: an early return that reads nothing
+    // empties the effect's dependency set and permanently unsubscribes it
+    // (Svelte 5 replaces deps with what this run read).
     const year = route.year;
     const month = route.month;
+    if (dragInProgress) return;
     if (!year && !month) {
       // Reset to no filter (only if we have a current filter)
       if (currentFilter) {

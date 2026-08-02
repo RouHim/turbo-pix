@@ -84,8 +84,14 @@ export class GestureManager {
 
     this.touchStartTime = timestamp;
 
-    // Track all touches
+    // Track only touches that started on this element (or a descendant).
+    // The manager's listeners live on this.element, but a touchstart that
+    // bubbles here reports the document-global TouchList — a simultaneous
+    // touch on the chrome (sidebar/controls, siblings of .viewer-main) would
+    // otherwise be tracked and never see its touchend, leaving a stale entry
+    // that poisons double-tap and pinch recognition until unmount.
     Array.from(e.touches).forEach((touch) => {
+      if (!this.element.contains(touch.target)) return;
       this.touches.set(touch.identifier, {
         id: touch.identifier,
         startX: touch.clientX,

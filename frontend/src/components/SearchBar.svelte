@@ -5,6 +5,7 @@
   import { api } from '../lib/api.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { appState, photoGridState } from '../lib/state.svelte.js';
+  import { isPrefixQuery } from '../lib/utils.js';
   import Icon from '../lib/Icon.svelte';
 
   let query = $state('');
@@ -63,7 +64,7 @@
 
     try {
       // Prefix queries (type:, location:, is_favorite:) use regular search path
-      if (q.startsWith('type:') || q.startsWith('location:') || q.startsWith('is_favorite:')) {
+      if (isPrefixQuery(q)) {
         photoGridState.semanticSearchMode = false;
         photoGridState.currentQuery = q;
         photoGridState.currentPage = 1;
@@ -550,6 +551,13 @@
     flex-shrink: 0;
   }
 
+  @media (width <= 1024px) {
+    .search-container {
+      margin: 0 var(--space-4);
+      max-width: 400px;
+    }
+  }
+
   @media (max-width: 768px) {
     .search-container {
       display: none;
@@ -557,6 +565,8 @@
       top: var(--header-height);
       left: 0;
       right: 0;
+      margin: 0;
+      max-width: none;
       background: var(--surface-color);
       padding: var(--space-4);
       border-bottom: 1px solid var(--divider-color);

@@ -1603,11 +1603,6 @@
   :root {
     --sidebar-width: 200px;
   }
-
-  .search-container {
-    margin: 0 var(--space-4);
-    max-width: 400px;
-  }
 }
 
 @media (width <= 768px) {

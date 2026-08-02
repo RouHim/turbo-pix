@@ -401,8 +401,9 @@
           {@const pos = polarToCartesian(140, 140, 120, midpointAngle)}
           <g
             data-orbit-phase={phase.id}
-            style="transform-origin: 140px 140px; transform-box: view-box"
-            class:orbit-segment-anim={!prefersReducedMotion()}
+            style="transform-origin: 140px 140px; transform-box: view-box; animation: {prefersReducedMotion()
+              ? 'none'
+              : 'orbit-segment 2s ease-in-out infinite'}"
           >
             <circle cx={pos.x} cy={pos.y} class="orbit-dot" data-orbit-dot="true"></circle>
           </g>
@@ -617,7 +618,7 @@
     opacity: 0;
   }
 
-  .orbit-center-icon :global(.feather) {
+  .orbit-center-icon :global(svg) {
     width: var(--orbit-center-icon-size);
     height: var(--orbit-center-icon-size);
   }
@@ -640,10 +641,6 @@
       opacity: 0.6;
       r: 7px;
     }
-  }
-
-  .orbit-segment-anim {
-    animation: orbit-segment 2s ease-in-out infinite;
   }
 
   @keyframes orbit-segment {

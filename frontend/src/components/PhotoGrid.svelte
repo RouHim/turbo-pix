@@ -7,6 +7,7 @@
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
   import { APP_CONSTANTS } from '../lib/constants.js';
+  import { isPrefixQuery } from '../lib/utils.js';
   import PhotoCard from './PhotoCard.svelte';
 
   const DEFAULT_BATCH_SIZE = APP_CONSTANTS.DEFAULT_BATCH_SIZE;
@@ -94,6 +95,12 @@
         // path: semantic results are unfilterable and must not leak into them.
         if (route.view !== 'all') {
           photoGridState.semanticSearchMode = false;
+        } else if (route.query && !isPrefixQuery(route.query)) {
+          // Returning to 'all' with a non-prefix query: SearchBar routes every
+          // non-prefix query semantically, so a Back from a filtered view must
+          // restore semantic mode — otherwise the same URL degrades to a
+          // regular text search (route-sync effect no-ops: query unchanged).
+          photoGridState.semanticSearchMode = true;
         }
         if (!photoGridState.semanticSearchMode) {
           photoGridState.currentQuery = route.query || null;

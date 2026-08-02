@@ -15,6 +15,9 @@
   let longitude = $state('');
   let errorMessage = $state('');
   let saving = $state(false);
+  // Set once the modal has actually been opened, so the focus-restore branch
+  // below doesn't steal focus to the (hidden) edit button on initial mount.
+  let wasOpen = false;
 
   function isFormatSupported(p) {
     if (!p?.mime_type) return false;
@@ -24,6 +27,7 @@
 
   function openModal() {
     if (!photo || !isFormatSupported(photo)) return;
+    wasOpen = true;
     editTargetHash = photo.hash_sha256;
     populateForm();
     showModal = true;
@@ -84,7 +88,8 @@
   $effect(() => {
     if (showModal) {
       modalEl?.querySelector('input')?.focus();
-    } else {
+    } else if (wasOpen) {
+      wasOpen = false;
       document.getElementById('metadata-edit-btn')?.focus();
     }
   });

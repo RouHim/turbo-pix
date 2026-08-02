@@ -8,6 +8,17 @@ import { get } from 'svelte/store';
 // ── Format helpers ──────────────────────────────────────────────────────────
 
 /**
+ * True for backend filter-prefix queries (type:, location:, is_favorite:),
+ * which the search pipeline routes through the regular (non-semantic) path.
+ * Keep in sync with SearchBar.performSearch.
+ * @param {string} q
+ * @returns {boolean}
+ */
+export function isPrefixQuery(q) {
+  return q.startsWith('type:') || q.startsWith('location:') || q.startsWith('is_favorite:');
+}
+
+/**
  * Format a file size in bytes to a human-readable string.
  * @param {number} bytes
  * @returns {string}
@@ -90,10 +101,12 @@ export function formatCollageDate(dateString) {
     return dateString;
   }
 
-  const monthName =
-    get(t)(`ui.months.${monthKey}`) || monthKey.charAt(0).toUpperCase() + monthKey.slice(1);
-  const weekdayName =
-    get(t)(`ui.weekdays.${weekdayKey}`) || weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1);
+  const monthName = get(t)(`ui.months.${monthKey}`, {
+    default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+  });
+  const weekdayName = get(t)(`ui.weekdays.${weekdayKey}`, {
+    default: weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1),
+  });
   const locale = getLocale() || 'en';
 
   if (locale === 'de') {

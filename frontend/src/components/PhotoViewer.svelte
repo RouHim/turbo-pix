@@ -711,12 +711,21 @@
             const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
             setVideoSource(photo, newUrl, true, true, true);
             resolve('Completed');
-          } else if (status.state === 'Failed' || status.state === 'Timeout') {
+          } else if (status.state === 'Failed') {
             clearInterval(intervalId);
             if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
             showTranscodeToast(
               get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+              true
+            );
+            resolve(status.state);
+          } else if (status.state === 'Timeout') {
+            clearInterval(intervalId);
+            if (transcodePollTimer === intervalId) transcodePollTimer = null;
+            hideTranscodeToast();
+            showTranscodeToast(
+              get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
               true
             );
             resolve(status.state);
@@ -998,6 +1007,9 @@
     if (!collageId) return;
 
     isAcceptingCollage = true;
+    // Capture before the await: navigating while the request is in flight
+    // must not change which collage the event reports (or which one closes).
+    const emittedCollageId = currentPhoto?.collageId ?? collageId;
 
     try {
       await api.acceptCollage(collageId);
@@ -1024,7 +1036,7 @@
     );
     window.dispatchEvent(
       new CustomEvent('collageAccepted', {
-        detail: { collageId: currentPhoto?.collageId ?? collageId },
+        detail: { collageId: emittedCollageId },
       })
     );
     close();

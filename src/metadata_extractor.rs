@@ -98,7 +98,8 @@ impl MetadataExtractor {
 
     /// Extract all EXIF metadata using kamadak-exif
     fn extract_exif_metadata(path: &Path, metadata: &mut PhotoMetadata) -> Result<(), String> {
-        let exif = crate::exif_helpers::read_exif_from_path(path)?;
+        let exif = crate::exif_helpers::read_exif_from_path(path)
+            .map_err(|e| format!("Failed to read EXIF: {}", e))?;
 
         Self::extract_basic_info(&exif, metadata);
         Self::extract_camera_info(&exif, metadata);
@@ -418,8 +419,12 @@ impl MetadataExtractor {
                         .and_then(|v| v.as_str())
                         .and_then(Self::parse_video_creation_time)
                         .or_else(|| {
+                            // The bare "date" tag was already tried (and
+                            // failed to parse) by the direct `tags.get("date")`
+                            // probe above, so only the localized
+                            // "date-{lang}" variants are reachable here.
                             tags.iter()
-                                .filter(|(k, _)| *k == "date" || k.strip_prefix("date-").is_some())
+                                .filter(|(k, _)| k.strip_prefix("date-").is_some())
                                 .find_map(|(_, v)| {
                                     v.as_str().and_then(Self::parse_video_creation_time)
                                 })
@@ -683,11 +688,12 @@ impl MetadataExtractor {
         let replaced = stem.replace(['/', ' ', '.', '-'], "_");
         let shards: Vec<&str> = replaced.split('_').collect();
 
-        // Shards are separator-normalized ('.', '-', '/', ' ' -> '_'), so a
-        // dashed date like "2024-02-15" can never survive as a single shard;
-        // the compact %Y%m%d form is the only reachable format here.
+        // Shards are separator-normalized ('.', '-', '/', ' ' -> '_'), so
+        // dashed forms like "2024-02-15" or "12-30-45" can never survive as
+        // a single shard; only the compact %Y%m%d / %H%M%S forms are
+        // reachable here.
         let date_formats = ["%Y%m%d"];
-        let time_formats = ["%H%M%S", "%H-%M-%S"];
+        let time_formats = ["%H%M%S"];
 
         for (i, shard) in shards.iter().enumerate() {
             for date_fmt in &date_formats {

@@ -143,7 +143,38 @@ pub async fn rotate_image(
     // `image` crate re-encodes from the pixel buffer and drops all EXIF, so
     // the full field set must be carried over explicitly afterwards (with
     // orientation forced to 1).
-    let original_exif = crate::exif_helpers::read_exif_from_path(file_path).ok();
+    let original_exif = match crate::exif_helpers::read_exif_from_path(file_path) {
+        Ok(exif) => Some(exif),
+        Err(e) => {
+            // Continuing without EXIF would re-encode the rotated file with
+            // NO EXIF — silent data loss (e.g. PNGs whose EXIF chunk carries
+            // the pngext-convention "Exif\0\0" prefix fail to parse here).
+            log::warn!(
+                "Failed to read EXIF from {} before rotation; rotated file will be written without EXIF: {}",
+                file_path.display(),
+                e
+            );
+            None
+        }
+    };
+
+    // Warn when the DB orientation disagrees with the file's EXIF: the stale
+    // DB value would bake in a wrong irreversible pixel rotation below.
+    if let Some(exif) = original_exif.as_ref() {
+        if let Some(file_orientation) = exif
+            .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0))
+        {
+            if photo.orientation.is_some() && photo.orientation != Some(file_orientation as i32) {
+                log::warn!(
+                    "EXIF orientation {} in {} differs from DB orientation {:?}; rotating with the DB value",
+                    file_orientation,
+                    file_path.display(),
+                    photo.orientation
+                );
+            }
+        }
+    }
 
     // Load image
     let mut img = image::open(file_path)
@@ -187,7 +218,7 @@ pub async fn rotate_image(
         // Cleanup temp file
         let _ = std::fs::remove_file(&temp_path);
         return Err(ImageEditError::ExifError(format!(
-            "Failed to reset EXIF orientation: {}",
+            "Failed to carry EXIF into rotated image: {}",
             e
         )));
     }
@@ -539,10 +570,15 @@ mod tests {
         // Sanity: the fixture really carries EXIF
         let before =
             crate::exif_helpers::read_exif_from_path(&file_path).expect("fixture must have EXIF");
+        // Make is an Ascii tag, so `get_uint` yields None for it; compare the
+        // display value instead so a corrupted/emptied Make fails the test.
         let make_before = before
             .get_field(exif::Tag::Make, exif::In::PRIMARY)
-            .map(|f| f.value.get_uint(0));
-        assert!(make_before.is_some(), "fixture must have a Make field");
+            .map(|f| f.value.display_as(exif::Tag::Make).to_string());
+        assert!(
+            make_before.as_deref().is_some_and(|s| !s.is_empty()),
+            "fixture must have a Make field"
+        );
         assert!(
             before
                 .get_field(exif::Tag::DateTime, exif::In::PRIMARY)
@@ -566,7 +602,7 @@ mod tests {
         assert_eq!(orientation, Some(1), "file orientation must be reset to 1");
         let make_after = after
             .get_field(exif::Tag::Make, exif::In::PRIMARY)
-            .map(|f| f.value.get_uint(0));
+            .map(|f| f.value.display_as(exif::Tag::Make).to_string());
         assert_eq!(make_after, make_before, "EXIF Make must survive rotation");
         assert!(
             after

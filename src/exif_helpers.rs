@@ -16,15 +16,16 @@ use img_parts::png::Png;
 use img_parts::{Bytes, ImageEXIF};
 
 /// Reads EXIF data from an open file-like reader.
-pub fn read_exif<R: BufRead + Seek>(reader: &mut R) -> Result<exif::Exif, String> {
-    exif::Reader::new()
-        .read_from_container(reader)
-        .map_err(|e| format!("Failed to read EXIF: {}", e))
+///
+/// Preserves the original kamadak-exif error so callers can tell a file with
+/// no EXIF segment at all (`exif::Error::NotFound`) apart from malformed data.
+pub fn read_exif<R: BufRead + Seek>(reader: &mut R) -> Result<exif::Exif, exif::Error> {
+    exif::Reader::new().read_from_container(reader)
 }
 
 /// Opens `path` and reads its EXIF data.
-pub fn read_exif_from_path(path: &Path) -> Result<exif::Exif, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+pub fn read_exif_from_path(path: &Path) -> Result<exif::Exif, exif::Error> {
+    let file = std::fs::File::open(path)?;
     read_exif(&mut std::io::BufReader::new(&file))
 }
 

@@ -177,50 +177,61 @@ test.describe('Photo Viewer', () => {
     await firstCard.click();
     await TestHelpers.verifyViewerOpen(page);
 
-    page.once('dialog', (dialog) => dialog.accept());
-    await page.locator('.delete-photo-btn').click();
-
-    // THEN: Photo card is removed from stream immediately (no reload)
-    await TestHelpers.verifyViewerOpen(page);
-    await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
-
-    // CLEANUP: restore the deleted photo so shared server state is unchanged.
-    // Deleting removes the file and the DB row, and there is no rescan API to
-    // rebuild the row, so write the file back and re-insert the row directly.
-    await writeFile(deletedPhoto.file_path, fileBytes);
-    await utimes(deletedPhoto.file_path, fileStats.atime, fileStats.mtime);
-
-    const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+    let deletePerformed = false;
     try {
-      db.prepare(
-        `INSERT OR REPLACE INTO photos (
-          hash_sha256, file_path, filename, file_size, mime_type,
-          taken_at, width, height, orientation, duration,
-          thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
-          metadata, file_modified, date_indexed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        deletedPhoto.hash_sha256,
-        deletedPhoto.file_path,
-        deletedPhoto.filename,
-        deletedPhoto.file_size,
-        deletedPhoto.mime_type ?? null,
-        deletedPhoto.taken_at ?? null,
-        deletedPhoto.width ?? null,
-        deletedPhoto.height ?? null,
-        deletedPhoto.orientation ?? null,
-        deletedPhoto.duration ?? null,
-        deletedPhoto.thumbnail_path ?? null,
-        deletedPhoto.has_thumbnail ? 1 : 0,
-        deletedPhoto.blurhash ?? null,
-        deletedPhoto.is_favorite ? 1 : 0,
-        deletedPhoto.semantic_vector_indexed ? 1 : 0,
-        JSON.stringify(deletedPhoto.metadata ?? {}),
-        deletedPhoto.file_modified ?? new Date().toISOString(),
-        deletedPhoto.date_indexed ?? new Date().toISOString()
-      );
+      page.once('dialog', (dialog) => dialog.accept());
+      await page.locator('.delete-photo-btn').click();
+      deletePerformed = true;
+
+      // THEN: Photo card is removed from stream immediately (no reload)
+      await TestHelpers.verifyViewerOpen(page);
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
     } finally {
-      db.close();
+      // CLEANUP: restore the deleted photo so shared server state is unchanged,
+      // even if an assertion above fails. Deleting removes the file and the DB
+      // row, and there is no rescan API to rebuild the row, so write the file
+      // back and re-insert the row directly. The restore only runs when the
+      // delete actually happened — if the click failed, the photo is intact.
+      if (deletePerformed) {
+        await writeFile(deletedPhoto.file_path, fileBytes);
+        await utimes(deletedPhoto.file_path, fileStats.atime, fileStats.mtime);
+
+        const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+        try {
+          db.prepare(
+            `INSERT OR REPLACE INTO photos (
+              hash_sha256, file_path, filename, file_size, mime_type,
+              taken_at, width, height, orientation, duration,
+              thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
+              metadata, file_modified, date_indexed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            deletedPhoto.hash_sha256,
+            deletedPhoto.file_path,
+            deletedPhoto.filename,
+            deletedPhoto.file_size,
+            deletedPhoto.mime_type ?? null,
+            deletedPhoto.taken_at ?? null,
+            deletedPhoto.width ?? null,
+            deletedPhoto.height ?? null,
+            deletedPhoto.orientation ?? null,
+            deletedPhoto.duration ?? null,
+            deletedPhoto.thumbnail_path ?? null,
+            deletedPhoto.has_thumbnail ? 1 : 0,
+            deletedPhoto.blurhash ?? null,
+            deletedPhoto.is_favorite ? 1 : 0,
+            // The DELETE also removed the semantic_vector_path_mapping row, so
+            // the photo's stored vector is gone. Clear the flag so the next
+            // scan re-embeds, instead of trusting the stale API record.
+            0,
+            JSON.stringify(deletedPhoto.metadata ?? {}),
+            deletedPhoto.file_modified ?? new Date().toISOString(),
+            deletedPhoto.date_indexed ?? new Date().toISOString()
+          );
+        } finally {
+          db.close();
+        }
+      }
     }
 
     // THEN: the photo reappears in the stream after a reload

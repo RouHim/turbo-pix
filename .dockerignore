@@ -3,6 +3,7 @@ target/
 dist/
 .git/
 test-data/
+test-e2e-data/
 data/
 photos/
 collages/

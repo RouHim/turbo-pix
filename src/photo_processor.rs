@@ -523,9 +523,13 @@ impl PhotoProcessor {
 }
 
 /// Records one phase-1 metadata task outcome on `status` and returns the
-/// photo when the task produced one. Non-photo outcomes (unreadable file,
-/// task error/panic) are counted as metadata errors instead of being
-/// silently dropped.
+/// photo when the task produced one. Task errors/panics are counted as
+/// metadata errors. `Ok(None)` is effectively unreachable (the extraction
+/// path only returns `None` when `file_name()` is None) but is counted as an
+/// error when it does occur. Note that unreadable files are NOT caught here:
+/// they still count as processed with `hash_sha256 = None`, because the
+/// extraction API has no return path that signals "unreadable" — detecting
+/// them would require adding one.
 fn record_metadata_task_outcome(
     outcome: Result<Option<ProcessedPhoto>, tokio::task::JoinError>,
     status: &IndexingStatus,

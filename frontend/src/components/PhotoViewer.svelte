@@ -606,6 +606,9 @@
       if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return true;
       if (response.status === 202) {
         const data = await response.json();
+        // The viewer may have been closed, or a newer photo requested, while
+        // the transcode JSON was loading — a stale viewer must not toast.
+        if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return true;
         const pollUrl = data.poll_url;
         showTranscodeToast(
           get(t)('video.transcoding.started', {
@@ -989,13 +992,19 @@
 
       // The user may have navigated to another photo while the delete was in
       // flight; keep the list update, but only re-navigate when the viewer
-      // still shows the deleted photo.
+      // still shows the deleted photo. If the viewer moved on, the delete
+      // still shifted every index after the removed slot, so re-sync
+      // currentIndex to keep hasPrev/hasNext and photos[currentIndex] writes
+      // pointing at the photo on screen.
       if (currentPhoto?.hash_sha256 === photoHash) {
         if (photos.length > 0) {
           await showPhotoAtIndex(Math.min(currentIndex, photos.length - 1));
         } else {
           close();
         }
+      } else if (currentPhoto) {
+        const idx = photos.findIndex((p) => p.hash_sha256 === currentPhoto.hash_sha256);
+        currentIndex = idx === -1 ? Math.min(currentIndex, photos.length - 1) : idx;
       }
       isLoading = false;
     } catch (error) {

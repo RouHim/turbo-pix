@@ -213,11 +213,19 @@ pub async fn get_photo_file(
     }
 }
 
-/// Build the response for a HEAD request on a file route: identical headers to
-/// the corresponding GET route (content-type, content-length, accept-ranges,
-/// cache-control) but an empty body. Content-length reflects the on-disk file
-/// size; no file content is read and no transcoding is triggered.
-fn file_head_reply(mime_type: Option<&str>, file_path: &Path, file_size: i64) -> impl Reply {
+/// Build the response for a HEAD request on a file route: the headers of the
+/// corresponding GET route (content-type, content-length, optional
+/// accept-ranges, cache-control) but an empty body. Content-length reflects
+/// the on-disk file size; no file content is read and no transcoding is
+/// triggered. `accept_ranges` is only set for routes whose GET counterpart
+/// implements byte ranges (the video route does; the photo-file GET route
+/// does not).
+fn file_head_reply(
+    mime_type: Option<&str>,
+    file_path: &Path,
+    file_size: i64,
+    accept_ranges: bool,
+) -> impl Reply {
     let content_type = mime_type
         .map(|m| m.to_string())
         .or_else(|| mimetype_detector::from_path(file_path).map(|m| m.to_string()))
@@ -226,10 +234,28 @@ fn file_head_reply(mime_type: Option<&str>, file_path: &Path, file_size: i64) ->
     // Empty body; the explicit content-length mirrors the file size reported by
     // the GET route. The explicit content-length is what makes the HEAD reply
     // useful (e.g. for range planning) without reading any file bytes.
-    let reply = warp::reply::with_header(Vec::<u8>::new(), "content-type", content_type);
-    let reply = warp::reply::with_header(reply, "content-length", file_size.to_string());
-    let reply = warp::reply::with_header(reply, "accept-ranges", "bytes");
-    warp::reply::with_header(reply, "cache-control", "public, max-age=31536000")
+    // Boxed because the accept-ranges header is added conditionally, and warp's
+    // typed with_header wrappers would otherwise be two distinct concrete types.
+    let reply: Box<dyn Reply> = Box::new(warp::reply::with_header(
+        Vec::<u8>::new(),
+        "content-type",
+        content_type,
+    ));
+    let reply: Box<dyn Reply> = Box::new(warp::reply::with_header(
+        reply,
+        "content-length",
+        file_size.to_string(),
+    ));
+    let reply: Box<dyn Reply> = if accept_ranges {
+        Box::new(warp::reply::with_header(reply, "accept-ranges", "bytes"))
+    } else {
+        reply
+    };
+    Box::new(warp::reply::with_header(
+        reply,
+        "cache-control",
+        "public, max-age=31536000",
+    ))
 }
 
 pub async fn head_photo_file(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
@@ -244,10 +270,35 @@ pub async fn head_photo_file(photo_hash: String, db_pool: DbPool) -> Result<impl
         }
     };
 
+    let file_path = Path::new(&photo.file_path);
+
+    // Stat the backing file: content-length must reflect the actual on-disk
+    // size (the DB row's file_size can be stale) and a missing file is a 404,
+    // not a 200 with a lying size.
+    let actual_size = match std::fs::metadata(file_path) {
+        Ok(metadata) => metadata.len() as i64,
+        Err(_) => return Err(reject::custom(NotFoundError)),
+    };
+
+    if crate::raw_processor::is_raw_file(file_path) {
+        // The GET route decodes RAW sources to a JPEG on the fly, so HEAD
+        // reports content-type: image/jpeg. Content-length is the RAW source
+        // size, not the decoded JPEG length: computing the latter would
+        // require actually transcoding, which HEAD must not do. This is a
+        // documented divergence from what a GET would return.
+        return Ok(file_head_reply(
+            Some("image/jpeg"),
+            file_path,
+            actual_size,
+            false,
+        ));
+    }
+
     Ok(file_head_reply(
         photo.mime_type.as_deref(),
-        Path::new(&photo.file_path),
-        photo.file_size,
+        file_path,
+        actual_size,
+        false,
     ))
 }
 
@@ -266,10 +317,19 @@ pub async fn head_photo_video(
         }
     };
 
+    // Stat the backing file so a missing file yields 404 and content-length
+    // reflects the actual on-disk size. The video GET route implements byte
+    // ranges (see handlers_video), so HEAD advertises accept-ranges.
+    let actual_size = match std::fs::metadata(&photo.file_path) {
+        Ok(metadata) => metadata.len() as i64,
+        Err(_) => return Err(reject::custom(NotFoundError)),
+    };
+
     Ok(file_head_reply(
         photo.mime_type.as_deref(),
         Path::new(&photo.file_path),
-        photo.file_size,
+        actual_size,
+        true,
     ))
 }
 
@@ -446,6 +506,9 @@ pub async fn get_photo_exif(photo_hash: String, db_pool: DbPool) -> Result<impl 
 
     let exif_metadata = match crate::exif_helpers::read_exif(&mut std::io::BufReader::new(&file)) {
         Ok(e) => e,
+        // A photo without an EXIF APP1/APP2 segment is a normal condition, not
+        // a server fault; report 404 so clients can treat it as "no EXIF".
+        Err(exif::Error::NotFound(_)) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
             log::error!("Failed to read EXIF from {}: {}", photo.file_path, e);
             return Err(reject::custom(DatabaseError {
@@ -953,7 +1016,7 @@ mod tests {
             .await
             .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
         let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
 
         let response = warp::test::request()
@@ -968,21 +1031,113 @@ mod tests {
             0,
             "HEAD responses have an empty body"
         );
+        // Content-length must reflect the actual on-disk size (the DB row
+        // stores a placeholder 12345), not a stale DB value.
+        let actual_size = fs::metadata(&temp_image).unwrap().len().to_string();
         assert_eq!(
             response.headers()["content-length"].to_str().unwrap(),
-            "12345"
+            actual_size
         );
         assert_eq!(
             response.headers()["content-type"].to_str().unwrap(),
             "image/jpeg"
         );
-        assert_eq!(
-            response.headers()["accept-ranges"].to_str().unwrap(),
-            "bytes"
+        assert!(
+            response.headers().get("accept-ranges").is_none(),
+            "photo-file HEAD must not advertise ranges: the GET route has no Range support"
         );
         assert_eq!(
             response.headers()["cache-control"].to_str().unwrap(),
             "public, max-age=31536000"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_head_photo_file_missing_file_returns_not_found() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        // Remove the backing file: the HEAD handler stats it and must answer
+        // 404 rather than a 200 with a stale content-length.
+        fs::remove_file(&temp_image).expect("Failed to remove test image");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}/file", photo_hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_head_photo_file_raw_returns_jpeg_content_type() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        // Back a photo row with a real RAW source. The DB mime type is the
+        // RAW type; the HEAD handler must still advertise image/jpeg because
+        // the GET route decodes RAW to JPEG on the fly.
+        let hash = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let raw_source = Path::new("test-data/IMG_9899.CR2");
+        let temp_raw = temp_dir.path().join("photo.CR2");
+        fs::copy(raw_source, &temp_raw).expect("Failed to copy RAW test image");
+
+        let photo = Photo {
+            hash_sha256: hash.to_string(),
+            file_path: temp_raw.to_str().unwrap().to_string(),
+            filename: "photo.CR2".to_string(),
+            file_size: 12345,
+            mime_type: Some("image/x-canon-cr2".to_string()),
+            taken_at: Some(Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap()),
+            width: Some(800),
+            height: Some(600),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        photo
+            .create(&db_pool)
+            .await
+            .expect("Failed to create test photo");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}/file", hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"].to_str().unwrap(),
+            "image/jpeg",
+            "RAW files are served as decoded JPEGs by GET, so HEAD must match"
+        );
+        // Content-length is the RAW source size (HEAD does not transcode);
+        // it is a documented divergence from the decoded GET length.
+        let raw_size = fs::metadata(&temp_raw).unwrap().len().to_string();
+        assert_eq!(
+            response.headers()["content-length"].to_str().unwrap(),
+            raw_size
+        );
+        assert!(
+            response.headers().get("accept-ranges").is_none(),
+            "photo-file HEAD must not advertise ranges"
         );
     }
 
@@ -992,7 +1147,7 @@ mod tests {
             .await
             .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
         let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
 
         let response = warp::test::request()
@@ -1001,18 +1156,44 @@ mod tests {
             .reply(&routes)
             .await;
 
-        // The video HEAD handler only queries the photo row and must not start
-        // a transcode.
+        // The video HEAD handler stats the backing file but must not start a
+        // transcode.
         assert_eq!(response.status(), 200);
         assert_eq!(
             response.body().len(),
             0,
             "HEAD responses have an empty body"
         );
+        let actual_size = fs::metadata(&temp_image).unwrap().len().to_string();
         assert_eq!(
             response.headers()["content-length"].to_str().unwrap(),
-            "12345"
+            actual_size
         );
+        // The video GET route implements byte ranges, so HEAD keeps advertising
+        // accept-ranges (unlike the photo-file route).
+        assert_eq!(
+            response.headers()["accept-ranges"].to_str().unwrap(),
+            "bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_head_photo_video_missing_file_returns_not_found() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        fs::remove_file(&temp_image).expect("Failed to remove test image");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("HEAD")
+            .path(&format!("/api/photos/{}/video", photo_hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 404);
     }
 
     #[tokio::test]
@@ -1112,6 +1293,58 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_exif_missing_segment_returns_not_found() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        // A plain JPEG with no EXIF APP1 segment: the image crate's encoder
+        // writes none. kamadak-exif reports Error::NotFound for it, which must
+        // map to 404 ("no EXIF available"), not a 500 server error.
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let temp_image = temp_dir.path().join(format!("{}.jpg", hash));
+        image::RgbImage::new(4, 4)
+            .save(&temp_image)
+            .expect("Failed to write no-EXIF JPEG");
+
+        let photo = Photo {
+            hash_sha256: hash.to_string(),
+            file_path: temp_image.to_str().unwrap().to_string(),
+            filename: format!("{}.jpg", hash),
+            file_size: 12345,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap()),
+            width: Some(4),
+            height: Some(4),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        photo
+            .create(&db_pool)
+            .await
+            .expect("Failed to create test photo");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .path(&format!("/api/photos/{}/exif", hash))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 404);
     }
 
     #[tokio::test]

@@ -185,6 +185,9 @@
 
   async function handleSubmit(e) {
     e.preventDefault();
+    // Re-entry guard: the Save button is disabled while saving, but Enter in a
+    // text field can still re-trigger submit — skip duplicate PATCHes.
+    if (saving) return;
     if (!photo) return;
 
     errorMessage = '';

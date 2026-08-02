@@ -34,7 +34,9 @@ static TRANSCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
 /// Maximum number of transcode status entries kept in memory. The store is a
 /// status cache for polling clients; settled entries are evicted first when
-/// the cap is exceeded so the map cannot grow without bound.
+/// the cap is exceeded so the map cannot grow without bound. Under a burst of
+/// concurrent transcodes the cap acts as a soft limit: in-progress entries are
+/// never evicted, since removing them would break in-flight polls.
 const TRANSCODE_STATUS_STORE_CAP: usize = 128;
 
 fn get_status_store() -> &'static Mutex<HashMap<String, TranscodeStatus>> {
@@ -52,9 +54,11 @@ pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>>
 }
 
 /// Evict entries from the status map until it is at or under
-/// [`TRANSCODE_STATUS_STORE_CAP`]. Settled entries (Completed/Failed/Timeout)
-/// are removed first so in-flight transcodes keep their pollable status;
-/// arbitrary entries are removed only if the map is still over the cap.
+/// [`TRANSCODE_STATUS_STORE_CAP`]. Only settled entries (Completed/Failed/
+/// Timeout) are removed; in-progress entries are never evicted so polling
+/// clients keep a live status. If only in-progress entries remain, eviction
+/// stops and the cap acts as a soft limit under bursts of concurrent
+/// transcodes.
 fn evict_transcode_statuses(map: &mut HashMap<String, TranscodeStatus>) {
     if map.len() <= TRANSCODE_STATUS_STORE_CAP {
         return;
@@ -75,13 +79,6 @@ fn evict_transcode_statuses(map: &mut HashMap<String, TranscodeStatus>) {
         if map.len() <= TRANSCODE_STATUS_STORE_CAP {
             return;
         }
-    }
-
-    while map.len() > TRANSCODE_STATUS_STORE_CAP {
-        let Some(key) = map.keys().next().cloned() else {
-            return;
-        };
-        map.remove(&key);
     }
 }
 
@@ -1545,6 +1542,38 @@ pub(crate) mod tests {
         assert!(
             map.contains_key("in-flight"),
             "in-progress entries must be evicted last"
+        );
+    }
+
+    #[test]
+    fn test_status_store_eviction_never_evicts_in_progress() {
+        // GIVEN a map over the cap holding only in-progress entries
+        let mut map = HashMap::new();
+        for i in 0..(TRANSCODE_STATUS_STORE_CAP + 20) {
+            map.insert(
+                format!("in-flight-{}", i),
+                TranscodeStatus {
+                    state: TranscodeState::InProgress,
+                    hash: format!("in-flight-{}", i),
+                    started_at: None,
+                    error: None,
+                },
+            );
+        }
+
+        // WHEN eviction runs
+        evict_transcode_statuses(&mut map);
+
+        // THEN no in-progress entry is evicted: the cap is a soft limit and
+        // in-flight polls keep their status
+        assert_eq!(map.len(), TRANSCODE_STATUS_STORE_CAP + 20);
+        assert!(
+            map.contains_key("in-flight-0"),
+            "in-progress entries must survive eviction"
+        );
+        assert!(
+            map.contains_key(&format!("in-flight-{}", TRANSCODE_STATUS_STORE_CAP + 19)),
+            "in-progress entries must survive eviction"
         );
     }
 }

@@ -1061,6 +1061,17 @@ fn create_collage_image(
             is_raw
         );
 
+        // Select the source by `using_thumbnail`: a stale/missing thumbnail
+        // must not silently drop the photo via `image::open` failure, and a
+        // `thumbnail_path = Some` + `has_thumbnail = false` row must not load
+        // the already-oriented thumbnail and then get the `!using_thumbnail`
+        // orientation correction applied on top of it.
+        let image_path = if using_thumbnail {
+            photo.thumbnail_path.as_deref().unwrap_or(&photo.file_path)
+        } else {
+            &photo.file_path
+        };
+
         let mut img = if is_raw {
             match raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path)) {
                 Ok(img) => img,
@@ -1071,7 +1082,6 @@ fn create_collage_image(
             }
         } else {
             // For non-RAW files, use thumbnail if available, otherwise use original
-            let image_path = photo.thumbnail_path.as_deref().unwrap_or(&photo.file_path);
             match image::open(image_path) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1471,8 +1481,20 @@ pub async fn accept_collage(
         if thumb_source.exists() {
             if let Some(thumb_filename) = thumb_source.file_name() {
                 let thumb_dest = dest_dir.join(thumb_filename);
-                if std::fs::rename(&thumb_source, &thumb_dest).is_ok() {
-                    moved_thumb = Some(thumb_dest);
+                match std::fs::rename(&thumb_source, &thumb_dest) {
+                    Ok(()) => moved_thumb = Some(thumb_dest),
+                    Err(e) => {
+                        // The DB thumbnail_path is set to NULL below, which is
+                        // the safe outcome (consumers fall back to the collage
+                        // file itself); the orphaned thumbnail in staging is a
+                        // silent leak worth surfacing.
+                        warn!(
+                            "Failed to move collage thumbnail {} to {}: {}",
+                            thumb_source.display(),
+                            thumb_dest.display(),
+                            e
+                        );
+                    }
                 }
             }
         }

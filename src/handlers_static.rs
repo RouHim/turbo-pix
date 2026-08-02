@@ -36,21 +36,18 @@ fn build_asset_response(
 }
 
 /// Builds the HEAD mirror of an asset route: the same headers as the GET
-/// response (content-type, content-length, accept-ranges, cache-control) with
-/// an empty body.
+/// response (content-type, content-length, cache-control) with an empty body.
+/// Notably no `accept-ranges` header: the static GET route ignores Range, so
+/// advertising byte-range support would be wrong.
 fn build_head_response(
     content: &'static [u8],
     content_type: &'static str,
 ) -> warp::reply::Response {
     warp::reply::with_header(
         warp::reply::with_header(
-            warp::reply::with_header(
-                warp::reply::with_header(Vec::<u8>::new(), "content-type", content_type),
-                "content-length",
-                content.len().to_string(),
-            ),
-            "accept-ranges",
-            "bytes",
+            warp::reply::with_header(Vec::<u8>::new(), "content-type", content_type),
+            "content-length",
+            content.len().to_string(),
         ),
         "cache-control",
         "no-cache",
@@ -214,7 +211,10 @@ mod tests {
             head.headers()["content-type"],
             content_type_from_path(head_path)
         );
-        assert_eq!(head.headers()["accept-ranges"], "bytes");
+        assert!(
+            head.headers().get("accept-ranges").is_none(),
+            "static assets do not support range requests; HEAD must not advertise accept-ranges"
+        );
         assert_eq!(head.headers()["cache-control"], "no-cache");
 
         // HEAD on unknown paths stays rejected (no SPA-fallback mirror)

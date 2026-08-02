@@ -754,6 +754,10 @@ impl Photo {
                         // Bare "location:" token — no city to match, skip it
                         // (LIKE '%%' would match every row with a city).
                     } else {
+                        // Trim once: "location: New York" accumulates a leading
+                        // space during absorption that would break the LIKE
+                        // pattern ('% New York%' matches nothing).
+                        let city = city.trim();
                         where_clause
                             .push_str(" AND json_extract(metadata, '$.location.city') LIKE ?");
                         params.push(format!("%{}%", city));
@@ -1273,6 +1277,39 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(stored, Some(true), "is_favorite must survive a hash re-key");
+
+        // AND: the old row is gone (the DELETE really ran, not just an UPSERT)
+        let old_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE hash_sha256 = ?")
+            .bind("a".repeat(64))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            old_rows, 0,
+            "re-keyed row must not remain under the old hash"
+        );
+
+        // AND: a same-hash rescan keeps the favorite via COALESCE (no re-key)
+        let mut rescan = photo.clone();
+        rescan.hash_sha256 = "b".repeat(64);
+        rescan.is_favorite = None;
+        let mut tx = pool.begin().await.unwrap();
+        rescan
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let stored: Option<bool> =
+            sqlx::query_scalar("SELECT is_favorite FROM photos WHERE hash_sha256 = ?")
+                .bind("b".repeat(64))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            stored,
+            Some(true),
+            "same-hash upsert must keep the favorite"
+        );
     }
 
     #[tokio::test]
@@ -1791,6 +1828,56 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, ny_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_location_space_separated_after_colon() {
+        let pool = create_test_db_pool().await.unwrap();
+        let ny_photo = create_test_photo_with_metadata(
+            "ny-space.jpg",
+            "ny-space-hash",
+            json!({
+                "location": {
+                    "city": "New York"
+                }
+            }),
+        );
+        ny_photo.create(&pool).await.unwrap();
+
+        // "location: New York" (space after the colon) absorbs "New York"
+        // with a leading space — the LIKE pattern must be trimmed or it
+        // matches nothing.
+        let query = create_search_query("location: New York");
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
+        assert_eq!(photos[0].file_path, ny_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_bare_location_token_is_skipped() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_metadata(
+            "with-city.jpg",
+            "with-city-hash",
+            json!({
+                "location": {
+                    "city": "Berlin"
+                }
+            }),
+        );
+        photo.create(&pool).await.unwrap();
+
+        // A bare "location:" token must not filter (previously it emitted
+        // LIKE '%%' which matched every row with a city).
+        let query = create_search_query("with-city location:");
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(total, 1);
     }
 
     #[tokio::test]

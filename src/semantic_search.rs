@@ -26,6 +26,7 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::clip;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use zerocopy::IntoBytes;
@@ -53,6 +54,14 @@ const MIN_SIMILARITY_SCORE: f32 = 0.615;
 // Video frame sampling configuration
 const VIDEO_FRAME_COUNT: usize = 3;
 const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
+
+/// Monotonic counter shared by BOTH video-pipeline paths
+/// (`compute_video_semantic_vector` and `encode_video_vector`) so their temp
+/// frame directories can never collide. A per-function counter seeded at 0
+/// lets concurrent invocations build the same `$TMPDIR/turbopix_<pid>_<n>`
+/// path, and one `TempFrameDir` RAII guard would then delete the other's
+/// frames mid-flight.
+static TEMP_FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// RAII guard for a temporary frame-extraction directory: removes the
 /// directory and everything in it on drop, so error paths cannot leak frames
@@ -332,10 +341,9 @@ impl SemanticSearchEngine {
             frame_times
         );
 
-        // Create temp directory for frame extraction
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Create temp directory for frame extraction (shared counter — see
+        // TEMP_FRAME_COUNTER)
+        let unique_id = TEMP_FRAME_COUNTER.fetch_add(1, Ordering::SeqCst);
         // RAII guard: the directory (and any frames inside) is removed on
         // drop, so the error paths below can never leak it.
         let temp_dir = TempFrameDir::new(unique_id);
@@ -432,9 +440,8 @@ impl SemanticSearchEngine {
             frame_times
         );
 
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Shared counter — see TEMP_FRAME_COUNTER.
+        let unique_id = TEMP_FRAME_COUNTER.fetch_add(1, Ordering::SeqCst);
         // RAII guard: the directory (and any frames inside) is removed on
         // drop, so the error paths below can never leak it.
         let temp_dir = TempFrameDir::new(unique_id);
@@ -645,6 +652,12 @@ pub(crate) fn load_clip_model(
     device: &Device,
     data_path: &str,
 ) -> Result<(clip::ClipModel, Tokenizer)> {
+    // NOTE: the `..` is intentional — `data_path/../data/models` keeps the
+    // model cache in the repo-root ./data/models even when the app runs with a
+    // sandboxed data dir (the E2E suite sets TURBO_PIX_DATA_PATH=test-e2e-data
+    // while sharing the model cache; without the `..` the E2E server would
+    // hang trying to download the model into the sandbox). Do not "simplify"
+    // this path expression.
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
     let model_repo = hf_hub::api::sync::ApiBuilder::new()
@@ -1356,6 +1369,25 @@ mod tests {
         for (path, score) in &results {
             println!("  {}: {:.1}", path, score);
         }
+    }
+
+    #[test]
+    fn test_temp_frame_counter_shared_across_video_paths() {
+        // Regression: each video path used to declare its own `static COUNTER`
+        // seeded at 0, so concurrent invocations of compute_video_semantic_vector
+        // and encode_video_vector could build the same
+        // `$TMPDIR/turbopix_<pid>_<n>` path and one TempFrameDir guard would
+        // delete the other's frames mid-flight. Both paths must now draw from
+        // the one module-level counter, so consecutive allocations never
+        // collide.
+        let id_a = TEMP_FRAME_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let id_b = TEMP_FRAME_COUNTER.fetch_add(1, Ordering::SeqCst);
+        assert_ne!(id_a, id_b, "shared counter must issue distinct ids");
+        assert_ne!(
+            TempFrameDir::new(id_a).path(),
+            TempFrameDir::new(id_b).path(),
+            "distinct ids must yield distinct temp directories"
+        );
     }
 
     #[test]

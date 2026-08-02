@@ -54,11 +54,13 @@ pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>>
 }
 
 /// Evict entries from the status map until it is at or under
-/// [`TRANSCODE_STATUS_STORE_CAP`]. Only settled entries (Completed/Failed/
-/// Timeout) are removed; in-progress entries are never evicted so polling
-/// clients keep a live status. If only in-progress entries remain, eviction
-/// stops and the cap acts as a soft limit under bursts of concurrent
-/// transcodes.
+/// [`TRANSCODE_STATUS_STORE_CAP`]. Only settled entries (Completed, and
+/// Failed/Timeout OLDER than the retry cooldown) are removed; in-progress
+/// entries are never evicted so polling clients keep a live status, and
+/// fresh failures keep their cooldown (evicting them would let a doomed
+/// 300s job re-spawn immediately). If only protected entries remain,
+/// eviction stops and the cap acts as a soft limit under bursts of
+/// concurrent transcodes.
 fn evict_transcode_statuses(map: &mut HashMap<String, TranscodeStatus>) {
     if map.len() <= TRANSCODE_STATUS_STORE_CAP {
         return;
@@ -66,11 +68,12 @@ fn evict_transcode_statuses(map: &mut HashMap<String, TranscodeStatus>) {
 
     let settled: Vec<String> = map
         .iter()
-        .filter(|(_, s)| {
-            matches!(
-                s.state,
-                TranscodeState::Completed | TranscodeState::Failed | TranscodeState::Timeout
-            )
+        .filter(|(_, s)| match s.state {
+            TranscodeState::Completed => true,
+            TranscodeState::Failed | TranscodeState::Timeout => s
+                .started_at
+                .is_none_or(|started| started + TRANSCODE_RETRY_COOLDOWN < Utc::now()),
+            TranscodeState::InProgress | TranscodeState::Pending => false,
         })
         .map(|(key, _)| key.clone())
         .collect();

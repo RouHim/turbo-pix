@@ -52,7 +52,7 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect()
-        } else if host == "127.0.0.1" || host == "::1" {
+        } else if host == "127.0.0.1" || host == "::1" || host == "localhost" {
             vec![
                 "127.0.0.1".to_string(),
                 "localhost".to_string(),
@@ -119,13 +119,20 @@ mod tests {
     fn uses_loopback_host_by_default() {
         with_env_lock(|| {
             let original = env::var("TURBO_PIX_HOST").ok();
+            let original_allowed = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
             env::remove_var("TURBO_PIX_HOST");
+            env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
 
             let config = Config::from_env().unwrap();
             assert_eq!(config.host, "127.0.0.1");
+            // Loopback binds default the DNS-rebinding Host pin ON.
+            assert_eq!(config.allowed_hosts, vec!["127.0.0.1", "localhost", "::1"]);
 
             if let Some(value) = original {
                 env::set_var("TURBO_PIX_HOST", value);
+            }
+            if let Some(value) = original_allowed {
+                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
             }
         });
     }
@@ -134,15 +141,45 @@ mod tests {
     fn reads_custom_host_from_env() {
         with_env_lock(|| {
             let original = env::var("TURBO_PIX_HOST").ok();
+            let original_allowed = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
             env::set_var("TURBO_PIX_HOST", "0.0.0.0");
+            env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
 
             let config = Config::from_env().unwrap();
             assert_eq!(config.host, "0.0.0.0");
+            // Non-loopback binds leave the pin OFF (operator opt-in).
+            assert!(config.allowed_hosts.is_empty());
 
             if let Some(value) = original {
                 env::set_var("TURBO_PIX_HOST", value);
             } else {
                 env::remove_var("TURBO_PIX_HOST");
+            }
+            if let Some(value) = original_allowed {
+                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
+            }
+        });
+    }
+
+    #[test]
+    fn parses_allowed_hosts_from_env() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
+            env::set_var(
+                "TURBO_PIX_ALLOWED_HOSTS",
+                "photos.example.com,  LAN-PIX  ,,photos.example.com",
+            );
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(
+                config.allowed_hosts,
+                vec!["photos.example.com", "LAN-PIX", "photos.example.com"]
+            );
+
+            if let Some(value) = original {
+                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
+            } else {
+                env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
             }
         });
     }

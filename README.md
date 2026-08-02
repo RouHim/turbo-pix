@@ -123,6 +123,8 @@ All configuration is done via environment variables:
 | `TURBO_PIX_PHOTO_PATHS`   | Comma-separated list of photo directories to scan | `./photos`                            | Yes      |
 | `TURBO_PIX_DATA_PATH`     | Data directory for database, cache, and AI models | `./data`                              | No       |
 | `TURBO_PIX_PORT`          | Port on which the application should listen       | `18473`                               | No       |
+| `TURBO_PIX_HOST`          | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access | `127.0.0.1` | No |
+| `TURBO_PIX_ALLOWED_HOSTS` | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | *(loopback names)* | No       |
 | `TURBO_PIX_LOCALE`        | Default UI locale (`en`, `de`)                    | `en`                                  | No       |
 | `TURBO_PIX_NOMINATIM_URL` | Base URL for the Nominatim geocoding service      | `https://nominatim.openstreetmap.org` | No       |
 | `RUST_LOG`                | Log level (trace, debug, info, warn, error)       | `info`                                | No       |

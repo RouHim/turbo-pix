@@ -165,11 +165,14 @@ pub async fn get_photo_file(
             photo.file_path
         );
 
-        let _raw_permit = RAW_DECODE_LIMIT.acquire().await.map_err(|e| {
-            reject::custom(DatabaseError {
-                message: format!("RAW decode queue closed: {}", e),
-            })
-        })?;
+        let _raw_permit = crate::raw_processor::RAW_DECODE_LIMIT
+            .acquire()
+            .await
+            .map_err(|e| {
+                reject::custom(DatabaseError {
+                    message: format!("RAW decode queue closed: {}", e),
+                })
+            })?;
 
         match crate::raw_processor::decode_raw_to_dynamic_image(file_path) {
             Ok(img) => {
@@ -585,12 +588,6 @@ pub struct RotateRequest {
 /// Rotation is a rare user action and the critical section is short.
 static ROTATE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-/// Caps concurrent RAW decodes in `get_photo_file`: each decode transiently
-/// holds several full-resolution buffers, so unbounded concurrency is a
-/// memory-exhaustion vector (mirrors the transcode semaphore).
-static RAW_DECODE_LIMIT: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
 
 pub async fn rotate_photo(
     photo_hash: String,

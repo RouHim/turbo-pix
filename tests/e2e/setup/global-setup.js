@@ -95,10 +95,12 @@ async function seedTestMedia() {
   }
 
   // Camera-EXIF fixture: the metadata EXIF test needs a photo whose EXIF
-  // carries Make/Model. Its EXIF taken_at (2011) is preserved by the
-  // extractor (EXIF wins over file mtime), so it sorts LAST in taken_at-DESC
-  // and never disturbs photos[0]-based tests — the EXIF test targets it by
-  // hash instead.
+  // carries Make/Model. Its EXIF taken_at is 2024-01-01 — NOT pinned to the
+  // archive era — so its sort position is not relied on anywhere: the EXIF
+  // test targets it by hash (metadata.e2e.spec.js), and no photos[0]-based
+  // test depends on the newest card being a particular file. If this
+  // fixture's date ever moves past the cluster seed dates, re-check
+  // photos[0]-based tests.
   const exifSrc = path.join('test-data', 'sample_with_exif.jpg');
   const exifDest = path.join(photosDir, 'sample_with_exif.jpg');
   if (existsSync(exifSrc)) {

@@ -42,8 +42,8 @@ test.describe('Metadata', () => {
 
   test('should display EXIF data when available', async ({ page }) => {
     // GIVEN: a photo with camera EXIF exists (sample_with_exif.jpg is seeded
-    // by global-setup). It sorts LAST in taken_at-DESC (EXIF date 2011), so
-    // locate it by hash instead of clicking photos[0].
+    // by global-setup). Its EXIF taken_at is 2024-01-01, so its grid position
+    // is not guaranteed — locate it by hash instead of clicking photos[0].
     const photosResponse = await page.request.get('/api/photos?page=1&limit=100');
     expect(photosResponse.ok()).toBeTruthy();
     const photosData = await photosResponse.json();

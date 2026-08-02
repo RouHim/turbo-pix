@@ -3,6 +3,13 @@ use log::{debug, warn};
 use std::path::Path;
 use thiserror::Error;
 
+/// Caps concurrent RAW decodes (full-resolution demosaic holds several
+/// buffers per request — a 45MP sensor can be hundreds of MB). Shared by
+/// `get_photo_file` and the thumbnail generator, both reachable through the
+/// unauthenticated API.
+pub static RAW_DECODE_LIMIT: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
+
 #[derive(Error, Debug)]
 pub enum RawError {
     #[error("Failed to decode RAW file: {0}")]

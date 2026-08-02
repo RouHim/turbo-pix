@@ -161,7 +161,13 @@ impl ThumbnailGenerator {
             self.generate_video_thumbnail(&photo_path, size, photo.orientation, format)
                 .await?
         } else if raw_processor::is_raw_file(&photo_path) {
-            // Handle RAW files
+            // Handle RAW files. The decode holds several full-resolution
+            // buffers per request, so concurrency is capped by the shared
+            // RAW_DECODE_LIMIT (same cap as get_photo_file's detail view).
+            let _raw_permit = raw_processor::RAW_DECODE_LIMIT
+                .acquire()
+                .await
+                .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
             let img = raw_processor::decode_raw_to_dynamic_image(&photo_path)
                 .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
             let img = self.apply_orientation(img, photo.orientation);

@@ -194,25 +194,28 @@ impl SemanticSearchEngine {
         let vector_floats: Vec<f32> = text_semantic_vector.flatten_all()?.to_vec1()?;
         let vector_bytes = vector_floats.as_slice().as_bytes().to_vec();
 
-        // Use sqlite-vec's built-in KNN search
-        // vec_distance_cosine returns distance (0 = identical, 2 = opposite)
-        // Convert to similarity score (1 = identical, 0 = orthogonal, -1 = opposite)
+        // NOTE: the pinned sqlite-vec (v0.2.4-alpha) only uses its KNN index
+        // when the query has a `MATCH` constraint on the vector column plus
+        // `ORDER BY distance` — this query has neither, so the plan is a full
+        // scan of the vector table (vec0Filter_fullscan) with a full sort.
+        // KNN is deliberately not enabled: its k = LIMIT + OFFSET is capped
+        // at 4096 and exceeding it is a hard SQL error, which deep semantic
+        // pagination would trip.
+        //
+        // The score threshold is applied BEFORE LIMIT/OFFSET: filtering after
+        // pagination truncates results — a page whose raw window holds fewer
+        // than `limit` above-threshold rows would end pagination early even
+        // though further valid matches exist. The CTE materializes the
+        // distance ONCE per row (vec_distance_cosine is a 2048-byte blob
+        // decode + dot product); evaluating it in both WHERE and ORDER BY
+        // would double the per-row cost. similarity = 1 - distance / 2
+        // (distance: 0 = identical, 2 = opposite).
         let db_start = std::time::Instant::now();
-
-        // Fetch results via sqlite-vec's KNN search with the score threshold
-        // applied BEFORE LIMIT/OFFSET: filtering after pagination truncates
-        // results — a page whose raw window holds fewer than `limit`
-        // above-threshold rows would end pagination early even though further
-        // valid matches exist.
-        // vec_distance_cosine returns distance (0 = identical, 2 = opposite);
-        // similarity = 1 - distance / 2 (1 = identical, -1 = opposite).
         let raw_results = sqlx::query_as::<_, (String, f32)>(
-            "SELECT ic.path, 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) as similarity\n             FROM media_semantic_vectors msv\n             JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id\n             WHERE 1.0 - (vec_distance_cosine(msv.semantic_vector, ?) / 2.0) >= ?\n             ORDER BY vec_distance_cosine(msv.semantic_vector, ?)\n             LIMIT ? OFFSET ?",
+            "WITH scored AS (\n             SELECT ic.path, vec_distance_cosine(msv.semantic_vector, ?) AS dist\n             FROM media_semantic_vectors msv\n             JOIN semantic_vector_path_mapping ic ON msv.rowid = ic.id\n             )\n             SELECT path, 1.0 - (dist / 2.0) AS similarity\n             FROM scored\n             WHERE 1.0 - (dist / 2.0) >= ?\n             ORDER BY dist\n             LIMIT ? OFFSET ?",
         )
         .bind(&vector_bytes)
-        .bind(&vector_bytes)
         .bind(MIN_SIMILARITY_SCORE)
-        .bind(&vector_bytes)
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(&self.pool)

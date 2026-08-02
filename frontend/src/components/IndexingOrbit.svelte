@@ -250,10 +250,18 @@
     }
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    // Focus can sit outside the sheet (e.g. document.body after clicking
+    // non-focusable sheet content); contain it instead of letting Tab roam
+    // to page controls behind the aria-modal backdrop.
+    const outside = !(active instanceof HTMLElement) || !e.currentTarget.contains(active);
+    if (outside) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && active === first) {
       e.preventDefault();
       last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
+    } else if (!e.shiftKey && active === last) {
       e.preventDefault();
       first.focus();
     }

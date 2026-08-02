@@ -26,6 +26,10 @@ pub struct ThumbnailGenerator {
     max_cache_size_bytes: u64,
 }
 
+/// Monotonic counter for video-thumbnail temp frame paths (see the
+/// `turbo_pix_frame_*` construction in `generate_video_thumbnail`).
+static THUMBNAIL_FRAME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl ThumbnailGenerator {
     pub fn new(config: &Config, _db_pool: DbPool) -> CacheResult<Self> {
         let cache_dir = PathBuf::from(&config.cache.thumbnail_cache_path);
@@ -35,11 +39,67 @@ impl ThumbnailGenerator {
         // Convert MB to bytes
         let max_cache_size_bytes = config.cache.max_cache_size_mb * 1024 * 1024;
 
-        Ok(Self {
+        let generator = Self {
             cache_dir,
             disk_cache: Arc::new(Mutex::new(HashMap::new())),
             max_cache_size_bytes,
-        })
+        };
+        generator.seed_cache_index();
+        Ok(generator)
+    }
+
+    /// Populates the in-memory LRU index from thumbnails already on disk.
+    /// Without this, files written by a previous process run are invisible to
+    /// `get_current_cache_size`/`enforce_cache_limit` — the size accounting
+    /// and eviction only ever see entries touched in THIS session, so the
+    /// on-disk cache grows across restarts without ever hitting
+    /// `max_cache_size_mb` (the leak `clear_for_hash` closes only the
+    /// explicit deletion path).
+    fn seed_cache_index(&self) {
+        let mut index = HashMap::new();
+        let Ok(subdirs) = std::fs::read_dir(&self.cache_dir) else {
+            return;
+        };
+        for subdir in subdirs.filter_map(|e| e.ok()) {
+            let Ok(file_type) = subdir.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let Ok(files) = std::fs::read_dir(subdir.path()) else {
+                continue;
+            };
+            for file in files.filter_map(|e| e.ok()) {
+                let file_path = file.path();
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                if !metadata.is_file() {
+                    continue;
+                }
+                // Filename `{hash}_{size}.{format}` → index key
+                // `{hash}_{size}_{format}` (CacheKey Display). Hashes are
+                // hex so the last `_` split is unambiguous.
+                let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let Some(extension) = file_path.extension().and_then(|e| e.to_str()) else {
+                    continue;
+                };
+                index.insert(
+                    format!("{}_{}", stem, extension),
+                    CacheEntry {
+                        path: file_path,
+                        last_access: metadata.modified().unwrap_or_else(|_| SystemTime::now()),
+                        file_size: metadata.len(),
+                    },
+                );
+            }
+        }
+        if let Ok(mut cache) = self.disk_cache.lock() {
+            *cache = index;
+        }
     }
 
     pub async fn get_or_generate(
@@ -178,8 +238,14 @@ impl ThumbnailGenerator {
         // Create temporary file for extracted frame
         let temp_dir = std::env::temp_dir();
         let temp_frame_path = temp_dir.join(format!(
-            "turbo_pix_frame_{}_{}.jpg",
+            "turbo_pix_frame_{}_{}_{}.jpg",
             std::process::id(),
+            // Monotonic counter (in addition to the timestamp): two
+            // concurrent thumbnail requests in the same millisecond would
+            // otherwise share a path, and one's cleanup would delete the
+            // other's frame mid-read (same race class fixed in
+            // semantic_search with TEMP_FRAME_COUNTER).
+            THUMBNAIL_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -390,6 +456,7 @@ mod tests {
 
         let config = Config {
             host: "127.0.0.1".to_string(),
+            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,
@@ -640,6 +707,7 @@ mod tests {
 
         let config = Config {
             host: "127.0.0.1".to_string(),
+            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -697,6 +765,7 @@ mod tests {
 
         let config = Config {
             host: "127.0.0.1".to_string(),
+            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -791,6 +860,7 @@ mod tests {
 
         let config = Config {
             host: "127.0.0.1".to_string(),
+            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -900,6 +970,7 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
         let config = Config {
             host: "127.0.0.1".to_string(),
+            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),

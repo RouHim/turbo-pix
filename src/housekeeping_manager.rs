@@ -35,14 +35,6 @@ pub async fn run_housekeeping_scan(
     let mut unique_paths: HashSet<String> = HashSet::new();
 
     // DEBUG: Check if we have any semantic vectors at all
-    {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_semantic_vectors")
-            .fetch_one(db_pool)
-            .await
-            .unwrap_or(0);
-        info!("DEBUG: media_semantic_vectors count: {}", count);
-    }
-
     for &term in HOUSEKEEPING_TERMS {
         // Search for the term
         match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0).await {

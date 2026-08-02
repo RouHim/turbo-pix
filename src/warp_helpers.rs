@@ -99,6 +99,12 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
         code = warp::http::StatusCode::PAYLOAD_TOO_LARGE;
         message = "Payload too large".to_string();
+    } else if err.find::<warp::reject::LengthRequired>().is_some() {
+        // warp's content_length_limit rejects chunked/missing-Content-Length
+        // bodies with 411 BEFORE reading them; map it explicitly so the
+        // rejection does not fall through to a misleading 500.
+        code = warp::http::StatusCode::LENGTH_REQUIRED;
+        message = "Content-Length required".to_string();
     } else if err.find::<warp::reject::UnsupportedMediaType>().is_some() {
         code = warp::http::StatusCode::UNSUPPORTED_MEDIA_TYPE;
         message = "Unsupported media type".to_string();
@@ -132,8 +138,9 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     ))
 }
 
-/// Hostname part of an `Origin` (`http://localhost:5173` → `localhost`) or
-/// `Host` (`localhost:18473` → `localhost`) header value.
+/// Hostname part of an `Origin` (`http://localhost:5173` → `localhost`),
+/// `Host` (`localhost:18473` → `localhost`) or bracketed IPv6
+/// (`[::1]:18473` → `::1`) header value.
 fn header_hostname(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -145,11 +152,19 @@ fn header_hostname(value: &str) -> Option<String> {
         .split_once("://")
         .map(|(_, rest)| rest)
         .unwrap_or(value);
-    let hostname = after_scheme
-        .split([':', '/'])
-        .next()
-        .unwrap_or(after_scheme)
-        .trim();
+    // Bracketed IPv6 literal: take the part between the brackets. Splitting
+    // on ':' naively would yield "[" for both sides, making ANY two IPv6
+    // hosts compare equal (the same-origin check would be vacuous).
+    let hostname = if let Some(rest) = after_scheme.strip_prefix('[') {
+        let (host, _) = rest.split_once(']')?;
+        host
+    } else {
+        after_scheme
+            .split([':', '/'])
+            .next()
+            .unwrap_or(after_scheme)
+    };
+    let hostname = hostname.trim();
     if hostname.is_empty() {
         None
     } else {
@@ -167,22 +182,42 @@ fn header_hostname(value: &str) -> Option<String> {
 /// - The comparison is hostname-only so the Vite dev-server proxy
 ///   (`Origin: http://localhost:5173`, `Host: localhost:18473`) still works.
 /// - `Origin: null` (sandboxed contexts) is always rejected.
-pub fn require_same_origin() -> impl Filter<Extract = (), Error = Rejection> + Clone {
+/// - When `allowed_hosts` is non-empty (TURBO_PIX_ALLOWED_HOSTS), the Host
+///   header itself must match one of them: DNS-rebinding attacks make
+///   Origin == Host trivially satisfiable by pointing the attacker's own
+///   domain at the server, so hostname equality alone is not a CSRF proof.
+pub fn require_same_origin(
+    allowed_hosts: &[String],
+) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    let allowed_hosts: Vec<String> = allowed_hosts
+        .iter()
+        .map(|h| h.trim().to_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect();
     warp::header::optional::<String>("origin")
         .and(warp::header::optional::<String>("host"))
-        .and_then(|origin: Option<String>, host: Option<String>| async move {
-            let Some(origin) = origin else {
-                return Ok(());
-            };
-            if origin == "null" {
-                return Err(reject::custom(CrossOriginRequest));
-            }
-            let Some(origin_host) = header_hostname(&origin) else {
-                return Err(reject::custom(CrossOriginRequest));
-            };
-            match host.and_then(|h| header_hostname(&h)) {
-                Some(host_host) if host_host == origin_host => Ok(()),
-                _ => Err(reject::custom(CrossOriginRequest)),
+        .and_then(move |origin: Option<String>, host: Option<String>| {
+            let allowed_hosts = allowed_hosts.clone();
+            async move {
+                let Some(origin) = origin else {
+                    return Ok(());
+                };
+                if origin == "null" {
+                    return Err(reject::custom(CrossOriginRequest));
+                }
+                let Some(origin_host) = header_hostname(&origin) else {
+                    return Err(reject::custom(CrossOriginRequest));
+                };
+                let Some(host_host) = host.and_then(|h| header_hostname(&h)) else {
+                    return Err(reject::custom(CrossOriginRequest));
+                };
+                if host_host != origin_host {
+                    return Err(reject::custom(CrossOriginRequest));
+                }
+                if !allowed_hosts.is_empty() && !allowed_hosts.contains(&host_host) {
+                    return Err(reject::custom(CrossOriginRequest));
+                }
+                Ok(())
             }
         })
         .untuple_one()
@@ -194,7 +229,15 @@ mod tests {
 
     fn test_routes(
     ) -> impl Filter<Extract = impl warp::Reply, Error = std::convert::Infallible> + Clone {
-        require_same_origin()
+        require_same_origin(&[])
+            .and(warp::any().map(|| "ok"))
+            .recover(handle_rejection)
+    }
+
+    fn test_routes_with_allowed(
+        hosts: &[String],
+    ) -> impl Filter<Extract = impl warp::Reply, Error = std::convert::Infallible> + Clone {
+        require_same_origin(hosts)
             .and(warp::any().map(|| "ok"))
             .recover(handle_rejection)
     }
@@ -246,5 +289,59 @@ mod tests {
             .reply(&test_routes())
             .await;
         assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn parses_bracketed_ipv6_hostnames() {
+        // GIVEN the same IPv6 literal on both sides (different ports)
+        let routes = test_routes();
+        let resp = warp::test::request()
+            .path("/")
+            .header("origin", "http://[::1]:5173")
+            .header("host", "[::1]:18473")
+            .reply(&routes)
+            .await;
+        // THEN same-host IPv6 passes
+        assert_eq!(resp.status(), 200);
+
+        // GIVEN DIFFERENT IPv6 literals — naive ':' splitting would collapse
+        // both to "[" and let any IPv6 host pass
+        let resp = warp::test::request()
+            .path("/")
+            .header("origin", "http://[2606:4700::6810:8445]")
+            .header("host", "[::1]:18473")
+            .reply(&routes)
+            .await;
+        assert_eq!(resp.status(), 403);
+
+        // Malformed bracket (no closing ']') fails closed
+        let resp = warp::test::request()
+            .path("/")
+            .header("origin", "http://[::1")
+            .header("host", "[::1]:18473")
+            .reply(&routes)
+            .await;
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn allowed_hosts_pins_the_host_header() {
+        let routes = test_routes_with_allowed(&["photos.example.com".to_string()]);
+        // Host not in the allowlist → rejected even though Origin == Host
+        let resp = warp::test::request()
+            .path("/")
+            .header("origin", "http://attacker.com")
+            .header("host", "attacker.com")
+            .reply(&routes)
+            .await;
+        assert_eq!(resp.status(), 403);
+        // Allowed hostname (with port) passes
+        let resp = warp::test::request()
+            .path("/")
+            .header("origin", "http://photos.example.com:18473")
+            .header("host", "photos.example.com:18473")
+            .reply(&routes)
+            .await;
+        assert_eq!(resp.status(), 200);
     }
 }

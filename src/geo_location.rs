@@ -75,8 +75,20 @@ impl NominatimClient {
         let total = photos.len();
 
         for (index, (file_path, lat, lon)) in photos.into_iter().enumerate() {
-            let city = self.resolve_city_name(lat, lon)?;
-            db::update_photo_city(pool, &file_path, city.as_deref()).await?;
+            // A per-photo failure (429 rate limit, 5xx, DNS) must not abort
+            // the whole Phase 3 batch: the photo stays
+            // geo_location_resolved=0 and is retried on the next rescan.
+            // Aborting would leave every later photo unresolved until then.
+            match self.resolve_city_name(lat, lon) {
+                Ok(city) => {
+                    if let Err(e) = db::update_photo_city(pool, &file_path, city.as_deref()).await {
+                        log::warn!("Failed to update city for {}: {}", file_path, e);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to resolve city for {}: {}", file_path, e);
+                }
+            }
             progress_cb(index + 1, total);
         }
 

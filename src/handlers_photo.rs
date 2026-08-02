@@ -198,27 +198,29 @@ pub async fn get_photo_file(
         }
     }
 
-    // For non-RAW files, serve the file contents. (Streaming is not
-    // possible through warp 0.4's public reply API — warp::fs::file requires
-    // the path at filter-construction time — so a single file is buffered;
-    // the 1 MiB request-body limit and the loopback-only default bind bound
-    // the exposure.)
-    match std::fs::read(&photo.file_path) {
-        Ok(file_data) => {
-            let content_type = photo.mime_type.unwrap_or_else(|| {
-                mimetype_detector::from_path(Path::new(&photo.file_path))
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string())
-            });
+    // For non-RAW files, stream the file instead of buffering it: an
+    // unauthenticated client can otherwise force unbounded per-request
+    // allocations by requesting many large files concurrently (same pattern
+    // as the video route). The explicit content-length keeps hyper from
+    // switching to chunked transfer encoding.
+    let file = match tokio::fs::File::open(&photo.file_path).await {
+        Ok(file) => file,
+        Err(_) => return Err(reject::custom(NotFoundError)),
+    };
+    // Re-stat the open handle so content-length matches the streamed bytes
+    // (the file may have been replaced or shrunk since the DB row was read).
+    let actual_len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let content_type = photo.mime_type.unwrap_or_else(|| {
+        mimetype_detector::from_path(Path::new(&photo.file_path))
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string())
+    });
 
-            let reply = warp::reply::with_header(file_data, "content-type", content_type);
-            let reply =
-                warp::reply::with_header(reply, "cache-control", "public, max-age=31536000");
-
-            Ok(Box::new(reply))
-        }
-        Err(_) => Err(reject::custom(NotFoundError)),
-    }
+    let response = warp::reply::stream(tokio_util::io::ReaderStream::new(file));
+    let response = warp::reply::with_header(response, "content-type", content_type);
+    let response = warp::reply::with_header(response, "content-length", actual_len.to_string());
+    let response = warp::reply::with_header(response, "cache-control", "public, max-age=31536000");
+    Ok(Box::new(response))
 }
 
 /// Build the response for a HEAD request on a file route: the headers of the
@@ -580,19 +582,7 @@ pub async fn rotate_photo(
     db_pool: DbPool,
     cache_manager: CacheManager,
 ) -> Result<impl Reply, Rejection> {
-    // Find photo
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
-        Ok(Some(photo)) => photo,
-        Ok(None) => return Err(reject::custom(NotFoundError)),
-        Err(e) => {
-            log::error!("Database error: {}", e);
-            return Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }));
-        }
-    };
-
-    // Parse angle
+    // Parse angle FIRST (pure input validation, no lock needed)
     let angle = match rotate_req.angle {
         90 => RotationAngle::Rotate90,
         180 => RotationAngle::Rotate180,
@@ -607,8 +597,25 @@ pub async fn rotate_photo(
         }
     };
 
-    // Rotate image (serialized per the ROTATE_LOCK comment above)
+    // Serialize rotations and re-fetch the photo UNDER the lock: two
+    // overlapping rotate requests for the same photo must both read the row
+    // after the previous rotation committed, otherwise the second request
+    // works from a stale snapshot (double-applied orientation, and its
+    // UPDATE ... WHERE hash_sha256 = old_hash matches 0 rows, which
+    // update_with_old_hash now rejects loudly). Rotation is a rare user
+    // action and the critical section is short.
     let _rotate_guard = ROTATE_LOCK.lock().await;
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
     let old_hash = photo.hash_sha256.clone();
     match image_editor::rotate_image(&photo, angle, &db_pool).await {
         Ok(updated_photo) => {

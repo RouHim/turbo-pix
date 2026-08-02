@@ -126,9 +126,12 @@ pub async fn get_video_file(
             photo.filename
         );
 
-        // Get cache directory from environment or use default
-        let cache_dir =
-            std::env::var("TRANSCODE_CACHE_DIR").unwrap_or_else(|_| "/tmp/turbo-pix".to_string());
+        // Get cache directory from environment or use the app data path (not
+        // /tmp/turbo-pix: a predictable world-writable path is squat-able by
+        // local users via symlinks). main.rs defaults the env var from
+        // config when unset.
+        let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+            .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
         let cache_path = Path::new(&cache_dir);
         let transcoded_path = get_transcoded_path(cache_path, &photo.hash_sha256);
 

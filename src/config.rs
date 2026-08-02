@@ -13,6 +13,10 @@ pub struct Config {
     /// interfaces unless the operator explicitly opts in (Docker sets
     /// TURBO_PIX_HOST=0.0.0.0).
     pub host: String,
+    /// Comma-separated hostnames the Host header may carry (DNS-rebinding
+    /// hardening, see require_same_origin). Empty = accept any hostname that
+    /// matches the Origin (default, suitable for personal LAN use).
+    pub allowed_hosts: Vec<String>,
     pub port: u16,
     pub photo_paths: Vec<String>,
     pub data_path: String,
@@ -38,6 +42,13 @@ impl Config {
 
         let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
+        let allowed_hosts = env::var("TURBO_PIX_ALLOWED_HOSTS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         let photo_paths = env::var("TURBO_PIX_PHOTO_PATHS")
             .unwrap_or_else(|_| "./photos".to_string())
             .split(',')
@@ -57,6 +68,7 @@ impl Config {
 
         Ok(Config {
             host,
+            allowed_hosts,
             port,
             photo_paths,
             data_path,

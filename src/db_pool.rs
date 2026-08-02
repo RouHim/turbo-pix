@@ -108,6 +108,15 @@ pub async fn delete_orphaned_photos(
     // inserts never touch the main database, so no write lock is held while
     // they run and concurrent API traffic stays responsive.
     let mut conn = pool.acquire().await?;
+    // A mid-way failure on a previous run (SQLITE_BUSY, I/O error) can leave
+    // the temp table attached to this pooled connection; dropping it first
+    // makes the cleanup self-healing instead of failing every night with
+    // "table scanned_paths already exists". NOT CREATE IF NOT EXISTS: a
+    // partially-populated table from a failed run must not silently skip
+    // deleting real orphans.
+    sqlx::query("DROP TABLE IF EXISTS scanned_paths")
+        .execute(&mut *conn)
+        .await?;
     sqlx::query("CREATE TEMP TABLE scanned_paths (path TEXT PRIMARY KEY)")
         .execute(&mut *conn)
         .await?;
@@ -185,7 +194,14 @@ pub async fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Er
     sqlx::query("PRAGMA busy_timeout = 1000")
         .execute(&mut *conn)
         .await?;
-    sqlx::query("VACUUM").execute(&mut *conn).await?;
+    let result = sqlx::query("VACUUM").execute(&mut *conn).await;
+    // busy_timeout is per-connection state; restore the pool default (30s,
+    // see build_connect_options) so this connection does not leak a 1s
+    // lock-wait limit into regular API traffic.
+    sqlx::query("PRAGMA busy_timeout = 30000")
+        .execute(&mut *conn)
+        .await?;
+    result?;
     info!("Database vacuum completed");
     Ok(())
 }

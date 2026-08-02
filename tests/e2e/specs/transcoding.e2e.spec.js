@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 import { TestHelpers } from '../setup/test-helpers.js';
 
 test.describe('Transcoding', () => {
@@ -25,6 +27,15 @@ test.describe('Transcoding', () => {
   test('should show toast and poll for hevc video', async ({ page }) => {
     // The server-side transcode + 2s status poll can take a while on slow CI.
     test.setTimeout(120_000);
+
+    // CI retries re-run this test against the SAME server: a completed
+    // transcode leaves its cached file behind, and the server then serves it
+    // directly (200, no 202/toast) — the retry would fail deterministically
+    // at the toast assertion. Clear the per-run cache so every attempt
+    // re-exercises the 202 → poll → video flow.
+    const transcodeCache = path.join('test-e2e-data', 'transcode-cache');
+    await fs.promises.rm(transcodeCache, { recursive: true, force: true });
+    await fs.promises.mkdir(transcodeCache, { recursive: true });
 
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);

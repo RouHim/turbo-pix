@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::FromRow;
+use sqlx::{FromRow, Row};
 
 pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
@@ -568,7 +568,21 @@ impl Photo {
         .bind(old_hash)
         .execute(&mut **tx)
         .await?;
-
+        // A stale-snapshot write (the row's hash changed while we were
+        // rotating — e.g. a second overlapping rotate request) matches 0
+        // rows; committing silently would leave the DB divergent from the
+        // file on disk. Fail loudly so the caller aborts the transaction.
+        let affected = sqlx::query("SELECT changes()")
+            .fetch_one(&mut **tx)
+            .await?
+            .try_get::<i64, _>(0)?;
+        if affected == 0 {
+            return Err(format!(
+                "Photo with hash {} no longer exists (stale snapshot?) — update matched 0 rows",
+                old_hash
+            )
+            .into());
+        }
         Ok(())
     }
 

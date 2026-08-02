@@ -524,6 +524,9 @@
       videoEl.pause();
       videoEl.classList.remove('loaded');
       videoEl.style.display = 'none';
+      // The src stays (cleared only by setVideoSource); mark it stale so the
+      // Space shortcut never plays the previous photo's video over this one.
+      delete videoEl.dataset.photoHash;
     }
 
     try {
@@ -777,6 +780,11 @@
   function setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC) {
     videoEl.src = '';
     videoEl.load();
+    // Records which photo this video element currently holds; the Space
+    // shortcut only plays when it matches the displayed photo (the element
+    // retains the previous photo's src while an image or a pending-transcode
+    // video is shown).
+    videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.onerror = async () => {
       // A stale photo's playback failure must neither retry nor toast.
       if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
@@ -1123,10 +1131,11 @@
       )
         return;
       e.preventDefault();
-      // Only video photos toggle playback: for an image the hidden videoEl
-      // still holds the previous video's src, and play() would resume
-      // audible playback over the image.
-      if (!isVideo) return;
+      // Only toggle playback when videoEl actually holds the CURRENT photo's
+      // source: for an image (or a video whose transcode is still pending)
+      // the hidden videoEl retains the previous photo's src, and play()
+      // would resume audible playback of the wrong video.
+      if (videoEl?.dataset.photoHash !== currentPhoto?.hash_sha256) return;
       if (videoEl?.paused) videoEl.play().catch(() => {});
       else videoEl?.pause();
     },

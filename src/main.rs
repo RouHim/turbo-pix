@@ -59,6 +59,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .map_err(|_| format!("Invalid TURBO_PIX_HOST: '{}'", config.host))?;
 
+    // Transcodes write into TRANSCODE_CACHE_DIR (handlers_video reads the env
+    // directly); default it under the app data path instead of the
+    // world-writable /tmp/turbo-pix so a local user cannot squat the path
+    // with a symlink.
+    if std::env::var("TRANSCODE_CACHE_DIR").is_err() {
+        std::env::set_var(
+            "TRANSCODE_CACHE_DIR",
+            format!("{}/cache/transcoded", config.data_path),
+        );
+    }
+
     info!("Starting TurboPix server on Port {}", port);
     info!("Photo paths: {:?}", config.photo_paths);
     info!("Data path: {}", config.data_path);
@@ -101,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // routes in build_photo_routes — warp's content_length_limit requires a
     // Content-Length header on every request, so it cannot be global
     // middleware (plain GETs would 411).
-    let routes = require_same_origin()
+    let routes = require_same_origin(&config.allowed_hosts)
         .and(
             health_routes
                 .or(photo_routes)

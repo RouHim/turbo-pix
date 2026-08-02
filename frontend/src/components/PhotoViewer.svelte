@@ -42,6 +42,8 @@
   let imageEl = $state(null);
   let videoEl = $state(null);
   let mainEl = $state(null);
+  // Element focused before the viewer opened; restored on close.
+  let previouslyFocusedElement = null;
 
   // ── Zoom / Pan state (ported from ViewerControls) ──────────────────────────
   let zoomLevel = $state(1);
@@ -403,6 +405,11 @@
       }
     }
 
+    // Dialog semantics: move focus into the viewer on open, restore on close.
+    previouslyFocusedElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (viewerEl) viewerEl.focus({ preventScroll: true });
+
     showSidebar = false;
 
     if (updateUrlEnabled) {
@@ -439,6 +446,11 @@
       viewerEl.classList.remove('active', 'fade-in');
       document.body.style.overflow = '';
     }
+
+    if (previouslyFocusedElement?.isConnected) {
+      previouslyFocusedElement.focus({ preventScroll: true });
+    }
+    previouslyFocusedElement = null;
 
     showSidebar = false;
     swipeableViewer?.reset();
@@ -654,7 +666,7 @@
       // interval top AND after every await: a late fetch/json response can
       // otherwise act for the previous photo.
       const bailIfStale = () => {
-        if (currentPhoto?.hash_sha256 !== photo.hash_sha256) {
+        if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) {
           clearInterval(intervalId);
           if (transcodePollTimer === intervalId) {
             transcodePollTimer = null;
@@ -886,7 +898,17 @@
       if (imageEl) {
         imageEl.src = newUrl;
         imageEl.onload = () => {
-          isLoading = false;
+          // Only the current photo's reload may clear the spinner.
+          if (currentPhoto?.hash_sha256 === updatedPhoto.hash_sha256) {
+            isLoading = false;
+          }
+        };
+        imageEl.onerror = () => {
+          // A failed reload (e.g. backend 500 on housekeeping candidates)
+          // must not leave the loading spinner up forever.
+          if (currentPhoto?.hash_sha256 === updatedPhoto.hash_sha256) {
+            isLoading = false;
+          }
         };
       }
     } catch (error) {
@@ -1211,6 +1233,10 @@
   class:active={isOpen}
   class:collage-mode={isCollage}
   bind:this={viewerEl}
+  role="dialog"
+  aria-modal="true"
+  aria-label={$t('ui.viewer_label', { default: 'Photo viewer' })}
+  tabindex="-1"
 >
   <div class="viewer-overlay" role="presentation"></div>
   <div class="viewer-content" role="presentation" onclick={stopPropagation}>

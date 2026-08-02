@@ -39,14 +39,19 @@
   function handleIndexingStatusChanged(e) {
     const phases = e.detail?.phases || [];
     const hk = phases.find((p) => p.id === 'housekeeping');
+    const wasActive = lastHkState === 'active';
     if (hk?.state === 'active') {
       scanning = true;
       lastHkState = 'active';
-    } else if (hk?.state === 'done') {
+    } else if (wasActive) {
+      // Scan ended in any way (done / error / interrupted run) — recover the
+      // list like the vanilla view did for every non-indexing state, instead
+      // of stranding the view in the scanning message.
       scanning = false;
-      const wasActive = lastHkState === 'active';
-      lastHkState = 'done';
-      if (wasActive) loadAndRender();
+      lastHkState = hk?.state ?? null;
+      loadAndRender();
+    } else {
+      lastHkState = hk?.state ?? null;
     }
   }
 
@@ -111,6 +116,11 @@
     busy = true;
     try {
       await api.deletePhoto(photo.hash_sha256);
+      // Keep the shared deletion contract: other views listen for
+      // photoRemoved to sync their photo lists.
+      window.dispatchEvent(
+        new CustomEvent('photoRemoved', { detail: { hash: photo.hash_sha256 } })
+      );
       addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), '', 'success');
       candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
     } catch (e) {

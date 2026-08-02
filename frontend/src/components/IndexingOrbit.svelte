@@ -304,15 +304,29 @@
         if (sp.isActive) {
           const processed = sp.processed || 0;
           const total = sp.total || 0;
-          const tpl = $t('ui.indexing_ring_tooltip', {
-            values: { phase: sp.phaseName, processed, total },
-            default: `${sp.phaseName} — ${processed}/${total}`,
-          });
-          return tpl;
+          if (total > 0) {
+            const tpl = $t('ui.indexing_ring_tooltip', {
+              values: { phase: sp.phaseName, processed, total },
+              default: `${sp.phaseName} — ${processed}/${total}`,
+            });
+            return tpl;
+          }
+          // Indeterminate phase (no totals yet): a "— 0/0" tooltip would be
+          // noise, show the phase name alone.
+          return sp.phaseName;
         }
       }
       return '';
     })()
+  );
+
+  // Announced through the ring's aria-live region: screen-reader users get
+  // progress updates even though the SVG and bottom sheet are aria-hidden.
+  const liveStatusText = $derived(
+    activePhaseName ||
+      (completionPulse
+        ? $t('ui.indexing_complete', { default: 'Indexing complete' })
+        : $t('ui.indexing_photos', { default: 'Processing your photos...' }))
   );
 
   const tooltipText = $derived(ringMode === 'compact' && activePhaseName ? activePhaseName : '');
@@ -350,6 +364,7 @@
   bind:this={ringTrigger}
 >
   <div class="indexing-orbit-shell">
+    <span class="sr-only">{liveStatusText}</span>
     <svg class="indexing-orbit-svg" viewBox="0 0 280 280" aria-hidden="true">
       {#each PHASES as phase, i (phase.id)}
         {@const arcD = arcPaths()[i]}
@@ -464,6 +479,19 @@
 </div>
 
 <style>
+  /* Visually hidden but announced by the ring's aria-live region */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   /* === Indexing Ring === */
   [data-phase-ring] {
     --indexing-ring-large-size: 300px;

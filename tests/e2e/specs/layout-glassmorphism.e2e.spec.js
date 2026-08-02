@@ -67,8 +67,12 @@ test.describe('Layout Glassmorphism', () => {
     });
 
     expect(styles.position).toBe('fixed');
-    expect(Math.abs(styles.top - styles.expectedTop)).toBeLessThan(2);
-    expect(Math.abs(styles.left - styles.expectedLeft)).toBeLessThan(2);
+    // 100vw/100vh equals innerWidth/innerHeight only while the document has no
+    // viewport scrollbars (main-content is height-constrained). Tolerate a
+    // scrollbar-width difference so a layout change that introduces one fails
+    // only when the ring actually leaves the corner.
+    expect(Math.abs(styles.top - styles.expectedTop)).toBeLessThan(20);
+    expect(Math.abs(styles.left - styles.expectedLeft)).toBeLessThan(20);
   });
 
   test('sidebar should NOT be offset when indexing orbit is visible', async ({ page }) => {

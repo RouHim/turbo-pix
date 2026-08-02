@@ -4,6 +4,9 @@
   "description": "Fast photo indexer and viewer",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/RouHim/turbo-pix.git"

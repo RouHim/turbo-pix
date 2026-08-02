@@ -5,6 +5,7 @@
   import { api } from '../lib/api.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
+  import Icon from '../lib/Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
 
@@ -20,6 +21,9 @@
   let hoveredIndex = $state(null);
   let tooltipX = $state(0);
   let tooltipY = $state(0);
+  // Set while a desktop slider drag is being debounced; the route-restore
+  // $effect must not wipe the in-progress filter before the URL push fires.
+  let dragInProgress = false;
 
   const positions = $derived(
     data?.density?.map((d) => ({
@@ -108,8 +112,15 @@
       selectedIndex = index;
     }
     renderHeatmap();
+    // The route-restore $effect reads currentFilter as a dependency, so it
+    // re-runs on every drag tick — with route.year still null it would reset
+    // the filter and snap the thumb back before the debounced push fires.
+    dragInProgress = true;
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => applyFilter(), 300);
+    debounceTimer = setTimeout(() => {
+      dragInProgress = false;
+      applyFilter();
+    }, 300);
   }
 
   function handleDropdownChange() {
@@ -139,14 +150,43 @@
     let index = Math.floor((e.clientX - rect.left) / barWidth);
     if (index < 0 || index >= positions.length) index = -1;
     hoveredIndex = index >= 0 ? index : null;
-    tooltipX = e.clientX;
-    tooltipY = e.clientY - 60;
+    // Clamp so the tooltip never overflows the viewport (it is centered via
+    // translateX(-50%) and offset 60px above the cursor).
+    tooltipX = Math.min(Math.max(e.clientX, 110), window.innerWidth - 110);
+    tooltipY = Math.max(e.clientY - 60, 8);
     renderHeatmap();
   }
 
   function handleTrackLeave() {
     hoveredIndex = null;
     renderHeatmap();
+  }
+
+  function getThemePrimaryColor() {
+    const cs = window.getComputedStyle(document.documentElement);
+    return (cs.getPropertyValue('--primary-color') || '').trim();
+  }
+
+  function withAlpha(color, alpha) {
+    if (!color) return `rgba(99, 102, 241, ${alpha})`;
+    if (color.startsWith('oklch')) {
+      return color.endsWith(')') ? `${color.slice(0, -1)} / ${alpha})` : `${color} / ${alpha}`;
+    }
+    if (color.startsWith('#')) {
+      const hex = color.replace('#', '');
+      const full =
+        hex.length === 3
+          ? hex
+              .split('')
+              .map((c) => c + c)
+              .join('')
+          : hex;
+      const r = parseInt(full.slice(0, 2), 16);
+      const g = parseInt(full.slice(2, 4), 16);
+      const b = parseInt(full.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return `rgba(99, 102, 241, ${alpha})`;
   }
 
   function renderHeatmap() {
@@ -158,7 +198,8 @@
     if (positions.length === 0) return;
 
     const maxCount = Math.max(...data.density.map((d) => d.count));
-    drawYearMarkers(ctx, width, height);
+    const primary = getThemePrimaryColor();
+    drawYearMarkers(ctx, width, height, primary);
 
     const barWidth = width / positions.length;
     positions.forEach((pos, index) => {
@@ -169,26 +210,26 @@
 
       const opacity = 0.3 + (pos.count / maxCount) * 0.7;
 
-      ctx.fillStyle = `rgba(99, 102, 241, ${opacity})`;
+      ctx.fillStyle = withAlpha(primary, opacity);
       ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
 
       if (isSelected) {
-        ctx.strokeStyle = 'rgba(99, 102, 241, 1)';
+        ctx.strokeStyle = withAlpha(primary, 1);
         ctx.lineWidth = 3;
         ctx.strokeRect(x + 1, y, barWidth - 3, normalizedHeight);
         ctx.shadowBlur = 8;
-        ctx.shadowColor = 'rgba(99, 102, 241, 0.6)';
-        ctx.fillStyle = 'rgba(99, 102, 241, 0.9)';
+        ctx.shadowColor = withAlpha(primary, 0.6);
+        ctx.fillStyle = withAlpha(primary, 0.9);
         ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
         ctx.shadowBlur = 0;
       } else if (hoveredIndex === index) {
-        ctx.fillStyle = 'rgba(99, 102, 241, 0.85)';
+        ctx.fillStyle = withAlpha(primary, 0.85);
         ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
       }
     });
   }
 
-  function drawYearMarkers(ctx, width, height) {
+  function drawYearMarkers(ctx, width, height, primary) {
     if (positions.length === 0) return;
     const barWidth = width / positions.length;
     let lastYear = null;
@@ -196,7 +237,7 @@
       if (pos.year !== lastYear) {
         const x = index * barWidth;
         if (lastYear !== null) {
-          ctx.strokeStyle = 'rgba(99, 102, 241, 0.15)';
+          ctx.strokeStyle = withAlpha(primary, 0.15);
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(x, 0);
@@ -210,6 +251,7 @@
 
   // Restore filter from route state (URL restore / popstate)
   $effect(() => {
+    if (dragInProgress) return;
     const year = route.year;
     const month = route.month;
     if (!year && !month) {
@@ -252,9 +294,15 @@
         title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
         onclick={resetFilter}
       >
-        ✕
+        <Icon name="x" width={14} height={14} />
       </button>
-      <div class="timeline-track" onmousemove={handleTrackHover} onmouseleave={handleTrackLeave}>
+      <!-- The track itself is presentational: hover only drives the tooltip, the range input below is the keyboard-accessible control -->
+      <div
+        class="timeline-track"
+        role="presentation"
+        onmousemove={handleTrackHover}
+        onmouseleave={handleTrackLeave}
+      >
         <canvas class="timeline-heatmap" width="800" height="40" bind:this={canvasEl}></canvas>
         <input
           type="range"
@@ -314,7 +362,7 @@
         title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
         onclick={resetFilter}
       >
-        ✕
+        <Icon name="x" width={14} height={14} />
       </button>
     </div>
   </div>

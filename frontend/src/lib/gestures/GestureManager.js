@@ -26,6 +26,9 @@ export class GestureManager {
     this.activeGesture = null;
     this.gestureState = 'idle'; // idle, recognizing, active
     this.gestureAxis = null;
+    // Primary touch driving an active pan; a second finger landing mid-pan
+    // must neither hijack the gesture nor end it while this finger is down.
+    this.panTouchId = null;
 
     // Callbacks
     this.callbacks = {
@@ -136,7 +139,7 @@ export class GestureManager {
     if (this.activeGesture === 'pinch' && this.touches.size === 2) {
       e.preventDefault();
       this.processPinch();
-    } else if (this.activeGesture === 'pan' && this.touches.size === 1) {
+    } else if (this.activeGesture === 'pan' && this.touches.size >= 1) {
       e.preventDefault();
       this.processPan();
     } else if (this.gestureState === 'recognizing' && this.touches.size === 1) {
@@ -165,8 +168,13 @@ export class GestureManager {
     // Process gesture completion
     if (this.activeGesture === 'pinch' && endedTouches.length > 0) {
       this.endPinchGesture();
-    } else if (this.activeGesture === 'pan' && endedTouches.length > 0) {
-      this.endPanGesture();
+    } else if (this.activeGesture === 'pan') {
+      // End the pan only when its primary touch lifted; an extra finger
+      // (second touch landing mid-pan) ending must not trigger navigation
+      // while the panning finger is still down.
+      if (this.panTouchId === null || endedTouches.includes(this.panTouchId)) {
+        this.endPanGesture();
+      }
     } else if (this.touches.size === 1 && endedTouches.length === 1) {
       // Single touch ended - check for tap or swipe
       const touch = this.touches.get(endedTouches[0]);
@@ -268,7 +276,10 @@ export class GestureManager {
   }
 
   processPan() {
-    const touch = Array.from(this.touches.values())[0];
+    const touch =
+      this.panTouchId !== null
+        ? (this.touches.get(this.panTouchId) ?? Array.from(this.touches.values())[0])
+        : Array.from(this.touches.values())[0];
     if (!touch) return;
 
     const gestureTouch = this.applyAxisLock({
@@ -413,6 +424,7 @@ export class GestureManager {
     this.activeGesture = null;
     this.gestureState = 'idle';
     this.gestureAxis = null;
+    this.panTouchId = null;
     this.velocityFrames = [];
   }
 
@@ -452,6 +464,8 @@ export class GestureManager {
   startPan() {
     if (this.activeGesture === 'pan') return;
     this.activeGesture = 'pan';
+    // First touch (Map preserves insertion order) drives the pan.
+    this.panTouchId = Array.from(this.touches.keys())[0] ?? null;
     this.processPan();
   }
 

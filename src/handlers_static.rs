@@ -31,7 +31,14 @@ fn build_route_for_file(
         return warp::path::end()
             .and(warp::get())
             .map(move || {
-                warp::reply::with_header(content, "content-type", content_type).into_response()
+                warp::reply::with_header(
+                    warp::reply::with_header(content, "content-type", content_type),
+                    "cache-control",
+                    // Vite emits unhashed filenames (index.js/index.css), so
+                    // the browser must revalidate on every load.
+                    "no-cache",
+                )
+                .into_response()
             })
             .boxed();
     }
@@ -45,7 +52,14 @@ fn build_route_for_file(
         .and(warp::path::end())
         .and(warp::get())
         .map(move || {
-            warp::reply::with_header(content, "content-type", content_type).into_response()
+            warp::reply::with_header(
+                warp::reply::with_header(content, "content-type", content_type),
+                "cache-control",
+                // Asset names are unhashed — always revalidate so a frontend
+                // update cannot be served stale from a heuristic cache.
+                "no-cache",
+            )
+            .into_response()
         })
         .boxed()
 }
@@ -66,7 +80,12 @@ fn build_route_for_binary_file(
         .and(warp::path::end())
         .and(warp::get())
         .map(move || {
-            warp::reply::with_header(content.to_vec(), "content-type", content_type).into_response()
+            warp::reply::with_header(
+                warp::reply::with_header(content.to_vec(), "content-type", content_type),
+                "cache-control",
+                "no-cache",
+            )
+            .into_response()
         })
         .boxed()
 }

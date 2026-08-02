@@ -51,7 +51,7 @@ export default defineConfig({
 ```
 Hashless filenames are deliberate: this is a locally served desktop app, there is no CDN cache to bust, and it keeps embedded paths stable.
 
-`svelte.config.js` at repo root:
+`frontend/svelte.config.js` (the Vite root is `frontend/`):
 ```js
 export default { compilerOptions: { runes: true } };
 ```
@@ -103,7 +103,7 @@ export default app;
 Move these from `static/` into `frontend/public/` (Vite copies `public/` verbatim into `dist/`):
 - `static/favicon.svg` → `frontend/public/favicon.svg`
 - `static/site.webmanifest` → `frontend/public/site.webmanifest`
-- The 4 frontend fonts → `frontend/public/fonts/`: `PlayfairDisplay-Bold.woff2`, `PlayfairDisplay-Regular.woff2`, `DMSans-Regular.woff2`, `DMSans-Medium.woff2` (the `@font-face` rules in the CSS reference `/fonts/<name>.woff2`, which keeps working unchanged).
+- The 3 frontend fonts → `frontend/public/fonts/`: `PlayfairDisplay-Bold.woff2`, `DMSans-Regular.woff2`, `DMSans-Medium.woff2` (the `@font-face` rules in the CSS reference `/fonts/<name>.woff2`, which keeps working unchanged; the old `PlayfairDisplay-Regular.woff2` was never referenced by a `@font-face` rule and is not ported).
 
 **1d. Rust embedding: replace the manual file lists with `build.rs` codegen**
 
@@ -429,7 +429,8 @@ Port `static/js/viewerControls.js`: zoom in/out/fit buttons (`.zoom-btn`), CSS-t
 
 ### Phase 9: E2E gate
 
-1. `pkill -9 -f turbo-pix` first (AGENTS.md: stale server on 18473 passes the health check and then `cargo run` fails with port-in-use).
+1. Kill any stale dev server with the narrow pattern first (AGENTS.md: a broad `pkill -9 -f turbo-pix` also kills the Playwright runner itself, since its argv contains the repo path via node_modules):
+   `pkill -9 -f 'target/(debug|release)/turbo-pix'`
 2. `npm run test:e2e` from repo root. Global setup now runs `npm run build` + `cargo build` + `cargo run` with `TURBO_PIX_DATA_PATH=test-e2e-data` etc. (unchanged from current `global-setup.js`).
 3. Fix failures by aligning Svelte output with the selector contract (Phase 2f) and behavior — never by weakening test assertions. Selector updates inside tests are allowed only where the old markup itself changed shape (should be none if the contract holds).
 4. If `TestHelpers` needs changes: it operates on selectors/URLs only (verified — the only `window.*` app global tests touch is `window.indexingStatus`, preserved in Phase 6c), so no helper rewrite should be needed.
@@ -455,7 +456,7 @@ Per-phase smoke tests are listed at each phase's end. Final end-to-end proof (fr
 
 ```bash
 npm run build && cargo build --bin turbo-pix        # tree builds
-pkill -9 -f turbo-pix; npm run test:e2e              # full Playwright suite green
+pkill -9 -f 'target/(debug|release)/turbo-pix'; npm run test:e2e   # full Playwright suite green
 ```
 
 Manual new-behavior checks (server: `TURBO_PIX_DATA_PATH=/tmp/tp TURBO_PIX_PHOTO_PATHS=<photos> TURBO_PIX_PORT=18473 ./target/debug/turbo-pix`, open `http://localhost:18473`):

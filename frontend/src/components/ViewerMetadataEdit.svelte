@@ -161,6 +161,11 @@
 
       const updatedPhoto = await api.updatePhotoMetadata(editTargetHash, updates);
 
+      // Stale-save guard: the modal can be closed (Escape / overlay / X) and
+      // the viewer navigated while the PATCH is in flight — a stale response
+      // must not overwrite the photo now on screen.
+      if (photo?.hash_sha256 !== editTargetHash) return;
+
       // Update photo refs
       if (onSaved) {
         onSaved(updatedPhoto);

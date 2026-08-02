@@ -135,7 +135,7 @@ test.describe('Photo Viewer', () => {
     await TestHelpers.verifyViewerOpen(page);
 
     // WHEN: User opens the metadata sidebar (hidden by default)
-    await page.locator('[title="View Details"]').click();
+    await page.locator('.metadata-btn').click();
     await expect(page.locator('.viewer-sidebar.show')).toBeVisible();
 
     // THEN: Field values render the formatted data, not the element id strings

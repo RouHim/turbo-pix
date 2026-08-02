@@ -208,7 +208,8 @@
         'error',
         5000
       );
-      loadError = error.message || true;
+      loadError =
+        error.message || $t('errors.unexpectedError', { default: 'An unexpected error occurred' });
       // The finally guard below only clears loading while the load is still
       // current, but the error path nulled lastLoadSignature — clear it here
       // or the skeleton/spinner stays forever and retry stays blocked.
@@ -368,8 +369,11 @@
       // A load aborted by unmount must not schedule the min-display timer in
       // its finally block: without this, the global loading flag can be
       // flipped by a destroyed instance and a duplicate page-1 request can
-      // slip through on remount.
+      // slip through on remount. Also clear the flag itself — nothing else
+      // would (the aborted load's finally skips its reset), which would leave
+      // SearchBar's spinner stuck after a view switch.
       lastLoadSignature = null;
+      photoGridState.loading = false;
     };
   });
 </script>

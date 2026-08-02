@@ -85,10 +85,16 @@ test.describe('Keyboard Shortcuts', () => {
     await favoriteBtn.focus();
 
     // WHEN: User presses Enter on the button
+    const favoriteResponse = page.waitForResponse(
+      (r) => r.url().includes('/favorite') && r.request().method() === 'PUT'
+    );
     await page.keyboard.press('Enter');
 
-    // THEN: Favorite toggles and the viewer stays closed (card-level keydown
-    // must not swallow Enter for inner action buttons)
+    // THEN: Favorite toggles — await the API response: the optimistic class
+    // flip alone would pass even if the favorite endpoint were broken. The
+    // viewer also stays closed (card-level keydown must not swallow Enter for
+    // inner action buttons)
+    await favoriteResponse;
     await expect.poll(() => favoriteBtn.getAttribute('class')).not.toBe(initialClass);
     await expect(page.locator(TestHelpers.selectors.viewer)).not.toBeVisible();
   });

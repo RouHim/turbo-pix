@@ -1,7 +1,7 @@
 <script>
   import { icons } from 'feather-icons';
 
-  const { name, width = 24, height = 24, className = '', ariaHidden = true } = $props();
+  const { name, width = 24, height = 24, class: className = '', ariaHidden = true } = $props();
 
   const svg = $derived(
     icons[name]?.toSvg({

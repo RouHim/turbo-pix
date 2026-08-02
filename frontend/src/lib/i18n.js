@@ -71,17 +71,14 @@ export { _ as t };
  * @returns {string} Translated error message or the original if no mapping found
  */
 export function translateError(errorMessage) {
+  // Raw strings the backend actually emits (see warp_helpers ErrorResponse and
+  // image_editor.rs); entries for strings no producer emits are dead weight.
   const errorMap = {
     'Photo not found': 'errors.photoNotFound',
     'Database error': 'errors.databaseError',
-    'Search failed': 'errors.searchError',
-    'Failed to load photo': 'errors.failedToLoadPhoto',
     'Failed to load image': 'errors.failedToLoadImage',
-    'Failed to read photo file': 'errors.failedToReadPhotoFile',
-    'Invalid thumbnail size': 'errors.invalidThumbnailSize',
-    'Server connection lost': 'errors.connectionLost',
     'Photo directory is mounted as read-only': 'errors.readOnlyFilesystem',
-    'Insufficient file permissions': 'errors.permissionDenied',
+    'Permission denied': 'errors.permissionDenied',
   };
 
   const key = errorMap[errorMessage];

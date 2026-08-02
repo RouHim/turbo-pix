@@ -58,8 +58,14 @@ export class SwipeableViewer {
 
       if (this.viewer.controls?.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
         this.viewer.gestureManager.startPan();
+        // The GestureManager's touchmove listener runs BEFORE this one (it is
+        // registered first via the Svelte action), so on this event it saw
+        // activeGesture still null and could not prevent the native scroll.
+        // Cancel it here — the pan-initiating move must not scroll the page.
+        event.preventDefault();
       } else if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > 0) {
         this.viewer.gestureManager.startPan();
+        event.preventDefault();
       }
     };
     this._onMainTouchEnd = () => {

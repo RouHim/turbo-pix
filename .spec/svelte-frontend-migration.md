@@ -6,7 +6,7 @@
 
 ## Goal
 
-Replace the entire TurboPix frontend — currently ~15,400 lines of vanilla JavaScript across 28 script files served without a bundler — with a Svelte 5 + Vite build pipeline. Every existing user-facing feature, behavior, and visual appearance must be preserved identically. The Rust backend, REST API, database schema, and all server-side logic remain untouched. The Vite build output replaces the current `static/` directory as the source of files embedded into the Rust binary via `include_static!`.
+Replace the entire TurboPix frontend — currently ~10,900 lines of vanilla JavaScript across 24 script files served without a bundler — with a Svelte 5 + Vite build pipeline. Every existing user-facing feature, behavior, and visual appearance must be preserved identically. The Rust backend, REST API, database schema, and all server-side logic remain untouched. The Vite build output replaces the current `static/` directory as the source of files embedded into the Rust binary via `include_static!`.
 
 ## User Scenarios
 

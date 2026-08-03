@@ -1,3 +1,43 @@
+# [2.35.0](https://github.com/RouHim/turbo-pix/compare/2.34.37...2.35.0) (2026-08-03)
+
+
+### Bug Fixes
+
+* add npm run build to CI jobs, fix cargo fmt ([3912399](https://github.com/RouHim/turbo-pix/commit/3912399488051546fc942afa3a894cebefb19660))
+* add prettier-plugin-svelte config, npm run build for e2e-tests CI ([485966e](https://github.com/RouHim/turbo-pix/commit/485966e853f2995acdbcc2ba6de6f3a067425c80))
+* CI lint passing - ESLint config for Svelte, prettier plugin, auto-fix ([77d170e](https://github.com/RouHim/turbo-pix/commit/77d170eca03e507c274cae369f2208d2ca2fc067))
+* copy assets/ into container builder stage ([37a2a31](https://github.com/RouHim/turbo-pix/commit/37a2a314345c197991d04921b011fd081716b2be))
+* copy build.rs into container builder stage ([692d230](https://github.com/RouHim/turbo-pix/commit/692d230a9eb0953a1a674cfc2bbdc1ca79062f71))
+* i18n _t/_ references, mobile search panel, responsive polish ([58ebf90](https://github.com/RouHim/turbo-pix/commit/58ebf90238bf24c27421b4f10ec2626e44a2f51e))
+* make e2e collage/housekeeping seeds deterministic and cover HEVC transcode poll ([0f3e8cc](https://github.com/RouHim/turbo-pix/commit/0f3e8cce1b7683663fb70b35fc74212446f493ba))
+* resolve all review findings for Svelte migration ([14e511c](https://github.com/RouHim/turbo-pix/commit/14e511c7bfe8743fa90615693c83576d2d0398ca))
+* resolve all review findings on Svelte migration branch ([73c5a3a](https://github.com/RouHim/turbo-pix/commit/73c5a3a52fe7cd46bf5e7c869225b1e3540d548e))
+* resolve eighteenth review round findings (LIKE escapes, CFA demosaic, atomic accept, cache versioning, temp-file RAII) ([7be83e5](https://github.com/RouHim/turbo-pix/commit/7be83e5a9d378842b582f1ace6ff780dfd71ddf3))
+* resolve eighth review round findings ([7623c24](https://github.com/RouHim/turbo-pix/commit/7623c243671bd6f60cbc49800dba018bf0f6c9bb))
+* resolve eleventh review round findings (security, robustness, test determinism) ([5ea527b](https://github.com/RouHim/turbo-pix/commit/5ea527bc48ec63633a17cec038226be27f0d3c75))
+* resolve fifteenth review round findings (collage RAW cap, viewer reopen races) ([050644e](https://github.com/RouHim/turbo-pix/commit/050644e495682d2d71b5e7ee1f1d436d3e42eda4))
+* resolve fifth review round findings on Svelte migration branch ([79b525c](https://github.com/RouHim/turbo-pix/commit/79b525cf69591c3471f93ea4fc55874c0df3d5b5))
+* resolve fourteenth review round findings (RAW decode cap everywhere, pin docs, cooldown eviction) ([ef0b6f3](https://github.com/RouHim/turbo-pix/commit/ef0b6f3e57b62f8945e5fba4018a30b664558c35))
+* resolve fourth review round findings on Svelte migration branch ([cb2ddab](https://github.com/RouHim/turbo-pix/commit/cb2ddab264bca8a356338d9118e8948bb9c60f71))
+* resolve fourth review round findings on Svelte migration branch ([53689ca](https://github.com/RouHim/turbo-pix/commit/53689ca0777604d2d65b999ec2aab47adae84163))
+* resolve ninth review round findings ([14caa27](https://github.com/RouHim/turbo-pix/commit/14caa27bb0b59d9423246cfb53fa063949beba78))
+* resolve remaining Svelte migration review findings ([68c2761](https://github.com/RouHim/turbo-pix/commit/68c2761ef4759c015ccea04e4b7a3ecb42a75f28))
+* resolve second review round findings on Svelte migration branch ([b219c16](https://github.com/RouHim/turbo-pix/commit/b219c163f82e41758db9779cf59781f69578a3b7))
+* resolve seventeenth review round findings (collage abort on decode errors, rotate grid-sync old hash) ([fa38aa2](https://github.com/RouHim/turbo-pix/commit/fa38aa29ee265243b550e40bf57d93e06321cbbf))
+* resolve seventh review round findings ([45f6ab2](https://github.com/RouHim/turbo-pix/commit/45f6ab20d0c5466b835b921623dfe6b94bd89bfa))
+* resolve sixteenth review round findings (collage abort on decode contention, grid-sync events) ([8f0d852](https://github.com/RouHim/turbo-pix/commit/8f0d8526168266f7b5f7291a0019137399cc3834))
+* resolve sixth review round findings ([ef8ac66](https://github.com/RouHim/turbo-pix/commit/ef8ac66bcdd71ced44f447ba3b4e7d1dc1093493))
+* resolve sixth review round findings on Svelte migration branch ([05363ce](https://github.com/RouHim/turbo-pix/commit/05363ce29a948983497a8f219319dbda7f1cdf0a))
+* resolve tenth review round residuals ([78a9ac8](https://github.com/RouHim/turbo-pix/commit/78a9ac872eebfa52de42f57dedcad060bc4938c7))
+* resolve third review round findings on Svelte migration branch ([3c2c350](https://github.com/RouHim/turbo-pix/commit/3c2c350546ba8fdd0341ea93734ad33ad171be9c))
+* resolve thirteenth review round findings (pagination determinism, security residuals, focus trap) ([aa0f10b](https://github.com/RouHim/turbo-pix/commit/aa0f10bc71d832025fd6298374f370540f150ce7))
+* resolve twelfth review round findings (self-healing cleanup, race closes, security hardening) ([05991ef](https://github.com/RouHim/turbo-pix/commit/05991ef6f23275afa3f2948fa8ea3fa2432bce01))
+
+
+### Features
+
+* Svelte 5 + Vite frontend migration (Phases 1-6 ports) ([c389c2a](https://github.com/RouHim/turbo-pix/commit/c389c2a5c389deaee7482f7d72e9e40d6e57d2ab))
+
 ## [2.34.37](https://github.com/RouHim/turbo-pix/compare/2.34.36...2.34.37) (2026-08-01)
 
 ## [2.34.36](https://github.com/RouHim/turbo-pix/compare/2.34.35...2.34.36) (2026-07-30)

@@ -44,6 +44,9 @@ jobs:
       - name: Run frontend linters
         run: npm run lint
 
+      - name: Run i18n integrity check
+        run: npm run test:i18n
+
   rust-tests:
     runs-on: ubuntu-latest
 

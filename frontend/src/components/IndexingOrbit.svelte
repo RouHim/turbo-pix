@@ -320,7 +320,7 @@
   function buildSheetPhase(phase, completionPulse) {
     const def = PHASES.find((p) => p.id === phase.id);
     const phaseName = $t(`ui.indexing_phase_${phase.id}`, {
-      default: def?.id || phase.id,
+      default: def ? def.id : $t('ui.indexing_phase_unknown', { default: 'Indexing' }),
     });
     const isDeterminate = phase.kind === 'determinate';
     const total = phase.total || 0;

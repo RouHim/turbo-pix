@@ -152,6 +152,7 @@
     "indexing_phase_discovering": "Fotos finden",
     "indexing_phase_metadata": "Details lesen",
     "indexing_phase_semantic_vectors": "Inhalte erkennen",
+    "indexing_phase_unknown": "Indexierung",
     "indexing_phase_geo_resolution": "Aufnahmeorte finden",
     "indexing_phase_collages": "Collagen erstellen",
     "indexing_phase_housekeeping": "Qualität prüfen",

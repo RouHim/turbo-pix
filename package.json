@@ -27,6 +27,7 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:report": "playwright show-report",
+    "test:i18n": "node --test tests/i18n-integrity.test.js",
     "prepare": "simple-git-hooks"
   },
   "simple-git-hooks": {

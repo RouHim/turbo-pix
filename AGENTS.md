@@ -131,6 +131,8 @@ npm run test:e2e:report   # View test report
 
 **i18n key format:** svelte-i18n keys are dot-paths into the nested JSON dictionaries (e.g. `ui.refresh`); en.json and de.json must stay structurally identical — every key in both.
 
+**i18n integrity guard:** `tests/i18n-integrity.test.js` (run via `npm run test:i18n`, wired into the CI lint-format job) scans every `$t('…')`/`get(t)('…')` literal, `$t(\`…\`)`/`get(t)(\`…\`)` template, and map key (Sidebar/SortControls `key:` fields, App's `titleKeys` object) in `frontend/src` against BOTH dictionaries and fails listing ALL missing keys plus any en/de parity drift. Template `${…}` placeholders must be one of `phase.id` (IndexingOrbit PHASES), `monthKey`, `weekdayKey` (constants.js) — a new template site needs its enum added to the test's `enums` map or the guard fails. New i18n keys MUST land in both en.json and de.json. App's `titleFallbacks` are plain strings, not keys — the titleKeys extraction is scoped to the object for that reason.
+
 **Startup indexing isolation:** `src/main.rs:start_background_tasks()` must keep `run_startup_rescan()` on a dedicated `std::thread` with its own `tokio::runtime::Runtime`; moving startup indexing back onto the main async runtime starves HTTP requests and makes `/api/indexing/status` look hung.
 
 **Indexing empty-state contract:** `frontend/src/components/PhotoGrid.svelte` (template empty-state branch) must check `indexingState.isIndexing && !currentQuery` (frontend/src/lib/state.svelte.js) before treating `photos.length === 0` as a true empty state; otherwise first-run indexing regresses to a misleading “No Photos Found” screen.

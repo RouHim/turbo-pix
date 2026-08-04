@@ -15,7 +15,7 @@
   let debounceTimer = null;
   let selectedIndex = $state(null);
   let sliderValue = $state(0);
-  let canvasEl = $state(null);
+  let ribbonEl = $state(null);
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
@@ -39,6 +39,22 @@
   );
 
   const maxSlider = $derived(Math.max(0, positions.length - 1));
+
+  const maxCount = $derived(Math.max(1, ...positions.map((p) => p.count)));
+
+  // Year landmarks: start bucket index per year; dense rule when > 6 years.
+  // Ordered ascending (positions are oldest-first) so ticks read left to right
+  // under the ribbon; the first tick is left-aligned to avoid clipping.
+  const yearTicks = $derived.by(() => {
+    const ticks = [...years]
+      .sort((a, b) => a - b)
+      .map((year) => ({
+        year,
+        startIndex: positions.findIndex((p) => p.year === year),
+      }));
+    if (ticks.length <= 6) return ticks;
+    return ticks.filter((_, i) => i === 0 || i === ticks.length - 1 || i % 2 === 0);
+  });
 
   function monthYearLabel(year, month) {
     const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
@@ -81,12 +97,6 @@
     }
   }
 
-  $effect(() => {
-    if (data && canvasEl) {
-      renderHeatmap();
-    }
-  });
-
   function applyFilter(updateUrl = true) {
     if (updateUrl) {
       const year = currentFilter?.year ?? null;
@@ -104,7 +114,6 @@
     }
     if (yearSelectEl) yearSelectEl.value = '';
     if (monthSelectEl) monthSelectEl.value = '';
-    renderHeatmap();
     applyFilter();
   }
 
@@ -118,7 +127,6 @@
       currentFilter = { year: pos.year, month: pos.month };
       selectedIndex = index;
     }
-    renderHeatmap();
     // The route-restore $effect reads currentFilter as a dependency, so it
     // re-runs on every drag tick — with route.year still null it would reset
     // the filter and snap the thumb back before the debounced push fires.
@@ -150,110 +158,24 @@
   }
 
   function handleTrackHover(e) {
-    if (!canvasEl || positions.length === 0) return;
-    const rect = canvasEl.getBoundingClientRect();
+    if (!ribbonEl || positions.length === 0) return;
+    const rect = ribbonEl.getBoundingClientRect();
     if (rect.width === 0) return;
-    const barWidth = rect.width / positions.length;
-    let index = Math.floor((e.clientX - rect.left) / barWidth);
+    const gap = 2; // .timeline-ribbon gap, keep in sync with CSS
+    const barWidth = (rect.width - gap * (positions.length - 1)) / positions.length;
+    if (barWidth <= 0) return; // degenerate: more buckets than the track can hold
+    const pitch = barWidth + gap;
+    let index = Math.floor((e.clientX - rect.left) / pitch);
     if (index < 0 || index >= positions.length) index = -1;
     hoveredIndex = index >= 0 ? index : null;
     // Clamp so the tooltip never overflows the viewport (it is centered via
     // translateX(-50%) and offset 60px above the cursor).
     tooltipX = Math.min(Math.max(e.clientX, 110), window.innerWidth - 110);
     tooltipY = Math.max(e.clientY - 60, 8);
-    renderHeatmap();
   }
 
   function handleTrackLeave() {
     hoveredIndex = null;
-    renderHeatmap();
-  }
-
-  function getThemePrimaryColor() {
-    const cs = window.getComputedStyle(document.documentElement);
-    return (cs.getPropertyValue('--primary-color') || '').trim();
-  }
-
-  function withAlpha(color, alpha) {
-    if (!color) return `rgba(99, 102, 241, ${alpha})`;
-    if (color.startsWith('oklch')) {
-      return color.endsWith(')') ? `${color.slice(0, -1)} / ${alpha})` : `${color} / ${alpha}`;
-    }
-    if (color.startsWith('#')) {
-      const hex = color.replace('#', '');
-      const full =
-        hex.length === 3
-          ? hex
-              .split('')
-              .map((c) => c + c)
-              .join('')
-          : hex;
-      const r = parseInt(full.slice(0, 2), 16);
-      const g = parseInt(full.slice(2, 4), 16);
-      const b = parseInt(full.slice(4, 6), 16);
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    }
-    return `rgba(99, 102, 241, ${alpha})`;
-  }
-
-  function renderHeatmap() {
-    if (!canvasEl || !data?.density) return;
-    const ctx = canvasEl.getContext('2d');
-    const width = canvasEl.width;
-    const height = canvasEl.height;
-    ctx.clearRect(0, 0, width, height);
-    if (positions.length === 0) return;
-
-    const maxCount = Math.max(...data.density.map((d) => d.count));
-    const primary = getThemePrimaryColor();
-    drawYearMarkers(ctx, width, height, primary);
-
-    const barWidth = width / positions.length;
-    positions.forEach((pos, index) => {
-      const normalizedHeight = (pos.count / maxCount) * height;
-      const x = index * barWidth;
-      const y = height - normalizedHeight;
-      const isSelected = selectedIndex === index;
-
-      const opacity = 0.3 + (pos.count / maxCount) * 0.7;
-
-      ctx.fillStyle = withAlpha(primary, opacity);
-      ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
-
-      if (isSelected) {
-        ctx.strokeStyle = withAlpha(primary, 1);
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x + 1, y, barWidth - 3, normalizedHeight);
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = withAlpha(primary, 0.6);
-        ctx.fillStyle = withAlpha(primary, 0.9);
-        ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
-        ctx.shadowBlur = 0;
-      } else if (hoveredIndex === index) {
-        ctx.fillStyle = withAlpha(primary, 0.85);
-        ctx.fillRect(x, y, barWidth - 1, normalizedHeight);
-      }
-    });
-  }
-
-  function drawYearMarkers(ctx, width, height, primary) {
-    if (positions.length === 0) return;
-    const barWidth = width / positions.length;
-    let lastYear = null;
-    positions.forEach((pos, index) => {
-      if (pos.year !== lastYear) {
-        const x = index * barWidth;
-        if (lastYear !== null) {
-          ctx.strokeStyle = withAlpha(primary, 0.15);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-        }
-        lastYear = pos.year;
-      }
-    });
   }
 
   /**
@@ -271,7 +193,6 @@
         }
         if (yearSelectEl) yearSelectEl.value = '';
         if (monthSelectEl) monthSelectEl.value = '';
-        renderHeatmap();
       }
     } else if (year) {
       const matchIndex = positions.findIndex((p) => p.year === year && p.month === month);
@@ -282,7 +203,6 @@
       }
       if (yearSelectEl && year) yearSelectEl.value = String(year);
       if (monthSelectEl) monthSelectEl.value = month ? String(month) : '';
-      renderHeatmap();
     }
   }
 
@@ -303,91 +223,130 @@
 </script>
 
 {#if !initError}
-  <div class="timeline-container">
-    <!-- Desktop: Slider -->
-    <div class="timeline-slider desktop-only">
-      <button
-        type="button"
-        class="timeline-reset"
-        title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-        aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-        onclick={resetFilter}
-      >
-        <Icon name="x" width={14} height={14} />
-      </button>
-      <!-- The track itself is presentational: hover only drives the tooltip, the range input below is the keyboard-accessible control -->
-      <div
-        class="timeline-track"
-        role="presentation"
-        onmousemove={handleTrackHover}
-        onmouseleave={handleTrackLeave}
-      >
-        <canvas class="timeline-heatmap" width="800" height="40" bind:this={canvasEl}></canvas>
-        <input
-          type="range"
-          class="timeline-input"
-          min="0"
-          max={maxSlider}
-          value={sliderValue}
-          aria-label={$t('ui.timeline_slider_aria', { default: 'Timeline filter' })}
-          oninput={handleSliderInput}
-          ondblclick={resetFilter}
-        />
-        {#if hoveredIndex !== null}
-          {@const pos = positions[hoveredIndex]}
-          <div class="timeline-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
-            <div class="timeline-tooltip-date">{monthYearLabel(pos.year, pos.month)}</div>
-            <div class="timeline-tooltip-count">
-              {$t('ui.photos_count', { values: { count: pos.count }, default: '{count} photos' })}
-            </div>
-          </div>
-        {/if}
+  {#if !data}
+    <div class="timeline-container">
+      <div class="timeline-slider">
+        <div class="timeline-skeleton" aria-hidden="true"></div>
+        <div class="timeline-label">{labelText}</div>
       </div>
-      <div class="timeline-label">{labelText}</div>
     </div>
-
-    <!-- Mobile: Dropdowns -->
-    <div class="timeline-dropdowns mobile-only">
-      <select
-        id="timeline-year-select"
-        class="timeline-year-select"
-        bind:this={yearSelectEl}
-        aria-label={$t('ui.year_select', { default: 'Year' })}
-        onchange={handleDropdownChange}
-      >
-        <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
-        {#each years as year (year)}
-          <option value={year}>{year}</option>
-        {/each}
-      </select>
-      <select
-        id="timeline-month-select"
-        class="timeline-month-select"
-        bind:this={monthSelectEl}
-        aria-label={$t('ui.month_select', { default: 'Month' })}
-        disabled={!currentFilter?.year}
-        onchange={handleDropdownChange}
-      >
-        <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
-        {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i (i)}
-          <option value={i + 1}
-            >{$t(`ui.months.${monthKey}`, {
-              default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
-            })}</option
+  {:else if positions.length === 0}
+    <!-- Empty library: nothing to filter, render nothing -->
+  {:else}
+    <div class="timeline-container">
+      <!-- Desktop: Slider -->
+      <div class="timeline-slider desktop-only">
+        <button
+          type="button"
+          class="timeline-reset"
+          title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+          aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+          onclick={resetFilter}
+        >
+          <Icon name="x" width={14} height={14} />
+        </button>
+        <div class="timeline-track-stack">
+          <!-- The track itself is presentational: hover only drives the tooltip, the range input below is the keyboard-accessible control -->
+          <div
+            class="timeline-track"
+            role="presentation"
+            onmousemove={handleTrackHover}
+            onmouseleave={handleTrackLeave}
           >
-        {/each}
-      </select>
-      <button
-        type="button"
-        class="timeline-reset"
-        title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-        aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-        onclick={resetFilter}
-      >
-        <Icon name="x" width={14} height={14} />
-      </button>
+            <div class="timeline-groove" aria-hidden="true">
+              <div class="timeline-ribbon" bind:this={ribbonEl}>
+                {#each positions as pos, i (i)}
+                  <div
+                    class="timeline-bar"
+                    class:selected={selectedIndex === i}
+                    class:hovered={hoveredIndex === i}
+                    style="--bar-ratio: {pos.count / maxCount}; --bar-opacity: {0.35 +
+                      0.55 * (pos.count / maxCount)}; animation-delay: {Math.min(i * 8, 300)}ms"
+                  ></div>
+                {/each}
+              </div>
+            </div>
+            <input
+              type="range"
+              class="timeline-input"
+              min="0"
+              max={maxSlider}
+              value={sliderValue}
+              aria-label={$t('ui.timeline_slider_aria', { default: 'Timeline filter' })}
+              aria-valuetext={labelText}
+              oninput={handleSliderInput}
+              ondblclick={resetFilter}
+            />
+            {#if hoveredIndex !== null}
+              {@const pos = positions[hoveredIndex]}
+              <div class="timeline-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
+                <div class="timeline-tooltip-date">{monthYearLabel(pos.year, pos.month)}</div>
+                <div class="timeline-tooltip-count">
+                  {$t('ui.photos_count', {
+                    values: { count: pos.count },
+                    default: '{count} photos',
+                  })}
+                </div>
+              </div>
+            {/if}
+          </div>
+          <div class="timeline-ticks" aria-hidden="true">
+            {#each yearTicks as tick, i (tick.year)}
+              <span
+                class="timeline-year-tick"
+                class:first={i === 0}
+                class:last={i === yearTicks.length - 1}
+                style="left: {(tick.startIndex / positions.length) * 100}%">{tick.year}</span
+              >
+            {/each}
+          </div>
+        </div>
+        <div class="timeline-label" class:filtered={currentFilter !== null}>{labelText}</div>
+      </div>
+
+      <!-- Mobile: Dropdowns -->
+      <div class="timeline-dropdowns mobile-only">
+        <select
+          id="timeline-year-select"
+          class="timeline-year-select"
+          bind:this={yearSelectEl}
+          aria-label={$t('ui.year_select', { default: 'Year' })}
+          onchange={handleDropdownChange}
+        >
+          <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
+          {#each years as year (year)}
+            <option value={year}>{year}</option>
+          {/each}
+        </select>
+        <select
+          id="timeline-month-select"
+          class="timeline-month-select"
+          bind:this={monthSelectEl}
+          aria-label={$t('ui.month_select', { default: 'Month' })}
+          disabled={!currentFilter?.year}
+          onchange={handleDropdownChange}
+        >
+          <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
+          {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i (i)}
+            <option value={i + 1}
+              >{$t(`ui.months.${monthKey}`, {
+                default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
+              })}</option
+            >
+          {/each}
+        </select>
+        <button
+          type="button"
+          class="timeline-reset"
+          title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+          aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+          onclick={resetFilter}
+        >
+          <Icon name="x" width={14} height={14} />
+        </button>
+      </div>
     </div>
-  </div>
+  {/if}
 {/if}
 
 <style>
@@ -398,11 +357,6 @@
     border-radius: var(--radius-md);
     border: 1px solid var(--divider-color);
     box-shadow: var(--shadow-light);
-    transition: var(--transition-medium);
-  }
-
-  .timeline-container:hover {
-    box-shadow: var(--shadow-medium);
   }
 
   .timeline-slider {
@@ -411,67 +365,67 @@
     gap: var(--space-5);
   }
 
-  .timeline-reset {
-    flex-shrink: 0;
-    width: var(--space-8);
-    height: var(--space-8);
-    border-radius: var(--radius-sm);
-    border: 1.5px solid var(--divider-color);
-    background: var(--background-color);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  .timeline-track-stack {
+    flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--font-lg);
-    font-weight: var(--font-semibold);
-    position: relative;
-    overflow: hidden;
-  }
-
-  .timeline-reset::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: var(--primary-color);
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
-
-  .timeline-reset:hover::before {
-    opacity: 1;
-  }
-
-  .timeline-reset:hover {
-    border-color: var(--primary-color);
-    color: white;
-    box-shadow: var(--shadow-medium);
-  }
-
-  .timeline-reset:active {
-    transform: translateY(0);
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
   }
 
   .timeline-track {
-    flex: 1;
     position: relative;
-    height: var(--button-size-lg);
+    height: 40px;
     display: flex;
     align-items: center;
   }
 
-  .timeline-heatmap {
+  .timeline-groove {
     position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    left: 0;
+    inset: 4px 0;
+    display: flex;
+    align-items: center;
+    background: var(--background-secondary);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-lg);
+    padding: 2px 4px;
+  }
+
+  .timeline-ribbon {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
     width: 100%;
-    height: 28px;
-    pointer-events: none;
-    border-radius: 14px;
-    box-shadow: inset 0 2px 4px rgb(0 0 0 / 10%);
-    background: linear-gradient(to bottom, rgb(0 0 0 / 5%), transparent);
+    height: 100%;
+  }
+
+  .timeline-bar {
+    flex: 1 1 0;
+    min-width: 0;
+    height: calc(6px + var(--bar-ratio) * 20px);
+    border-radius: var(--radius-full);
+    background: var(--primary-color);
+    opacity: var(--bar-opacity);
+    transform-origin: bottom;
+    animation: timeline-bar-grow 0.4s var(--ease-spring) backwards;
+    transition: opacity var(--transition-fast);
+  }
+
+  .timeline-bar.selected {
+    opacity: 1;
+  }
+
+  .timeline-bar.hovered {
+    opacity: 0.9;
+  }
+
+  @keyframes timeline-bar-grow {
+    from {
+      transform: scaleY(0);
+    }
+    to {
+      transform: scaleY(1);
+    }
   }
 
   .timeline-input {
@@ -480,81 +434,136 @@
     left: 0;
     width: 100%;
     transform: translateY(-50%);
+    z-index: 2;
     -webkit-appearance: none;
     appearance: none;
     background: transparent;
     cursor: grab;
-    height: var(--button-size-lg);
+    height: 40px;
+    margin: 0;
+    border-radius: var(--radius-lg);
   }
 
   .timeline-input:active {
     cursor: grabbing;
   }
 
+  .timeline-input:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
   .timeline-input::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
     background: var(--primary-color);
+    border: 2px solid var(--surface-color);
     cursor: grab;
-    border: 3px solid white;
     box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform var(--transition-fast);
   }
 
   .timeline-input::-webkit-slider-thumb:hover {
-    transform: scale(1.15);
+    transform: scale(1.1);
     box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
   }
 
   .timeline-input:active::-webkit-slider-thumb {
     cursor: grabbing;
-    transform: scale(1.1);
+    transform: scale(1.05);
   }
 
   .timeline-input::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
     background: var(--primary-color);
+    border: 2px solid var(--surface-color);
     cursor: grab;
-    border: 3px solid white;
     box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform var(--transition-fast);
   }
 
   .timeline-input::-moz-range-thumb:hover {
-    transform: scale(1.15);
+    transform: scale(1.1);
     box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
   }
 
   .timeline-input:active::-moz-range-thumb {
     cursor: grabbing;
-    transform: scale(1.1);
+    transform: scale(1.05);
+  }
+
+  .timeline-ticks {
+    position: relative;
+    height: 16px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .timeline-year-tick {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    font-size: var(--font-xs);
+    line-height: 16px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  .timeline-year-tick.first {
+    transform: none;
+  }
+
+  .timeline-year-tick.last {
+    transform: translateX(-100%);
   }
 
   .timeline-label {
     flex-shrink: 0;
-    min-width: 130px;
-    text-align: right;
-    font-size: var(--font-md);
-    font-weight: var(--font-semibold);
-    color: var(--primary-color);
-    letter-spacing: -0.01em;
+    min-width: 104px;
+    text-align: center;
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-secondary);
+    transition:
+      background-color var(--transition-fast),
+      color var(--transition-fast);
+  }
+
+  .timeline-label.filtered {
+    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
+    color: var(--primary-dark);
   }
 
   .timeline-tooltip {
     position: fixed;
     transform: translateX(-50%);
-    background: var(--surface-color);
+    background: var(--surface-elevated);
     border: 1px solid var(--divider-color);
     border-radius: var(--radius-md);
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-2) var(--space-3);
     box-shadow: var(--shadow-heavy);
     pointer-events: none;
-    z-index: var(--z-modal);
+    z-index: var(--z-tooltip);
+    animation: timeline-tooltip-in 0.15s ease-out;
+  }
+
+  @keyframes timeline-tooltip-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 
   .timeline-tooltip-date {
@@ -569,29 +578,84 @@
     color: var(--text-secondary);
   }
 
+  .timeline-reset {
+    flex-shrink: 0;
+    width: var(--space-8);
+    height: var(--space-8);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--divider-color);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+      border-color var(--transition-fast),
+      color var(--transition-fast),
+      background-color var(--transition-fast);
+  }
+
+  .timeline-reset:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: color-mix(in oklch, var(--primary-color) 10%, transparent);
+  }
+
+  .timeline-reset:active {
+    transform: translateY(1px);
+  }
+
+  .timeline-reset:focus-visible {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
+  .timeline-skeleton {
+    flex: 1;
+    height: 40px;
+    border-radius: var(--radius-lg);
+    background: var(--background-secondary);
+    border: 1px solid var(--divider-color);
+  }
+
   /* Mobile Timeline Dropdowns */
   .timeline-dropdowns {
     display: none;
-    gap: 10px;
+    gap: var(--space-3);
     align-items: center;
   }
 
   .timeline-year-select,
   .timeline-month-select {
     flex: 1;
+    min-width: 0;
     padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-sm);
-    background: var(--background-color);
+    border: 2px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
     color: var(--text-primary);
     font-size: var(--font-base);
     cursor: pointer;
+    transition: var(--transition-fast);
   }
 
-  .timeline-year-select:focus,
-  .timeline-month-select:focus {
+  .timeline-year-select:focus-visible,
+  .timeline-month-select:focus-visible {
     outline: none;
     border-color: var(--primary-color);
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
+  .timeline-year-select:disabled,
+  .timeline-month-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .desktop-only {
@@ -612,12 +676,7 @@
     }
 
     .timeline-container {
-      padding: 12px 15px;
-    }
-
-    .timeline-label {
-      min-width: 100px;
-      font-size: 13px;
+      padding: var(--space-3) var(--space-4);
     }
   }
 
@@ -635,6 +694,25 @@
     .timeline-reset {
       width: 36px;
       height: 36px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .timeline-bar,
+    .timeline-label,
+    .timeline-label.filtered,
+    .timeline-tooltip,
+    .timeline-input::-webkit-slider-thumb,
+    .timeline-reset {
+      animation: none;
+      transition: none;
+    }
+    /* NOTE: keep the -moz thumb in its own rule — Chromium drops the WHOLE
+       selector list when it contains an unknown pseudo-element, which would
+       empty this media query (and `animation: none` never applied). */
+    .timeline-input::-moz-range-thumb {
+      animation: none;
+      transition: none;
     }
   }
 </style>

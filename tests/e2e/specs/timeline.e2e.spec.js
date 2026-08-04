@@ -84,7 +84,6 @@ test.describe('Timeline', () => {
   test('should announce readable value via aria-valuetext', async ({ page }) => {
     // GIVEN: Timeline slider is rendered
     const slider = page.locator('.timeline-input');
-    await expect(slider).toHaveCount(1);
 
     const density = await page.evaluate(() =>
       fetch('/api/photos/timeline')
@@ -92,6 +91,8 @@ test.describe('Timeline', () => {
         .then((data) => data.density || [])
     );
     test.skip(density.length === 0, 'Timeline needs at least one month bucket');
+
+    await expect(slider).toHaveCount(1);
 
     // THEN: The initial (rightmost, unfiltered) position announces "All Dates"
     await expect(slider).toHaveAttribute('aria-valuetext', 'All Dates');
@@ -110,7 +111,6 @@ test.describe('Timeline', () => {
   test('should scrub with keyboard', async ({ page }) => {
     // GIVEN: Timeline slider is rendered with at least two month buckets
     const slider = page.locator('.timeline-input');
-    await expect(slider).toHaveCount(1);
 
     const density = await page.evaluate(() =>
       fetch('/api/photos/timeline')
@@ -118,6 +118,8 @@ test.describe('Timeline', () => {
         .then((data) => data.density || [])
     );
     test.skip(density.length < 2, 'Timeline needs at least two month buckets to scrub');
+
+    await expect(slider).toHaveCount(1);
 
     // WHEN: User focuses the slider and presses Home
     await slider.focus();

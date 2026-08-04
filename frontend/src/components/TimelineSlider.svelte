@@ -161,8 +161,11 @@
     if (!ribbonEl || positions.length === 0) return;
     const rect = ribbonEl.getBoundingClientRect();
     if (rect.width === 0) return;
-    const barWidth = rect.width / positions.length;
-    let index = Math.floor((e.clientX - rect.left) / barWidth);
+    const gap = 2; // .timeline-ribbon gap, keep in sync with CSS
+    const barWidth = (rect.width - gap * (positions.length - 1)) / positions.length;
+    if (barWidth <= 0) return; // degenerate: more buckets than the track can hold
+    const pitch = barWidth + gap;
+    let index = Math.floor((e.clientX - rect.left) / pitch);
     if (index < 0 || index >= positions.length) index = -1;
     hoveredIndex = index >= 0 ? index : null;
     // Clamp so the tooltip never overflows the viewport (it is centered via
@@ -220,15 +223,17 @@
 </script>
 
 {#if !initError}
-  <div class="timeline-container">
-    {#if !data}
-      <div class="timeline-slider desktop-only">
+  {#if !data}
+    <div class="timeline-container">
+      <div class="timeline-slider">
         <div class="timeline-skeleton" aria-hidden="true"></div>
         <div class="timeline-label">{labelText}</div>
       </div>
-    {:else if positions.length === 0}
-      <!-- Empty library: nothing to filter, render nothing -->
-    {:else}
+    </div>
+  {:else if positions.length === 0}
+    <!-- Empty library: nothing to filter, render nothing -->
+  {:else}
+    <div class="timeline-container">
       <!-- Desktop: Slider -->
       <div class="timeline-slider desktop-only">
         <button
@@ -290,6 +295,7 @@
               <span
                 class="timeline-year-tick"
                 class:first={i === 0}
+                class:last={i === yearTicks.length - 1}
                 style="left: {(tick.startIndex / positions.length) * 100}%">{tick.year}</span
               >
             {/each}
@@ -339,8 +345,8 @@
           <Icon name="x" width={14} height={14} />
         </button>
       </div>
-    {/if}
-  </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -513,6 +519,10 @@
 
   .timeline-year-tick.first {
     transform: none;
+  }
+
+  .timeline-year-tick.last {
+    transform: translateX(-100%);
   }
 
   .timeline-label {
@@ -690,6 +700,7 @@
   @media (prefers-reduced-motion: reduce) {
     .timeline-bar,
     .timeline-label,
+    .timeline-label.filtered,
     .timeline-tooltip,
     .timeline-input::-webkit-slider-thumb,
     .timeline-reset {

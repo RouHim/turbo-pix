@@ -1,3 +1,10 @@
+## [2.35.2](https://github.com/RouHim/turbo-pix/compare/2.35.1...2.35.2) (2026-08-04)
+
+
+### Bug Fixes
+
+* **i18n:** guard against unresolved i18n keys and localize unknown indexing phases ([02ac69d](https://github.com/RouHim/turbo-pix/commit/02ac69de25a1fab9cbe2f2640a6d173d0b9bcff8))
+
 ## [2.35.1](https://github.com/RouHim/turbo-pix/compare/2.35.0...2.35.1) (2026-08-04)
 
 # [2.35.0](https://github.com/RouHim/turbo-pix/compare/2.34.37...2.35.0) (2026-08-03)

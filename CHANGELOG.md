@@ -1,3 +1,15 @@
+# [2.36.0](https://github.com/RouHim/turbo-pix/compare/2.35.3...2.36.0) (2026-08-04)
+
+
+### Bug Fixes
+
+* resolve all timeline slider review findings ([a6ee6ad](https://github.com/RouHim/turbo-pix/commit/a6ee6ad1d1687ba8dddd7c4d0a439a645857400f))
+
+
+### Features
+
+* **timeline:** redesign timeline slider UI/UX ([0296d8f](https://github.com/RouHim/turbo-pix/commit/0296d8ffe59a2ae5b7518aabed3462a6f2476a3b))
+
 ## [2.35.3](https://github.com/RouHim/turbo-pix/compare/2.35.2...2.35.3) (2026-08-04)
 
 ## [2.35.2](https://github.com/RouHim/turbo-pix/compare/2.35.1...2.35.2) (2026-08-04)

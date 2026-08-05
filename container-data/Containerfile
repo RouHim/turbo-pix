@@ -6,7 +6,7 @@ FROM mwader/static-ffmpeg:8.1 AS ffmpeg
 # # # # # # # # # # # # # # # # # # # #
 # Frontend Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-FROM node:24-alpine AS frontend-build
+FROM node:25-alpine AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vite.config.js ./

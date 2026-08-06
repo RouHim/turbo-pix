@@ -170,7 +170,17 @@
     "timeline_slider_aria": "Timeline filter",
     "logo_alt": "TurboPix logo",
     "file_size_zero": "0 Bytes",
-    "retry": "Retry"
+    "retry": "Retry",
+    "select": "Select",
+    "selected_count": "{count} selected",
+    "select_all_visible": "Select all visible",
+    "cancel_selection": "Cancel selection",
+    "shift_dates": "Shift dates",
+    "export": "Export",
+    "exporting": "Exporting…",
+    "working": "Working…",
+    "days": "Days",
+    "apply": "Apply"
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",
@@ -183,7 +193,8 @@
     "readOnlyFilesystem": "Cannot delete photo — the photo directory is read-only",
     "permissionDenied": "Cannot delete photo — insufficient file permissions",
     "timeline_load_failed": "Failed to load timeline data",
-    "view_crashed": "Something went wrong"
+    "view_crashed": "Something went wrong",
+    "batchActionFailed": "Batch action failed"
   },
   "notifications": {
     "rotationFailed": "Failed to rotate photo",
@@ -197,7 +208,30 @@
     "deleted": "Deleted",
     "error": "Error",
     "kept": "Kept",
-    "photoKept": "Photo removed from housekeeping candidates"
+    "photoKept": "Photo removed from housekeeping candidates",
+    "batchDeleteConfirm": "Permanently delete {count} photo(s)? This cannot be undone.",
+    "batchRejectConfirm": "Reject {count} collage(s)? This cannot be undone.",
+    "batchDeleted": "{count} photos deleted",
+    "batchKept": "{count} candidates kept",
+    "batchFavorited": "{count} photos added to favorites",
+    "batchUnfavorited": "{count} photos removed from favorites",
+    "batchDateShifted": "{count} photos date-shifted",
+    "batchSkippedNoDate": "{count} photos skipped (no taken date)",
+    "batchExported": "{count} photos exported",
+    "batchAccepted": "{count} collages accepted",
+    "batchRejected": "{count} collages rejected",
+    "batchFailed": "{count} items failed"
+  },
+  "savedSearches": {
+    "sectionTitle": "Saved searches",
+    "save": "Save search",
+    "saved": "Search saved",
+    "saveFailed": "Could not save search",
+    "alreadySaved": "Search already saved",
+    "defaultName": "Saved search",
+    "rename": "Rename",
+    "delete": "Delete",
+    "errorNameRequired": "Name cannot be empty"
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

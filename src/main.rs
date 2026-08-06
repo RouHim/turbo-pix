@@ -15,6 +15,7 @@ use turbo_pix::handlers_health::build_health_routes;
 use turbo_pix::handlers_housekeeping::build_housekeeping_routes;
 use turbo_pix::handlers_indexing::build_indexing_routes;
 use turbo_pix::handlers_photo::build_photo_routes;
+use turbo_pix::handlers_saved_searches::build_saved_searches_routes;
 use turbo_pix::handlers_search::build_search_routes;
 use turbo_pix::handlers_static::build_static_routes;
 use turbo_pix::handlers_thumbnail::build_thumbnail_routes;
@@ -106,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     start_background_tasks(photo_scheduler);
 
     let health_routes = build_health_routes(db_pool.clone());
-    let photo_routes = build_photo_routes(db_pool.clone(), cache_manager);
+    let photo_routes = build_photo_routes(
+        db_pool.clone(),
+        cache_manager,
+        config.data_path.clone().into(),
+    );
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search.clone());
     let indexing_routes = build_indexing_routes(indexing_status, db_pool.clone());
@@ -117,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         semantic_search,
     );
     let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
+    let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
     let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
@@ -134,6 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or(indexing_routes)
                 .or(collage_routes)
                 .or(housekeeping_routes)
+                .or(saved_searches_routes)
                 .or(config_routes)
                 .or(static_routes),
         )

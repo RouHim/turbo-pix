@@ -3,8 +3,16 @@
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
   import { api } from '../lib/api.js';
-  import { addToast } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    selectionState,
+    enterSelectionMode,
+    toggleSelected,
+    selectRange,
+    pruneSelection,
+  } from '../lib/state.svelte.js';
   import { formatCollageDate, handleError } from '../lib/utils.js';
+  import { longpress } from '../lib/longpress.js';
 
   let collages = $state([]);
   let loading = $state(true);
@@ -36,6 +44,9 @@
     abortController = new AbortController();
     try {
       collages = await api.getPendingCollages({ signal: abortController.signal });
+      // Reload-prune: covers collages settled elsewhere (another tab, the
+      // viewer) while this view was showing a stale list.
+      pruneSelection(collages.map((c) => String(c.id)));
     } catch (e) {
       if (e?.name === 'AbortError') return;
       console.error('Failed to load pending collages:', e);
@@ -133,9 +144,32 @@
   }
 
   function handleCardClick(e, collage) {
+    if (selectionState.active) {
+      if (e.shiftKey && selectionState.anchorKey != null) {
+        selectRange(
+          selectionState.anchorKey,
+          String(collage.id),
+          collages.map((c) => String(c.id))
+        );
+      } else {
+        toggleSelected(String(collage.id));
+      }
+      return;
+    }
     if (e.target.closest('.card-action-btn')) return;
     openViewer(collage);
   }
+
+  function handleLongPress(collage) {
+    if (selectionState.active) return;
+    enterSelectionMode();
+    toggleSelected(String(collage.id));
+  }
+
+  // Surface keys in display order for range selection and select-all-visible.
+  $effect(() => {
+    selectionState.orderedKeys = collages.map((c) => String(c.id));
+  });
 </script>
 
 <div class="collages-view">
@@ -208,7 +242,18 @@
 
     <div class="photo-grid" id="photo-grid">
       {#each collages as collage (collage.id)}
-        <div class="photo-card collage-card" data-photo-id={collage.id}>
+        {@const selected = !!selectionState.selected[String(collage.id)]}
+        <div
+          class="photo-card collage-card"
+          data-photo-id={collage.id}
+          class:selected
+          use:longpress={{ onLongPress: () => handleLongPress(collage) }}
+        >
+          {#if selectionState.active}
+            <div class="photo-card-selection-badge" aria-hidden="true">
+              <Icon name={selected ? 'check-square' : 'square'} width={18} height={18} />
+            </div>
+          {/if}
           <div
             class="photo-card-open-layer"
             role="button"
@@ -217,11 +262,16 @@
               default: `Collage for ${formatCollageDate(collage.date)}`,
               values: { date: formatCollageDate(collage.date) },
             })}
+            aria-pressed={selectionState.active ? selected : undefined}
             onclick={(e) => handleCardClick(e, collage)}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                openViewer(collage);
+                if (selectionState.active) {
+                  toggleSelected(String(collage.id));
+                } else {
+                  openViewer(collage);
+                }
               }
             }}
           ></div>
@@ -248,30 +298,32 @@
               })}
             </span>
           </div>
-          <div class="photo-card-actions collage-actions">
-            <button
-              type="button"
-              class="card-action-btn accept-collage-btn"
-              data-action="accept-collage"
-              title={$t('ui.accept_collage', { default: 'Accept' })}
-              aria-label={$t('ui.accept_collage', { default: 'Accept' })}
-              disabled={actionBusy}
-              onclick={() => acceptCollage(collage)}
-            >
-              <Icon name="check" width={18} height={18} />
-            </button>
-            <button
-              type="button"
-              class="card-action-btn reject-collage-btn"
-              data-action="reject-collage"
-              title={$t('ui.reject_collage', { default: 'Reject' })}
-              aria-label={$t('ui.reject_collage', { default: 'Reject' })}
-              disabled={actionBusy}
-              onclick={() => rejectCollage(collage)}
-            >
-              <Icon name="x" width={18} height={18} />
-            </button>
-          </div>
+          {#if !selectionState.active}
+            <div class="photo-card-actions collage-actions">
+              <button
+                type="button"
+                class="card-action-btn accept-collage-btn"
+                data-action="accept-collage"
+                title={$t('ui.accept_collage', { default: 'Accept' })}
+                aria-label={$t('ui.accept_collage', { default: 'Accept' })}
+                disabled={actionBusy}
+                onclick={() => acceptCollage(collage)}
+              >
+                <Icon name="check" width={18} height={18} />
+              </button>
+              <button
+                type="button"
+                class="card-action-btn reject-collage-btn"
+                data-action="reject-collage"
+                title={$t('ui.reject_collage', { default: 'Reject' })}
+                aria-label={$t('ui.reject_collage', { default: 'Reject' })}
+                disabled={actionBusy}
+                onclick={() => rejectCollage(collage)}
+              >
+                <Icon name="x" width={18} height={18} />
+              </button>
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -375,5 +427,34 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 2px;
     }
+  }
+
+  /* Selection mode: outline + badge (mirrors PhotoCard). */
+  .photo-card.selected {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
+  .photo-card-selection-badge {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--glass-bg, oklch(100% 0 0deg / 10%));
+    backdrop-filter: blur(8px) saturate(1.5);
+    -webkit-backdrop-filter: blur(8px) saturate(1.5);
+    color: var(--primary-color);
+    pointer-events: none;
+  }
+
+  .photo-card.selected .photo-card-selection-badge {
+    background: var(--primary-color);
+    color: var(--color-bg, white);
   }
 </style>

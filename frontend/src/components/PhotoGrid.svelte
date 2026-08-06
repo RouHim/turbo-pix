@@ -1,6 +1,15 @@
 <script>
   import { onMount, untrack } from 'svelte';
-  import { photoGridState, indexingState, addToast } from '../lib/state.svelte.js';
+  import {
+    photoGridState,
+    indexingState,
+    addToast,
+    selectionState,
+    enterSelectionMode,
+    toggleSelected,
+    selectRange,
+    pruneSelection,
+  } from '../lib/state.svelte.js';
   import { route } from '../lib/router.svelte.js';
   import { api } from '../lib/api.js';
   import { logger } from '../lib/logger.js';
@@ -332,6 +341,35 @@
   }
 
   // ===========================================================================
+  // Selection mode
+  // ===========================================================================
+
+  function handleSelect(photo, event) {
+    if (event.shiftKey && selectionState.anchorKey != null) {
+      selectRange(
+        selectionState.anchorKey,
+        photo.hash_sha256,
+        photoGridState.photos.map((p) => p.hash_sha256)
+      );
+    } else {
+      toggleSelected(photo.hash_sha256);
+    }
+  }
+
+  function handleLongPress(photo) {
+    if (selectionState.active) return;
+    enterSelectionMode();
+    toggleSelected(photo.hash_sha256);
+  }
+
+  // Keep the surface's visible keys in display order for range selection and
+  // select-all-visible. Reading photoGridState.photos makes this reactive;
+  // the orderedKeys assignment is not a read, so there is no loop.
+  $effect(() => {
+    selectionState.orderedKeys = photoGridState.photos.map((p) => p.hash_sha256);
+  });
+
+  // ===========================================================================
   // Lifecycle — route effects
   // ===========================================================================
 
@@ -354,6 +392,7 @@
     if (idx === -1) return;
     if (route.view === 'favorites' && !isFavorite) {
       photoGridState.photos.splice(idx, 1);
+      pruneSelection(photoGridState.photos.map((p) => p.hash_sha256));
       refillIfEmpty();
     } else {
       photoGridState.photos[idx].is_favorite = isFavorite;
@@ -383,6 +422,7 @@
     const idx = photoGridState.photos.findIndex((p) => p.hash_sha256 === hash);
     if (idx !== -1) {
       photoGridState.photos.splice(idx, 1);
+      pruneSelection(photoGridState.photos.map((p) => p.hash_sha256));
       refillIfEmpty();
     }
   }
@@ -401,11 +441,16 @@
     loadPhotos(true);
   }
 
+  function handleReloadRequested() {
+    loadPhotos(true);
+  }
+
   onMount(() => {
     window.addEventListener('favoriteToggled', handleFavoriteToggled);
     window.addEventListener('photoUpdated', handlePhotoUpdated);
     window.addEventListener('photoRemoved', handlePhotoRemoved);
     window.addEventListener('indexingCompleted', handleIndexingCompleted);
+    window.addEventListener('photosReloadRequested', handleReloadRequested);
 
     // Find the scroll container
     scrollContainer = document.querySelector('.main-content');
@@ -418,6 +463,7 @@
       window.removeEventListener('photoUpdated', handlePhotoUpdated);
       window.removeEventListener('photoRemoved', handlePhotoRemoved);
       window.removeEventListener('indexingCompleted', handleIndexingCompleted);
+      window.removeEventListener('photosReloadRequested', handleReloadRequested);
       if (scrollContainer) {
         scrollContainer.removeEventListener('scroll', onScroll);
       }
@@ -518,7 +564,14 @@
   {:else}
     <!-- Photo cards -->
     {#each photos as photo (photo.hash_sha256)}
-      <PhotoCard {photo} onOpen={openViewer} />
+      <PhotoCard
+        {photo}
+        onOpen={openViewer}
+        selectionMode={selectionState.active}
+        selected={!!selectionState.selected[photo.hash_sha256]}
+        onSelect={handleSelect}
+        onLongPress={handleLongPress}
+      />
     {/each}
   {/if}
 </div>

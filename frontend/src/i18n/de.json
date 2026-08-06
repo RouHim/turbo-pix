@@ -170,7 +170,17 @@
     "timeline_slider_aria": "Zeitleisten-Filter",
     "logo_alt": "TurboPix-Logo",
     "file_size_zero": "0 Bytes",
-    "retry": "Erneut versuchen"
+    "retry": "Erneut versuchen",
+    "select": "Auswählen",
+    "selected_count": "{count} ausgewählt",
+    "select_all_visible": "Alle sichtbaren auswählen",
+    "cancel_selection": "Auswahl aufheben",
+    "shift_dates": "Datumsverschiebung",
+    "export": "Exportieren",
+    "exporting": "Exportiere…",
+    "working": "Arbeite…",
+    "days": "Tage",
+    "apply": "Anwenden"
   },
   "errors": {
     "error_loading_photos": "Fehler beim Laden der Fotos",
@@ -183,7 +193,8 @@
     "readOnlyFilesystem": "Foto kann nicht gelöscht werden — das Fotoverzeichnis ist schreibgeschützt",
     "permissionDenied": "Foto kann nicht gelöscht werden — unzureichende Dateiberechtigungen",
     "timeline_load_failed": "Zeitleiste konnte nicht geladen werden",
-    "view_crashed": "Etwas ist schiefgelaufen"
+    "view_crashed": "Etwas ist schiefgelaufen",
+    "batchActionFailed": "Stapelaktion fehlgeschlagen"
   },
   "notifications": {
     "rotationFailed": "Drehen fehlgeschlagen",
@@ -197,7 +208,30 @@
     "deleted": "Gelöscht",
     "error": "Fehler",
     "kept": "Behalten",
-    "photoKept": "Foto von Housekeeping-Kandidaten entfernt"
+    "photoKept": "Foto von Housekeeping-Kandidaten entfernt",
+    "batchDeleteConfirm": "{count} Foto(s) endgültig löschen? Dies kann nicht rückgängig gemacht werden.",
+    "batchRejectConfirm": "{count} Collage(s) ablehnen? Dies kann nicht rückgängig gemacht werden.",
+    "batchDeleted": "{count} Fotos gelöscht",
+    "batchKept": "{count} Kandidaten behalten",
+    "batchFavorited": "{count} Fotos zu Favoriten hinzugefügt",
+    "batchUnfavorited": "{count} Fotos aus Favoriten entfernt",
+    "batchDateShifted": "{count} Fotos verschoben",
+    "batchSkippedNoDate": "{count} Fotos übersprungen (kein Aufnahmedatum)",
+    "batchExported": "{count} Fotos exportiert",
+    "batchAccepted": "{count} Collagen akzeptiert",
+    "batchRejected": "{count} Collagen abgelehnt",
+    "batchFailed": "{count} Elemente fehlgeschlagen"
+  },
+  "savedSearches": {
+    "sectionTitle": "Gespeicherte Suchen",
+    "save": "Suche speichern",
+    "saved": "Suche gespeichert",
+    "saveFailed": "Suche konnte nicht gespeichert werden",
+    "alreadySaved": "Suche bereits gespeichert",
+    "defaultName": "Gespeicherte Suche",
+    "rename": "Umbenennen",
+    "delete": "Löschen",
+    "errorNameRequired": "Name darf nicht leer sein"
   },
   "messages": {
     "indexing_in_progress_title": "Fotos werden indiziert",

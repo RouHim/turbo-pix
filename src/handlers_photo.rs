@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use image::DynamicImage;
@@ -362,6 +362,55 @@ pub struct FavoriteRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
+pub struct BatchHashesRequest {
+    pub hashes: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchFavoriteRequest {
+    pub hashes: Vec<String>,
+    pub is_favorite: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchDateShiftRequest {
+    pub hashes: Vec<String>,
+    pub days: i32,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct BatchFailure {
+    pub id: String,
+    pub error: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct BatchResult {
+    pub applied: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>, // only batch date-shift fills this (photos with no taken_at)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<BatchFailure>,
+}
+
+/// Shared batch-size validation for every batch endpoint. An empty array is a
+/// client bug; more than 1000 items would let one request pin the server for
+/// minutes (each item does its own DB round-trip and possibly file IO).
+pub(crate) fn validate_hashes(hashes: &[String]) -> Result<(), Rejection> {
+    if hashes.is_empty() {
+        return Err(reject::custom(ValidationError {
+            message: "hashes must not be empty".to_string(),
+        }));
+    }
+    if hashes.len() > 1000 {
+        return Err(reject::custom(ValidationError {
+            message: "too many hashes (max 1000)".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
 pub struct MetadataUpdateRequest {
     pub taken_at: Option<String>, // ISO 8601 datetime string
     pub latitude: Option<f64>,
@@ -684,9 +733,349 @@ pub async fn delete_photo(
     }
 }
 
+/// Batch-delete every selected photo. Partial failure is a 200 with a
+/// per-item failure list (FR-011): successful items stay applied and the
+/// failures are identified — the request is never rejected wholesale.
+pub async fn batch_delete(
+    req: BatchHashesRequest,
+    db_pool: DbPool,
+    cache_manager: CacheManager,
+) -> Result<impl Reply, Rejection> {
+    validate_hashes(&req.hashes)?;
+
+    let mut result = BatchResult {
+        applied: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    for hash in &req.hashes {
+        let photo = match Photo::find_by_hash(&db_pool, hash).await {
+            Ok(Some(photo)) => photo,
+            Ok(None) => {
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: "Photo not found".to_string(),
+                });
+                continue;
+            }
+            Err(e) => {
+                log::error!("Database error: {}", e);
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: format!("Database error: {}", e),
+                });
+                continue;
+            }
+        };
+        match image_editor::delete_photo(&photo, &db_pool, &cache_manager).await {
+            Ok(()) => result.applied.push(hash.clone()),
+            Err(image_editor::ImageEditError::PermissionDenied(msg)) => {
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: msg,
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to delete photo {}: {}", hash, e);
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: e.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(warp::reply::json(&result))
+}
+
+/// Batch add/remove favorite. Explicit, never a toggle: mixed favorite
+/// states within one selection are resolved by the direction in the request.
+pub async fn batch_favorite(
+    req: BatchFavoriteRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    validate_hashes(&req.hashes)?;
+
+    let mut result = BatchResult {
+        applied: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    for hash in &req.hashes {
+        let mut photo = match Photo::find_by_hash(&db_pool, hash).await {
+            Ok(Some(photo)) => photo,
+            Ok(None) => {
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: "Photo not found".to_string(),
+                });
+                continue;
+            }
+            Err(e) => {
+                log::error!("Database error: {}", e);
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: format!("Database error: {}", e),
+                });
+                continue;
+            }
+        };
+        photo.is_favorite = Some(req.is_favorite);
+        match photo.update(&db_pool).await {
+            Ok(_) => result.applied.push(hash.clone()),
+            Err(e) => {
+                log::error!("Database error: {}", e);
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: format!("Database error: {}", e),
+                });
+            }
+        }
+    }
+
+    Ok(warp::reply::json(&result))
+}
+
+/// Batch date-shift of the taken date by ±N days. Photos without a taken_at
+/// are skipped and counted (never silently dropped, never given an invented
+/// date); `taken_at` is already a `DateTime<Utc>` after row decode.
+pub async fn batch_date_shift(
+    req: BatchDateShiftRequest,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    if req.days == 0 {
+        return Err(reject::custom(ValidationError {
+            message: "days must be non-zero".to_string(),
+        }));
+    }
+    validate_hashes(&req.hashes)?;
+
+    let mut result = BatchResult {
+        applied: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    for hash in &req.hashes {
+        let mut photo = match Photo::find_by_hash(&db_pool, hash).await {
+            Ok(Some(photo)) => photo,
+            Ok(None) => {
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: "Photo not found".to_string(),
+                });
+                continue;
+            }
+            Err(e) => {
+                log::error!("Database error: {}", e);
+                result.failed.push(BatchFailure {
+                    id: hash.clone(),
+                    error: format!("Database error: {}", e),
+                });
+                continue;
+            }
+        };
+        match photo.taken_at {
+            Some(dt) => {
+                photo.taken_at = Some(dt + chrono::Duration::days(req.days as i64));
+                match photo.update(&db_pool).await {
+                    Ok(_) => result.applied.push(hash.clone()),
+                    Err(e) => {
+                        log::error!("Database error: {}", e);
+                        result.failed.push(BatchFailure {
+                            id: hash.clone(),
+                            error: format!("Database error: {}", e),
+                        });
+                    }
+                }
+            }
+            None => result.skipped.push(hash.clone()),
+        }
+    }
+
+    Ok(warp::reply::json(&result))
+}
+
+/// Batch export of the original files as a single ZIP archive. This is the
+/// one batch action that can return non-200: when any selected photo is
+/// unknown or its backing file is gone, the whole archive cannot be built and
+/// the request fails with a 400 carrying the per-item `failed` list (FR-011).
+pub async fn batch_export(
+    req: BatchHashesRequest,
+    db_pool: DbPool,
+    data_path: PathBuf,
+) -> Result<Box<dyn Reply>, Rejection> {
+    validate_hashes(&req.hashes)?;
+
+    // Resolve every photo up front so a missing photo/file fails fast with a
+    // JSON body instead of a half-written stream.
+    let mut missing = Vec::new();
+    let mut photos = Vec::new();
+    for hash in &req.hashes {
+        match Photo::find_by_hash(&db_pool, hash).await {
+            Ok(Some(photo)) => {
+                if Path::new(&photo.file_path).exists() {
+                    photos.push(photo);
+                } else {
+                    missing.push(BatchFailure {
+                        id: hash.clone(),
+                        error: "File not found on disk".to_string(),
+                    });
+                }
+            }
+            Ok(None) => missing.push(BatchFailure {
+                id: hash.clone(),
+                error: "Photo not found".to_string(),
+            }),
+            Err(e) => {
+                log::error!("Database error: {}", e);
+                missing.push(BatchFailure {
+                    id: hash.clone(),
+                    error: format!("Database error: {}", e),
+                });
+            }
+        }
+    }
+
+    if !missing.is_empty() {
+        let body = warp::reply::json(&serde_json::json!({
+            "error": "Some selected photos could not be exported",
+            "failed": missing,
+        }));
+        return Ok(Box::new(warp::reply::with_status(
+            body,
+            warp::http::StatusCode::BAD_REQUEST,
+        )));
+    }
+
+    // Build the archive on a blocking thread (zip is sync IO).
+    let export_dir = data_path.join("cache").join("export");
+    let export_path =
+        tokio::task::spawn_blocking(move || build_export_archive(&export_dir, &photos))
+            .await
+            .map_err(|e| {
+                log::error!("Export task panicked: {}", e);
+                reject::custom(DatabaseError {
+                    message: "Failed to export photos".to_string(),
+                })
+            })?
+            .map_err(|e| {
+                log::error!("Failed to build export archive: {}", e);
+                reject::custom(DatabaseError {
+                    message: "Failed to export photos".to_string(),
+                })
+            })?;
+
+    let file = match tokio::fs::File::open(&export_path).await {
+        Ok(file) => file,
+        Err(e) => {
+            log::error!("Failed to open export archive: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: "Failed to export photos".to_string(),
+            }));
+        }
+    };
+    let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let filename = export_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "turbopix-export.zip".to_string());
+
+    let reply = warp::reply::stream(tokio_util::io::ReaderStream::new(file));
+    let reply = warp::reply::with_header(reply, "content-type", "application/zip");
+    let reply = warp::reply::with_header(reply, "content-length", file_size.to_string());
+    let reply = warp::reply::with_header(
+        reply,
+        "content-disposition",
+        format!("attachment; filename=\"{}\"", filename),
+    );
+    let reply = warp::reply::with_header(reply, "cache-control", "no-store");
+
+    Ok(Box::new(reply))
+}
+
+/// Create `turbo-pix-export-{timestamp}.zip` in `export_dir` containing every
+/// photo's original file. Stale archives older than 1 hour are swept first
+/// (covers crashed/interrupted exports; the sweep can never delete an
+/// in-flight archive because that is by definition younger than 1h). Entries
+/// use `Stored` compression — photos/videos are already compressed.
+/// Duplicate names are disambiguated case-insensitively with `-2`, `-3`, …
+/// inserted before the final extension (`IMG_1234-2.CR2`).
+fn build_export_archive(export_dir: &Path, photos: &[Photo]) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(export_dir)
+        .map_err(|e| format!("Failed to create export directory: {}", e))?;
+
+    // Stale sweep: remove `turbo-pix-export-*.zip` older than 1 hour.
+    if let Ok(entries) = std::fs::read_dir(export_dir) {
+        let now = std::time::SystemTime::now();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("turbo-pix-export-") && name.ends_with(".zip") {
+                let stale = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .map(|age| age.as_secs() > 3600)
+                    .unwrap_or(false);
+                if stale {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    // Unique temp name (second resolution; append -n on collision).
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let mut path = export_dir.join(format!("turbo-pix-export-{}.zip", timestamp));
+    let mut n = 2;
+    while path.exists() {
+        path = export_dir.join(format!("turbo-pix-export-{}-{}.zip", timestamp, n));
+        n += 1;
+    }
+
+    let file = std::fs::File::create(&path)
+        .map_err(|e| format!("Failed to create export archive: {}", e))?;
+    let mut zip_writer = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    let mut used_names: Vec<String> = Vec::with_capacity(photos.len());
+    for photo in photos {
+        let base = photo.filename.replace(['/', '\\'], "-");
+        let mut name = base.clone();
+        let mut suffix = 2;
+        while used_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            name = match base.rfind('.') {
+                Some(idx) if idx > 0 => format!("{}-{}{}", &base[..idx], suffix, &base[idx..]),
+                _ => format!("{}-{}", base, suffix),
+            };
+            suffix += 1;
+        }
+        used_names.push(name.clone());
+
+        zip_writer
+            .start_file(name, options)
+            .map_err(|e| format!("Failed to write archive entry: {}", e))?;
+        let mut source = std::fs::File::open(&photo.file_path)
+            .map_err(|e| format!("Failed to open {}: {}", photo.file_path, e))?;
+        std::io::copy(&mut source, &mut zip_writer)
+            .map_err(|e| format!("Failed to copy {}: {}", photo.file_path, e))?;
+    }
+
+    zip_writer
+        .finish()
+        .map_err(|e| format!("Failed to finalize export archive: {}", e))?;
+    Ok(path)
+}
+
 pub fn build_photo_routes(
     db_pool: DbPool,
     cache_manager: CacheManager,
+    data_path: PathBuf,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let api_photos_list = warp::path("api")
         .and(warp::path("photos"))
@@ -704,9 +1093,60 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(get_timeline);
 
-    // NOTE: the literal `/timeline` route must be registered BEFORE the
-    // parameterized `api_photo_get` route, otherwise `/api/photos/timeline` is
-    // first matched as `get_photo("timeline")`, wasting a database lookup.
+    // NOTE: the batch literal routes AND the `/timeline` literal route must
+    // be registered BEFORE the parameterized `api_photo_get` route. `batch`
+    // cannot be swallowed by the param route (`/api/photos/batch/delete` has
+    // two extra segments), but keeping the literals first documents the
+    // ordering rule in one place.
+    let api_photo_batch_delete = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("batch"))
+        .and(warp::path("delete"))
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
+        .and(warp::body::json::<BatchHashesRequest>())
+        .and(with_db(db_pool.clone()))
+        .and(with_cache(cache_manager.clone()))
+        .and_then(batch_delete);
+
+    let api_photo_batch_favorite = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("batch"))
+        .and(warp::path("favorite"))
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
+        .and(warp::body::json::<BatchFavoriteRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(batch_favorite);
+
+    let api_photo_batch_date_shift = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("batch"))
+        .and(warp::path("date-shift"))
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
+        .and(warp::body::json::<BatchDateShiftRequest>())
+        .and(with_db(db_pool.clone()))
+        .and_then(batch_date_shift);
+
+    let api_photo_batch_export = {
+        let data_path = data_path.clone();
+        warp::path("api")
+            .and(warp::path("photos"))
+            .and(warp::path("batch"))
+            .and(warp::path("export"))
+            .and(warp::path::end())
+            .and(warp::post())
+            .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
+            .and(warp::body::json::<BatchHashesRequest>())
+            .and(with_db(db_pool.clone()))
+            .map(move |req, db| (req, db, data_path.clone()))
+            .untuple_one()
+            .and_then(batch_export)
+    };
     let api_photo_get = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -816,6 +1256,10 @@ pub fn build_photo_routes(
 
     api_photos_list
         .or(api_photo_timeline)
+        .or(api_photo_batch_delete)
+        .or(api_photo_batch_favorite)
+        .or(api_photo_batch_date_shift)
+        .or(api_photo_batch_export)
         .or(api_photo_get)
         .or(api_photo_file)
         .or(api_photo_file_head)
@@ -892,12 +1336,19 @@ mod tests {
     }
 
     /// Build the full photo route set with rejection handling applied, as the
-    /// real server does, so warp::test can exercise the HTTP contract.
+    /// real server does, so warp::test can exercise the HTTP contract. The
+    /// export data path is derived from the cache dir (`{temp}/cache` →
+    /// `{temp}/data`) so existing call sites stay untouched.
     fn build_test_routes(
         db_pool: DbPool,
         cache_dir: PathBuf,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
-        build_photo_routes(db_pool, CacheManager::new(cache_dir)).recover(handle_rejection)
+        let data_path = cache_dir
+            .parent()
+            .map(|p| p.join("data"))
+            .unwrap_or_else(|| cache_dir.join("data"));
+        build_photo_routes(db_pool, CacheManager::new(cache_dir), data_path)
+            .recover(handle_rejection)
     }
 
     #[tokio::test]
@@ -1423,5 +1874,311 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), 404);
+    }
+
+    const BATCH_H1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const BATCH_H2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    const BATCH_H3: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+
+    #[tokio::test]
+    async fn test_batch_delete_removes_all_selected() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let file1 = create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        let file2 = create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
+        let file3 = create_photo_row(&db_pool, &temp_dir, BATCH_H3).await;
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/delete")
+            .json(&json!({"hashes": [BATCH_H1, BATCH_H2]}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let result: BatchResult = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(result.applied.len(), 2);
+        assert!(result.applied.contains(&BATCH_H1.to_string()));
+        assert!(result.applied.contains(&BATCH_H2.to_string()));
+        assert!(result.failed.is_empty());
+        assert!(!file1.exists());
+        assert!(!file2.exists());
+        assert!(file3.exists());
+        assert!(Photo::find_by_hash(&db_pool, BATCH_H1)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(Photo::find_by_hash(&db_pool, BATCH_H2)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(Photo::find_by_hash(&db_pool, BATCH_H3)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_reports_missing_hash() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let file1 = create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        let file2 = create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/delete")
+            .json(&json!({"hashes": [BATCH_H1, missing]}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let result: BatchResult = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(result.applied, vec![BATCH_H1.to_string()]);
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].id, missing);
+        assert_eq!(result.failed[0].error, "Photo not found");
+        assert!(!file1.exists()); // applied photo file removed
+        assert!(file2.exists()); // untouched photo still on disk
+    }
+
+    #[tokio::test]
+    async fn test_batch_favorite_applies_and_reports_missing() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/favorite")
+            .json(&json!({"hashes": [BATCH_H1, missing], "is_favorite": true}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let result: BatchResult = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(result.applied, vec![BATCH_H1.to_string()]);
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].id, missing);
+
+        let photo = Photo::find_by_hash(&db_pool, BATCH_H1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(photo.is_favorite, Some(true));
+        let photo2 = Photo::find_by_hash(&db_pool, BATCH_H2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(photo2.is_favorite, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_batch_date_shift_moves_and_skips() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await; // taken_at 2020-01-01
+        create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
+        sqlx::query("UPDATE photos SET taken_at = NULL WHERE hash_sha256 = ?")
+            .bind(BATCH_H2)
+            .execute(&db_pool)
+            .await
+            .unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/date-shift")
+            .json(&json!({"hashes": [BATCH_H1, BATCH_H2], "days": -1}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let result: BatchResult = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(result.applied, vec![BATCH_H1.to_string()]);
+        assert_eq!(result.skipped, vec![BATCH_H2.to_string()]);
+        assert!(result.failed.is_empty());
+
+        let photo = Photo::find_by_hash(&db_pool, BATCH_H1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            photo.taken_at,
+            Some(Utc.with_ymd_and_hms(2019, 12, 31, 12, 0, 0).unwrap())
+        );
+        assert!(Photo::find_by_hash(&db_pool, BATCH_H2)
+            .await
+            .unwrap()
+            .unwrap()
+            .taken_at
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_batch_date_shift_zero_days_rejected() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/date-shift")
+            .json(&json!({"hashes": [BATCH_H1], "days": 0}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_rejects_empty() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/delete")
+            .json(&json!({"hashes": []}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_batch_export_zip_entries_disambiguated_and_original_bytes() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        // Two photos with the same filename and one RAW with its own name.
+        let jpeg1 = create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        let jpeg2 = create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
+        let raw = create_photo_row(&db_pool, &temp_dir, BATCH_H3).await;
+        fs::copy("test-data/IMG_9899.CR2", &raw).expect("Failed to copy RAW file");
+        sqlx::query("UPDATE photos SET filename = 'same.jpg' WHERE hash_sha256 IN (?, ?)")
+            .bind(BATCH_H1)
+            .bind(BATCH_H2)
+            .execute(&db_pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE photos SET filename = 'IMG_9899.CR2', mime_type = 'image/x-raw' \
+             WHERE hash_sha256 = ?",
+        )
+        .bind(BATCH_H3)
+        .execute(&db_pool)
+        .await
+        .unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/export")
+            .json(&json!({"hashes": [BATCH_H1, BATCH_H2, BATCH_H3]}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/zip"
+        );
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            disposition.contains("turbo-pix-export-"),
+            "unexpected disposition: {}",
+            disposition
+        );
+        assert!(disposition.contains(".zip"));
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(response.body().to_vec()))
+            .expect("response body must be a valid ZIP");
+        assert_eq!(archive.len(), 3);
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"same.jpg".to_string()));
+        assert!(names.contains(&"same-2.jpg".to_string()));
+        assert!(names.contains(&"IMG_9899.CR2".to_string()));
+        // Names must be pairwise distinct.
+        for (i, a) in names.iter().enumerate() {
+            for b in names.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
+
+        // Entry bytes equal the original file bytes (RAW and one JPEG).
+        let raw_bytes = {
+            let mut raw_entry = archive.by_name("IMG_9899.CR2").unwrap();
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut raw_entry, &mut buf).unwrap();
+            buf
+        };
+        assert_eq!(raw_bytes, fs::read("test-data/IMG_9899.CR2").unwrap());
+        let jpeg_bytes = {
+            let mut jpeg_entry = archive.by_name("same.jpg").unwrap();
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut jpeg_entry, &mut buf).unwrap();
+            buf
+        };
+        assert_eq!(jpeg_bytes, fs::read(&jpeg1).unwrap());
+        // And the disambiguated entry is the second copy.
+        let jpeg2_bytes = {
+            let mut jpeg2_entry = archive.by_name("same-2.jpg").unwrap();
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut jpeg2_entry, &mut buf).unwrap();
+            buf
+        };
+        assert_eq!(jpeg2_bytes, fs::read(&jpeg2).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_export_missing_photo_400() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+        let missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/photos/batch/export")
+            .json(&json!({"hashes": [BATCH_H1, missing]}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["failed"].as_array().unwrap().len(), 1);
+        assert_eq!(body["failed"][0]["id"], missing);
     }
 }

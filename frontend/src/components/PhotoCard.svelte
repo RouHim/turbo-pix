@@ -6,8 +6,16 @@
   import { toDataURL } from '../lib/blurhash.js';
   import { t } from '../lib/i18n.js';
   import Icon from '../lib/Icon.svelte';
+  import { longpress } from '../lib/longpress.js';
 
-  const { photo, onOpen } = $props();
+  const {
+    photo,
+    onOpen,
+    selected = false,
+    selectionMode = false,
+    onSelect = null,
+    onLongPress = null,
+  } = $props();
 
   // --- Derived state ---
   const isVideo = $derived(photo?.metadata?.video?.codec != null);
@@ -46,6 +54,10 @@
   let favoritePending = false;
 
   function handleCardClick(e) {
+    if (selectionMode) {
+      onSelect?.(photo, e);
+      return;
+    }
     if (!e.target.closest('.card-action-btn')) {
       if (onOpen) {
         onOpen(photo);
@@ -124,12 +136,23 @@
   }
 </script>
 
-<div class="photo-card" data-photo-id={photo?.hash_sha256}>
+<div
+  class="photo-card"
+  data-photo-id={photo?.hash_sha256}
+  class:selected
+  use:longpress={{ onLongPress: () => onLongPress?.(photo) }}
+>
+  {#if selectionMode}
+    <div class="photo-card-selection-badge" aria-hidden="true">
+      <Icon name={selected ? 'check-square' : 'square'} width={18} height={18} />
+    </div>
+  {/if}
   <div
     class="photo-card-open-layer"
     role="button"
     tabindex="0"
     aria-label={title}
+    aria-pressed={selectionMode ? selected : undefined}
     onclick={handleCardClick}
     onkeydown={(e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -187,32 +210,34 @@
     <div class="photo-card-meta">{meta}</div>
   </div>
 
-  <div class="photo-card-actions">
-    <!-- Default context: favorite + download -->
-    <button
-      class="card-action-btn favorite-btn"
-      class:active={favoriteActive}
-      title={favoriteActive
-        ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
-        : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
-      aria-label={favoriteActive
-        ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
-        : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
-      data-action="favorite"
-      onclick={toggleFavorite}
-    >
-      <Icon name="heart" width={18} height={18} />
-    </button>
-    <button
-      class="card-action-btn download-btn"
-      title={$t('ui.download', { default: 'Download' })}
-      aria-label={$t('ui.download', { default: 'Download' })}
-      data-action="download"
-      onclick={downloadPhoto}
-    >
-      <Icon name="download" width={18} height={18} />
-    </button>
-  </div>
+  {#if !selectionMode}
+    <div class="photo-card-actions">
+      <!-- Default context: favorite + download -->
+      <button
+        class="card-action-btn favorite-btn"
+        class:active={favoriteActive}
+        title={favoriteActive
+          ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
+          : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
+        aria-label={favoriteActive
+          ? $t('ui.remove_from_favorites', { default: 'Remove from Favorites' })
+          : $t('ui.add_to_favorites', { default: 'Add to Favorites' })}
+        data-action="favorite"
+        onclick={toggleFavorite}
+      >
+        <Icon name="heart" width={18} height={18} />
+      </button>
+      <button
+        class="card-action-btn download-btn"
+        title={$t('ui.download', { default: 'Download' })}
+        aria-label={$t('ui.download', { default: 'Download' })}
+        data-action="download"
+        onclick={downloadPhoto}
+      >
+        <Icon name="download" width={18} height={18} />
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -503,5 +528,36 @@
     .photo-card-actions {
       display: none;
     }
+  }
+
+  /* Selection mode: a clear outline around selected cards and a badge in the
+     top-left corner. The badge sits above the open layer (z-3) — the action
+     buttons are hidden in selection mode, so no higher layer conflicts. */
+  .photo-card.selected {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
+  .photo-card-selection-badge {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--glass-bg, oklch(100% 0 0deg / 10%));
+    backdrop-filter: blur(8px) saturate(1.5);
+    -webkit-backdrop-filter: blur(8px) saturate(1.5);
+    color: var(--primary-color);
+    pointer-events: none;
+  }
+
+  .photo-card.selected .photo-card-selection-badge {
+    background: var(--primary-color);
+    color: var(--color-bg, white);
   }
 </style>

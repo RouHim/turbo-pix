@@ -1,18 +1,26 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { isLoading } from 'svelte-i18n';
   import { t, initI18n } from './lib/i18n.js';
-  import { appState, addToast } from './lib/state.svelte.js';
+  import {
+    appState,
+    addToast,
+    selectionState,
+    enterSelectionMode,
+    exitSelectionMode,
+  } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
   import { throttle, performance } from './lib/utils.js';
   import { APP_CONSTANTS } from './lib/constants.js';
   import { logger } from './lib/logger.js';
+  import Icon from './lib/Icon.svelte';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import SortControls from './components/SortControls.svelte';
   import ToastContainer from './lib/ToastContainer.svelte';
+  import SelectionBar from './components/SelectionBar.svelte';
   import PhotoGrid from './components/PhotoGrid.svelte';
   import CollagesView from './components/CollagesView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
@@ -45,6 +53,17 @@
           default: titleFallbacks[route.view] || 'All Photos',
         })
   );
+
+  // FR-013: selection never leaks across surfaces. A different view OR a
+  // different query is a different surface (semantic search results are one);
+  // sort/year/month changes keep the same result set, so they do not clear.
+  $effect(() => {
+    route.view;
+    route.query;
+    untrack(() => {
+      if (selectionState.active) exitSelectionMode();
+    });
+  });
 
   onMount(() => {
     const updateMobile = throttle(() => {
@@ -130,6 +149,17 @@
         {#if route.view !== 'collages' && route.view !== 'housekeeping'}
           <SortControls />
         {/if}
+        <button
+          type="button"
+          class="btn"
+          data-action="select-mode"
+          onclick={enterSelectionMode}
+          aria-pressed={selectionState.active}
+          hidden={selectionState.active}
+        >
+          <Icon name="check-square" width={16} height={16} />
+          {$t('ui.select', { default: 'Select' })}
+        </button>
       </div>
     </div>
 
@@ -172,6 +202,9 @@
     {/snippet}
     <PhotoViewer />
   </svelte:boundary>
+  {#if selectionState.active || selectionState.busy}
+    <SelectionBar />
+  {/if}
   <ToastContainer />
 {:else}
   <div class="app-loading">TurboPix</div>

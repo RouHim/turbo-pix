@@ -1,3 +1,5 @@
+import { api } from './api.js';
+
 export const appState = $state({
   sidebarOpen: false,
   mobileSearchOpen: false,
@@ -19,6 +21,84 @@ export const photoGridState = $state({
   currentQuery: '',
   semanticSearchMode: false,
 });
+
+/**
+ * Per-surface selection mode state. `selected` is a plain-object map (key →
+ * true) rather than a Set: Svelte 5 runes instrument `Object.keys`/`delete`/
+ * index-assign reliably, while Set `has()` tracking is not worth the doubt.
+ * Keys are photo `hash_sha256` strings, or `String(collage.id)` on the
+ * collages surface. `orderedKeys` is the current surface's visible keys in
+ * display order (maintained by each view) — the range-selection and
+ * select-all-visible contract.
+ */
+export const selectionState = $state({
+  active: false,
+  selected: {},
+  anchorKey: null,
+  orderedKeys: [],
+  busy: null, // 'delete' | 'keep' | 'favorite' | 'unfavorite' | 'dateShift' | 'export' | 'accept' | 'reject' | null
+});
+
+export function enterSelectionMode() {
+  selectionState.active = true;
+}
+
+export function exitSelectionMode() {
+  selectionState.active = false;
+  selectionState.selected = {};
+  selectionState.anchorKey = null;
+}
+
+export function toggleSelected(key) {
+  if (selectionState.selected[key]) delete selectionState.selected[key];
+  else selectionState.selected[key] = true;
+  selectionState.anchorKey = key;
+}
+
+export function selectRange(anchorKey, targetKey, orderedKeys) {
+  const a = orderedKeys.indexOf(anchorKey);
+  const b = orderedKeys.indexOf(targetKey);
+  if (a === -1 || b === -1) {
+    toggleSelected(targetKey);
+    return;
+  }
+  const [from, to] = a <= b ? [a, b] : [b, a];
+  for (let i = from; i <= to; i++) selectionState.selected[orderedKeys[i]] = true;
+  selectionState.anchorKey = targetKey;
+}
+
+export function selectAllVisible() {
+  const keys = selectionState.orderedKeys;
+  const allSelected = keys.length > 0 && keys.every((k) => selectionState.selected[k]);
+  keys.forEach((k) => {
+    if (allSelected) delete selectionState.selected[k];
+    else selectionState.selected[k] = true;
+  });
+  if (!allSelected) selectionState.anchorKey = keys[keys.length - 1] ?? null;
+}
+
+/** Drop selected keys that are no longer part of the surface's loaded set. */
+export function pruneSelection(keys) {
+  const keep = {};
+  for (const k of keys) keep[k] = true;
+  for (const k of Object.keys(selectionState.selected)) {
+    if (!keep[k]) delete selectionState.selected[k];
+  }
+  if (selectionState.anchorKey != null && !keep[selectionState.anchorKey]) {
+    selectionState.anchorKey = null;
+  }
+}
+
+export const savedSearches = $state([]);
+
+export async function loadSavedSearches() {
+  try {
+    const data = await api.getSavedSearches();
+    savedSearches.splice(0, savedSearches.length, ...(data?.saved_searches || []));
+  } catch (error) {
+    console.error('Failed to load saved searches', error);
+  }
+}
 
 export const themeState = $state({
   theme: document.documentElement.classList.contains('dark-theme') ? 'dark' : 'light',

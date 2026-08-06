@@ -2,7 +2,15 @@
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast, indexingState } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    indexingState,
+    selectionState,
+    enterSelectionMode,
+    toggleSelected,
+    selectRange,
+    pruneSelection,
+  } from '../lib/state.svelte.js';
   import { handleError } from '../lib/utils.js';
   import HousekeepingCard from './HousekeepingCard.svelte';
 
@@ -24,12 +32,21 @@
     loadAndRender();
     window.addEventListener('indexingStatusChanged', handleIndexingStatusChanged);
     window.addEventListener('photoRemoved', handlePhotoRemoved);
+    window.addEventListener('housekeepingKept', handleHousekeepingKept);
     return () => {
       window.removeEventListener('indexingStatusChanged', handleIndexingStatusChanged);
       window.removeEventListener('photoRemoved', handlePhotoRemoved);
+      window.removeEventListener('housekeepingKept', handleHousekeepingKept);
       if (abortController) abortController.abort();
     };
   });
+
+  function handleHousekeepingKept(event) {
+    const hashes = event.detail?.hashes || [];
+    if (hashes.length === 0) return;
+    candidates = candidates.filter((c) => !hashes.includes(c.photo.hash_sha256));
+    pruneSelection(candidates.map((c) => c.photo.hash_sha256));
+  }
 
   function handlePhotoRemoved(event) {
     const { hash } = event.detail || {};
@@ -70,6 +87,9 @@
       } else {
         candidates = [];
       }
+      // No pagination here: the loaded list IS the surface. Drop selections
+      // for candidates a background rescan removed mid-session.
+      pruneSelection(candidates.map((c) => c.photo.hash_sha256));
       loaded = true;
     } catch (e) {
       if (e?.name === 'AbortError') return;
@@ -132,6 +152,36 @@
       busy = false;
     }
   }
+
+  // ===========================================================================
+  // Selection mode
+  // ===========================================================================
+
+  // HousekeepingCard passes the enriched photo (hash on the photo itself),
+  // not the raw candidate wrapper.
+  function handleSelect(photo, event) {
+    const key = photo.hash_sha256;
+    if (event.shiftKey && selectionState.anchorKey != null) {
+      selectRange(
+        selectionState.anchorKey,
+        key,
+        candidates.map((c) => c.photo.hash_sha256)
+      );
+    } else {
+      toggleSelected(key);
+    }
+  }
+
+  function handleLongPress(photo) {
+    if (selectionState.active) return;
+    enterSelectionMode();
+    toggleSelected(photo.hash_sha256);
+  }
+
+  // Surface keys in display order for range selection and select-all-visible.
+  $effect(() => {
+    selectionState.orderedKeys = candidates.map((c) => c.photo.hash_sha256);
+  });
 </script>
 
 <div class="housekeeping-view">
@@ -173,6 +223,10 @@
               })
             );
           }}
+          selectionMode={selectionState.active}
+          selected={!!selectionState.selected[photo.hash_sha256]}
+          onSelect={handleSelect}
+          onLongPress={handleLongPress}
         />
       {/each}
     </div>

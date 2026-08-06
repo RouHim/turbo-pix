@@ -280,6 +280,126 @@ class TurboPixAPI {
       method: 'DELETE',
     });
   }
+
+  // Saved searches
+  async getSavedSearches() {
+    return this.request('/api/saved-searches');
+  }
+
+  async createSavedSearch(payload) {
+    // Uses _json: the duplicate case (409) must surface the existing entry.
+    return this._json('/api/saved-searches', 'POST', payload);
+  }
+
+  async renameSavedSearch(id, name) {
+    return this.request(`/api/saved-searches/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async deleteSavedSearch(id) {
+    return this.request(`/api/saved-searches/${id}`, { method: 'DELETE' });
+  }
+
+  // ===========================================================================
+  // Batch selection actions
+  // ===========================================================================
+
+  async batchDelete(hashes) {
+    return this.request('/api/photos/batch/delete', {
+      method: 'POST',
+      body: JSON.stringify({ hashes }),
+    });
+  }
+
+  async batchSetFavorite(hashes, isFavorite) {
+    return this.request('/api/photos/batch/favorite', {
+      method: 'POST',
+      body: JSON.stringify({ hashes, is_favorite: isFavorite }),
+    });
+  }
+
+  async batchDateShift(hashes, days) {
+    return this.request('/api/photos/batch/date-shift', {
+      method: 'POST',
+      body: JSON.stringify({ hashes, days }),
+    });
+  }
+
+  /**
+   * Downloads the export archive as a blob. Bypasses `request` (which would
+   * `.text()` the body): the caller needs the raw bytes plus the
+   * Content-Disposition filename. A 400 (some photos unexportable) carries a
+   * JSON body with `error` and `failed` — surfaced as a plain Error message.
+   */
+  async batchExport(hashes) {
+    const response = await fetch(`${this.baseUrl}/api/photos/batch/export`, {
+      method: 'POST',
+      headers: this.defaultHeaders,
+      body: JSON.stringify({ hashes }),
+    });
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        message = err?.error || message;
+      } catch {
+        // non-JSON error body
+      }
+      throw new Error(message);
+    }
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    const blob = await response.blob();
+    return { blob, filename: match?.[1] || 'turbopix-export.zip' };
+  }
+
+  async batchRemoveHousekeepingCandidates(hashes) {
+    return this.request('/api/housekeeping/candidates/batch-remove', {
+      method: 'POST',
+      body: JSON.stringify({ hashes }),
+    });
+  }
+
+  async batchAcceptCollages(ids) {
+    return this.request('/api/collages/batch-accept', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async batchRejectCollages(ids) {
+    return this.request('/api/collages/batch-reject', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  /** Like request() but resolves parsed JSON and rejects with an Error carrying `.status` and `.data`. */
+  async _json(endpoint, method, payload) {
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      method,
+      headers: this.defaultHeaders,
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
+    if (!response.ok) {
+      const error = new Error(data?.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+    return data;
+  }
 }
 
 export const api = new TurboPixAPI();

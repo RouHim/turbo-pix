@@ -3,6 +3,7 @@
   import Icon from '../lib/Icon.svelte';
   import { formatDate, getThumbnailUrl } from '../lib/utils.js';
   import { toDataURL } from '../lib/blurhash.js';
+  import { longpress } from '../lib/longpress.js';
 
   const {
     photo,
@@ -10,6 +11,10 @@
     onKeep = () => {},
     onDelete = () => {},
     onOpen = () => {},
+    selected = false,
+    selectionMode = false,
+    onSelect = null,
+    onLongPress = null,
   } = $props();
 
   let imageLoaded = $state(false);
@@ -35,6 +40,10 @@
   }
 
   function handleCardClick(e) {
+    if (selectionMode) {
+      onSelect?.(photo, e);
+      return;
+    }
     if (e.target.closest('.card-action-btn')) return;
     onOpen(photo);
   }
@@ -45,6 +54,8 @@
   data-photo-id={photo.hash_sha256}
   role="button"
   tabindex="0"
+  class:selected
+  use:longpress={{ onLongPress: () => onLongPress?.(photo) }}
   onclick={handleCardClick}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -54,6 +65,11 @@
     }
   }}
 >
+  {#if selectionMode}
+    <div class="photo-card-selection-badge" aria-hidden="true">
+      <Icon name={selected ? 'check-square' : 'square'} width={18} height={18} />
+    </div>
+  {/if}
   <div class="photo-card-image-container" class:image-loaded={imageLoaded}>
     {#if blurhashUrl && !imageLoaded && !imageError}
       <img class="photo-card-blurhash" src={blurhashUrl} alt="" aria-hidden="true" />
@@ -113,30 +129,32 @@
       {/if}
     </span>
   </div>
-  <div class="photo-card-actions">
-    <button
-      type="button"
-      class="card-action-btn keep-btn"
-      data-action="keep"
-      title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-      aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
-      disabled={busy}
-      onclick={onKeep}
-    >
-      <Icon name="check" width={18} height={18} />
-    </button>
-    <button
-      type="button"
-      class="card-action-btn delete-housekeeping-btn"
-      data-action="delete-housekeeping"
-      title={$t('ui.delete_photo', { default: 'Delete' })}
-      aria-label={$t('ui.delete_photo', { default: 'Delete' })}
-      disabled={busy}
-      onclick={onDelete}
-    >
-      <Icon name="trash-2" width={18} height={18} />
-    </button>
-  </div>
+  {#if !selectionMode}
+    <div class="photo-card-actions">
+      <button
+        type="button"
+        class="card-action-btn keep-btn"
+        data-action="keep"
+        title={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
+        aria-label={$t('ui.keep_photo', { default: 'Keep (Remove from housekeeping list)' })}
+        disabled={busy}
+        onclick={onKeep}
+      >
+        <Icon name="check" width={18} height={18} />
+      </button>
+      <button
+        type="button"
+        class="card-action-btn delete-housekeeping-btn"
+        data-action="delete-housekeeping"
+        title={$t('ui.delete_photo', { default: 'Delete' })}
+        aria-label={$t('ui.delete_photo', { default: 'Delete' })}
+        disabled={busy}
+        onclick={onDelete}
+      >
+        <Icon name="trash-2" width={18} height={18} />
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -190,6 +208,35 @@
   .photo-card:hover .photo-card-image {
     transform: scale(1.08);
     filter: brightness(1.1) contrast(1.05) saturate(1.1);
+  }
+
+  /* Selection mode: outline + badge (mirrors PhotoCard). */
+  .photo-card.selected {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
+  .photo-card-selection-badge {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--glass-bg, oklch(100% 0 0deg / 10%));
+    backdrop-filter: blur(8px) saturate(1.5);
+    -webkit-backdrop-filter: blur(8px) saturate(1.5);
+    color: var(--primary-color);
+    pointer-events: none;
+  }
+
+  .photo-card.selected .photo-card-selection-badge {
+    background: var(--primary-color);
+    color: var(--color-bg, white);
   }
 
   .photo-card-placeholder {

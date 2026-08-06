@@ -6,7 +6,7 @@ on:
 
 jobs:
   lint-format:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
@@ -48,7 +48,7 @@ jobs:
         run: npm run test:i18n
 
   rust-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
@@ -84,7 +84,7 @@ jobs:
       - name: Build release
         run: cargo build --profile production
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
@@ -135,7 +135,7 @@ jobs:
       - rust-tests
       - e2e-tests
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -165,7 +165,7 @@ jobs:
 
   build-frontend:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -191,7 +191,7 @@ jobs:
       - create-release
       - build-frontend
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
@@ -319,7 +319,7 @@ jobs:
 
   push-manifest:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build-container
 
     steps:

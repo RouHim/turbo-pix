@@ -1,7 +1,12 @@
 <script>
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import Icon from '../lib/Icon.svelte';
   import { t } from '../lib/i18n.js';
-  import { appState } from '../lib/state.svelte.js';
+  import { api } from '../lib/api.js';
+  import { addToast, appState, loadSavedSearches, savedSearches } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
+  import { handleError } from '../lib/utils.js';
 
   const views = [
     { id: 'all', key: 'ui.all_photos', fallback: 'All Photos' },
@@ -37,6 +42,100 @@
     appState.sidebarOpen = false;
   }
 
+  let renamingId = $state(null);
+  let renameName = $state('');
+  let renameInputEl = $state(null);
+
+  onMount(() => {
+    loadSavedSearches();
+  });
+
+  function isActiveSearch(item) {
+    return (
+      route.view === item.view &&
+      route.query === item.query &&
+      route.sort === item.sort &&
+      route.year === item.year &&
+      route.month === item.month
+    );
+  }
+
+  function openSavedSearch(item) {
+    appState.mobileSearchOpen = false;
+    if (isActiveSearch(item)) {
+      // Already showing this state — mirrors navigate().
+      appState.sidebarOpen = false;
+      return;
+    }
+    pushState({
+      view: item.view,
+      query: item.query,
+      sort: item.sort,
+      year: item.year,
+      month: item.month,
+    });
+    appState.sidebarOpen = false;
+    // NOTE: photo is deliberately not touched — same as existing view navigation.
+  }
+
+  function startRename(item) {
+    renamingId = item.id;
+    renameName = item.name;
+  }
+
+  $effect(() => {
+    if (renamingId !== null) {
+      renameInputEl?.focus();
+      renameInputEl?.select();
+    }
+  });
+
+  function cancelRename() {
+    renamingId = null;
+  }
+
+  async function confirmRename() {
+    const name = renameName.trim();
+    if (!name) {
+      addToast(
+        get(t)('savedSearches.errorNameRequired', { default: 'Name cannot be empty' }),
+        '',
+        'error',
+        3000
+      );
+      return; // stay in edit mode; previous name is kept on cancel
+    }
+    const id = renamingId;
+    try {
+      const updated = await api.renameSavedSearch(id, name);
+      const item = savedSearches.find((s) => s.id === id);
+      if (item) item.name = updated.name; // $state mutation is reactive
+      renamingId = null;
+    } catch (error) {
+      handleError(error, 'rename saved search');
+    }
+  }
+
+  function onRenameKeydown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      confirmRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
+  async function deleteSearch(item) {
+    try {
+      await api.deleteSavedSearch(item.id);
+      const idx = savedSearches.findIndex((s) => s.id === item.id);
+      if (idx !== -1) savedSearches.splice(idx, 1);
+    } catch (error) {
+      handleError(error, 'delete saved search');
+    }
+  }
+
   // Escape closes the sidebar whenever it is open.
   $effect(() => {
     function onKey(e) {
@@ -68,6 +167,62 @@
         {$t(view.key, { default: view.fallback })}
       </button>
     {/each}
+
+    {#if savedSearches.length > 0}
+      <div class="sidebar-section-title">
+        {$t('savedSearches.sectionTitle', { default: 'Saved searches' })}
+      </div>
+      {#each savedSearches as item (item.id)}
+        <div
+          class="saved-search-row"
+          class:active={isActiveSearch(item)}
+          data-testid="saved-search-row"
+        >
+          <button
+            type="button"
+            class="saved-search-open"
+            title={item.name}
+            aria-current={isActiveSearch(item) ? 'true' : undefined}
+            onclick={() => openSavedSearch(item)}
+            data-testid="saved-search-open"
+          >
+            <Icon name="bookmark" width={14} height={14} />
+            <span class="saved-search-name">{item.name}</span>
+          </button>
+          {#if renamingId === item.id}
+            <input
+              type="text"
+              class="saved-search-rename-input"
+              bind:value={renameName}
+              bind:this={renameInputEl}
+              onkeydown={onRenameKeydown}
+              onblur={cancelRename}
+              aria-label={$t('savedSearches.rename', { default: 'Rename' })}
+              data-testid="saved-search-name-input"
+            />
+          {:else}
+            <button
+              type="button"
+              class="saved-search-action"
+              title={$t('savedSearches.rename', { default: 'Rename' })}
+              aria-label={$t('savedSearches.rename', { default: 'Rename' })}
+              onclick={() => startRename(item)}
+              data-testid="saved-search-rename"
+              ><Icon name="edit-2" width={14} height={14} /></button
+            >
+            <button
+              type="button"
+              class="saved-search-action"
+              title={$t('savedSearches.delete', { default: 'Delete' })}
+              aria-label={$t('savedSearches.delete', { default: 'Delete' })}
+              onclick={() => deleteSearch(item)}
+              data-testid="saved-search-delete"
+              ><Icon name="trash-2" width={14} height={14} /></button
+            >
+          {/if}
+        </div>
+      {/each}
+    {/if}
   </div>
 </nav>
 
@@ -182,5 +337,75 @@
       -webkit-backdrop-filter: none;
       background: var(--surface-color);
     }
+  }
+
+  .sidebar-section-title {
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+  }
+
+  .saved-search-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    border-radius: var(--radius-md);
+  }
+
+  .saved-search-row.active {
+    background: var(--primary-color);
+    color: white;
+  }
+
+  .saved-search-open {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-3) var(--space-4);
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-family: var(--font-body);
+    font-size: var(--font-md);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .saved-search-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .saved-search-action {
+    display: flex;
+    padding: var(--space-2);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-md);
+  }
+
+  .saved-search-action:hover {
+    color: var(--text-primary);
+    background: var(--background-secondary);
+  }
+
+  .saved-search-rename-input {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--divider-color);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: var(--font-md);
   }
 </style>

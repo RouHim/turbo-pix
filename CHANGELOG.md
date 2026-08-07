@@ -1,3 +1,11 @@
+# [2.37.0](https://github.com/RouHim/turbo-pix/compare/2.36.2...2.37.0) (2026-08-07)
+
+
+### Features
+
+* batch select + actions across all photo surfaces ([fa57b2b](https://github.com/RouHim/turbo-pix/commit/fa57b2bcdbae96959a91317b1f28963f69d9f4fc))
+* saved searches — save/rename/delete named view states from the sidebar ([e894f58](https://github.com/RouHim/turbo-pix/commit/e894f58b8f36782b8e8c1f678b7fa023e686b7ad))
+
 ## [2.36.2](https://github.com/RouHim/turbo-pix/compare/2.36.1...2.36.2) (2026-08-05)
 
 ## [2.36.1](https://github.com/RouHim/turbo-pix/compare/2.36.0...2.36.1) (2026-08-05)

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { api } from '../lib/api.js';
   import { logger } from '../lib/logger.js';
   import { route } from '../lib/router.svelte.js';

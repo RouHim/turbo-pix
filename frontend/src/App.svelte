@@ -15,11 +15,11 @@
   import { throttle, performance } from './lib/utils.js';
   import { APP_CONSTANTS } from './lib/constants.js';
   import { logger } from './lib/logger.js';
-  import Icon from './lib/Icon.svelte';
+  import Icon from './components/Icon.svelte';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import SortControls from './components/SortControls.svelte';
-  import ToastContainer from './lib/ToastContainer.svelte';
+  import ToastContainer from './components/ToastContainer.svelte';
   import SelectionBar from './components/SelectionBar.svelte';
   import PhotoGrid from './components/PhotoGrid.svelte';
   import CollagesView from './components/CollagesView.svelte';

@@ -14,7 +14,7 @@
   import { api } from '../lib/api.js';
   import { logger } from '../lib/logger.js';
   import { t } from '../lib/i18n.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { isPrefixQuery } from '../lib/utils.js';
   import PhotoCard from './PhotoCard.svelte';

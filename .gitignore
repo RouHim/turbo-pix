@@ -45,6 +45,7 @@ Thumbs.db
 # Working notes
 FRONTEND_IMPROVEMENTS.md
 SECURITY_PLAN.md
+nighthawk-report.md
 
 # Playwright E2E test artifacts
 test-playwright-report/

@@ -8,7 +8,7 @@
     isFormatSupported,
     isVideoFile,
   } from '../lib/utils.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
 

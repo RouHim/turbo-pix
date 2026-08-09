@@ -287,7 +287,7 @@ jobs:
             --platform ${{ matrix.platform }} \
             --build-arg TARGETARCH=${{ matrix.arch }} \
             --tag turbo-pix-${{ matrix.arch }}:latest \
-            -f container-data/Containerfile .
+            -f container/Containerfile .
 
       - name: Download AI models in container
         if: matrix.arch == 'amd64'

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { addToast, appState, loadSavedSearches, savedSearches } from '../lib/state.svelte.js';

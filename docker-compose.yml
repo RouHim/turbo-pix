@@ -2,7 +2,7 @@ services:
   turbopix:
     build:
       context: .
-      dockerfile: container-data/Containerfile
+      dockerfile: container/Containerfile
     ports:
       - "18473:18473"
     volumes:

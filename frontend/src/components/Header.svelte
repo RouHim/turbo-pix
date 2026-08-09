@@ -4,7 +4,7 @@
   import { route, pushState } from '../lib/router.svelte.js';
   import SearchBar from './SearchBar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   function toggleSidebar() {
     appState.sidebarOpen = !appState.sidebarOpen;

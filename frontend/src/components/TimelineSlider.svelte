@@ -6,7 +6,7 @@
   import { addToast } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
 

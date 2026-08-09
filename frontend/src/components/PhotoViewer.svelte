@@ -17,7 +17,7 @@
   import { logger } from '../lib/logger.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import ViewerControls from './ViewerControls.svelte';
   import ViewerMetadata from './ViewerMetadata.svelte';
   import ViewerMetadataEdit from './ViewerMetadataEdit.svelte';

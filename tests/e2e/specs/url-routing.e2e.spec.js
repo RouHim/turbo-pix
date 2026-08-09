@@ -263,6 +263,59 @@ test.describe('URL Routing', () => {
       const state = TestHelpers.getUrlState(page);
       expect(state.view).toBe('favorites');
     });
+
+    test('should stay in-app when pressing Back from an open viewer', async ({ page }) => {
+      // GIVEN: User is on the homepage
+      await TestHelpers.goto(page);
+      await TestHelpers.waitForPhotosToLoad(page);
+
+      // WHEN: User opens the first photo and presses Back
+      const firstHash = await (
+        await TestHelpers.getPhotoCards(page)
+      )[0].getAttribute('data-photo-id');
+      await TestHelpers.openViewer(page, firstHash);
+      await page.goBack();
+
+      // THEN: The browser stays inside TurboPix, viewer is closed
+      await expect(page).toHaveURL(/localhost:18473\/$/);
+      await expect(page.locator(TestHelpers.selectors.viewer)).not.toHaveClass(/active/);
+    });
+
+    test('should reopen the viewer on Forward after Back', async ({ page }) => {
+      // GIVEN: User opened a photo and pressed Back
+      await TestHelpers.goto(page);
+      await TestHelpers.waitForPhotosToLoad(page);
+      const firstHash = await (
+        await TestHelpers.getPhotoCards(page)
+      )[0].getAttribute('data-photo-id');
+      await TestHelpers.openViewer(page, firstHash);
+      await page.goBack();
+      await expect(page).toHaveURL(/localhost:18473\/$/);
+
+      // WHEN: User presses Forward
+      await page.goForward();
+
+      // THEN: Viewer reopens on the same photo
+      await TestHelpers.verifyViewerOpen(page);
+      expect(await TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
+    });
+
+    test('should clear the photo param when closing the viewer', async ({ page }) => {
+      await TestHelpers.goto(page);
+      await TestHelpers.waitForPhotosToLoad(page);
+      const firstHash = await (
+        await TestHelpers.getPhotoCards(page)
+      )[0].getAttribute('data-photo-id');
+      await TestHelpers.openViewer(page, firstHash);
+
+      // WHEN: User closes the viewer with Escape
+      await TestHelpers.closeViewer(page);
+
+      // THEN: URL no longer carries the photo param (refresh won't reopen the viewer)
+      const state = TestHelpers.getUrlState(page);
+      expect(state.photo).toBeNull();
+      await expect(page).toHaveURL(/localhost:18473\/$/);
+    });
   });
 
   test.describe('Param preservation', () => {

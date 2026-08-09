@@ -2,7 +2,7 @@
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { route, replaceState } from '../lib/router.svelte.js';
+  import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { photoGridState } from '../lib/state.svelte.js';
   import { addToast } from '../lib/state.svelte.js';
   import {
@@ -30,6 +30,10 @@
   const preloadedImages = $state(new Map());
   let showSidebar = $state(false);
   let updateUrlEnabled = $state(true);
+  // True while the viewer's own history entry (pushed by open()) is the
+  // current entry; close() then pops it via history.back() instead of
+  // replaceState. Plain field — never read in the template.
+  let viewerPushedEntry = false;
 
   // Loading / video
   let isLoading = $state(false);
@@ -384,7 +388,7 @@
   }
 
   // ── Core viewer API ────────────────────────────────────────────────────────
-  async function open(photo, allPhotos = []) {
+  async function open(photo, allPhotos = [], pushEntry = true) {
     photos = allPhotos;
     currentIndex = photos.findIndex((p) => p.hash_sha256 === photo.hash_sha256);
     if (currentIndex === -1) {
@@ -422,7 +426,10 @@
     showSidebar = false;
 
     if (updateUrlEnabled) {
-      replaceState({ photo: photo.hash_sha256 });
+      viewerPushedEntry = pushEntry;
+      if (pushEntry) {
+        pushState({ photo: photo.hash_sha256 });
+      }
     }
 
     await displayPhoto(photo);
@@ -478,7 +485,14 @@
     preloadedImages.clear();
 
     if (updateUrl) {
-      replaceState({ photo: null });
+      if (viewerPushedEntry) {
+        viewerPushedEntry = false;
+        window.history.back();
+      } else {
+        replaceState({ photo: null });
+      }
+    } else {
+      viewerPushedEntry = false;
     }
   }
 
@@ -1312,7 +1326,7 @@
       if (route.photo !== photoHash) return; // user pressed Back while the photo was loading
       if (photo) {
         const allPhotos = photoGridState.photos.length > 0 ? photoGridState.photos : [];
-        await open(photo, allPhotos);
+        await open(photo, allPhotos, false);
       }
     } catch (error) {
       logger?.error('Failed to open photo from URL', error, {

@@ -1,3 +1,10 @@
+# [2.38.0](https://github.com/RouHim/turbo-pix/compare/2.37.1...2.38.0) (2026-08-09)
+
+
+### Features
+
+* **viewer:** push history entry on open, pop on close ([4467174](https://github.com/RouHim/turbo-pix/commit/446717463de633759cbab22150170a85ed5caa4e))
+
 ## [2.37.1](https://github.com/RouHim/turbo-pix/compare/2.37.0...2.37.1) (2026-08-07)
 
 # [2.37.0](https://github.com/RouHim/turbo-pix/compare/2.36.2...2.37.0) (2026-08-07)

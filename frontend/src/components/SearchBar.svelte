@@ -322,24 +322,29 @@
 </script>
 
 <div id="search-bar" class="search-container" class:mobile-show={appState.mobileSearchOpen}>
-  <input
-    type="text"
-    id="search-input"
-    class="search-input"
-    placeholder={$t('ui.search_ai_placeholder', { default: 'AI-powered photo search...' })}
-    aria-label={$t('ui.search', { default: 'Search' })}
-    bind:value={query}
-    bind:this={inputEl}
-    onkeydown={onKeydown}
-    onfocus={onFocus}
-    oninput={onInput}
-    onblur={() => {
-      focused = false;
-      setTimeout(() => (showSuggestions = false), 150);
-    }}
-  />
-  <button type="button" id="search-btn" class="search-btn" class:searching onclick={submitSearch}>
-    {searching ? '' : $t('ui.search', { default: 'Search' })}
+  <div class="search-field">
+    <input
+      type="text"
+      id="search-input"
+      class="search-input"
+      placeholder={$t('ui.search_ai_placeholder', { default: 'AI-powered photo search...' })}
+      aria-label={$t('ui.search', { default: 'Search' })}
+      bind:value={query}
+      bind:this={inputEl}
+      onkeydown={onKeydown}
+      onfocus={onFocus}
+      oninput={onInput}
+      onblur={() => {
+        focused = false;
+        setTimeout(() => (showSuggestions = false), 150);
+      }}
+    />
+    {#if searching}
+      <span class="search-spinner" data-testid="search-spinner" aria-hidden="true"></span>
+    {/if}
+  </div>
+  <button type="button" id="search-btn" class="search-btn" onclick={submitSearch}>
+    {$t('ui.search', { default: 'Search' })}
   </button>
 
   {#if canSave}
@@ -395,7 +400,9 @@
 
   .search-input {
     flex: 1;
+    width: 100%;
     padding: var(--space-3) var(--space-4);
+    padding-right: var(--space-6);
     border: 1px solid var(--divider-color);
     border-radius: var(--radius-md);
     font-size: var(--font-lg);
@@ -405,6 +412,31 @@
     font-family: var(--font-body);
   }
 
+  .search-field {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+  }
+
+  .search-spinner {
+    position: absolute;
+    right: var(--space-3);
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--divider-color);
+    border-top-color: var(--primary-color);
+    border-radius: var(--radius-full);
+    animation: search-spin 0.8s linear infinite;
+    pointer-events: none;
+  }
+
+  @keyframes search-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .search-input:focus {
     outline: none;
     border-color: var(--primary-color);
@@ -412,8 +444,6 @@
   }
 
   .search-btn {
-    position: relative;
-    overflow: visible;
     padding: var(--space-3) var(--space-5);
     margin-left: var(--space-2);
     background: var(--primary-color);
@@ -447,40 +477,6 @@
 
   .save-search-btn:hover {
     background: var(--background-secondary);
-  }
-
-  .search-btn.searching::before,
-  .search-btn.searching::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 100%;
-    height: 100%;
-    border-radius: inherit;
-    border: 2px solid var(--primary-color);
-    opacity: 0;
-    pointer-events: none;
-    animation: radar-pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  .search-btn.searching::after {
-    animation-delay: 0.5s;
-  }
-
-  @keyframes radar-pulse {
-    0% {
-      transform: translate(-50%, -50%) scale(1);
-      opacity: 0.8;
-    }
-    50% {
-      opacity: 0.4;
-    }
-    100% {
-      transform: translate(-50%, -50%) scale(2.5);
-      opacity: 0;
-    }
   }
 
   /* Search hint */

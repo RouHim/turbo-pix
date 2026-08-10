@@ -235,7 +235,7 @@ test.describe('Search animation', () => {
       (response) =>
         response.url().includes('/api/search/semantic') && response.status() === 200
     );
-    await TestHelpers.performSearch(page, 'cat');
+    await TestHelpers.performSearch(page, 'car');
     await searchResponse;
 
     // THEN: The search button keeps its label (no collapse / layout shift)
@@ -255,7 +255,7 @@ test.describe('Search animation', () => {
 - [ ] **Step 2: Run the test to verify it fails on current code**
 
 Run: `npx playwright test tests/e2e/specs/search-animation.e2e.spec.js`
-Expected (on the pre-fix tree): FAIL — button text is empty while searching (label assertion), or the spinner selector matches nothing.
+Expected (on the pre-fix tree): FAIL — the spinner assertion: `[data-testid="search-spinner"]` does not exist pre-fix (the pre-fix indicator is a radar pulse on the search button), so `toBeVisible` times out after 5s. The label assertion is NOT the failure point: `toHaveText` auto-retries for 5s and the pre-fix search restores the button label within ~3.3s, so it passes.
 
 - [ ] **Step 3: Re-run after Tasks 1-2**
 

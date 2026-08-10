@@ -218,7 +218,7 @@ git commit -m "fix: remove dead radar-pulse search animation CSS"
 
 ```js
 import { test, expect } from '@playwright/test';
-import TestHelpers from '../setup/test-helpers.js';
+import { TestHelpers } from '../setup/test-helpers.js';
 
 test.describe('Search animation', () => {
   test.beforeEach(async ({ page }) => {

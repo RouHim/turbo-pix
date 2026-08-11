@@ -114,7 +114,7 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 ## Not audited
 
 - `CHANGELOG.md` full contents (only format checked), `Cargo.lock` (dependency versions audited only via machete; `cargo audit` not installed — noted, not installed).
-- `container-data/Containerfile` and docker-compose (deployment config; CI exercises the image build).
+- `container/Containerfile` and docker-compose (deployment config; CI exercises the image build).
 - `test-data/` binaries and `.spec/` planning docs.
 - `knip`/`madge`/`depcheck`/`cargo-udeps`/`cargo-audit` not installed — dead-export scan done manually (found F8), unused-deps via machete only (found F12 false positive).
 - E2E specs were counted (150 tests, 23 specs) but not line-audited.

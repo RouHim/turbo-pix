@@ -1,3 +1,23 @@
+## [2.38.2](https://github.com/RouHim/turbo-pix/compare/2.38.1...2.38.2) (2026-08-10)
+
+
+### Bug Fixes
+
+* move search loading indicator from button into input field ([ab79950](https://github.com/RouHim/turbo-pix/commit/ab7995075d6e0b41862a72b973cbf95e7867464c))
+* remove dead radar-pulse search animation CSS ([86fdf08](https://github.com/RouHim/turbo-pix/commit/86fdf08924d5bf4b897f756f613ec7b135c657ad))
+* sync plan test snippet and harden spinner assertion ordering ([b1a54dc](https://github.com/RouHim/turbo-pix/commit/b1a54dcf795e8bc237e28778cb799d4ad14248ae))
+
+## [2.38.1](https://github.com/RouHim/turbo-pix/compare/2.38.0...2.38.1) (2026-08-09)
+
+# [2.38.0](https://github.com/RouHim/turbo-pix/compare/2.37.1...2.38.0) (2026-08-09)
+
+
+### Features
+
+* **viewer:** push history entry on open, pop on close ([4467174](https://github.com/RouHim/turbo-pix/commit/446717463de633759cbab22150170a85ed5caa4e))
+
+## [2.37.1](https://github.com/RouHim/turbo-pix/compare/2.37.0...2.37.1) (2026-08-07)
+
 # [2.37.0](https://github.com/RouHim/turbo-pix/compare/2.36.2...2.37.0) (2026-08-07)
 
 

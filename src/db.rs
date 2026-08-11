@@ -186,28 +186,23 @@ impl Photo {
     // These are public API methods - not all are used internally yet
 
     // Camera
-    #[allow(dead_code)]
     pub fn camera_make(&self) -> Option<&str> {
         self.metadata.get("camera")?.get("make")?.as_str()
     }
 
-    #[allow(dead_code)]
     pub fn camera_model(&self) -> Option<&str> {
         self.metadata.get("camera")?.get("model")?.as_str()
     }
 
-    #[allow(dead_code)]
     pub fn lens_make(&self) -> Option<&str> {
         self.metadata.get("camera")?.get("lens_make")?.as_str()
     }
 
-    #[allow(dead_code)]
     pub fn lens_model(&self) -> Option<&str> {
         self.metadata.get("camera")?.get("lens_model")?.as_str()
     }
 
     // Settings
-    #[allow(dead_code)]
     pub fn iso(&self) -> Option<i32> {
         self.metadata
             .get("settings")?
@@ -217,12 +212,10 @@ impl Photo {
             .ok()
     }
 
-    #[allow(dead_code)]
     pub fn aperture(&self) -> Option<f64> {
         self.metadata.get("settings")?.get("aperture")?.as_f64()
     }
 
-    #[allow(dead_code)]
     pub fn shutter_speed(&self) -> Option<&str> {
         self.metadata
             .get("settings")?
@@ -230,12 +223,10 @@ impl Photo {
             .as_str()
     }
 
-    #[allow(dead_code)]
     pub fn focal_length(&self) -> Option<f64> {
         self.metadata.get("settings")?.get("focal_length")?.as_f64()
     }
 
-    #[allow(dead_code)]
     pub fn exposure_mode(&self) -> Option<&str> {
         self.metadata
             .get("settings")?
@@ -243,7 +234,6 @@ impl Photo {
             .as_str()
     }
 
-    #[allow(dead_code)]
     pub fn metering_mode(&self) -> Option<&str> {
         self.metadata
             .get("settings")?
@@ -251,7 +241,6 @@ impl Photo {
             .as_str()
     }
 
-    #[allow(dead_code)]
     pub fn white_balance(&self) -> Option<&str> {
         self.metadata
             .get("settings")?
@@ -259,23 +248,19 @@ impl Photo {
             .as_str()
     }
 
-    #[allow(dead_code)]
     pub fn color_space(&self) -> Option<&str> {
         self.metadata.get("settings")?.get("color_space")?.as_str()
     }
 
-    #[allow(dead_code)]
     pub fn flash_used(&self) -> Option<bool> {
         self.metadata.get("settings")?.get("flash_used")?.as_bool()
     }
 
     // Location
-    #[allow(dead_code)]
     pub fn latitude(&self) -> Option<f64> {
         self.metadata.get("location")?.get("latitude")?.as_f64()
     }
 
-    #[allow(dead_code)]
     pub fn longitude(&self) -> Option<f64> {
         self.metadata.get("location")?.get("longitude")?.as_f64()
     }
@@ -1025,18 +1010,6 @@ pub async fn get_paths_needing_semantic_indexing(
     .fetch_all(pool)
     .await?;
     Ok(paths)
-}
-
-/// Mark a photo as semantically indexed
-pub async fn mark_photo_as_semantically_indexed(
-    pool: &DbPool,
-    file_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    sqlx::query("UPDATE photos SET semantic_vector_indexed = 1 WHERE file_path = ?")
-        .bind(file_path)
-        .execute(pool)
-        .await?;
-    Ok(())
 }
 
 pub async fn get_photos_needing_geo_resolution(

@@ -19,6 +19,14 @@ use crate::warp_helpers::{
 /// are a handful of fields; anything larger is a memory-exhaustion attempt.
 const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
 
+/// Default photo page number (1-based) and page size for list responses.
+const DEFAULT_PAGE: u32 = 1;
+const DEFAULT_PAGE_SIZE: u32 = 50;
+
+/// Hard bounds on client-supplied pagination.
+const MIN_PAGE_SIZE: u32 = 1;
+const MAX_PAGE_SIZE: u32 = 100;
+
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {
     pub page: Option<u32>,
@@ -78,8 +86,11 @@ async fn fetch_photos(
 pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     // Client-supplied pagination must not underflow/overflow: page and limit
     // are clamped to sane ranges before arithmetic.
-    let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let page = query.page.unwrap_or(DEFAULT_PAGE).max(DEFAULT_PAGE);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+        .clamp(MIN_PAGE_SIZE, MAX_PAGE_SIZE);
     let offset = (page as u64 - 1) * limit as u64;
 
     // Dispatch to helper that selects search vs list

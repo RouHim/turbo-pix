@@ -6,6 +6,15 @@ use crate::db::DbPool;
 use crate::semantic_search::SemanticSearch;
 use crate::warp_helpers::{with_db, with_semantic_search, DatabaseError};
 
+/// Default page size for semantic search responses.
+const DEFAULT_LIMIT: usize = 50;
+
+/// Clamp bounds for client-supplied pagination: an unbounded limit would
+/// stream the whole vector index back in one response.
+const MIN_LIMIT: usize = 1;
+const MAX_LIMIT: usize = 200;
+const MAX_OFFSET: usize = 1_000_000;
+
 #[derive(Debug, Deserialize)]
 pub struct SemanticSearchQuery {
     pub q: String,
@@ -16,7 +25,7 @@ pub struct SemanticSearchQuery {
 }
 
 fn default_limit() -> usize {
-    50
+    DEFAULT_LIMIT
 }
 
 fn default_offset() -> usize {
@@ -52,8 +61,8 @@ pub async fn semantic_search(
     // Perform semantic search. Clamp the client-supplied pagination: an
     // unbounded limit would stream the whole vector index back in one
     // response.
-    let limit = query.limit.clamp(1, 200);
-    let offset = query.offset.min(1_000_000);
+    let limit = query.limit.clamp(MIN_LIMIT, MAX_LIMIT);
+    let offset = query.offset.min(MAX_OFFSET);
     let results = semantic_search
         .search(&query.q, limit, offset)
         .await

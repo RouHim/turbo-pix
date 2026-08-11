@@ -100,15 +100,6 @@ pub struct CacheKey {
 }
 
 impl CacheKey {
-    pub fn new(content_hash: String, size: ThumbnailSize, format: ThumbnailFormat) -> Self {
-        Self {
-            content_hash,
-            content_version: String::new(),
-            size,
-            format,
-        }
-    }
-
     pub fn from_photo(
         photo: &crate::db::Photo,
         size: ThumbnailSize,

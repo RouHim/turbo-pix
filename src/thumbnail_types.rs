@@ -175,3 +175,76 @@ pub struct VideoMetadata {
     pub width: i32,
     pub height: i32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_size_pixels_labels_and_display() {
+        assert_eq!(ThumbnailSize::Small.to_pixels(), 200);
+        assert_eq!(ThumbnailSize::Medium.to_pixels(), 400);
+        assert_eq!(ThumbnailSize::Large.to_pixels(), 800);
+        assert_eq!(ThumbnailSize::Small.as_str(), "small");
+        assert_eq!(ThumbnailSize::Medium.as_str(), "medium");
+        assert_eq!(ThumbnailSize::Large.as_str(), "large");
+        assert_eq!(ThumbnailSize::Medium.to_string(), "medium");
+    }
+
+    #[test]
+    fn thumbnail_size_from_str() {
+        assert_eq!("small".parse(), Ok(ThumbnailSize::Small));
+        assert_eq!("medium".parse(), Ok(ThumbnailSize::Medium));
+        assert_eq!("large".parse(), Ok(ThumbnailSize::Large));
+        assert_eq!("tiny".parse::<ThumbnailSize>(), Err(()));
+        assert_eq!("".parse::<ThumbnailSize>(), Err(()));
+    }
+
+    #[test]
+    fn thumbnail_format_labels_content_types_and_default() {
+        assert_eq!(ThumbnailFormat::Jpeg.as_str(), "jpeg");
+        assert_eq!(ThumbnailFormat::Webp.as_str(), "webp");
+        assert_eq!(ThumbnailFormat::Jpeg.content_type(), "image/jpeg");
+        assert_eq!(ThumbnailFormat::Webp.content_type(), "image/webp");
+        assert_eq!(ThumbnailFormat::default(), ThumbnailFormat::Jpeg);
+        assert_eq!(ThumbnailFormat::Webp.to_string(), "webp");
+    }
+
+    #[test]
+    fn thumbnail_format_from_str() {
+        assert_eq!("jpeg".parse(), Ok(ThumbnailFormat::Jpeg));
+        assert_eq!("jpg".parse(), Ok(ThumbnailFormat::Jpeg));
+        assert_eq!("webp".parse(), Ok(ThumbnailFormat::Webp));
+        assert_eq!("png".parse::<ThumbnailFormat>(), Err(()));
+    }
+
+    #[test]
+    fn cache_key_filename_versioned_and_unversioned() {
+        let versioned = CacheKey {
+            content_hash: "abc123".to_string(),
+            content_version: "123_456".to_string(),
+            size: ThumbnailSize::Medium,
+            format: ThumbnailFormat::Webp,
+        };
+        assert_eq!(versioned.filename(), "abc123_123_456_medium.webp");
+        assert_eq!(versioned.to_string(), "abc123_123_456_medium_webp");
+
+        let unversioned = CacheKey {
+            content_hash: "abc123".to_string(),
+            content_version: String::new(),
+            size: ThumbnailSize::Small,
+            format: ThumbnailFormat::Jpeg,
+        };
+        assert_eq!(unversioned.filename(), "abc123_small.jpeg");
+        assert_eq!(unversioned.to_string(), "abc123_small_jpeg");
+    }
+
+    #[test]
+    fn cache_error_display_messages() {
+        assert_eq!(CacheError::PhotoNotFound.to_string(), "Photo not found");
+        assert_eq!(
+            CacheError::VideoProcessingError("boom".into()).to_string(),
+            "Video processing error: boom"
+        );
+    }
+}

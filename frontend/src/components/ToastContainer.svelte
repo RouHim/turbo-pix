@@ -1,6 +1,6 @@
 <script>
   import { toasts, removeToast } from '../lib/state.svelte.js';
-  import { t } from './i18n.js';
+  import { t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
 
   const typeIcons = {

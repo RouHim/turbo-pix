@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { t } from '../lib/i18n.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { api } from '../lib/api.js';
   import { indexingState } from '../lib/state.svelte.js';
   import { logger } from '../lib/logger.js';

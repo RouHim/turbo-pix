@@ -1,6 +1,6 @@
 <script>
   import { t } from '../lib/i18n.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { formatDate, getThumbnailUrl } from '../lib/utils.js';
   import { toDataURL } from '../lib/blurhash.js';
   import { longpress } from '../lib/longpress.js';

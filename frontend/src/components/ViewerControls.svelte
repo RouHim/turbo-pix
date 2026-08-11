@@ -1,5 +1,5 @@
 <script>
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
   import { t } from '../lib/i18n.js';
 
   const {

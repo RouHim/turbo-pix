@@ -6,7 +6,7 @@
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { appState, addToast, photoGridState, savedSearches } from '../lib/state.svelte.js';
   import { isPrefixQuery } from '../lib/utils.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   let query = $state('');
   let searchHistory = $state(api.getSearchHistory() || []);

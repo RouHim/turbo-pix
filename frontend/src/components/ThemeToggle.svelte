@@ -3,7 +3,7 @@
   import { t } from '../lib/i18n.js';
   import { themeState } from '../lib/state.svelte.js';
   import { storage } from '../lib/utils.js';
-  import Icon from '../lib/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   function applyTheme(theme, persist = true) {
     document.documentElement.classList.remove('light-theme', 'dark-theme');

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Row};
 
-use crate::db::{Photo, parse_datetime};
+use crate::db::{parse_datetime, Photo};
 use crate::db_pool::DbPool;
 use crate::file_scanner::PhotoFile;
 use crate::photo_processor::PhotoProcessor;

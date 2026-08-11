@@ -52,17 +52,6 @@ export function initI18n(defaultLocale) {
   }
 }
 
-export function setLocale(l) {
-  if (!SUPPORTED.includes(l)) l = 'en';
-  locale.set(l);
-  try {
-    localStorage.setItem('turbo-pix-locale', l);
-    if (typeof document !== 'undefined') document.documentElement.lang = l;
-  } catch {
-    /* storage unavailable */
-  }
-}
-
 export { _ as t };
 
 /**

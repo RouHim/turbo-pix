@@ -15,7 +15,7 @@ export const route = $state({ ...defaultState });
 let updatingFromPopstate = false;
 let isInitialized = false;
 
-export function parseUrl(url) {
+function parseUrl(url) {
   const pathView = url.pathname.replace(/^\//, '').replace(/\/$/, '');
 
   return normalizeState({
@@ -28,7 +28,7 @@ export function parseUrl(url) {
   });
 }
 
-export function normalizeState(state) {
+function normalizeState(state) {
   const view = validViews.includes(state.view) ? state.view : defaultState.view;
   const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
   const year = parsePositiveInteger(state.year);
@@ -46,7 +46,7 @@ export function normalizeState(state) {
   };
 }
 
-export function parsePositiveInteger(value) {
+function parsePositiveInteger(value) {
   if (value === null || value === undefined || value === '') {
     return null;
   }
@@ -65,7 +65,7 @@ export function parsePositiveInteger(value) {
   return parsedValue;
 }
 
-export function normalizeString(value) {
+function normalizeString(value) {
   if (typeof value !== 'string') {
     return null;
   }
@@ -74,7 +74,7 @@ export function normalizeString(value) {
   return normalizedValue ? normalizedValue : null;
 }
 
-export function buildUrl(state = {}) {
+function buildUrl(state = {}) {
   const normalizedState = normalizeState({ ...defaultState, ...state });
   // SvelteURL adds reactivity this write-only builder URL doesn't need.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- URL is only mutated/serialized, never read reactively

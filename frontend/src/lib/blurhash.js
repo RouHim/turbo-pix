@@ -142,7 +142,7 @@ const signPow = (value, exp) => {
  * @param {number} punch - Contrast adjustment (default: 1)
  * @returns {Uint8ClampedArray} Pixel data in RGBA format
  */
-export const decode = (blurhash, width, height, punch = 1) => {
+const decode = (blurhash, width, height, punch = 1) => {
   if (!blurhash || blurhash.length < 6) {
     throw new Error('Invalid blurhash');
   }

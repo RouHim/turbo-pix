@@ -260,7 +260,7 @@
       gap: var(--space-6);
 
       & .skeleton-item {
-        height: 200px;
+        aspect-ratio: 1;
         background: linear-gradient(
           90deg,
           var(--divider-color) 25%,

@@ -493,13 +493,14 @@
 
 <div id="photo-grid" class="photo-grid">
   {#if loading && photos.length === 0}
-    <!-- Skeleton loading -->
-    <div class="loading-skeleton">
-      <!-- eslint-disable-next-line no-unused-vars -- placeholder _ index is part of the skeleton keying idiom -->
-      {#each Array(6) as _, i (i)}
-        <div class="skeleton-item"></div>
-      {/each}
-    </div>
+    <!-- Skeleton loading: items are DIRECT grid children of .photo-grid so the
+         skeleton shares the exact tracks of the real cards (a nested grid's fr
+         tracks + aspect-ratio items mis-resolve under intrinsic sizing in some
+         engines, overflowing the grid). Zero layout shift on arrival. -->
+    <!-- eslint-disable-next-line no-unused-vars -- placeholder _ index is part of the skeleton keying idiom -->
+    {#each Array(6) as _, i (i)}
+      <div class="skeleton-item"></div>
+    {/each}
   {:else if photos.length === 0 && !loading}
     <!-- Empty state -->
     {#if loadError}
@@ -640,14 +641,12 @@
     min-height: 400px;
   }
 
-  .loading-skeleton {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: var(--space-6);
-  }
-
-  .loading-skeleton .skeleton-item {
-    height: 200px;
+  .skeleton-item {
+    aspect-ratio: 1;
+    /* Empty boxes with aspect-ratio get a ~200px auto min-content contribution
+       in Chromium, which inflates 1fr grid tracks (3x199 in a 358px grid).
+       min-width: 0 opts the tile out of that sizing. */
+    min-width: 0;
     background: linear-gradient(
       90deg,
       var(--divider-color) 25%,
@@ -790,24 +789,21 @@
 
   /* Responsive */
   @media (width <= 1200px) {
-    .photo-grid,
-    .loading-skeleton {
+    .photo-grid {
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: var(--space-5);
     }
   }
 
   @media (width <= 1024px) {
-    .photo-grid,
-    .loading-skeleton {
+    .photo-grid {
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: var(--space-4);
     }
   }
 
   @media (width >= 1400px) {
-    .photo-grid,
-    .loading-skeleton {
+    .photo-grid {
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: var(--space-8);
     }
@@ -818,16 +814,18 @@
      .main-content content container (container-type: inline-size), matching
      the pre-migration @container (width <= 768px) behavior. */
   @container (width <= 768px) {
-    .photo-grid,
-    .loading-skeleton {
+    .photo-grid {
       grid-template-columns: repeat(3, 1fr);
       gap: var(--space-1);
+    }
+
+    .skeleton-item {
+      border-radius: 0;
     }
   }
 
   @container (width <= 480px) {
-    .photo-grid,
-    .loading-skeleton {
+    .photo-grid {
       grid-template-columns: repeat(3, 1fr);
       gap: 2px;
     }

@@ -186,7 +186,7 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
 impl Photo {
     // ===== METADATA ACCESSORS (for Rust code) =====
     // Frontend reads metadata.* directly from JSON
-    // These are public API methods - not all are used internally yet
+    // Used by photo_processor and handlers_video to build responses.
 
     // Camera
     pub fn camera_make(&self) -> Option<&str> {

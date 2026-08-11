@@ -32,7 +32,6 @@ pub async fn run_housekeeping_scan(
     // Structure: Photo Hash -> (Reason, Score)
     let mut candidates: Vec<(String, String, f32)> = Vec::new();
 
-    // DEBUG: Check if we have any semantic vectors at all
     for &term in HOUSEKEEPING_TERMS {
         // Search for the term
         match semantic_search.search(term, MAX_RESULTS_PER_TERM, 0).await {
@@ -43,8 +42,7 @@ pub async fn run_housekeeping_scan(
                     term
                 );
                 for (path, score) in results {
-                    // We need to map path to hash. We'll do this in bulk or per item?
-                    // Let's store path for now and resolve to hash later.
+                    // Store paths for now; resolve to hashes below.
                     candidates.push((path.clone(), term.to_string(), score));
                 }
             }

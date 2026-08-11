@@ -199,9 +199,6 @@ impl ThumbnailGenerator {
         let _cache_path = self.get_cache_path(&cache_key);
         self.save_to_disk_cache(&cache_key, &thumbnail_data).await?;
 
-        // Update database to mark thumbnail as available
-        // Note: Thumbnail status tracking removed as part of cleanup
-
         Ok(thumbnail_data)
     }
 

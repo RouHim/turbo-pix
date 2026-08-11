@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use image::DynamicImage;
 use serde::Deserialize;
 use serde_json::json;
 use warp::{reject, Filter, Rejection, Reply};
@@ -109,21 +108,6 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
     }
 }
 
-/// Apply EXIF orientation transformation to an image
-/// Matches the orientation values from EXIF specification
-fn apply_orientation(img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
-    match orientation {
-        Some(2) => img.fliph(),
-        Some(3) => img.rotate180(),
-        Some(4) => img.flipv(),
-        Some(5) => img.fliph().rotate270(), // Transpose: flip horizontal, then rotate 90 CCW (270 CW)
-        Some(6) => img.rotate90(),
-        Some(7) => img.fliph().rotate90(), // Transverse: flip horizontal, then rotate 90 CW
-        Some(8) => img.rotate270(),
-        _ => img, // 1 or None = no transformation needed
-    }
-}
-
 pub async fn get_photo(photo_hash: String, db_pool: DbPool) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => Ok(warp::reply::json(&photo)),
@@ -177,7 +161,7 @@ pub async fn get_photo_file(
         match crate::raw_processor::decode_raw_to_dynamic_image(file_path) {
             Ok(img) => {
                 // Apply orientation correction
-                let img = apply_orientation(img, photo.orientation);
+                let img = image_editor::apply_orientation(img, photo.orientation);
 
                 // Encode as JPEG with high quality
                 let mut jpeg_data = Vec::new();

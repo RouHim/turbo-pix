@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use exif::{Field, In, Tag, Value};
-use image::GenericImageView;
+use image::{DynamicImage, GenericImageView};
 use sha2::{Digest, Sha256};
 
 use crate::cache_manager::CacheManager;
@@ -27,6 +27,21 @@ fn is_video_file(file_path: &Path) -> bool {
         .map(|ext| ext.to_lowercase())
         .map(|ext| VIDEO_EXTENSIONS.contains(&ext.as_str()))
         .unwrap_or(false)
+}
+
+/// Apply EXIF orientation transformation to an image
+/// Matches the orientation values from EXIF specification
+pub(crate) fn apply_orientation(img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
+    match orientation {
+        Some(2) => img.fliph(),
+        Some(3) => img.rotate180(),
+        Some(4) => img.flipv(),
+        Some(5) => img.fliph().rotate270(), // Transpose: flip horizontal, then rotate 90 CCW (270 CW)
+        Some(6) => img.rotate90(),
+        Some(7) => img.fliph().rotate90(), // Transverse: flip horizontal, then rotate 90 CW
+        Some(8) => img.rotate270(),
+        _ => img, // 1 or None = no transformation needed
+    }
 }
 
 /// Angle for rotation operations
@@ -182,18 +197,7 @@ pub async fn rotate_image(
 
     // Apply existing EXIF orientation to pixels first
     // This ensures we're rotating the actual visual orientation, not the stored orientation
-    if let Some(orientation) = photo.orientation {
-        img = match orientation {
-            2 => img.fliph(),
-            3 => img.rotate180(),
-            4 => img.flipv(),
-            5 => img.fliph().rotate270(),
-            6 => img.rotate90(),
-            7 => img.fliph().rotate90(),
-            8 => img.rotate270(),
-            _ => img, // 1 or unknown = no transformation
-        };
-    }
+    img = apply_orientation(img, photo.orientation);
 
     // Now apply the requested rotation
     let rotated_img = match angle {

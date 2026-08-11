@@ -8,6 +8,7 @@ use tokio::fs;
 
 use crate::config::Config;
 use crate::db::{DbPool, Photo};
+use crate::image_editor;
 use crate::raw_processor;
 use crate::thumbnail_types::{CacheError, CacheKey, CacheResult, ThumbnailFormat, ThumbnailSize};
 use crate::video_processor;
@@ -205,16 +206,7 @@ impl ThumbnailGenerator {
     }
 
     fn apply_orientation(&self, img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
-        match orientation {
-            Some(2) => img.fliph(),
-            Some(3) => img.rotate180(),
-            Some(4) => img.flipv(),
-            Some(5) => img.fliph().rotate270(), // Transpose: flip horizontal, then rotate 90 CCW (270 CW)
-            Some(6) => img.rotate90(),
-            Some(7) => img.fliph().rotate90(), // Transverse: flip horizontal, then rotate 90 CW
-            Some(8) => img.rotate270(),
-            _ => img, // 1 or None = no transformation needed
-        }
+        image_editor::apply_orientation(img, orientation)
     }
 
     fn resize_image(&self, img: DynamicImage, size: ThumbnailSize) -> DynamicImage {

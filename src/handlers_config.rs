@@ -15,3 +15,20 @@ pub fn build_config_routes(
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn config_route_returns_default_locale() {
+        let routes = build_config_routes("de".to_string());
+        let res = warp::test::request()
+            .path("/api/config")
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert_eq!(body["default_locale"], "de");
+    }
+}

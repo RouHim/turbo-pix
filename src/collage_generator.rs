@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Locale, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, Locale, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info, warn};
 use rand::rng;
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Row};
 
-use crate::db::Photo;
+use crate::db::{Photo, parse_datetime};
 use crate::db_pool::DbPool;
 use crate::file_scanner::PhotoFile;
 use crate::photo_processor::PhotoProcessor;
@@ -30,20 +30,6 @@ pub struct Collage {
     pub accepted_at: Option<DateTime<Utc>>,
     pub rejected_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-}
-
-/// Parses a collage timestamp, accepting both RFC3339 ("2026-01-04T16:17:10Z")
-/// and SQLite's format ("2026-01-04 16:17:10", produced by `datetime('now')`
-/// and `CURRENT_TIMESTAMP`).
-fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
-        })
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Collage {

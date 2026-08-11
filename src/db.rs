@@ -80,7 +80,10 @@ where
         .or(Ok(json!({})))
 }
 
-fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
+/// Parses a timestamp, accepting both RFC3339 ("2026-01-04T16:17:10Z")
+/// and SQLite's format ("2026-01-04 16:17:10", produced by `datetime('now')`
+/// and `CURRENT_TIMESTAMP`).
+pub(crate) fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
     // Try RFC3339 first (e.g., "2026-01-04T16:17:10Z")
     DateTime::parse_from_rfc3339(s)
         .ok()

@@ -477,6 +477,8 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
+            max_transcodes: 2,
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
@@ -732,6 +734,8 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1,
             },
+            max_transcodes: 2,
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
@@ -790,6 +794,8 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1,
             },
+            max_transcodes: 2,
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
@@ -885,6 +891,8 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 2,
             },
+            max_transcodes: 2,
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
@@ -990,6 +998,8 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
+            max_transcodes: 2,
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };

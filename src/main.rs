@@ -71,6 +71,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Transcode pool size + timeout (video_processor reads the env directly);
+    // default them from config so a process-wide value is always visible to
+    // the transcode/status paths. Respects an explicit operator override.
+    if std::env::var("TURBO_PIX_MAX_TRANSCODES").is_err() {
+        std::env::set_var(
+            "TURBO_PIX_MAX_TRANSCODES",
+            config.max_transcodes.to_string(),
+        );
+    }
+    if std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").is_err() {
+        std::env::set_var(
+            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
+            config.transcode_timeout_secs.to_string(),
+        );
+    }
+
     // Non-loopback binds with an empty allowlist have NO DNS-rebinding
     // protection (origin==host is trivially satisfiable); warn instead of
     // silently shipping a hardened-but-disabled posture.

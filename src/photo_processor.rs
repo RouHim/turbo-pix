@@ -71,6 +71,10 @@ pub struct ProcessedPhoto {
     pub audio_codec: Option<String>, // Audio codec (e.g., "aac", "mp3")
     pub bitrate: Option<i32>,     // Bitrate in kbps
     pub frame_rate: Option<f64>,  // Frame rate for videos
+    pub video_profile: Option<String>, // Video profile (e.g., "High")
+    pub bit_depth: Option<u32>,   // Pixel format bit depth (e.g., 8, 10)
+    pub container: Option<String>, // Container format (e.g., "mov", "matroska")
+    pub moov_at_start: bool,      // MOOV atom at start of container (Direct Play friendly)
     pub semantic_vector_indexed: Option<bool>, // Preserved from DB for unchanged photos
 }
 
@@ -234,6 +238,10 @@ impl PhotoProcessor {
                                 audio_codec: existing_photo.audio_codec().map(String::from),
                                 bitrate: existing_photo.bitrate(),
                                 frame_rate: existing_photo.frame_rate(),
+                                video_profile: existing_photo.video_profile().map(String::from),
+                                bit_depth: existing_photo.bit_depth(),
+                                container: existing_photo.container().map(String::from),
+                                moov_at_start: existing_photo.moov_at_start(),
                                 semantic_vector_indexed: existing_photo.semantic_vector_indexed,
                             });
                         }
@@ -296,6 +304,17 @@ impl PhotoProcessor {
         // Fix MOOV atom placement for video files (enables fast progressive download)
         maybe_fix_moov_for_video(path);
 
+        // Whether the MOOV atom now sits at the start of the container (absent
+        // for non-videos, which default to true).
+        let moov_at_start = if mimetype_detector::from_path(path)
+            .map(|m| m.type_() == "video")
+            .unwrap_or(false)
+        {
+            video_processor::has_moov_at_start(path).unwrap_or(true)
+        } else {
+            true
+        };
+
         let processed_photo = ProcessedPhoto {
             file_path: file_path.clone(),
             filename,
@@ -328,6 +347,10 @@ impl PhotoProcessor {
             audio_codec: metadata.audio_codec,
             bitrate: metadata.bitrate,
             frame_rate: metadata.frame_rate,
+            video_profile: metadata.video_profile,
+            bit_depth: metadata.bit_depth,
+            container: metadata.container,
+            moov_at_start,
             semantic_vector_indexed: Some(false),
         };
 

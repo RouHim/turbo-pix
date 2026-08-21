@@ -43,9 +43,24 @@ pub struct PhotoMetadata {
     pub audio_codec: Option<String>,
     pub bitrate: Option<i32>,
     pub frame_rate: Option<f64>,
+    pub video_profile: Option<String>,
+    pub bit_depth: Option<u32>,
+    pub container: Option<String>,
 }
 
 pub struct MetadataExtractor;
+
+/// Extracts the container name from the ffprobe `format.format_name` field,
+/// which is a comma-separated list of candidate formats (e.g.
+/// `"mov,mp4,m4a,3gp,3g2,mj2"`). The first token is the actual container.
+pub(crate) fn container_from_format_name(parsed: &serde_json::Value) -> Option<String> {
+    parsed["format"]["format_name"]
+        .as_str()?
+        .split(',')
+        .next()
+        .map(str::trim)
+        .map(String::from)
+}
 
 impl MetadataExtractor {
     /// Clean EXIF string values by removing null bytes, trimming whitespace,
@@ -346,6 +361,8 @@ impl MetadataExtractor {
 
                         metadata.taken_at = Self::extract_taken_at_from_ffprobe_json(&parsed);
 
+                        metadata.container = container_from_format_name(&parsed);
+
                         // Extract codec/dimension/frame-rate info from streams
                         Self::apply_stream_info(&parsed, metadata);
                     }
@@ -386,6 +403,9 @@ impl MetadataExtractor {
                 && stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0
         }) {
             metadata.video_codec = video_stream["codec_name"].as_str().map(String::from);
+            metadata.video_profile = video_stream["profile"].as_str().map(String::from);
+            metadata.bit_depth =
+                crate::video_capability::parse_pix_fmt_bit_depth(video_stream["pix_fmt"].as_str());
 
             // Parse frame rate
             if let Some(r_frame_rate) = video_stream["r_frame_rate"].as_str() {
@@ -1987,5 +2007,32 @@ mod tests {
 
         // THEN: Should return None (no year present)
         assert!(result.is_none(), "Should reject time-only filename");
+    }
+
+    #[test]
+    fn parses_profile_and_bitdepth_from_ffprobe_json() {
+        let parsed = serde_json::json!({
+            "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "1.0" },
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "profile": "High", "pix_fmt": "yuv420p", "width": 1920, "height": 1080,
+                "r_frame_rate": "30000/1001"
+            }]
+        });
+        let mut meta = PhotoMetadata::default();
+        MetadataExtractor::apply_stream_info(&parsed, &mut meta);
+        assert_eq!(meta.video_codec.as_deref(), Some("h264"));
+        assert_eq!(meta.video_profile.as_deref(), Some("High"));
+        assert_eq!(meta.bit_depth, Some(8));
+    }
+
+    #[test]
+    fn container_from_format_name_takes_first_token() {
+        let parsed = serde_json::json!({ "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2" } });
+        assert_eq!(container_from_format_name(&parsed).as_deref(), Some("mov"));
+        assert_eq!(
+            container_from_format_name(&serde_json::json!({ "format": {} })),
+            None
+        );
     }
 }

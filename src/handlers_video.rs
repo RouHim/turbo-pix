@@ -639,10 +639,30 @@ fn parse_range_header(value: &str) -> Option<ByteRange> {
 }
 
 pub async fn get_video_status(photo_hash: String) -> Result<impl Reply, Rejection> {
-    match get_transcode_status(&photo_hash) {
-        Some(status) => Ok(warp::reply::json(&status)),
-        None => Err(reject::custom(NotFoundError)),
+    let status = match get_transcode_status(&photo_hash) {
+        Some(status) => status,
+        None => return Err(reject::custom(NotFoundError)),
+    };
+
+    // Compute how much longer the server will keep a transcode running before
+    // giving up, so the polling client can align its timeout with the server's
+    // instead of inventing one. Absent when the deadline is unknowable.
+    let deadline_ms = status.started_at.map(|started| {
+        let timeout_secs = crate::video_processor::transcode_timeout_secs();
+        let elapsed_ms = (Utc::now() - started).num_milliseconds().max(0) as u64;
+        timeout_secs.saturating_mul(1000).saturating_sub(elapsed_ms)
+    });
+
+    let mut body = serde_json::to_value(&status).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(value) = deadline_ms {
+        if body.is_object() {
+            body.as_object_mut()
+                .expect("is_object checked above")
+                .insert("deadline_ms".to_string(), serde_json::json!(value));
+        }
     }
+
+    Ok(warp::reply::json(&body))
 }
 
 #[cfg(test)]
@@ -1009,6 +1029,44 @@ mod tests {
         let status = get_transcode_status(hash).expect("status should be available in store");
         assert_eq!(status.state, TranscodeState::Completed);
         assert_eq!(status.hash, expected.hash);
+
+        clear_transcode_status(hash);
+    }
+
+    #[tokio::test]
+    async fn test_video_status_includes_percent_and_deadline() {
+        let hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        clear_transcode_status(hash);
+
+        let started_at = Utc::now();
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::InProgress,
+                hash: hash.to_string(),
+                started_at: Some(started_at),
+                error: None,
+                percent: Some(42),
+            },
+        );
+
+        let response = get_video_status(hash.to_string())
+            .await
+            .expect("status should return");
+        let body = collect_response_body(response.into_response()).await;
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("status response should be JSON");
+
+        assert_eq!(json["percent"], 42, "percent must be serialized");
+        let deadline_ms = json["deadline_ms"]
+            .as_u64()
+            .expect("deadline_ms must be present");
+        // Default timeout 300s, minus the (tiny) elapsed time since started_at.
+        assert!(
+            deadline_ms > 250_000 && deadline_ms <= 300_000,
+            "deadline_ms should be ~300s minus elapsed, got {}",
+            deadline_ms
+        );
 
         clear_transcode_status(hash);
     }

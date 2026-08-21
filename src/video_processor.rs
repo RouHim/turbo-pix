@@ -57,7 +57,7 @@ pub fn transcode_semaphore() -> &'static Semaphore {
 
 /// Number of concurrent transcode jobs. Reads env each call so a runtime value
 /// is honored; the semaphore itself locks in the first value it saw via
-/// [`transcode_semaphore`] (tests use a reset hook to re-init deterministically).
+/// [`transcode_semaphore`].
 pub fn transcode_max_pool() -> usize {
     match std::env::var("TURBO_PIX_MAX_TRANSCODES") {
         Ok(raw) => raw.trim().parse::<usize>().unwrap_or_else(|_| {
@@ -70,6 +70,22 @@ pub fn transcode_max_pool() -> usize {
         Err(_) => {
             std::thread::available_parallelism().map_or(2, |n| (n.get().max(2) / 2).clamp(1, 4))
         }
+    }
+}
+
+/// Per-transcode timeout in seconds, from `TURBO_PIX_TRANSCODE_TIMEOUT_SECS`
+/// (default 300). Exposed to clients via the status endpoint so polling stops
+/// when the server would actually give up, not at an arbitrary client cap.
+pub fn transcode_timeout_secs() -> u64 {
+    match std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS") {
+        Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|_| {
+            log::warn!(
+                "Invalid TURBO_PIX_TRANSCODE_TIMEOUT_SECS '{}', using default 300",
+                raw
+            );
+            300
+        }),
+        Err(_) => 300,
     }
 }
 

@@ -54,12 +54,15 @@ fn with_transcode_warning(
 /// Warning sent when a transcode attempt failed and the original is served.
 const TRANSCODE_FAILED_WARNING: &str = "HEVC transcoding not available - serving original video";
 
+use std::sync::Arc;
+
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
 use crate::video_capability::{decide, ClientCodecs, DirectPlay};
 use crate::video_processor::{
     claim_transcode, ensure_progressive_mp4, get_transcode_status, get_transcoded_path_versioned,
-    set_transcode_status, transcode_hevc_to_h264, TranscodeClaim, TranscodeState, TranscodeStatus,
+    set_transcode_status, transcode_codec_to_h264_with_progress, TranscodeClaim, TranscodeState,
+    TranscodeStatus,
 };
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 
@@ -332,8 +335,30 @@ pub async fn get_video_file(
 
                             let input_path = video_path.to_path_buf();
                             let output_path = transcoded_path.clone();
+                            let hash_for_progress = hash.clone();
+                            let on_progress = {
+                                let hash_for_progress = hash_for_progress.clone();
+                                Arc::new(move |percent: Option<u8>| {
+                                    set_transcode_status(
+                                        &hash_for_progress,
+                                        TranscodeStatus {
+                                            state: TranscodeState::InProgress,
+                                            hash: hash_for_progress.clone(),
+                                            started_at: Some(started_at),
+                                            error: None,
+                                            percent,
+                                        },
+                                    );
+                                })
+                            };
                             tokio::spawn(async move {
-                                match transcode_hevc_to_h264(&input_path, &output_path).await {
+                                match transcode_codec_to_h264_with_progress(
+                                    &input_path,
+                                    &output_path,
+                                    on_progress,
+                                )
+                                .await
+                                {
                                     Ok(_) => {
                                         // Only one transcode version file per hash:
                                         // remove older `{hash}_*.mp4` siblings now
@@ -370,6 +395,7 @@ pub async fn get_video_file(
                                                 hash: hash.clone(),
                                                 started_at: Some(started_at),
                                                 error: None,
+                                                percent: Some(100),
                                             },
                                         );
                                     }
@@ -389,6 +415,7 @@ pub async fn get_video_file(
                                                 hash: hash.clone(),
                                                 started_at: Some(started_at),
                                                 error: Some(error),
+                                                percent: None,
                                             },
                                         );
                                     }
@@ -971,6 +998,7 @@ mod tests {
             hash: hash.to_string(),
             started_at: Some(Utc::now()),
             error: None,
+            percent: None,
         };
         set_transcode_status(hash, expected.clone());
 
@@ -997,6 +1025,7 @@ mod tests {
                 hash: hash.to_string(),
                 started_at: Some(Utc::now()),
                 error: None,
+                percent: None,
             },
         );
 
@@ -1013,6 +1042,7 @@ mod tests {
                 hash: hash.to_string(),
                 started_at: in_progress.started_at,
                 error: None,
+                percent: None,
             },
         );
 
@@ -1450,6 +1480,7 @@ mod tests {
                 hash: hash.clone(),
                 started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
+                percent: None,
             },
         );
 
@@ -1586,6 +1617,7 @@ mod tests {
                 hash: hash.clone(),
                 started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
+                percent: None,
             },
         );
 
@@ -1655,6 +1687,7 @@ mod tests {
                 hash: hash.clone(),
                 started_at: Some(started_at),
                 error: None,
+                percent: None,
             },
         );
 

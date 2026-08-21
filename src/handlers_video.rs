@@ -207,8 +207,23 @@ pub async fn get_video_file(
             } else {
                 match ensure_progressive_mp4(video_path, &remux_path).await {
                     Ok(()) => {
-                        log::info!("Faststart-remuxed video: {}", remux_path.display());
-                        (remux_path, None)
+                        // ensure_progressive_mp4 short-circuits to Ok(()) WITHOUT
+                        // writing the sidecar when the input already has moov at
+                        // the start (its documented idempotency no-op). If the DB
+                        // record is stale (moov_at_start: false) but the on-disk
+                        // file is already progressive, no sidecar exists — serve
+                        // the playable ORIGINAL instead of a path that doesn't
+                        // exist (which would 404).
+                        if remux_path.exists() {
+                            log::info!("Faststart-remuxed video: {}", remux_path.display());
+                            (remux_path, None)
+                        } else {
+                            log::info!(
+                                "Video already progressive on disk (record stale); serving original: {}",
+                                photo.filename
+                            );
+                            (video_path.to_path_buf(), None)
+                        }
                     }
                     Err(e) => {
                         log::warn!(
@@ -822,6 +837,84 @@ mod tests {
             "Direct Play must serve the ORIGINAL file bytes"
         );
         assert!(response.headers().get("x-transcode-warning").is_none());
+    }
+
+    #[tokio::test]
+    async fn remux_short_circuits_on_already_progressive_serves_original() {
+        // A photo whose record says moov_at_start: false but whose backing file
+        // is already progressive (index-time moov fix failed, then the file was
+        // fixed/replaced on disk): ensure_progressive_mp4 no-ops without writing
+        // the sidecar, so the handler must serve the playable ORIGINAL instead
+        // of a nonexistent remux path (which would 404).
+        let fixture = Path::new("test-data/test_video.mp4");
+        if !fixture.exists() {
+            eprintln!("skipping: test_video.mp4 fixture missing");
+            return;
+        }
+
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "f3".repeat(32);
+
+        let _ = setup_test_video(&db_pool, &temp_dir, &hash).await;
+        // Point the photo at the real progressive fixture and record moov-at-end.
+        let real_size = std::fs::metadata(fixture).unwrap().len();
+        use crate::db::Photo;
+        let mut photo = Photo::find_by_hash(&db_pool, &hash).await.unwrap().unwrap();
+        photo.file_path = fixture.to_str().unwrap().to_string();
+        photo.filename = "test_video.mp4".to_string();
+        photo.file_size = real_size as i64;
+        photo.metadata = json!({
+            "video": { "codec": "h264", "container": "mp4", "moov_at_start": false }
+        });
+        photo.create_or_update(&db_pool).await.unwrap();
+
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("range", HeaderValue::from_static("bytes=0-1023"));
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: None,
+            },
+            headers,
+            db_pool,
+        )
+        .await
+        .expect("handler should return")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let cr = response
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            cr.ends_with(&format!("/{}", real_size)),
+            "must serve the ORIGINAL progressive file bytes, got content-range {}",
+            cr
+        );
+        // The short-circuit must NOT have left a sidecar behind.
+        let remux_path = remux_sidecar_path(
+            temp_dir.path().to_str().unwrap(),
+            &hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        assert!(
+            !remux_path.exists(),
+            "no remux sidecar should be written when the source is already progressive"
+        );
     }
 
     #[tokio::test]

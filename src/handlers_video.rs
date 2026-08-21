@@ -34,28 +34,31 @@ fn unsatisfiable_range_response(content_type: &str, file_size: u64) -> Box<dyn R
     Box::new(response)
 }
 
-/// Attach the `X-Transcode-Warning` header only when a transcode attempt
-/// actually failed (previously the header was always sent, with an empty
-/// value). Boxed so the caller keeps a single `Box<dyn Reply>` return type.
+/// Attach the `X-Transcode-Warning` header only when a transcode/remux attempt
+/// actually failed (`warning` is `Some(message)`). Previously the header was
+/// always sent, with an empty value. Boxed so the caller keeps a single
+/// `Box<dyn Reply>` return type.
 fn with_transcode_warning(
     response: impl Reply + 'static,
-    transcoding_failed: bool,
+    warning: Option<&'static str>,
 ) -> Box<dyn Reply> {
-    if transcoding_failed {
-        Box::new(warp::reply::with_header(
+    match warning {
+        Some(message) => Box::new(warp::reply::with_header(
             response,
             "X-Transcode-Warning",
-            "HEVC transcoding not available - serving original video",
-        ))
-    } else {
-        Box::new(response)
+            message,
+        )),
+        None => Box::new(response),
     }
 }
+/// Warning sent when a transcode attempt failed and the original is served.
+const TRANSCODE_FAILED_WARNING: &str = "HEVC transcoding not available - serving original video";
 
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
+use crate::video_capability::{decide, ClientCodecs, DirectPlay};
 use crate::video_processor::{
-    claim_transcode, get_transcode_status, get_transcoded_path_versioned, is_hevc_video,
+    claim_transcode, ensure_progressive_mp4, get_transcode_status, get_transcoded_path_versioned,
     set_transcode_status, transcode_hevc_to_h264, TranscodeClaim, TranscodeState, TranscodeStatus,
 };
 use crate::warp_helpers::{DatabaseError, NotFoundError};
@@ -64,6 +67,11 @@ use crate::warp_helpers::{DatabaseError, NotFoundError};
 pub struct VideoQuery {
     pub metadata: Option<String>,
     pub transcode: Option<String>,
+    /// Client codec capabilities, from the `?client=` query param (read into this
+    /// field via serde rename). The request header `X-TurboPix-Codecs` takes
+    /// precedence over this at decision time.
+    #[serde(rename = "client")]
+    pub client_codecs: Option<String>,
 }
 
 pub async fn get_video_file(
@@ -116,196 +124,296 @@ pub async fn get_video_file(
         .map(|v| v == "true")
         .unwrap_or(false);
 
-    // Determine which file to serve (original or transcoded)
+    // Resolve client codec capabilities: the request header takes precedence
+    // over the `?client=` query param; neither present → conservative (h264-8).
+    let client = ClientCodecs::parse(
+        headers
+            .get("X-TurboPix-Codecs")
+            .and_then(|v| v.to_str().ok())
+            .or(query.client_codecs.as_deref()),
+    );
+
     let video_path = Path::new(&photo.file_path);
-    let (file_to_serve, transcoding_failed) = if client_wants_transcode
-        && is_hevc_video(video_path).await.unwrap_or(false)
-    {
-        log::info!(
-            "Client requested transcode for HEVC video: {}",
+
+    // Stat the backing file BEFORE the serve-time decision: a 0-byte file (a
+    // sync app's `.pending-*` temp) can never be played, remuxed, or
+    // transcoded, so fast-fail with an empty warning and, crucially, WITHOUT
+    // claiming a transcode slot. A missing backing file → 404.
+    let source_size = match std::fs::metadata(video_path) {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return Err(reject::custom(NotFoundError)),
+    };
+    if source_size == 0 {
+        log::warn!(
+            "Serving empty video file (0 bytes, likely a pending temp): {}",
             photo.filename
         );
+        let response = warp::reply::with_status(Vec::<u8>::new(), StatusCode::OK);
+        let response = warp::reply::with_header(response, "content-length", "0");
+        let response = warp::reply::with_header(response, "x-transcode-warning", "empty");
+        return Ok(Box::new(response));
+    }
 
-        // Get cache directory from environment or use the app data path (not
-        // /tmp/turbo-pix: a predictable world-writable path is squat-able by
-        // local users via symlinks). main.rs defaults the env var from
-        // config when unset.
-        let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-            .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-        let cache_path = Path::new(&cache_dir);
-        // Versioned by the source's size+mtime (the DB hash is path-derived,
-        // so an in-place edit keeps the hash while the bytes change — the
-        // version makes this miss after the rescan notices the edit instead
-        // of serving the stale H.264 transcode forever).
-        let transcoded_path = get_transcoded_path_versioned(
-            cache_path,
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        );
+    // Capability-record decision (Task 1 record, Task 2 engine). Transcode
+    // support is decided from the RECORD (video_codec), not the is_hevc_video
+    // ffprobe call.
+    let record_codec = photo.video_codec().unwrap_or("");
+    let container = photo.container().unwrap_or("");
+    let bit_depth = photo.bit_depth();
+    // Containers without a moov atom (webm/mkv/ogv) never need a faststart
+    // remux: treat them as already-moov-at-start so they never hit the remux
+    // path (WebM has no moov at all).
+    let moov_at_start = match container {
+        "webm" | "mkv" | "ogv" => true,
+        _ => photo.moov_at_start(),
+    };
+    let play = decide(
+        record_codec,
+        container,
+        bit_depth,
+        moov_at_start,
+        photo.file_size,
+        &client,
+    );
 
-        // Check if transcoded version exists
-        if !transcoded_path.exists() {
-            // Atomically claim the transcode slot: the claim and the status
-            // insert happen under one lock, so two concurrent requests for
-            // the same hash cannot both spawn an ffmpeg job (check-then-act
-            // race). A previous attempt may have failed/timed out (serve the
-            // original instead of re-spawning a doomed 300s job) or still be
-            // running (hand back the poll response without starting a
-            // second transcode).
-            match claim_transcode(&photo.hash_sha256) {
-                TranscodeClaim::PreviouslyFailedOrTimedOut => {
-                    // A transcode writes to a temp file and renames it into
-                    // place only on success, so a failure/timeout leaves no
-                    // file at `transcoded_path`. Remove any leftover temp
-                    // sibling and serve the original; the warning header
-                    // tells the client why.
-                    let temp_output_path = transcoded_path.with_extension("mp4.tmp");
-                    if temp_output_path.exists() {
-                        log::warn!(
-                            "Removing leftover temp file from failed/timeout transcode: {}",
-                            temp_output_path.display()
-                        );
-                        let _ = std::fs::remove_file(&temp_output_path);
+    // Decide which file to serve: original (Direct Play), a faststart remux
+    // sidecar, or a transcode. `warning` is Some(reason) only when a
+    // remux/transcode attempt failed and we fell back to the original.
+    let (file_to_serve, warning) = match play {
+        DirectPlay::Yes => {
+            if client_wants_transcode {
+                log::info!(
+                    "Transcode requested but video is directly playable, serving original: {}",
+                    photo.filename
+                );
+            }
+            (video_path.to_path_buf(), None)
+        }
+        DirectPlay::NeedsRemux => {
+            // Remux the moov atom to the front with a cheap stream copy so
+            // progressive playback can start immediately. Cache under a
+            // dedicated {TRANSCODE_CACHE_DIR}/remux/ subdir, versioned the same
+            // as the transcode cache (size+mtime) so an in-place edit misses.
+            let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+                .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
+            let remux_path = remux_sidecar_path(
+                &cache_dir,
+                &photo.hash_sha256,
+                photo.file_size,
+                photo.date_modified.timestamp_millis(),
+            );
+            if remux_path.exists() {
+                (remux_path, None)
+            } else {
+                match ensure_progressive_mp4(video_path, &remux_path).await {
+                    Ok(()) => {
+                        log::info!("Faststart-remuxed video: {}", remux_path.display());
+                        (remux_path, None)
                     }
-                    log::warn!(
-                        "Serving original video; previous transcode attempt failed/timed out: {}",
-                        photo.filename
-                    );
-                    (video_path.to_path_buf(), true)
+                    Err(e) => {
+                        log::warn!(
+                            "Faststart remux failed; serving original: {}: {}",
+                            photo.filename,
+                            e
+                        );
+                        (video_path.to_path_buf(), Some("remux-failed"))
+                    }
                 }
-                TranscodeClaim::AlreadyInProgress => {
-                    // A transcode spawned by a previous request is still
-                    // running: return the poll response without spawning a
-                    // second job.
-                    log::info!("Transcode already in progress for: {}", photo.filename);
-                    let response = warp::reply::with_status(
-                        warp::reply::json(&json!({
-                            "status": "transcoding",
-                            "poll_url": format!("/api/photos/{}/video/status", photo_hash),
-                        })),
-                        StatusCode::ACCEPTED,
-                    );
-                    return Ok(Box::new(response));
-                }
-                TranscodeClaim::Started => {
-                    // We own the slot (claim_transcode inserted the
-                    // InProgress status): start a fresh transcode.
-                    let hash_short = photo.hash_sha256.get(..12).unwrap_or(&photo.hash_sha256);
-                    log::info!(
-                        "Transcoding HEVC video to H.264: {} (hash: {})",
-                        photo.filename,
-                        hash_short
-                    );
+            }
+        }
+        DirectPlay::No => {
+            if !client_wants_transcode {
+                // Client can't play this codec natively and didn't request a
+                // transcode — serve the original and let the client decide.
+                log::info!(
+                    "Video codec not natively playable and no transcode requested, serving original: {}",
+                    photo.filename
+                );
+                (video_path.to_path_buf(), None)
+            } else {
+                log::info!(
+                    "Client requested transcode for video (codec: {}): {}",
+                    record_codec,
+                    photo.filename
+                );
 
-                    let started_at = Utc::now();
-                    let hash = photo.hash_sha256.clone();
+                // Get cache directory from environment or use the app data
+                // path (not /tmp/turbo-pix: a predictable world-writable path
+                // is squat-able by local users via symlinks). main.rs defaults
+                // the env var from config when unset.
+                let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+                    .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
+                let cache_path = Path::new(&cache_dir);
+                // Versioned by the source's size+mtime (the DB hash is
+                // path-derived, so an in-place edit keeps the hash while the
+                // bytes change — the version makes this miss after the rescan
+                // notices the edit instead of serving the stale H.264
+                // transcode forever).
+                let transcoded_path = get_transcoded_path_versioned(
+                    cache_path,
+                    &photo.hash_sha256,
+                    photo.file_size,
+                    photo.date_modified.timestamp_millis(),
+                );
 
-                    let input_path = video_path.to_path_buf();
-                    let output_path = transcoded_path.clone();
-                    tokio::spawn(async move {
-                        match transcode_hevc_to_h264(&input_path, &output_path).await {
-                            Ok(_) => {
-                                // Only one transcode version file per hash:
-                                // remove older `{hash}_*.mp4` siblings now
-                                // that the new version is in place (the
-                                // versioned name folds in size+mtime, so an
-                                // in-place edit produces a new file rather
-                                // than overwriting).
-                                if let Some(parent) = output_path.parent() {
-                                    if let Ok(entries) = std::fs::read_dir(parent) {
-                                        let new_name = output_path
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or_default();
-                                        for entry in entries.filter_map(|e| e.ok()) {
-                                            let path = entry.path();
-                                            let is_old_version = path
-                                                .file_name()
-                                                .and_then(|n| n.to_str())
-                                                .is_some_and(|n| {
-                                                    n.starts_with(&format!("{}_", hash))
-                                                        && n.ends_with(".mp4")
-                                                        && n != new_name
-                                                });
-                                            if is_old_version {
-                                                let _ = std::fs::remove_file(&path);
+                // Check if transcoded version exists
+                if !transcoded_path.exists() {
+                    // Atomically claim the transcode slot: the claim and the
+                    // status insert happen under one lock, so two concurrent
+                    // requests for the same hash cannot both spawn an ffmpeg
+                    // job (check-then-act race). A previous attempt may have
+                    // failed/timed out (serve the original instead of
+                    // re-spawning a doomed 300s job) or still be running
+                    // (hand back the poll response without starting a second
+                    // transcode).
+                    match claim_transcode(&photo.hash_sha256) {
+                        TranscodeClaim::PreviouslyFailedOrTimedOut => {
+                            // A transcode writes to a temp file and renames it
+                            // into place only on success, so a failure/timeout
+                            // leaves no file at `transcoded_path`. Remove any
+                            // leftover temp sibling and serve the original;
+                            // the warning header tells the client why.
+                            let temp_output_path = transcoded_path.with_extension("mp4.tmp");
+                            if temp_output_path.exists() {
+                                log::warn!(
+                                    "Removing leftover temp file from failed/timeout transcode: {}",
+                                    temp_output_path.display()
+                                );
+                                let _ = std::fs::remove_file(&temp_output_path);
+                            }
+                            log::warn!(
+                                "Serving original video; previous transcode attempt failed/timed out: {}",
+                                photo.filename
+                            );
+                            (video_path.to_path_buf(), Some(TRANSCODE_FAILED_WARNING))
+                        }
+                        TranscodeClaim::AlreadyInProgress => {
+                            // A transcode spawned by a previous request is still
+                            // running: return the poll response without spawning a
+                            // second job.
+                            log::info!("Transcode already in progress for: {}", photo.filename);
+                            let response = warp::reply::with_status(
+                                warp::reply::json(&json!({
+                                    "status": "transcoding",
+                                    "poll_url": format!("/api/photos/{}/video/status", photo_hash),
+                                })),
+                                StatusCode::ACCEPTED,
+                            );
+                            return Ok(Box::new(response));
+                        }
+                        TranscodeClaim::Started => {
+                            // We own the slot (claim_transcode inserted the
+                            // InProgress status): start a fresh transcode.
+                            let hash_short =
+                                photo.hash_sha256.get(..12).unwrap_or(&photo.hash_sha256);
+                            log::info!(
+                                "Transcoding video to H.264: {} (hash: {})",
+                                photo.filename,
+                                hash_short
+                            );
+
+                            let started_at = Utc::now();
+                            let hash = photo.hash_sha256.clone();
+
+                            let input_path = video_path.to_path_buf();
+                            let output_path = transcoded_path.clone();
+                            tokio::spawn(async move {
+                                match transcode_hevc_to_h264(&input_path, &output_path).await {
+                                    Ok(_) => {
+                                        // Only one transcode version file per hash:
+                                        // remove older `{hash}_*.mp4` siblings now
+                                        // that the new version is in place (the
+                                        // versioned name folds in size+mtime, so an
+                                        // in-place edit produces a new file rather
+                                        // than overwriting).
+                                        if let Some(parent) = output_path.parent() {
+                                            if let Ok(entries) = std::fs::read_dir(parent) {
+                                                let new_name = output_path
+                                                    .file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or_default();
+                                                for entry in entries.filter_map(|e| e.ok()) {
+                                                    let path = entry.path();
+                                                    let is_old_version = path
+                                                        .file_name()
+                                                        .and_then(|n| n.to_str())
+                                                        .is_some_and(|n| {
+                                                            n.starts_with(&format!("{}_", hash))
+                                                                && n.ends_with(".mp4")
+                                                                && n != new_name
+                                                        });
+                                                    if is_old_version {
+                                                        let _ = std::fs::remove_file(&path);
+                                                    }
+                                                }
                                             }
                                         }
+                                        set_transcode_status(
+                                            &hash,
+                                            TranscodeStatus {
+                                                state: TranscodeState::Completed,
+                                                hash: hash.clone(),
+                                                started_at: Some(started_at),
+                                                error: None,
+                                            },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        let error = e.to_string();
+                                        let state =
+                                            if error.to_ascii_lowercase().contains("timed out") {
+                                                TranscodeState::Timeout
+                                            } else {
+                                                TranscodeState::Failed
+                                            };
+
+                                        set_transcode_status(
+                                            &hash,
+                                            TranscodeStatus {
+                                                state,
+                                                hash: hash.clone(),
+                                                started_at: Some(started_at),
+                                                error: Some(error),
+                                            },
+                                        );
                                     }
                                 }
-                                set_transcode_status(
-                                    &hash,
-                                    TranscodeStatus {
-                                        state: TranscodeState::Completed,
-                                        hash: hash.clone(),
-                                        started_at: Some(started_at),
-                                        error: None,
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                let error = e.to_string();
-                                let state = if error.to_ascii_lowercase().contains("timed out") {
-                                    TranscodeState::Timeout
-                                } else {
-                                    TranscodeState::Failed
-                                };
+                            });
 
-                                set_transcode_status(
-                                    &hash,
-                                    TranscodeStatus {
-                                        state,
-                                        hash: hash.clone(),
-                                        started_at: Some(started_at),
-                                        error: Some(error),
-                                    },
-                                );
-                            }
+                            let response = warp::reply::with_status(
+                                warp::reply::json(&json!({
+                                    "status": "transcoding",
+                                    "poll_url": format!("/api/photos/{}/video/status", photo_hash),
+                                })),
+                                StatusCode::ACCEPTED,
+                            );
+                            return Ok(Box::new(response));
                         }
-                    });
-
-                    let response = warp::reply::with_status(
-                        warp::reply::json(&json!({
-                            "status": "transcoding",
-                            "poll_url": format!("/api/photos/{}/video/status", photo_hash),
-                        })),
-                        StatusCode::ACCEPTED,
-                    );
-                    return Ok(Box::new(response));
-                }
-            }
-        } else {
-            match get_transcode_status(&photo.hash_sha256).map(|s| s.state) {
-                Some(TranscodeState::Failed | TranscodeState::Timeout) => {
-                    // A previous transcode attempt failed or timed out
-                    // mid-write, leaving a corrupt/partial file at the
-                    // cache path. Remove it and serve the original instead.
-                    log::warn!(
-                        "Removing stale transcoded file left by a failed/timeout transcode: {}",
-                        transcoded_path.display()
-                    );
-                    let _ = std::fs::remove_file(&transcoded_path);
-                    (video_path.to_path_buf(), true)
-                }
-                _ => {
-                    log::info!(
-                        "Using cached transcoded version: {}",
-                        transcoded_path.display()
-                    );
-                    (transcoded_path, false)
+                    }
+                } else {
+                    match get_transcode_status(&photo.hash_sha256).map(|s| s.state) {
+                        Some(TranscodeState::Failed | TranscodeState::Timeout) => {
+                            // A previous transcode attempt failed or timed out
+                            // mid-write, leaving a corrupt/partial file at the
+                            // cache path. Remove it and serve the original instead.
+                            log::warn!(
+                                "Removing stale transcoded file left by a failed/timeout transcode: {}",
+                                transcoded_path.display()
+                            );
+                            let _ = std::fs::remove_file(&transcoded_path);
+                            (video_path.to_path_buf(), Some(TRANSCODE_FAILED_WARNING))
+                        }
+                        _ => {
+                            log::info!(
+                                "Using cached transcoded version: {}",
+                                transcoded_path.display()
+                            );
+                            (transcoded_path, None)
+                        }
+                    }
                 }
             }
         }
-    } else {
-        // Serve original video (client supports HEVC or video is not HEVC)
-        if client_wants_transcode {
-            log::info!(
-                "Transcode requested but video is not HEVC, serving original: {}",
-                photo.filename
-            );
-        }
-        (video_path.to_path_buf(), false)
     };
 
     // Get file metadata
@@ -316,19 +424,19 @@ pub async fn get_video_file(
 
     let file_size = file_metadata.len();
 
-    // Determine correct MIME type based on whether we're serving transcoded content
-    let content_type =
-        if client_wants_transcode && file_to_serve != video_path && !transcoding_failed {
-            // Serving transcoded H.264 video - always use video/mp4
-            "video/mp4".to_string()
-        } else {
-            // Serving original video - use stored/detected MIME type
-            photo.mime_type.unwrap_or_else(|| {
-                mimetype_detector::from_path(Path::new(&photo.file_path))
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string())
-            })
-        };
+    // Determine correct MIME type based on what's being served: both the
+    // faststart remux sidecar and the transcoded output are MP4 (a stream copy
+    // of an MP4, or an H.264 transcode), so serve `video/mp4` for them. The
+    // original uses its stored/detected MIME type.
+    let content_type = if file_to_serve != video_path {
+        "video/mp4".to_string()
+    } else {
+        photo.mime_type.unwrap_or_else(|| {
+            mimetype_detector::from_path(Path::new(&photo.file_path))
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "application/octet-stream".to_string())
+        })
+    };
 
     // Parse Range header
     let range_header = headers
@@ -413,7 +521,7 @@ pub async fn get_video_file(
                 warp::reply::with_header(response, "cache-control", "public, max-age=31536000");
 
             // Only attach the warning header when transcoding actually failed
-            Ok(with_transcode_warning(response, transcoding_failed))
+            Ok(with_transcode_warning(response, warning))
         }
         None => {
             // No range requested: stream the whole file instead of buffering it
@@ -436,9 +544,24 @@ pub async fn get_video_file(
                 warp::reply::with_header(response, "content-length", actual_len.to_string());
 
             // Only attach the warning header when transcoding actually failed
-            Ok(with_transcode_warning(response, transcoding_failed))
+            Ok(with_transcode_warning(response, warning))
         }
     }
+}
+/// Faststart remux sidecar path under `{TRANSCODE_CACHE_DIR}/remux/`, versioned
+/// by the source's content fingerprint (size + mtime millis) exactly like the
+/// transcode cache, so an in-place edit produces a new sidecar instead of
+/// serving a stale moov-at-start copy.
+fn remux_sidecar_path(
+    cache_dir: &str,
+    original_hash: &str,
+    file_size: i64,
+    modified_millis: i64,
+) -> std::path::PathBuf {
+    Path::new(cache_dir).join("remux").join(format!(
+        "{}_{}_{}.mp4",
+        original_hash, file_size, modified_millis
+    ))
 }
 
 /// Parse a single-range `Range` header value (e.g. "bytes=0-1023", "bytes=-500").
@@ -604,6 +727,102 @@ mod tests {
         }
         out
     }
+    #[tokio::test]
+    async fn empty_backing_file_returns_empty_warning_without_claiming_transcode() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // setup writes non-empty content; truncate to 0 to simulate a .pending-* file
+        let video_path = setup_test_video(&db_pool, &temp_dir, hash).await;
+        std::fs::write(&video_path, b"").expect("failed to truncate video");
+
+        // ffprobe path must exist for any probing; is_hevc_video is not reached for the
+        // empty branch, but set it defensively to avoid env surprises.
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("range", HeaderValue::from_static("bytes=0-100"));
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: None,
+            },
+            headers,
+            db_pool,
+        )
+        .await
+        .expect("handler should return")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("content-length").unwrap(), "0");
+        assert_eq!(
+            response.headers().get("x-transcode-warning").unwrap(),
+            "empty"
+        );
+        assert!(
+            get_transcode_status(hash).is_none(),
+            "no transcode may be claimed for an empty file"
+        );
+    }
+
+    #[tokio::test]
+    async fn h264_original_served_directly_without_transcode_param() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let video_path = setup_test_video(&db_pool, &temp_dir, hash).await;
+        // Give the photo row a valid h264 codec record so decide() Direct-Plays it.
+        use crate::db::Photo;
+        let mut photo = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        photo.metadata =
+            json!({ "video": { "codec": "h264", "container": "mp4", "moov_at_start": true } });
+        photo.create_or_update(&db_pool).await.unwrap(); // upsert
+
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("range", HeaderValue::from_static("bytes=0-10"));
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: None,
+            },
+            headers,
+            db_pool,
+        )
+        .await
+        .expect("handler should return")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let cr = response
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            cr.ends_with(&format!(
+                "/{}",
+                std::fs::metadata(&video_path).unwrap().len()
+            )),
+            "Direct Play must serve the ORIGINAL file bytes"
+        );
+        assert!(response.headers().get("x-transcode-warning").is_none());
+    }
 
     #[tokio::test]
     async fn test_video_202() {
@@ -633,6 +852,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -746,6 +966,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -796,6 +1017,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool.clone(),
@@ -814,7 +1036,10 @@ mod tests {
         );
         assert!(response.headers().get("content-range").is_none());
 
-        // A range request against an empty file is unsatisfiable -> 416.
+        // A range request against an empty file now hits the empty-file
+        // fast-fail BEFORE range processing: 200 with content-length 0 and an
+        // "empty" warning (the file can never be played, remuxed, or
+        // transcoded, so no transcode slot is claimed).
         let mut headers = HeaderMap::new();
         headers.insert("range", HeaderValue::from_static("bytes=0-"));
         let response = get_video_file(
@@ -822,6 +1047,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -830,13 +1056,20 @@ mod tests {
         .expect("handler should return a response")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
                 .headers()
-                .get("content-range")
+                .get("content-length")
                 .and_then(|v| v.to_str().ok()),
-            Some("bytes */0")
+            Some("0")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-transcode-warning")
+                .and_then(|v| v.to_str().ok()),
+            Some("empty")
         );
         assert!(collect_response_body(response).await.is_empty());
     }
@@ -857,6 +1090,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -899,6 +1133,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -937,6 +1172,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -972,6 +1208,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -1007,6 +1244,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -1040,6 +1278,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1126,6 +1365,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1181,6 +1421,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: None,
+                client_codecs: None,
             },
             headers,
             db_pool,
@@ -1260,6 +1501,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1328,6 +1570,7 @@ mod tests {
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
+                client_codecs: None,
             },
             HeaderMap::new(),
             db_pool,

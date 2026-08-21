@@ -250,6 +250,8 @@
       "started": "Video wird für die Wiedergabe konvertiert...",
       "failed": "Videokonvertierung fehlgeschlagen",
       "timeout": "Videokonvertierung: Zeitlimit überschritten"
-    }
+    },
+    "file_empty": "Dieses Video ist leer oder wird noch synchronisiert.",
+    "conversion_reason": "Video konnte nicht konvertiert werden: {reason}"
   }
 }

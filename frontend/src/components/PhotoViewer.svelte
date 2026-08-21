@@ -668,28 +668,48 @@
   async function displayVideo(photo, forceTranscode = false) {
     if (!videoEl) return;
 
-    const videoCodec = photo.metadata?.video?.codec || '';
-    const isHEVC = videoCodec.toLowerCase() === 'hevc' || videoCodec.toLowerCase() === 'h265';
-    let needsTranscode = forceTranscode;
-
-    if (isHEVC && !forceTranscode) {
-      const width = photo.width || 1920;
-      const height = photo.height || 1080;
-      const supportsHEVC = await videoCodecSupport.supportsHEVC(width, height);
-      needsTranscode = !supportsHEVC;
-    }
-
-    // The viewer may have been closed, or a newer photo requested, while HEVC
-    // support was being probed — a hidden viewer must not start playback.
-    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-
-    const videoUrl = getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
-
-    if (needsTranscode && (await tryStartTranscode(videoUrl, photo))) {
+    if (forceTranscode) {
+      // Explicit retry (e.g. "Play original anyway" fallback path): jump
+      // straight to the transcode flow, no decision round-trip.
+      const url = getVideoUrl(photo.hash_sha256, { transcode: true });
+      if (await tryStartTranscode(url, photo)) return;
+      setVideoSource(photo, url, true, true, true);
       return;
     }
 
-    setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC);
+    // Ask the server for the recommended path (Direct Play / remux /
+    // transcode / empty). The server owns the codec+container decision using
+    // our declared capability set, so we do not re-guess HEVC support client-side.
+    const decision = await api.getVideoDecision(
+      photo.hash_sha256,
+      videoCodecSupport.getClientCodecsString()
+    );
+
+    // The viewer may have been closed, or a newer photo requested, while the
+    // decision was loading — a hidden viewer must not start playback.
+    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+
+    if (decision.action === 'direct' || decision.action === 'remux') {
+      setVideoSource(photo, decision.url, false, false, false);
+    } else if (decision.action === 'transcode') {
+      const url = decision.url || getVideoUrl(photo.hash_sha256, { transcode: true });
+      if (await tryStartTranscode(url, photo)) return;
+    } else if (decision.action === 'empty') {
+      showTranscodeToast(
+        get(t)('video.file_empty', {
+          default: 'This video file is empty or still being synced.',
+        }),
+        true
+      );
+    } else {
+      showTranscodeToast(
+        get(t)('video.conversion_reason', {
+          values: { reason: decision.reason || '' },
+          default: 'Could not convert this video: {reason}',
+        }),
+        true
+      );
+    }
   }
 
   function showTranscodeToast(message, isError = false) {

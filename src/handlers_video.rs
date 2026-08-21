@@ -75,6 +75,10 @@ pub struct VideoQuery {
     /// precedence over this at decision time.
     #[serde(rename = "client")]
     pub client_codecs: Option<String>,
+    /// `?decision` (bare or `=true`) → return a JSON playback decision
+    /// ({action,url,reason}) instead of streaming, so the client can choose
+    /// Direct Play / remux / transcode without probing the stream itself.
+    pub decision: Option<String>,
 }
 
 pub async fn get_video_file(
@@ -151,6 +155,21 @@ pub async fn get_video_file(
             "Serving empty video file (0 bytes, likely a pending temp): {}",
             photo.filename
         );
+        // A `?decision` probe on an empty file reports the empty action
+        // (the client surfaces "empty / still syncing") rather than a blank
+        // 200 the JSON parser would choke on.
+        if query
+            .decision
+            .as_deref()
+            .is_some_and(|v| v.is_empty() || v == "true")
+        {
+            let response = json!({
+                "action": "empty",
+                "url": null,
+                "reason": null,
+            });
+            return Ok(Box::new(warp::reply::json(&response)));
+        }
         let response = warp::reply::with_status(Vec::<u8>::new(), StatusCode::OK);
         let response = warp::reply::with_header(response, "content-length", "0");
         let response = warp::reply::with_header(response, "x-transcode-warning", "empty");
@@ -178,6 +197,35 @@ pub async fn get_video_file(
         photo.file_size,
         &client,
     );
+
+    // `?decision` (bare or `=true`): don't stream — return the recommended
+    // playback action as JSON so the client can pick without probing the
+    // stream itself. The returned `url` is what the client should load.
+    if query
+        .decision
+        .as_deref()
+        .is_some_and(|v| v.is_empty() || v == "true")
+    {
+        let video_url = format!("/api/photos/{}/video", photo_hash);
+        let response = match play {
+            DirectPlay::Yes => json!({
+                "action": "direct",
+                "url": video_url,
+                "reason": null,
+            }),
+            DirectPlay::NeedsRemux => json!({
+                "action": "remux",
+                "url": video_url,
+                "reason": null,
+            }),
+            DirectPlay::No => json!({
+                "action": "transcode",
+                "url": format!("{video_url}?transcode=true"),
+                "reason": null,
+            }),
+        };
+        return Ok(Box::new(warp::reply::json(&response)));
+    }
 
     // Decide which file to serve: original (Direct Play), a faststart remux
     // sidecar, or a transcode. `warning` is Some(reason) only when a
@@ -814,6 +862,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -861,6 +910,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -884,6 +934,80 @@ mod tests {
             "Direct Play must serve the ORIGINAL file bytes"
         );
         assert!(response.headers().get("x-transcode-warning").is_none());
+    }
+
+    #[tokio::test]
+    async fn decision_endpoint_reports_direct_and_transcode_actions() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "1111111111111111111111111111111111111111111111111111111111111111";
+        let _video_path = setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        // Directly-playable record: h264, mp4, moov at start.
+        {
+            use crate::db::Photo;
+            let mut photo = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+            photo.metadata = json!({
+                "video": { "codec": "h264", "container": "mp4", "moov_at_start": true }
+            });
+            photo.create_or_update(&db_pool).await.unwrap();
+
+            let response = get_video_file(
+                hash.to_string(),
+                VideoQuery {
+                    metadata: None,
+                    transcode: None,
+                    client_codecs: Some("h264-8".to_string()),
+                    decision: Some("true".to_string()),
+                },
+                HeaderMap::new(),
+                db_pool.clone(),
+            )
+            .await
+            .expect("decision handler should return")
+            .into_response();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = collect_response_body(response).await;
+            let json: serde_json::Value =
+                serde_json::from_slice(&body).expect("decision response should be JSON");
+            assert_eq!(json["action"], "direct");
+            assert_eq!(json["url"], format!("/api/photos/{}/video", hash));
+        }
+
+        // Record that needs transcoding: avi container (never direct-playable).
+        {
+            use crate::db::Photo;
+            let mut photo = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+            photo.metadata = json!({
+                "video": { "codec": "mpeg4", "container": "avi", "moov_at_start": true }
+            });
+            photo.create_or_update(&db_pool).await.unwrap();
+
+            let response = get_video_file(
+                hash.to_string(),
+                VideoQuery {
+                    metadata: None,
+                    transcode: None,
+                    client_codecs: Some("h264-8".to_string()),
+                    decision: Some("true".to_string()),
+                },
+                HeaderMap::new(),
+                db_pool,
+            )
+            .await
+            .expect("decision handler should return")
+            .into_response();
+
+            let body = collect_response_body(response).await;
+            let json: serde_json::Value =
+                serde_json::from_slice(&body).expect("decision response should be JSON");
+            assert_eq!(json["action"], "transcode");
+            assert_eq!(
+                json["url"],
+                format!("/api/photos/{}/video?transcode=true", hash)
+            );
+        }
     }
 
     #[tokio::test]
@@ -930,6 +1054,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -993,6 +1118,7 @@ mod tests {
                 metadata: None,
                 transcode: Some("true".to_string()),
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1148,6 +1274,7 @@ mod tests {
                 metadata: None,
                 transcode: Some("true".to_string()),
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1199,6 +1326,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool.clone(),
@@ -1229,6 +1357,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1272,6 +1401,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1315,6 +1445,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1354,6 +1485,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1390,6 +1522,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1426,6 +1559,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1460,6 +1594,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1548,6 +1683,7 @@ mod tests {
                 metadata: None,
                 transcode: Some("true".to_string()),
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1604,6 +1740,7 @@ mod tests {
                 metadata: None,
                 transcode: None,
                 client_codecs: None,
+                decision: None,
             },
             headers,
             db_pool,
@@ -1685,6 +1822,7 @@ mod tests {
                 metadata: None,
                 transcode: Some("true".to_string()),
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,
@@ -1755,6 +1893,7 @@ mod tests {
                 metadata: None,
                 transcode: Some("true".to_string()),
                 client_codecs: None,
+                decision: None,
             },
             HeaderMap::new(),
             db_pool,

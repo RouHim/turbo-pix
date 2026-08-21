@@ -47,6 +47,16 @@ fn get_transcode_semaphore() -> &'static Semaphore {
     TRANSCODE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
+// Lightweight semaphore for serve-time moov faststart remuxes. Deliberately
+// distinct from TRANSCODE_SEMAPHORE: a remux is a fast `-c copy` stream copy
+// that must not queue behind slow re-encodes. Bounded to 4 so at most 4
+// concurrent ffmpeg remux processes run at once.
+static REMOX_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+fn get_remox_semaphore() -> &'static Semaphore {
+    REMOX_SEMAPHORE.get_or_init(|| Semaphore::new(4))
+}
+
 pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>> {
     get_transcode_semaphore().acquire().await.map_err(|e| {
         CacheError::VideoProcessingError(format!("Failed to acquire transcode permit: {}", e))
@@ -580,6 +590,79 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
     Ok(())
 }
 
+/// Serve-time streamability fix: remux an MP4 with the moov atom moved to the
+/// front via a fast `-c copy -movflags +faststart` pass, so browsers can start
+/// progressive playback immediately. This is a cheap stream copy (no re-encode,
+/// no decoder), separate from the full HEVC transcode path. No-op (returns
+/// `Ok(())`) when the input already has moov at the start. Writes to
+/// `OUTPUT.tmp` then atomically renames into place, mirroring the transcode
+/// temp+rename pattern so a failure never leaves a partial file at `output_path`.
+pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    if has_moov_at_start(input_path)? {
+        return Ok(());
+    }
+
+    // Write to a temp file in the SAME directory as the final path so the
+    // completed file can be atomically renamed into place.
+    let temp_output_path = output_path.with_extension("mp4.tmp");
+    let output_path_owned = output_path.to_path_buf();
+
+    // Bounded by a lightweight semaphore (bounded to 4) so remuxes never queue
+    // behind slow re-encodes on the transcode semaphore.
+    let _permit = get_remox_semaphore().acquire().await.map_err(|e| {
+        CacheError::VideoProcessingError(format!(
+            "Failed to acquire remux semaphore for {}: {}",
+            output_path.display(),
+            e
+        ))
+    })?;
+
+    // Create output directory if it doesn't exist.
+    if let Some(parent) = temp_output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            CacheError::VideoProcessingError(format!("Failed to create output directory: {}", e))
+        })?;
+    }
+
+    let ffmpeg_path = get_ffmpeg_path();
+    let mut command = TokioCommand::new(&ffmpeg_path);
+    command.kill_on_drop(true).args([
+        "-y",
+        "-i",
+        input_path.to_string_lossy().as_ref(),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        // Force the muxer explicitly: the temp output path ends in `.mp4.tmp`,
+        // so ffmpeg cannot infer the format from the extension.
+        "-f",
+        "mp4",
+        temp_output_path.to_string_lossy().as_ref(),
+    ]);
+
+    let output = command.output().await.map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path, &e))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = std::fs::remove_file(&temp_output_path);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffmpeg faststart remux exited with status {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    // Move the completed temp file into place (atomic on the same filesystem).
+    std::fs::rename(&temp_output_path, &output_path_owned).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_output_path);
+        CacheError::VideoProcessingError(format!("Failed to move remuxed video into place: {}", e))
+    })?;
+
+    Ok(())
+}
+
 /// Transcode HEVC video to H.264 for browser compatibility
 pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
     transcode_hevc_to_h264_with_timeout(input_path, output_path, Duration::from_secs(300)).await
@@ -994,6 +1077,31 @@ pub(crate) mod tests {
             );
         }
     }
+    // Force a moov-at-end copy of a valid mp4: `-movflags -faststart` DISABLES
+    // faststart, leaving the moov atom at the end of the file, which is the
+    // intended "broken" input for the progressive-remux test.
+    fn ffmpeg_copy_moov_end(src: &Path, dst: &Path) {
+        let output = Command::new(get_ffmpeg_path())
+            .args([
+                "-y",
+                "-i",
+                src.to_string_lossy().as_ref(),
+                "-c",
+                "copy",
+                "-movflags",
+                "-faststart",
+                "-f",
+                "mp4",
+                dst.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!("Failed to create moov-at-end test video: {}", stderr);
+        }
+    }
 
     #[test]
     fn test_moov_detection() {
@@ -1059,6 +1167,29 @@ pub(crate) mod tests {
         let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
 
         assert_eq!(before, after);
+    }
+
+    #[tokio::test]
+    async fn ensure_progressive_mp4_remuxes_moov_to_front() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        // Real fixture has moov at start already; force a moov-at-end copy.
+        let src = Path::new("test-data/test_video.mp4");
+        if !src.exists() {
+            return;
+        }
+        let moov_end = temp.path().join("in.mp4");
+        ffmpeg_copy_moov_end(src, &moov_end); // local test helper defined below
+        assert!(!has_moov_at_start(&moov_end).unwrap());
+        let out = temp.path().join("out.mp4");
+        ensure_progressive_mp4(&moov_end, &out).await.unwrap();
+        assert!(out.exists());
+        assert!(
+            has_moov_at_start(&out).unwrap(),
+            "remux must move moov forward"
+        );
+        // second call is idempotent on a start-front file
+        ensure_progressive_mp4(&out, &out).await.unwrap();
     }
 
     fn create_test_config() -> (Config, TempDir) {

@@ -1,3 +1,29 @@
+# [2.39.0](https://github.com/RouHim/turbo-pix/compare/2.38.2...2.39.0) (2026-08-22)
+
+
+### Bug Fixes
+
+* box CreateError::Duplicate to satisfy clippy result_large_err ([3d18f18](https://github.com/RouHim/turbo-pix/commit/3d18f18173b15fac5ddd5023263e94ffd0ae5e06))
+* replace chunks_exact with as_chunks to satisfy clippy chunks_exact_to_as_chunks ([4642239](https://github.com/RouHim/turbo-pix/commit/46422393a9ca9783d40c1c9271bd117ca5fc6e4f))
+* resolve native-video-playback review findings ([16b556c](https://github.com/RouHim/turbo-pix/commit/16b556ca6729084173a363fb877266e43cd058e3))
+* **test-data:** restore embedded creation_time on video fixture ([1aa807a](https://github.com/RouHim/turbo-pix/commit/1aa807abbf0d7ff101b30fad366b33b048797cce))
+* **video:** serve original when remux short-circuits on already-progressive file ([4fde982](https://github.com/RouHim/turbo-pix/commit/4fde982729c6abce561999856cd26f04aea59d55))
+
+
+### Features
+
+* **config:** wire TURBO_PIX_MAX_TRANSCODES and TURBO_PIX_TRANSCODE_TIMEOUT_SECS ([68e3bea](https://github.com/RouHim/turbo-pix/commit/68e3bea36580b27ceb4934f6d5049d0801646ce0))
+* **video:** add direct-playability decision engine ([b6be6f1](https://github.com/RouHim/turbo-pix/commit/b6be6f1d3b1f114ba7c4d193b079dfe30dc21c7c))
+* **video:** add serve-time moov faststart remux ([84454f4](https://github.com/RouHim/turbo-pix/commit/84454f4b9cdcf1ed0207dc04d551d3196430cbef))
+* **video:** capture profile/bit-depth/container/moov in capability record ([401903f](https://github.com/RouHim/turbo-pix/commit/401903f644ab27b7b7a12a6e4ee361625545c4fe))
+* **video:** codec-agnostic transcoding, bounded worker pool, progress reporting ([840f738](https://github.com/RouHim/turbo-pix/commit/840f738fab25b22b5addde45e80496f6305aa736))
+* **video:** serve-time decision, faststart remux, empty-file fast fail ([d8f0296](https://github.com/RouHim/turbo-pix/commit/d8f02967abac98889dc1b3a8b821854b631d3826))
+* **video:** status endpoint exposes percent and server deadline ([6966803](https://github.com/RouHim/turbo-pix/commit/6966803e251ec64adf8c64c5a8169ee8c52c36c4))
+* **web:** play-original escape hatch on transcode failure ([c4bb5a4](https://github.com/RouHim/turbo-pix/commit/c4bb5a419a40fdef9834fef2b9a9304227341672))
+* **web:** robust codec support probe and client capability string ([bfbf29f](https://github.com/RouHim/turbo-pix/commit/bfbf29f7810fbe0fa8804a8306821d7ffca6895c))
+* **web:** server-driven playback decision in viewer ([0a4a8ad](https://github.com/RouHim/turbo-pix/commit/0a4a8ad25666fe54a648c75137a882869c898c71))
+* **web:** transcode polling driven by server deadline and percent ([e1b15ab](https://github.com/RouHim/turbo-pix/commit/e1b15abbe9489cd3953e7647448feb5f413e6f88))
+
 ## [2.38.2](https://github.com/RouHim/turbo-pix/compare/2.38.1...2.38.2) (2026-08-10)
 
 

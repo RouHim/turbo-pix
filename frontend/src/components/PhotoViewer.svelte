@@ -39,6 +39,10 @@
   let isLoading = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
+  // Set when the user selected "Play original anyway" after a transcode
+  // failure; suppresses the onerror transcode-retry so a failing original
+  // cannot loop back into the transcode decision. Logic-only (never rendered).
+  let hasUserChosenOriginal = false;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -669,13 +673,17 @@
     if (!videoEl) return;
 
     if (forceTranscode) {
-      // Explicit retry (e.g. "Play original anyway" fallback path): jump
-      // straight to the transcode flow, no decision round-trip.
+      // Explicit retry (e.g. HEVC playback failure): jump straight to the
+      // transcode flow, no decision round-trip.
       const url = getVideoUrl(photo.hash_sha256, { transcode: true });
       if (await tryStartTranscode(url, photo)) return;
       setVideoSource(photo, url, true, true, true);
       return;
     }
+
+    // A fresh playback attempt re-derives the decision; clear any prior
+    // "play original" choice so a normal playback failure can retry transcode.
+    hasUserChosenOriginal = false;
 
     // Ask the server for the recommended path (Direct Play / remux /
     // transcode / empty). The server owns the codec+container decision using
@@ -831,6 +839,19 @@
     });
   }
 
+  /**
+   * "Play original anyway": after a transcode failure, try the source bytes
+   * directly. Sets hasUserChosenOriginal so a subsequent playback error shows
+   * a plain error instead of looping back into the transcode decision.
+   */
+  function playOriginalAnyway(photo) {
+    if (!videoEl) return;
+    if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    hasUserChosenOriginal = true;
+    hideTranscodeToast();
+    setVideoSource(photo, getVideoUrl(photo.hash_sha256, {}), false, false, false);
+  }
+
   function setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC) {
     videoEl.src = '';
     videoEl.load();
@@ -842,7 +863,7 @@
     videoEl.onerror = async () => {
       // A stale photo's playback failure must neither retry nor toast.
       if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-      if (isHEVC && !needsTranscode && !forceTranscode) {
+      if (isHEVC && !needsTranscode && !forceTranscode && !hasUserChosenOriginal) {
         await displayVideo(photo, true);
         return;
       }
@@ -1543,6 +1564,16 @@
   <div class="transcode-toast transcode-toast-visible" class:transcode-toast-error={transcodeError}>
     <Icon name={transcodeError ? 'alert-triangle' : 'loader'} width={18} height={18} />
     <span class="transcode-toast-message">{transcodeMessage}</span>
+    {#if transcodeError}
+      <button
+        type="button"
+        class="transcode-toast-action"
+        data-action="play-original"
+        onclick={() => playOriginalAnyway(currentPhoto)}
+      >
+        {get(t)('video.play_original', { default: 'Play original anyway' })}
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -1893,6 +1924,25 @@
 
   :global(.transcode-toast .feather-loader) {
     animation: transcode-spin 1.5s linear infinite;
+  }
+
+  :global(.transcode-toast-action) {
+    margin-left: 8px;
+    padding: 6px 14px;
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  :global(.transcode-toast-action:hover) {
+    border-color: var(--accent-color);
   }
 
   :global {

@@ -253,6 +253,7 @@
       "progress": "Converting… {percent}%"
     },
     "file_empty": "This video file is empty or still being synced.",
-    "conversion_reason": "Could not convert this video: {reason}"
+    "conversion_reason": "Could not convert this video: {reason}",
+    "play_original": "Play original anyway"
   }
 }

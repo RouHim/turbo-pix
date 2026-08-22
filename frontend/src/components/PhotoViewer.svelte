@@ -728,8 +728,14 @@
 
   async function pollTranscodeStatus(pollUrl, photo) {
     const POLL_INTERVAL = 2000;
-    const MAX_POLL_DURATION = 5 * 60 * 1000;
-    const startTime = Date.now();
+    // Grace beyond the server's own deadline: we stop polling only once the
+    // server would actually have given up (its `deadline_ms`), plus a small
+    // buffer for network/poll skew — never at a client-invented 5-minute cap.
+    const DEADLINE_GRACE_MS = 30 * 1000;
+    // Absolute wall-clock time at which we stop (null until the server first
+    // reports a deadline). Refreshed on every response that carries one so the
+    // stop tracks the server's live countdown.
+    let serverStopAt = null;
 
     return new Promise((resolve) => {
       // Stop polling once the user has moved on to another photo; the
@@ -755,27 +761,31 @@
       const intervalId = setInterval(async () => {
         if (bailIfStale()) return;
 
-        const elapsed = Date.now() - startTime;
-        if (elapsed >= MAX_POLL_DURATION) {
-          clearInterval(intervalId);
-          if (transcodePollTimer === intervalId) {
-            transcodePollTimer = null;
-            hideTranscodeToast();
-          }
-          showTranscodeToast(
-            get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
-            true
-          );
-          resolve('Timeout');
-          return;
-        }
-
         try {
           const res = await fetch(pollUrl);
           if (!res.ok) return;
           if (bailIfStale()) return;
           const status = await res.json();
           if (bailIfStale()) return;
+
+          // Track the server's own deadline: stop when it would give up (plus
+          // the grace buffer), not at an arbitrary client cap.
+          if (typeof status.deadline_ms === 'number' && Number.isFinite(status.deadline_ms)) {
+            serverStopAt = Date.now() + status.deadline_ms + DEADLINE_GRACE_MS;
+          }
+          if (serverStopAt !== null && Date.now() >= serverStopAt) {
+            clearInterval(intervalId);
+            if (transcodePollTimer === intervalId) {
+              transcodePollTimer = null;
+              hideTranscodeToast();
+            }
+            showTranscodeToast(
+              get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
+              true
+            );
+            resolve('Timeout');
+            return;
+          }
 
           if (status.state === 'Completed') {
             clearInterval(intervalId);
@@ -802,6 +812,16 @@
               true
             );
             resolve(status.state);
+          } else if (status.state === 'InProgress') {
+            // Live progress, when the server reports a percent.
+            if (typeof status.percent === 'number') {
+              showTranscodeToast(
+                get(t)('video.transcoding.progress', {
+                  values: { percent: status.percent },
+                  default: 'Converting… {percent}%',
+                })
+              );
+            }
           }
         } catch {
           /* ignore */

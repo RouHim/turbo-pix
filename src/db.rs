@@ -290,6 +290,32 @@ impl Photo {
         self.metadata.get("video")?.get("frame_rate")?.as_f64()
     }
 
+    pub fn video_profile(&self) -> Option<&str> {
+        self.metadata.get("video")?.get("profile")?.as_str()
+    }
+
+    pub fn bit_depth(&self) -> Option<u32> {
+        self.metadata
+            .get("video")?
+            .get("bit_depth")?
+            .as_u64()
+            .map(|v| v as u32)
+    }
+
+    pub fn container(&self) -> Option<&str> {
+        self.metadata.get("video")?.get("container")?.as_str()
+    }
+
+    /// Whether the MOOV atom is at the start of the container. Defaults to
+    /// `true` when absent (absence means the record never wrote a false value).
+    pub fn moov_at_start(&self) -> bool {
+        self.metadata
+            .get("video")
+            .and_then(|v| v.get("moov_at_start"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+    }
+
     // ===== DATABASE OPERATIONS =====
 
     /// Update photo fields from extracted metadata
@@ -330,6 +356,9 @@ impl Photo {
                 "audio_codec": extracted.audio_codec,
                 "bitrate": extracted.bitrate,
                 "frame_rate": extracted.frame_rate,
+                "profile": extracted.video_profile,
+                "bit_depth": extracted.bit_depth,
+                "container": extracted.container,
             }
         });
 
@@ -941,6 +970,20 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
         }
         if let Some(frame_rate) = processed.frame_rate {
             video.insert("frame_rate".to_string(), json!(frame_rate));
+        }
+        if let Some(profile) = processed.video_profile {
+            video.insert("profile".to_string(), json!(profile));
+        }
+        if let Some(bit_depth) = processed.bit_depth {
+            video.insert("bit_depth".to_string(), json!(bit_depth));
+        }
+        if let Some(container) = processed.container {
+            video.insert("container".to_string(), json!(container));
+        }
+        // Only record moov_at_start when false — absence means true, which
+        // avoids bloating every record.
+        if !processed.moov_at_start {
+            video.insert("moov_at_start".to_string(), json!(false));
         }
 
         let mut metadata = serde_json::Map::new();

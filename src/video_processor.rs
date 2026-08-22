@@ -3,9 +3,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::timeout;
@@ -27,6 +29,9 @@ pub struct TranscodeStatus {
     pub hash: String,
     pub started_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// Progress percentage of the current transcode (0..=100), when known.
+    /// `None` when no progress signal is available (e.g. duration unknown).
+    pub percent: Option<u8>,
 }
 
 static TRANSCODE_STATUS_STORE: OnceLock<Mutex<HashMap<String, TranscodeStatus>>> = OnceLock::new();
@@ -43,12 +48,78 @@ fn get_status_store() -> &'static Mutex<HashMap<String, TranscodeStatus>> {
     TRANSCODE_STATUS_STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn get_transcode_semaphore() -> &'static Semaphore {
-    TRANSCODE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+/// Bounded worker pool for transcodes. Defaults to `min(max(nproc/2,1),4)`
+/// unless `TURBO_PIX_MAX_TRANSCODES` pins it (0 = transcoding disabled). This
+/// replaces the historical global `Semaphore::new(1)` so distinct HEVC/non-HEVC
+/// re-encodes can run concurrently instead of serializing behind one job.
+pub fn transcode_semaphore() -> &'static Semaphore {
+    TRANSCODE_SEMAPHORE.get_or_init(|| Semaphore::new(transcode_max_pool()))
+}
+
+/// Number of concurrent transcode jobs. Reads env each call so a runtime value
+/// is honored; the semaphore itself locks in the first value it saw via
+/// [`transcode_semaphore`].
+pub fn transcode_max_pool() -> usize {
+    match std::env::var("TURBO_PIX_MAX_TRANSCODES") {
+        Ok(raw) => raw.trim().parse::<usize>().unwrap_or_else(|_| {
+            log::warn!(
+                "Invalid TURBO_PIX_MAX_TRANSCODES '{}', using default 2",
+                raw
+            );
+            2
+        }),
+        Err(_) => {
+            std::thread::available_parallelism().map_or(2, |n| (n.get().max(2) / 2).clamp(1, 4))
+        }
+    }
+}
+
+/// Per-transcode timeout in seconds, from `TURBO_PIX_TRANSCODE_TIMEOUT_SECS`
+/// (default 300). Exposed to clients via the status endpoint so polling stops
+/// when the server would actually give up, not at an arbitrary client cap.
+pub fn transcode_timeout_secs() -> u64 {
+    match std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS") {
+        Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|_| {
+            log::warn!(
+                "Invalid TURBO_PIX_TRANSCODE_TIMEOUT_SECS '{}', using default 300",
+                raw
+            );
+            300
+        }),
+        Err(_) => 300,
+    }
+}
+
+// NOTE: no test-only reset hook is provided for TRANSCODE_SEMAPHORE. The
+// semaphore caches its size from the first transcode in the process; tests
+// that need pool semantics must use env values that are immune to that
+// (transcode_max_pool() is read fresh per call, so env parsing is testable;
+// the disabled path checks transcode_max_pool() == 0 before touching the
+// semaphore, so it is deterministic regardless of prior initialization).
+
+// Lightweight semaphore for serve-time moov faststart remuxes. Deliberately
+// distinct from TRANSCODE_SEMAPHORE: a remux is a fast `-c copy` stream copy
+// that must not queue behind slow re-encodes. Bounded to 4 so at most 4
+// concurrent ffmpeg remux processes run at once.
+static REMOX_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+/// Monotonic counter for giving each remux temp file a unique name (see
+/// `remux_temp_path`). The remux path lacks the per-hash claim the transcode
+/// path has, so a fixed temp name would let two concurrent requests for the
+/// same sidecar write the same file (interleaved writes under `-y`).
+static REMUX_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn get_remox_semaphore() -> &'static Semaphore {
+    REMOX_SEMAPHORE.get_or_init(|| Semaphore::new(4))
 }
 
 pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>> {
-    get_transcode_semaphore().acquire().await.map_err(|e| {
+    if transcode_max_pool() == 0 {
+        return Err(CacheError::VideoProcessingError(
+            "Transcoding is disabled (TURBO_PIX_MAX_TRANSCODES=0)".to_string(),
+        ));
+    }
+    transcode_semaphore().acquire().await.map_err(|e| {
         CacheError::VideoProcessingError(format!("Failed to acquire transcode permit: {}", e))
     })
 }
@@ -109,6 +180,9 @@ pub enum TranscodeClaim {
     /// A previous attempt failed or timed out; remove any leftover temp file
     /// and serve the original.
     PreviouslyFailedOrTimedOut,
+    /// The worker pool is at its concurrent-claim cap; serve the original
+    /// instead of queueing an unbounded spawned task.
+    PoolSaturated,
 }
 
 /// How long a Failed/Timeout transcode status blocks re-spawning the same
@@ -121,12 +195,21 @@ const TRANSCODE_RETRY_COOLDOWN: chrono::Duration = chrono::Duration::minutes(15)
 /// status-store lock, closing the check-then-act window where two concurrent
 /// requests for the same hash could both read "no status" and each spawn an
 /// ffmpeg job. The global transcode semaphore would only serialize the jobs,
-/// not prevent the duplicate spawn.
+/// not prevent the duplicate spawn. Claims are additionally bounded to the
+/// worker-pool size so a flood of distinct-hash transcode requests cannot
+/// accumulate unbounded spawned tasks or unbounded InProgress status entries.
 pub fn claim_transcode(hash: &str) -> TranscodeClaim {
     let store = get_status_store();
     let mut map = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // A new claim is allowed only while fewer than `transcode_max_pool()`
+    // hashes are already in flight. This mirrors the semaphore's concurrency
+    // bound and keeps both the spawned-task count and the InProgress status
+    // map bounded. A full pool (including 0 = disabled) serves the original.
+    let can_start = count_in_progress(&map) < transcode_max_pool();
+
     match map.get(hash) {
         Some(status) if matches!(status.state, TranscodeState::InProgress) => {
             TranscodeClaim::AlreadyInProgress
@@ -143,15 +226,10 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
                 .started_at
                 .is_none_or(|started| started + TRANSCODE_RETRY_COOLDOWN < Utc::now());
             if stale {
-                map.insert(
-                    hash.to_string(),
-                    TranscodeStatus {
-                        state: TranscodeState::InProgress,
-                        hash: hash.to_string(),
-                        started_at: Some(Utc::now()),
-                        error: None,
-                    },
-                );
+                if !can_start {
+                    return TranscodeClaim::PoolSaturated;
+                }
+                map.insert(hash.to_string(), in_progress_status(hash));
                 evict_transcode_statuses(&mut map);
                 TranscodeClaim::Started
             } else {
@@ -159,18 +237,29 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
             }
         }
         _ => {
-            map.insert(
-                hash.to_string(),
-                TranscodeStatus {
-                    state: TranscodeState::InProgress,
-                    hash: hash.to_string(),
-                    started_at: Some(Utc::now()),
-                    error: None,
-                },
-            );
+            if !can_start {
+                return TranscodeClaim::PoolSaturated;
+            }
+            map.insert(hash.to_string(), in_progress_status(hash));
             evict_transcode_statuses(&mut map);
             TranscodeClaim::Started
         }
+    }
+}
+
+fn count_in_progress(map: &HashMap<String, TranscodeStatus>) -> usize {
+    map.values()
+        .filter(|s| matches!(s.state, TranscodeState::InProgress))
+        .count()
+}
+
+fn in_progress_status(hash: &str) -> TranscodeStatus {
+    TranscodeStatus {
+        state: TranscodeState::InProgress,
+        hash: hash.to_string(),
+        started_at: Some(Utc::now()),
+        error: None,
+        percent: None,
     }
 }
 
@@ -580,31 +669,206 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
     Ok(())
 }
 
-/// Transcode HEVC video to H.264 for browser compatibility
-pub async fn transcode_hevc_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    transcode_hevc_to_h264_with_timeout(input_path, output_path, Duration::from_secs(300)).await
+/// Serve-time streamability fix: remux an MP4 with the moov atom moved to the
+/// front via a fast `-c copy -movflags +faststart` pass, so browsers can start
+/// progressive playback immediately. This is a cheap stream copy (no re-encode,
+/// no decoder), separate from the full HEVC transcode path. No-op (returns
+/// `Ok(())`) when the input already has moov at the start or the sidecar
+/// already exists. Writes to a unique temp file then atomically renames into
+/// place, so concurrent requests for the same sidecar cannot interleave into
+/// a corrupt output.
+pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    // Bound the whole remux (moov probe + ffmpeg copy) by the remux semaphore
+    // so a burst of NeedsRemux requests cannot spawn unbounded blocking
+    // ffprobe/ffmpeg processes on the async runtime.
+    let _permit = get_remox_semaphore().acquire().await.map_err(|e| {
+        CacheError::VideoProcessingError(format!(
+            "Failed to acquire remux semaphore for {}: {}",
+            output_path.display(),
+            e
+        ))
+    })?;
+
+    // Re-check under the permit: another request may have completed the remux
+    // while this one queued on the semaphore.
+    if output_path.exists() {
+        return Ok(());
+    }
+
+    // `has_moov_at_start` runs a blocking ffprobe; offload it so it cannot
+    // stall a tokio worker thread.
+    let probe_input = input_path.to_path_buf();
+    let moov_at_start = tokio::task::spawn_blocking(move || has_moov_at_start(&probe_input))
+        .await
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe task panicked: {e}")))??;
+    if moov_at_start {
+        return Ok(());
+    }
+
+    // Unique temp path: the remux path has no per-hash claim (unlike the
+    // transcode path), so a fixed name would let two concurrent remuxes of the
+    // same sidecar write the same file. Named in the SAME directory as the
+    // final path so the completed file can be atomically renamed in.
+    let temp_output_path = remux_temp_path(output_path);
+    let output_path_owned = output_path.to_path_buf();
+
+    // Create output directory if it doesn't exist.
+    if let Some(parent) = temp_output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            CacheError::VideoProcessingError(format!("Failed to create output directory: {}", e))
+        })?;
+    }
+
+    let ffmpeg_path = get_ffmpeg_path();
+    let mut command = TokioCommand::new(&ffmpeg_path);
+    command.kill_on_drop(true).args([
+        "-y",
+        "-i",
+        input_path.to_string_lossy().as_ref(),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        // Force the muxer explicitly: the temp path ends in `.tmp`, so ffmpeg
+        // cannot infer the format from the extension.
+        "-f",
+        "mp4",
+        temp_output_path.to_string_lossy().as_ref(),
+    ]);
+
+    let output = command.output().await.map_err(|e| {
+        CacheError::VideoProcessingError(format_binary_error("ffmpeg", &ffmpeg_path, &e))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = std::fs::remove_file(&temp_output_path);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffmpeg faststart remux exited with status {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    // Move the completed temp file into place (atomic on the same filesystem).
+    std::fs::rename(&temp_output_path, &output_path_owned).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_output_path);
+        CacheError::VideoProcessingError(format!("Failed to move remuxed video into place: {}", e))
+    })?;
+
+    Ok(())
 }
 
-async fn transcode_hevc_to_h264_with_timeout(
-    input_path: &Path,
-    output_path: &Path,
-    timeout_duration: Duration,
-) -> CacheResult<()> {
-    let ffmpeg_path = get_ffmpeg_path();
-    transcode_hevc_to_h264_with_timeout_and_path(
+/// A per-call unique temp path in the same directory as `output_path`, so two
+/// concurrent remuxes of the same sidecar never write the same file.
+fn remux_temp_path(output_path: &Path) -> PathBuf {
+    let seq = REMUX_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("remux");
+    parent.join(format!("{stem}.{}.{}.tmp", std::process::id(), seq))
+}
+/// Transcode any video codec to H.264 for browser compatibility.
+pub async fn transcode_codec_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    transcode_codec_to_h264_with_timeout(
         input_path,
         output_path,
-        timeout_duration,
-        ffmpeg_path,
+        Duration::from_secs(transcode_timeout_secs()),
+        None,
     )
     .await
 }
 
-async fn transcode_hevc_to_h264_with_timeout_and_path(
+/// Transcode any video codec to H.264, reporting progress percentage to
+/// `on_progress` as ffmpeg emits `-progress pipe:1` lines. `on_progress` is
+/// called with `Some(percent)` (0..=100) whenever a progress line arrives and
+/// the input duration is known, and never with a decreasing value. When the
+/// duration is unknown, `on_progress(None)` signals "working, no percent".
+pub async fn transcode_codec_to_h264_with_progress(
+    input_path: &Path,
+    output_path: &Path,
+    on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>,
+) -> CacheResult<()> {
+    transcode_codec_to_h264_with_timeout(
+        input_path,
+        output_path,
+        Duration::from_secs(transcode_timeout_secs()),
+        Some(on_progress),
+    )
+    .await
+}
+
+async fn transcode_codec_to_h264_with_timeout(
+    input_path: &Path,
+    output_path: &Path,
+    timeout_duration: Duration,
+    on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
+) -> CacheResult<()> {
+    let ffmpeg_path = get_ffmpeg_path();
+    transcode_codec_to_h264_with_timeout_and_path(
+        input_path,
+        output_path,
+        timeout_duration,
+        ffmpeg_path,
+        on_progress,
+    )
+    .await
+}
+
+/// Progress state shared between the stdout-reading task and the error path.
+struct ProgressParser {
+    /// Input duration in seconds when known (drives percent computation).
+    duration: Option<f64>,
+    /// Most recent percent already reported, so values never regress.
+    last_percent: u8,
+    /// Callback (None = no progress reporting requested).
+    on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
+}
+
+impl ProgressParser {
+    /// Handle one `-progress pipe:1` `key=value` line, reporting a percent.
+    /// ffmpeg progress emits `out_time_us` (microseconds) and `out_time_ms`
+    /// (milliseconds); either is accepted via the task's preferred unit.
+    fn handle_line(&mut self, line: &str) {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            return;
+        };
+        let seconds = match key {
+            "out_time_us" => value.parse::<f64>().ok().map(|us| us / 1_000_000.0),
+            "out_time_ms" => value.parse::<f64>().ok().map(|ms| ms / 1_000.0),
+            _ => return,
+        };
+        let (Some(seconds), Some(duration)) = (seconds, self.duration) else {
+            return;
+        };
+        if duration <= 0.0 || !duration.is_finite() {
+            return;
+        }
+        let percent = ((seconds / duration * 100.0).round() as u8)
+            .clamp(0, 100)
+            .min(100);
+        if percent > self.last_percent {
+            self.last_percent = percent;
+            if let Some(cb) = &self.on_progress {
+                cb(Some(percent));
+            }
+        }
+    }
+
+    fn signal_unknown(&self) {
+        if let Some(cb) = &self.on_progress {
+            cb(None);
+        }
+    }
+}
+
+async fn transcode_codec_to_h264_with_timeout_and_path(
     input_path: &Path,
     output_path: &Path,
     timeout_duration: Duration,
     ffmpeg_path: String,
+    on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
 ) -> CacheResult<()> {
     // Write to a temp file in the SAME directory as the final path so the
     // completed file can be atomically renamed into place. A failed or
@@ -626,36 +890,63 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             })?;
         }
 
-        // Try hardware-accelerated HEVC decoding first, fall back to software if unavailable
-        // Use VAAPI (Video Acceleration API) for hardware-accelerated HEVC decoding on Linux
+        // Probe the input duration once so progress can be expressed as a
+        // percentage. A best-effort probe: if it fails, percent is unknown and
+        // the client is told "working" with no number.
+        let duration = if on_progress.is_some() {
+            extract_video_metadata(input_path)
+                .await
+                .ok()
+                .map(|m| m.duration)
+        } else {
+            None
+        };
+        let mut progress = ProgressParser {
+            duration,
+            last_percent: 0,
+            on_progress,
+        };
+        if duration.is_none() {
+            progress.signal_unknown();
+        }
+
+        // Try hardware-accelerated decoding first, fall back to software if
+        // unavailable. `-progress pipe:1` streams key=value progress lines to
+        // stdout, which we read incrementally to report percent.
         let ffmpeg_path_for_err = ffmpeg_path.clone();
         let mut command = TokioCommand::new(ffmpeg_path);
-        command.kill_on_drop(true).args([
-            "-hwaccel",
-            "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
-            "-i",
-            input_path.to_string_lossy().as_ref(),
-            "-c:v",
-            "libx264", // Use H.264 encoder (more widely available than libopenh264)
-            "-preset",
-            "fast", // Encoding speed preset (fast is good for real-time transcoding)
-            "-crf",
-            "23", // Constant Rate Factor (18-28, lower = better quality)
-            "-c:a",
-            "copy", // Copy audio stream without re-encoding (faster)
-            "-movflags",
-            "+faststart", // Enable streaming-friendly format
-            "-y",         // Overwrite output file
-            // Force the muxer explicitly: the temp output path ends in
-            // `.mp4.tmp`, so ffmpeg cannot infer the format from the
-            // extension and otherwise fails with "Error initializing the
-            // muxer: Invalid argument".
-            "-f",
-            "mp4",
-            temp_output_path.to_string_lossy().as_ref(),
-        ]);
+        command
+            .kill_on_drop(true)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .args([
+                "-hwaccel",
+                "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
+                "-i",
+                input_path.to_string_lossy().as_ref(),
+                "-c:v",
+                "libx264", // Use H.264 encoder (more widely available than libopenh264)
+                "-preset",
+                "fast", // Encoding speed preset (fast is good for real-time transcoding)
+                "-crf",
+                "23", // Constant Rate Factor (18-28, lower = better quality)
+                "-c:a",
+                "copy", // Copy audio stream without re-encoding (faster)
+                "-movflags",
+                "+faststart", // Enable streaming-friendly format
+                "-y",         // Overwrite output file
+                "-progress",
+                "pipe:1", // Stream progress to stdout for percent reporting
+                // Force the muxer explicitly: the temp output path ends in
+                // `.mp4.tmp`, so ffmpeg cannot infer the format from the
+                // extension and otherwise fails with "Error initializing the
+                // muxer: Invalid argument".
+                "-f",
+                "mp4",
+                temp_output_path.to_string_lossy().as_ref(),
+            ]);
 
-        let output = command.output().await.map_err(|e| {
+        let mut child = command.spawn().map_err(|e| {
             CacheError::VideoProcessingError(format_binary_error(
                 "ffmpeg",
                 &ffmpeg_path_for_err,
@@ -663,16 +954,55 @@ async fn transcode_hevc_to_h264_with_timeout_and_path(
             ))
         })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        // Drain stdout (progress) incrementally; collect stderr for the error
+        // message so a long ffmpeg run cannot deadlock on a full pipe.
+        let stdout = child.stdout.take().ok_or_else(|| {
+            CacheError::VideoProcessingError("ffmpeg stdout pipe unavailable".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            CacheError::VideoProcessingError("ffmpeg stderr pipe unavailable".to_string())
+        })?;
+
+        let mut stderr_reader = BufReader::new(stderr);
+        let stderr_handle = tokio::spawn(async move {
+            let mut buf = String::new();
+            let _ = stderr_reader.read_to_string(&mut buf).await;
+            buf
+        });
+
+        let mut stdout_reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdout_reader.read_line(&mut line).await {
+                Ok(0) => break, // EOF: ffmpeg closed stdout
+                Ok(_) => progress.handle_line(&line),
+                Err(e) => {
+                    // A read error on the progress pipe is non-fatal: the
+                    // transcode's real outcome comes from the exit status.
+                    log::debug!("ffmpeg progress pipe read error: {e}");
+                    break;
+                }
+            }
+        }
+
+        // Wait for ffmpeg to finish, then join the stderr collector.
+        let status = child.wait().await.map_err(|e| {
+            CacheError::VideoProcessingError(format_binary_error(
+                "ffmpeg",
+                &ffmpeg_path_for_err,
+                &e,
+            ))
+        })?;
+        let stderr = stderr_handle.await.unwrap_or_default();
+
+        if !status.success() {
             log::error!("FFmpeg transcoding failed!");
             log::error!("FFmpeg stderr: {}", stderr);
-            log::error!("FFmpeg stdout: {}", stdout);
             let _ = std::fs::remove_file(&temp_output_path);
             return Err(CacheError::VideoProcessingError(format!(
                 "ffmpeg transcode exited with status {}. stderr: {}",
-                output.status, stderr
+                status, stderr
             )));
         }
 
@@ -746,11 +1076,9 @@ pub(crate) mod tests {
     use std::cell::Cell;
     use std::io::{Error, ErrorKind};
     use std::process::Command;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
     use tempfile::TempDir;
-    use tokio::time::sleep;
 
     thread_local! {
         static TEST_ENV_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -994,6 +1322,31 @@ pub(crate) mod tests {
             );
         }
     }
+    // Force a moov-at-end copy of a valid mp4: `-movflags -faststart` DISABLES
+    // faststart, leaving the moov atom at the end of the file, which is the
+    // intended "broken" input for the progressive-remux test.
+    fn ffmpeg_copy_moov_end(src: &Path, dst: &Path) {
+        let output = Command::new(get_ffmpeg_path())
+            .args([
+                "-y",
+                "-i",
+                src.to_string_lossy().as_ref(),
+                "-c",
+                "copy",
+                "-movflags",
+                "-faststart",
+                "-f",
+                "mp4",
+                dst.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!("Failed to create moov-at-end test video: {}", stderr);
+        }
+    }
 
     #[test]
     fn test_moov_detection() {
@@ -1061,6 +1414,29 @@ pub(crate) mod tests {
         assert_eq!(before, after);
     }
 
+    #[tokio::test]
+    async fn ensure_progressive_mp4_remuxes_moov_to_front() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        // Real fixture has moov at start already; force a moov-at-end copy.
+        let src = Path::new("test-data/test_video.mp4");
+        if !src.exists() {
+            return;
+        }
+        let moov_end = temp.path().join("in.mp4");
+        ffmpeg_copy_moov_end(src, &moov_end); // local test helper defined below
+        assert!(!has_moov_at_start(&moov_end).unwrap());
+        let out = temp.path().join("out.mp4");
+        ensure_progressive_mp4(&moov_end, &out).await.unwrap();
+        assert!(out.exists());
+        assert!(
+            has_moov_at_start(&out).unwrap(),
+            "remux must move moov forward"
+        );
+        // second call is idempotent on a start-front file
+        ensure_progressive_mp4(&out, &out).await.unwrap();
+    }
+
     fn create_test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
@@ -1083,6 +1459,7 @@ pub(crate) mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
+            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
         };
@@ -1271,40 +1648,86 @@ pub(crate) mod tests {
         std::fs::set_permissions(path, permissions).unwrap();
     }
 
-    #[cfg(not(unix))]
-    fn make_executable(_path: &Path) {}
+    #[tokio::test]
+    async fn test_transcode_disabled_rejects_permit() {
+        // TURBO_PIX_MAX_TRANSCODES=0 disables transcoding. acquire checks
+        // transcode_max_pool() == 0 BEFORE acquiring the (possibly already
+        // initialized) semaphore, so this is deterministic.
+        let _env = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
+        let err = acquire_transcode_permit().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("disabled"),
+            "expected disabled error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_transcode_max_pool_parses_env() {
+        let _env = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "4");
+        assert_eq!(transcode_max_pool(), 4);
+        let _env2 = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
+        assert_eq!(transcode_max_pool(), 0, "0 must mean disabled");
+    }
 
     #[tokio::test]
-    async fn test_transcode_semaphore() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let max_active = Arc::new(AtomicUsize::new(0));
+    async fn test_transcode_reports_percent_from_progress_lines() {
+        let _lock = acquire_test_env_lock();
+        let temp_dir = TempDir::new().unwrap();
 
-        let run = |active: Arc<AtomicUsize>, max_active: Arc<AtomicUsize>| async move {
-            let _permit = acquire_transcode_permit().await.unwrap();
-            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-            loop {
-                let max = max_active.load(Ordering::SeqCst);
-                if current <= max {
-                    break;
-                }
-                if max_active
-                    .compare_exchange(max, current, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    break;
-                }
-            }
+        // Fake ffprobe reports a 10s duration (needed to turn out_time into %).
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe_duration.sh");
+        std::fs::write(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nprintf '%s\\n' '{\"format\":{\"duration\":\"10.0\"},\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":320,\"height\":240}]}'",
+        )
+        .unwrap();
+        make_executable(&ffprobe_script);
 
-            sleep(Duration::from_millis(150)).await;
-            active.fetch_sub(1, Ordering::SeqCst);
-        };
+        // Fake ffmpeg writes progress lines (emulating ~30% then ~70% complete),
+        // touches the output file, and exits 0.
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg_progress.sh");
+        std::fs::write(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\nprintf '%s\\n' 'out_time_us=3000000' 'progress=continue' 'out_time_us=7000000' 'progress=continue' > /dev/stdout\ntouch \"$last\"\nexit 0\n",
+        )
+        .unwrap();
+        make_executable(&ffmpeg_script);
 
-        let t1 = tokio::spawn(run(active.clone(), max_active.clone()));
-        let t2 = tokio::spawn(run(active, max_active.clone()));
-        t1.await.unwrap();
-        t2.await.unwrap();
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
 
-        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        let input = temp_dir.path().join("input.mp4");
+        let output = temp_dir.path().join("output.mp4");
+        std::fs::write(&input, b"not-a-real-video").unwrap();
+
+        let reported: Arc<Mutex<Vec<Option<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let cb = reported.clone();
+        let on_progress = Arc::new(move |p: Option<u8>| {
+            cb.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(p);
+        });
+
+        transcode_codec_to_h264_with_progress(&input, &output, on_progress)
+            .await
+            .expect("transcode should succeed");
+
+        let reported = reported
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // 3s / 10s = 30%, then 7s / 10s = 70%.
+        assert!(
+            reported.contains(&Some(30)),
+            "expected 30% progress callback, got: {:?}",
+            *reported
+        );
+        assert!(
+            reported.contains(&Some(70)),
+            "expected 70% progress callback, got: {:?}",
+            *reported
+        );
     }
 
     #[tokio::test]
@@ -1324,11 +1747,12 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_hevc_to_h264_with_timeout_and_path(
+        let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
             Duration::from_secs(1),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
         )
         .await;
 
@@ -1368,11 +1792,12 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_hevc_to_h264_with_timeout_and_path(
+        let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
         )
         .await;
 
@@ -1406,11 +1831,12 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("nested/output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_hevc_to_h264_with_timeout_and_path(
+        let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
         )
         .await;
 
@@ -1449,6 +1875,7 @@ pub(crate) mod tests {
             hash: "abc".to_string(),
             started_at: None,
             error: None,
+            percent: None,
         };
 
         let json = serde_json::to_string(&status).expect("JSON serialization failed");
@@ -1601,6 +2028,7 @@ pub(crate) mod tests {
             hash: "test_hash".to_string(),
             started_at: Some(Utc::now()),
             error: None,
+            percent: None,
         };
         set_transcode_status("test_hash", status.clone());
 
@@ -1651,6 +2079,7 @@ pub(crate) mod tests {
                 hash: "claim-hash-2".to_string(),
                 started_at: Some(Utc::now()),
                 error: Some("boom".to_string()),
+                percent: None,
             },
         );
         assert_eq!(
@@ -1665,6 +2094,7 @@ pub(crate) mod tests {
                 hash: "claim-hash-2".to_string(),
                 started_at: Some(Utc::now()),
                 error: Some("timed out".to_string()),
+                percent: None,
             },
         );
         assert_eq!(
@@ -1688,6 +2118,7 @@ pub(crate) mod tests {
                     Utc::now() - TRANSCODE_RETRY_COOLDOWN - chrono::Duration::seconds(1),
                 ),
                 error: Some("boom".to_string()),
+                percent: None,
             },
         );
 
@@ -1715,6 +2146,7 @@ pub(crate) mod tests {
                     hash: format!("settled-{}", i),
                     started_at: None,
                     error: None,
+                    percent: None,
                 },
             );
         }
@@ -1738,6 +2170,7 @@ pub(crate) mod tests {
                     hash: format!("settled-{}", i),
                     started_at: None,
                     error: None,
+                    percent: None,
                 },
             );
         }
@@ -1748,6 +2181,7 @@ pub(crate) mod tests {
                 hash: "in-flight".to_string(),
                 started_at: None,
                 error: None,
+                percent: None,
             },
         );
 
@@ -1774,6 +2208,7 @@ pub(crate) mod tests {
                     hash: format!("in-flight-{}", i),
                     started_at: None,
                     error: None,
+                    percent: None,
                 },
             );
         }

@@ -42,7 +42,7 @@ pub const VALID_SORTS: [&str; 6] = [
 
 #[derive(Debug)]
 pub enum CreateError {
-    Duplicate(SavedSearch),
+    Duplicate(Box<SavedSearch>),
     Db(Box<dyn std::error::Error>),
 }
 
@@ -104,7 +104,7 @@ pub async fn create(
             .await
             .map_err(|e| CreateError::Db(Box::new(e)))?;
             return match existing {
-                Some(row) => Err(CreateError::Duplicate(row)),
+                Some(row) => Err(CreateError::Duplicate(Box::new(row))),
                 // Unique index said conflict but the row is gone (race with a
                 // delete); surface a Db error rather than invent a row.
                 None => Err(CreateError::Db(

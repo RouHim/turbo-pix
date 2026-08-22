@@ -22,6 +22,8 @@ pub struct Config {
     pub data_path: String,
     pub db_path: String,
     pub cache: CacheConfig,
+    /// Per-transcode timeout in seconds. Default 300.
+    pub transcode_timeout_secs: u64,
     pub locale: String,
     pub nominatim_url: String,
 }
@@ -74,6 +76,10 @@ impl Config {
         let nominatim_url = env::var("TURBO_PIX_NOMINATIM_URL")
             .unwrap_or_else(|_| "https://nominatim.openstreetmap.org".to_string());
 
+        let transcode_timeout_secs = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()?;
+
         let cache = CacheConfig {
             thumbnail_cache_path,
             max_cache_size_mb,
@@ -87,6 +93,7 @@ impl Config {
             data_path,
             db_path,
             cache,
+            transcode_timeout_secs,
             locale,
             nominatim_url,
         })
@@ -248,5 +255,42 @@ mod tests {
                 env::remove_var("TURBO_PIX_NOMINATIM_URL");
             }
         });
+    }
+
+    #[test]
+    fn reads_transcode_timeout_default() {
+        with_env_lock(|| {
+            let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
+            env::remove_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS");
+
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.transcode_timeout_secs, 300);
+
+            env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "420");
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.transcode_timeout_secs, 420);
+
+            restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
+        });
+    }
+
+    #[test]
+    fn rejects_invalid_transcode_timeout_env() {
+        with_env_lock(|| {
+            let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
+            env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "also-bad");
+            assert!(
+                Config::from_env().is_err(),
+                "invalid transcode_timeout_secs must error"
+            );
+            restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
+        });
+    }
+
+    fn restore_env_var(key: &str, value: Option<String>) {
+        match value {
+            Some(v) => env::set_var(key, v),
+            None => env::remove_var(key),
+        }
     }
 }

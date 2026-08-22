@@ -249,7 +249,11 @@
     "transcoding": {
       "started": "Video is being converted for playback...",
       "failed": "Video conversion failed",
-      "timeout": "Video conversion timed out"
-    }
+      "timeout": "Video conversion timed out",
+      "progress": "Converting… {percent}%"
+    },
+    "file_empty": "This video file is empty or still being synced.",
+    "conversion_reason": "Could not convert this video: {reason}",
+    "play_original": "Play original anyway"
   }
 }

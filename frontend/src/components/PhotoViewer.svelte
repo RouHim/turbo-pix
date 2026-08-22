@@ -39,6 +39,10 @@
   let isLoading = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
+  // Set when the user selected "Play original anyway" after a transcode
+  // failure; suppresses the onerror transcode-retry so a failing original
+  // cannot loop back into the transcode decision. Logic-only (never rendered).
+  let hasUserChosenOriginal = false;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -668,28 +672,55 @@
   async function displayVideo(photo, forceTranscode = false) {
     if (!videoEl) return;
 
-    const videoCodec = photo.metadata?.video?.codec || '';
-    const isHEVC = videoCodec.toLowerCase() === 'hevc' || videoCodec.toLowerCase() === 'h265';
-    let needsTranscode = forceTranscode;
-
-    if (isHEVC && !forceTranscode) {
-      const width = photo.width || 1920;
-      const height = photo.height || 1080;
-      const supportsHEVC = await videoCodecSupport.supportsHEVC(width, height);
-      needsTranscode = !supportsHEVC;
-    }
-
-    // The viewer may have been closed, or a newer photo requested, while HEVC
-    // support was being probed — a hidden viewer must not start playback.
-    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-
-    const videoUrl = getVideoUrl(photo.hash_sha256, { transcode: needsTranscode });
-
-    if (needsTranscode && (await tryStartTranscode(videoUrl, photo))) {
+    if (forceTranscode) {
+      // Explicit retry (e.g. HEVC playback failure): jump straight to the
+      // transcode flow, no decision round-trip.
+      const url = getVideoUrl(photo.hash_sha256, { transcode: true });
+      if (await tryStartTranscode(url, photo)) return;
+      setVideoSource(photo, url, false);
       return;
     }
 
-    setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC);
+    // A fresh playback attempt re-derives the decision; clear any prior
+    // "play original" choice so a normal playback failure can retry transcode.
+    hasUserChosenOriginal = false;
+
+    // Ask the server for the recommended path (Direct Play / remux /
+    // transcode / empty). The server owns the codec+container decision using
+    // our declared capability set, so we do not re-guess HEVC support client-side.
+    const decision = await api.getVideoDecision(
+      photo.hash_sha256,
+      videoCodecSupport.getClientCodecsString()
+    );
+
+    // The viewer may have been closed, or a newer photo requested, while the
+    // decision was loading — a hidden viewer must not start playback.
+    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+
+    if (decision.action === 'direct' || decision.action === 'remux') {
+      setVideoSource(photo, decision.url, true);
+    } else if (decision.action === 'transcode') {
+      const url = decision.url || getVideoUrl(photo.hash_sha256, { transcode: true });
+      if (await tryStartTranscode(url, photo)) return;
+      // No 202 (cached transcode streams as 200) or the start fetch failed:
+      // fall through to playing the (already-available) transcoded stream.
+      setVideoSource(photo, url, false);
+    } else if (decision.action === 'empty') {
+      showTranscodeToast(
+        get(t)('video.file_empty', {
+          default: 'This video file is empty or still being synced.',
+        }),
+        true
+      );
+    } else {
+      showTranscodeToast(
+        get(t)('video.conversion_reason', {
+          values: { reason: decision.reason || '' },
+          default: 'Could not convert this video: {reason}',
+        }),
+        true
+      );
+    }
   }
 
   function showTranscodeToast(message, isError = false) {
@@ -708,8 +739,14 @@
 
   async function pollTranscodeStatus(pollUrl, photo) {
     const POLL_INTERVAL = 2000;
-    const MAX_POLL_DURATION = 5 * 60 * 1000;
-    const startTime = Date.now();
+    // Grace beyond the server's own deadline: we stop polling only once the
+    // server would actually have given up (its `deadline_ms`), plus a small
+    // buffer for network/poll skew — never at a client-invented 5-minute cap.
+    const DEADLINE_GRACE_MS = 30 * 1000;
+    // Absolute wall-clock time at which we stop (null until the server first
+    // reports a deadline). Refreshed on every response that carries one so the
+    // stop tracks the server's live countdown.
+    let serverStopAt = null;
 
     return new Promise((resolve) => {
       // Stop polling once the user has moved on to another photo; the
@@ -735,21 +772,6 @@
       const intervalId = setInterval(async () => {
         if (bailIfStale()) return;
 
-        const elapsed = Date.now() - startTime;
-        if (elapsed >= MAX_POLL_DURATION) {
-          clearInterval(intervalId);
-          if (transcodePollTimer === intervalId) {
-            transcodePollTimer = null;
-            hideTranscodeToast();
-          }
-          showTranscodeToast(
-            get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
-            true
-          );
-          resolve('Timeout');
-          return;
-        }
-
         try {
           const res = await fetch(pollUrl);
           if (!res.ok) return;
@@ -757,12 +779,31 @@
           const status = await res.json();
           if (bailIfStale()) return;
 
+          // Track the server's own deadline: stop when it would give up (plus
+          // the grace buffer), not at an arbitrary client cap.
+          if (typeof status.deadline_ms === 'number' && Number.isFinite(status.deadline_ms)) {
+            serverStopAt = Date.now() + status.deadline_ms + DEADLINE_GRACE_MS;
+          }
+          if (serverStopAt !== null && Date.now() >= serverStopAt) {
+            clearInterval(intervalId);
+            if (transcodePollTimer === intervalId) {
+              transcodePollTimer = null;
+              hideTranscodeToast();
+            }
+            showTranscodeToast(
+              get(t)('video.transcoding.timeout', { default: 'Video conversion timed out' }),
+              true
+            );
+            resolve('Timeout');
+            return;
+          }
+
           if (status.state === 'Completed') {
             clearInterval(intervalId);
             if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
             const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
-            setVideoSource(photo, newUrl, true, true, true);
+            setVideoSource(photo, newUrl, false);
             resolve('Completed');
           } else if (status.state === 'Failed') {
             clearInterval(intervalId);
@@ -782,6 +823,16 @@
               true
             );
             resolve(status.state);
+          } else if (status.state === 'InProgress') {
+            // Live progress, when the server reports a percent.
+            if (typeof status.percent === 'number') {
+              showTranscodeToast(
+                get(t)('video.transcoding.progress', {
+                  values: { percent: status.percent },
+                  default: 'Converting… {percent}%',
+                })
+              );
+            }
           }
         } catch {
           /* ignore */
@@ -791,7 +842,20 @@
     });
   }
 
-  function setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC) {
+  /**
+   * "Play original anyway": after a transcode failure, try the source bytes
+   * directly. Sets hasUserChosenOriginal so a subsequent playback error shows
+   * a plain error instead of looping back into the transcode decision.
+   */
+  function playOriginalAnyway(photo) {
+    if (!videoEl) return;
+    if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    hasUserChosenOriginal = true;
+    hideTranscodeToast();
+    setVideoSource(photo, getVideoUrl(photo.hash_sha256, {}), false);
+  }
+
+  function setVideoSource(photo, videoUrl, retryOnFailure) {
     videoEl.src = '';
     videoEl.load();
     // Records which photo this video element currently holds; the Space
@@ -802,7 +866,7 @@
     videoEl.onerror = async () => {
       // A stale photo's playback failure must neither retry nor toast.
       if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-      if (isHEVC && !needsTranscode && !forceTranscode) {
+      if (retryOnFailure && !hasUserChosenOriginal) {
         await displayVideo(photo, true);
         return;
       }
@@ -1503,6 +1567,16 @@
   <div class="transcode-toast transcode-toast-visible" class:transcode-toast-error={transcodeError}>
     <Icon name={transcodeError ? 'alert-triangle' : 'loader'} width={18} height={18} />
     <span class="transcode-toast-message">{transcodeMessage}</span>
+    {#if transcodeError}
+      <button
+        type="button"
+        class="transcode-toast-action"
+        data-action="play-original"
+        onclick={() => playOriginalAnyway(currentPhoto)}
+      >
+        {get(t)('video.play_original', { default: 'Play original anyway' })}
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -1853,6 +1927,25 @@
 
   :global(.transcode-toast .feather-loader) {
     animation: transcode-spin 1.5s linear infinite;
+  }
+
+  :global(.transcode-toast-action) {
+    margin-left: 8px;
+    padding: 6px 14px;
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  :global(.transcode-toast-action:hover) {
+    border-color: var(--accent-color);
   }
 
   :global {

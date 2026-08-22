@@ -22,8 +22,6 @@ pub struct Config {
     pub data_path: String,
     pub db_path: String,
     pub cache: CacheConfig,
-    /// Bound on concurrent transcode ffmpeg jobs (0 = disabled). Default 2.
-    pub max_transcodes: usize,
     /// Per-transcode timeout in seconds. Default 300.
     pub transcode_timeout_secs: u64,
     pub locale: String,
@@ -78,9 +76,6 @@ impl Config {
         let nominatim_url = env::var("TURBO_PIX_NOMINATIM_URL")
             .unwrap_or_else(|_| "https://nominatim.openstreetmap.org".to_string());
 
-        let max_transcodes = env::var("TURBO_PIX_MAX_TRANSCODES")
-            .unwrap_or_else(|_| "2".to_string())
-            .parse()?;
         let transcode_timeout_secs = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "300".to_string())
             .parse()?;
@@ -98,7 +93,6 @@ impl Config {
             data_path,
             db_path,
             cache,
-            max_transcodes,
             transcode_timeout_secs,
             locale,
             nominatim_url,
@@ -264,48 +258,31 @@ mod tests {
     }
 
     #[test]
-    fn reads_transcode_env_defaults() {
+    fn reads_transcode_timeout_default() {
         with_env_lock(|| {
-            let orig_max = env::var("TURBO_PIX_MAX_TRANSCODES").ok();
             let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
-            env::remove_var("TURBO_PIX_MAX_TRANSCODES");
             env::remove_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS");
 
             let config = Config::from_env().unwrap();
-            assert_eq!(config.max_transcodes, 2);
             assert_eq!(config.transcode_timeout_secs, 300);
 
-            env::set_var("TURBO_PIX_MAX_TRANSCODES", "4");
             env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "420");
             let config = Config::from_env().unwrap();
-            assert_eq!(config.max_transcodes, 4);
             assert_eq!(config.transcode_timeout_secs, 420);
 
-            restore_env_var("TURBO_PIX_MAX_TRANSCODES", orig_max);
             restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
         });
     }
 
     #[test]
-    fn rejects_invalid_transcode_env() {
+    fn rejects_invalid_transcode_timeout_env() {
         with_env_lock(|| {
-            let orig_max = env::var("TURBO_PIX_MAX_TRANSCODES").ok();
             let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
-            env::set_var("TURBO_PIX_MAX_TRANSCODES", "not-a-number");
-
-            assert!(
-                Config::from_env().is_err(),
-                "invalid max_transcodes must error"
-            );
-
-            env::remove_var("TURBO_PIX_MAX_TRANSCODES");
             env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "also-bad");
             assert!(
                 Config::from_env().is_err(),
                 "invalid transcode_timeout_secs must error"
             );
-
-            restore_env_var("TURBO_PIX_MAX_TRANSCODES", orig_max);
             restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
         });
     }

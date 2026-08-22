@@ -71,15 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Transcode pool size + timeout (video_processor reads the env directly);
-    // default them from config so a process-wide value is always visible to
-    // the transcode/status paths. Respects an explicit operator override.
-    if std::env::var("TURBO_PIX_MAX_TRANSCODES").is_err() {
-        std::env::set_var(
-            "TURBO_PIX_MAX_TRANSCODES",
-            config.max_transcodes.to_string(),
-        );
-    }
+    // Transcode timeout (video_processor reads the env directly); default it
+    // from config so a process-wide value is always visible to the status
+    // path. Respects an explicit operator override. The transcode pool size
+    // (TURBO_PIX_MAX_TRANSCODES) is intentionally NOT defaulted here: when
+    // unset, video_processor derives an nproc-scaled pool, and pinning a fixed
+    // default would silently defeat that dynamic sizing.
     if std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").is_err() {
         std::env::set_var(
             "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",

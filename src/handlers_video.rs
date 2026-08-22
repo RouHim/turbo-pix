@@ -53,6 +53,9 @@ fn with_transcode_warning(
 }
 /// Warning sent when a transcode attempt failed and the original is served.
 const TRANSCODE_FAILED_WARNING: &str = "HEVC transcoding not available - serving original video";
+/// Warning sent when the transcode worker pool is saturated and the original
+/// is served instead of queueing.
+const TRANSCODE_BUSY_WARNING: &str = "Transcode worker pool busy - serving original video";
 
 use std::sync::Arc;
 
@@ -118,7 +121,9 @@ pub async fn get_video_file(
             "width": photo.width,
             "height": photo.height,
             "taken_at": photo.taken_at.map(|dt| dt.to_rfc3339()),
-            "file_path": photo.file_path,
+            // `file_path` is deliberately omitted: it is an absolute server
+            // path and disclosing it in the metadata payload leaks the host's
+            // filesystem layout to clients.
         });
 
         return Ok(Box::new(warp::reply::json(&video_metadata)));
@@ -366,6 +371,16 @@ pub async fn get_video_file(
                                 StatusCode::ACCEPTED,
                             );
                             return Ok(Box::new(response));
+                        }
+                        TranscodeClaim::PoolSaturated => {
+                            // The worker pool is at its concurrent-claim cap (or
+                            // transcoding is disabled): serve the original instead
+                            // of queueing an unbounded spawned task.
+                            log::warn!(
+                                "Transcode pool saturated; serving original: {}",
+                                photo.filename
+                            );
+                            (video_path.to_path_buf(), Some(TRANSCODE_BUSY_WARNING))
                         }
                         TranscodeClaim::Started => {
                             // We own the slot (claim_transcode inserted the

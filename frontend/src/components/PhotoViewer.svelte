@@ -677,7 +677,7 @@
       // transcode flow, no decision round-trip.
       const url = getVideoUrl(photo.hash_sha256, { transcode: true });
       if (await tryStartTranscode(url, photo)) return;
-      setVideoSource(photo, url, true, true, true);
+      setVideoSource(photo, url, false);
       return;
     }
 
@@ -698,10 +698,13 @@
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
     if (decision.action === 'direct' || decision.action === 'remux') {
-      setVideoSource(photo, decision.url, false, false, false);
+      setVideoSource(photo, decision.url, true);
     } else if (decision.action === 'transcode') {
       const url = decision.url || getVideoUrl(photo.hash_sha256, { transcode: true });
       if (await tryStartTranscode(url, photo)) return;
+      // No 202 (cached transcode streams as 200) or the start fetch failed:
+      // fall through to playing the (already-available) transcoded stream.
+      setVideoSource(photo, url, false);
     } else if (decision.action === 'empty') {
       showTranscodeToast(
         get(t)('video.file_empty', {
@@ -800,7 +803,7 @@
             if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
             const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
-            setVideoSource(photo, newUrl, true, true, true);
+            setVideoSource(photo, newUrl, false);
             resolve('Completed');
           } else if (status.state === 'Failed') {
             clearInterval(intervalId);
@@ -849,10 +852,10 @@
     if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
     hasUserChosenOriginal = true;
     hideTranscodeToast();
-    setVideoSource(photo, getVideoUrl(photo.hash_sha256, {}), false, false, false);
+    setVideoSource(photo, getVideoUrl(photo.hash_sha256, {}), false);
   }
 
-  function setVideoSource(photo, videoUrl, needsTranscode, forceTranscode, isHEVC) {
+  function setVideoSource(photo, videoUrl, retryOnFailure) {
     videoEl.src = '';
     videoEl.load();
     // Records which photo this video element currently holds; the Space
@@ -863,7 +866,7 @@
     videoEl.onerror = async () => {
       // A stale photo's playback failure must neither retry nor toast.
       if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-      if (isHEVC && !needsTranscode && !forceTranscode && !hasUserChosenOriginal) {
+      if (retryOnFailure && !hasUserChosenOriginal) {
         await displayVideo(photo, true);
         return;
       }

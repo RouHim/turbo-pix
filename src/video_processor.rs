@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -102,6 +103,12 @@ pub fn transcode_timeout_secs() -> u64 {
 // concurrent ffmpeg remux processes run at once.
 static REMOX_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
+/// Monotonic counter for giving each remux temp file a unique name (see
+/// `remux_temp_path`). The remux path lacks the per-hash claim the transcode
+/// path has, so a fixed temp name would let two concurrent requests for the
+/// same sidecar write the same file (interleaved writes under `-y`).
+static REMUX_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn get_remox_semaphore() -> &'static Semaphore {
     REMOX_SEMAPHORE.get_or_init(|| Semaphore::new(4))
 }
@@ -173,6 +180,9 @@ pub enum TranscodeClaim {
     /// A previous attempt failed or timed out; remove any leftover temp file
     /// and serve the original.
     PreviouslyFailedOrTimedOut,
+    /// The worker pool is at its concurrent-claim cap; serve the original
+    /// instead of queueing an unbounded spawned task.
+    PoolSaturated,
 }
 
 /// How long a Failed/Timeout transcode status blocks re-spawning the same
@@ -185,12 +195,21 @@ const TRANSCODE_RETRY_COOLDOWN: chrono::Duration = chrono::Duration::minutes(15)
 /// status-store lock, closing the check-then-act window where two concurrent
 /// requests for the same hash could both read "no status" and each spawn an
 /// ffmpeg job. The global transcode semaphore would only serialize the jobs,
-/// not prevent the duplicate spawn.
+/// not prevent the duplicate spawn. Claims are additionally bounded to the
+/// worker-pool size so a flood of distinct-hash transcode requests cannot
+/// accumulate unbounded spawned tasks or unbounded InProgress status entries.
 pub fn claim_transcode(hash: &str) -> TranscodeClaim {
     let store = get_status_store();
     let mut map = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // A new claim is allowed only while fewer than `transcode_max_pool()`
+    // hashes are already in flight. This mirrors the semaphore's concurrency
+    // bound and keeps both the spawned-task count and the InProgress status
+    // map bounded. A full pool (including 0 = disabled) serves the original.
+    let can_start = count_in_progress(&map) < transcode_max_pool();
+
     match map.get(hash) {
         Some(status) if matches!(status.state, TranscodeState::InProgress) => {
             TranscodeClaim::AlreadyInProgress
@@ -207,16 +226,10 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
                 .started_at
                 .is_none_or(|started| started + TRANSCODE_RETRY_COOLDOWN < Utc::now());
             if stale {
-                map.insert(
-                    hash.to_string(),
-                    TranscodeStatus {
-                        state: TranscodeState::InProgress,
-                        hash: hash.to_string(),
-                        started_at: Some(Utc::now()),
-                        error: None,
-                        percent: None,
-                    },
-                );
+                if !can_start {
+                    return TranscodeClaim::PoolSaturated;
+                }
+                map.insert(hash.to_string(), in_progress_status(hash));
                 evict_transcode_statuses(&mut map);
                 TranscodeClaim::Started
             } else {
@@ -224,19 +237,29 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
             }
         }
         _ => {
-            map.insert(
-                hash.to_string(),
-                TranscodeStatus {
-                    state: TranscodeState::InProgress,
-                    hash: hash.to_string(),
-                    started_at: Some(Utc::now()),
-                    error: None,
-                    percent: None,
-                },
-            );
+            if !can_start {
+                return TranscodeClaim::PoolSaturated;
+            }
+            map.insert(hash.to_string(), in_progress_status(hash));
             evict_transcode_statuses(&mut map);
             TranscodeClaim::Started
         }
+    }
+}
+
+fn count_in_progress(map: &HashMap<String, TranscodeStatus>) -> usize {
+    map.values()
+        .filter(|s| matches!(s.state, TranscodeState::InProgress))
+        .count()
+}
+
+fn in_progress_status(hash: &str) -> TranscodeStatus {
+    TranscodeStatus {
+        state: TranscodeState::InProgress,
+        hash: hash.to_string(),
+        started_at: Some(Utc::now()),
+        error: None,
+        percent: None,
     }
 }
 
@@ -650,21 +673,14 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
 /// front via a fast `-c copy -movflags +faststart` pass, so browsers can start
 /// progressive playback immediately. This is a cheap stream copy (no re-encode,
 /// no decoder), separate from the full HEVC transcode path. No-op (returns
-/// `Ok(())`) when the input already has moov at the start. Writes to
-/// `OUTPUT.tmp` then atomically renames into place, mirroring the transcode
-/// temp+rename pattern so a failure never leaves a partial file at `output_path`.
+/// `Ok(())`) when the input already has moov at the start or the sidecar
+/// already exists. Writes to a unique temp file then atomically renames into
+/// place, so concurrent requests for the same sidecar cannot interleave into
+/// a corrupt output.
 pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    if has_moov_at_start(input_path)? {
-        return Ok(());
-    }
-
-    // Write to a temp file in the SAME directory as the final path so the
-    // completed file can be atomically renamed into place.
-    let temp_output_path = output_path.with_extension("mp4.tmp");
-    let output_path_owned = output_path.to_path_buf();
-
-    // Bounded by a lightweight semaphore (bounded to 4) so remuxes never queue
-    // behind slow re-encodes on the transcode semaphore.
+    // Bound the whole remux (moov probe + ffmpeg copy) by the remux semaphore
+    // so a burst of NeedsRemux requests cannot spawn unbounded blocking
+    // ffprobe/ffmpeg processes on the async runtime.
     let _permit = get_remox_semaphore().acquire().await.map_err(|e| {
         CacheError::VideoProcessingError(format!(
             "Failed to acquire remux semaphore for {}: {}",
@@ -672,6 +688,29 @@ pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> Ca
             e
         ))
     })?;
+
+    // Re-check under the permit: another request may have completed the remux
+    // while this one queued on the semaphore.
+    if output_path.exists() {
+        return Ok(());
+    }
+
+    // `has_moov_at_start` runs a blocking ffprobe; offload it so it cannot
+    // stall a tokio worker thread.
+    let probe_input = input_path.to_path_buf();
+    let moov_at_start = tokio::task::spawn_blocking(move || has_moov_at_start(&probe_input))
+        .await
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe task panicked: {e}")))??;
+    if moov_at_start {
+        return Ok(());
+    }
+
+    // Unique temp path: the remux path has no per-hash claim (unlike the
+    // transcode path), so a fixed name would let two concurrent remuxes of the
+    // same sidecar write the same file. Named in the SAME directory as the
+    // final path so the completed file can be atomically renamed in.
+    let temp_output_path = remux_temp_path(output_path);
+    let output_path_owned = output_path.to_path_buf();
 
     // Create output directory if it doesn't exist.
     if let Some(parent) = temp_output_path.parent() {
@@ -690,8 +729,8 @@ pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> Ca
         "copy",
         "-movflags",
         "+faststart",
-        // Force the muxer explicitly: the temp output path ends in `.mp4.tmp`,
-        // so ffmpeg cannot infer the format from the extension.
+        // Force the muxer explicitly: the temp path ends in `.tmp`, so ffmpeg
+        // cannot infer the format from the extension.
         "-f",
         "mp4",
         temp_output_path.to_string_lossy().as_ref(),
@@ -719,10 +758,26 @@ pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> Ca
     Ok(())
 }
 
+/// A per-call unique temp path in the same directory as `output_path`, so two
+/// concurrent remuxes of the same sidecar never write the same file.
+fn remux_temp_path(output_path: &Path) -> PathBuf {
+    let seq = REMUX_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("remux");
+    parent.join(format!("{stem}.{}.{}.tmp", std::process::id(), seq))
+}
 /// Transcode any video codec to H.264 for browser compatibility.
 pub async fn transcode_codec_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    transcode_codec_to_h264_with_timeout(input_path, output_path, Duration::from_secs(300), None)
-        .await
+    transcode_codec_to_h264_with_timeout(
+        input_path,
+        output_path,
+        Duration::from_secs(transcode_timeout_secs()),
+        None,
+    )
+    .await
 }
 
 /// Transcode any video codec to H.264, reporting progress percentage to
@@ -738,7 +793,7 @@ pub async fn transcode_codec_to_h264_with_progress(
     transcode_codec_to_h264_with_timeout(
         input_path,
         output_path,
-        Duration::from_secs(300),
+        Duration::from_secs(transcode_timeout_secs()),
         Some(on_progress),
     )
     .await
@@ -1404,7 +1459,6 @@ pub(crate) mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
-            max_transcodes: 2,
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),

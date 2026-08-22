@@ -105,8 +105,10 @@ async fn main() -> Result<()> {
             // Actually, we can deserialize the bytes since we know it's f32 little endian
 
             let floats: Vec<f32> = embedding_bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_ne_bytes(*chunk))
                 .collect();
 
             embeddings.push((count, floats));

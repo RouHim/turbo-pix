@@ -624,25 +624,28 @@ pub fn download_models(data_path: &str) -> Result<()> {
     // hang trying to download the model into the sandbox).
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
-    let model_repo = hf_hub::api::sync::ApiBuilder::new()
-        .with_cache_dir(cache_dir.clone())
-        .build()
+    let (model_owner, model_name) = hf_hub::split_id(CLIP_MODEL);
+    let model_repo = hf_hub::HFClient::builder()
+        .cache_dir(cache_dir.clone())
+        .build_sync()
         .context("Failed to build HuggingFace API")?
-        .repo(hf_hub::Repo::with_revision(
-            CLIP_MODEL.into(),
-            hf_hub::RepoType::Model,
-            MODEL_REVISION.into(),
-        ));
+        .model(model_owner, model_name);
 
     log::info!("Downloading model weights...");
     let weights_path = model_repo
-        .get("model.safetensors")
+        .download_file()
+        .filename("model.safetensors")
+        .revision(MODEL_REVISION)
+        .send()
         .context("Failed to download model weights")?;
     log::info!("Model weights downloaded: {}", weights_path.display());
 
     log::info!("Downloading tokenizer...");
     let tokenizer_path = model_repo
-        .get("tokenizer.json")
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(MODEL_REVISION)
+        .send()
         .context("Failed to download tokenizer")?;
     log::info!("Tokenizer downloaded: {}", tokenizer_path.display());
 
@@ -666,21 +669,24 @@ pub(crate) fn load_clip_model(
     // this path expression.
     let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
 
-    let model_repo = hf_hub::api::sync::ApiBuilder::new()
-        .with_cache_dir(cache_dir)
-        .build()
+    let (model_owner, model_name) = hf_hub::split_id(CLIP_MODEL);
+    let model_repo = hf_hub::HFClient::builder()
+        .cache_dir(cache_dir)
+        .build_sync()
         .context("Failed to build HuggingFace API")?
-        .repo(hf_hub::Repo::with_revision(
-            CLIP_MODEL.into(),
-            hf_hub::RepoType::Model,
-            MODEL_REVISION.into(),
-        ));
+        .model(model_owner, model_name);
 
     let weights_filename = model_repo
-        .get("model.safetensors")
+        .download_file()
+        .filename("model.safetensors")
+        .revision(MODEL_REVISION)
+        .send()
         .context("Failed to download model weights")?;
     let tokenizer_filename = model_repo
-        .get("tokenizer.json")
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(MODEL_REVISION)
+        .send()
         .context("Failed to download tokenizer")?;
 
     let config = clip::ClipConfig::vit_base_patch32();

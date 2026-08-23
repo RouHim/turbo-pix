@@ -420,7 +420,7 @@ impl Photo {
             sort_field, sort_order, sort_order
         );
 
-        let photos = sqlx::query_as::<_, Photo>(&query_str)
+        let photos = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(query_str))
             .bind(limit)
             .bind(offset)
             .fetch_all(pool)
@@ -836,7 +836,7 @@ impl Photo {
 
         // Get total count
         let count_sql = format!("SELECT COUNT(*) FROM photos{}", where_clause);
-        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+        let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
         for param in &params {
             count_query = count_query.bind(param);
         }
@@ -861,7 +861,7 @@ impl Photo {
             where_clause, sort_field, sort_order, sort_order
         );
 
-        let mut data_query = sqlx::query_as::<_, Photo>(&data_sql);
+        let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql));
         for param in &params {
             data_query = data_query.bind(param);
         }

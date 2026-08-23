@@ -12,8 +12,8 @@ mimalloc = "0.1.48"
 warp = { version = "0.4.2", features = ["server", "multipart", "test"] }
 
 # Database
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
-libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
+libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 
 # Scheduling
 clokwerk = "0.4"
@@ -26,9 +26,9 @@ fast-blurhash = "1.0"
 rawloader = "0.37"
 
 # ML model for semantic search
-candle-core = "0.10.0"
-candle-nn = "0.10.0"
-candle-transformers = "0.10.0"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
 tokenizers = "0.23.0"
 sqlite-vec = { git = "https://github.com/vlasky/sqlite-vec", tag = "v0.2.4-alpha" }

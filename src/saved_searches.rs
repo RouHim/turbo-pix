@@ -50,9 +50,9 @@ const SELECT_COLUMNS: &str = "id, name, query, view, sort, year, month, created_
 
 /// List saved searches newest-first (created_at second resolution, id tiebreak).
 pub async fn list(pool: &DbPool) -> Result<Vec<SavedSearch>, Box<dyn std::error::Error>> {
-    let rows = sqlx::query_as::<_, SavedSearch>(&format!(
+    let rows = sqlx::query_as::<_, SavedSearch>(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLUMNS} FROM saved_searches ORDER BY created_at DESC, id DESC"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -91,10 +91,10 @@ pub async fn create(
         None => {
             // Conflict: return the existing row. `IS` gives NULL == NULL
             // equality for the optional columns.
-            let existing = sqlx::query_as::<_, SavedSearch>(&format!(
+            let existing = sqlx::query_as::<_, SavedSearch>(sqlx::AssertSqlSafe(format!(
                 "SELECT {SELECT_COLUMNS} FROM saved_searches
                  WHERE query IS ? AND view = ? AND sort = ? AND year IS ? AND month IS ?"
-            ))
+            )))
             .bind(query)
             .bind(view)
             .bind(sort)
@@ -114,9 +114,9 @@ pub async fn create(
         }
     };
 
-    let row = sqlx::query_as::<_, SavedSearch>(&format!(
+    let row = sqlx::query_as::<_, SavedSearch>(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLUMNS} FROM saved_searches WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_one(pool)
     .await
@@ -130,10 +130,10 @@ pub async fn rename(
     id: i64,
     name: &str,
 ) -> Result<Option<SavedSearch>, Box<dyn std::error::Error>> {
-    let row = sqlx::query_as::<_, SavedSearch>(&format!(
+    let row = sqlx::query_as::<_, SavedSearch>(sqlx::AssertSqlSafe(format!(
         "UPDATE saved_searches SET name = ? WHERE id = ?
          RETURNING {SELECT_COLUMNS}"
-    ))
+    )))
     .bind(name)
     .bind(id)
     .fetch_optional(pool)

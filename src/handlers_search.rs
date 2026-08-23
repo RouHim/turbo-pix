@@ -93,7 +93,7 @@ pub async fn semantic_search(
         placeholders.join(",")
     );
 
-    let mut query_builder = sqlx::query_as::<_, (String, String)>(&query_sql);
+    let mut query_builder = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(query_sql));
     for path in &paths {
         query_builder = query_builder.bind(path);
     }

@@ -123,7 +123,7 @@ pub async fn delete_orphaned_photos(
     for chunk in existing_paths.chunks(CHUNK_SIZE) {
         let rows = chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
         let sql = format!("INSERT OR IGNORE INTO scanned_paths (path) VALUES {}", rows);
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for path in chunk {
             query = query.bind(path);
         }

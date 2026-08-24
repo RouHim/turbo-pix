@@ -128,11 +128,6 @@ mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
 
-    fn h(tag: &str) -> String {
-        // 64-char hash satisfying photos.hash_sha256 CHECK(length = 64).
-        format!("{tag:0>64}")
-    }
-
     #[tokio::test]
     async fn test_create_and_list_newest_first() {
         let pool = create_test_db_pool().await.unwrap();

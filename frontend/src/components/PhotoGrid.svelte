@@ -74,6 +74,10 @@
    * semantic results are unfilterable and must not leak into them.
    */
   function applyResetState() {
+    if (route.album != null) {
+      photoGridState.semanticSearchMode = false;
+      photoGridState.currentQuery = null;
+    }
     photoGridState.photos = [];
     photoGridState.currentPage = 1;
     photoGridState.hasMore = true;
@@ -156,6 +160,15 @@
    * @returns {Promise<Array>}
    */
   async function loadRegularPage(signal) {
+    if (route.album != null) {
+      const { sort, order } = buildFilters();
+      const response = await api.getEventAlbumPhotos(
+        route.album,
+        { page: photoGridState.currentPage, limit: DEFAULT_BATCH_SIZE, sort, order },
+        { signal }
+      );
+      return response.photos || [];
+    }
     const { query: viewQuery, ...filters } = buildFilters();
     const params = {
       page: photoGridState.currentPage,
@@ -195,7 +208,7 @@
     // Dedupe identical concurrent loads (effect + onMount can both fire);
     // reloadToken is bumped by handleIndexingCompleted so a completion
     // reload is never swallowed by the dedupe.
-    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${photoGridState.currentPage}|${reloadToken}`;
+    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.album}|${photoGridState.currentPage}|${reloadToken}`;
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
 
@@ -380,6 +393,7 @@
     route.sort;
     route.year;
     route.month;
+    route.album;
     untrack(() => loadPhotos(true));
   });
   // ===========================================================================
@@ -540,13 +554,21 @@
     {:else}
       <div class="error-state">
         <div class="error-state-icon">
-          <Icon name="camera" width={64} height={64} />
+          <Icon name={route.album != null ? 'calendar' : 'camera'} width={64} height={64} />
         </div>
         <div class="error-state-title">
-          {$t('ui.no_photos_found', { default: 'No Photos Found' })}
+          {#if route.album != null}
+            {$t('eventAlbums.emptyTitle', { default: 'No Photos' })}
+          {:else}
+            {$t('ui.no_photos_found', { default: 'No Photos Found' })}
+          {/if}
         </div>
         <div class="error-state-message">
-          {#if currentQuery}
+          {#if route.album != null}
+            {$t('eventAlbums.emptyState', {
+              default: "No photos match this album's criteria.",
+            })}
+          {:else if currentQuery}
             {$t('messages.no_photos_match_search', {
               default: `No photos match your search for "${currentQuery}"`,
               values: { query: currentQuery },
@@ -555,7 +577,7 @@
             {$t('messages.no_photos_indexed', { default: 'No photos have been indexed yet' })}
           {/if}
         </div>
-        {#if !currentQuery}
+        {#if !currentQuery && route.album == null}
           <button class="error-state-button" onclick={() => window.location.reload()}>
             {$t('ui.refresh', { default: 'Refresh' })}
           </button>

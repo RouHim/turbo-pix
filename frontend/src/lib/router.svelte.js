@@ -8,6 +8,7 @@ const defaultState = {
   sort: 'date_desc',
   year: null,
   month: null,
+  album: null,
 };
 
 export const route = $state({ ...defaultState });
@@ -25,6 +26,7 @@ function parseUrl(url) {
     sort: url.searchParams.get('sort'),
     year: parsePositiveInteger(url.searchParams.get('year')),
     month: parsePositiveInteger(url.searchParams.get('month')),
+    album: parsePositiveInteger(url.searchParams.get('album')),
   });
 }
 
@@ -43,6 +45,7 @@ function normalizeState(state) {
     sort,
     year,
     month,
+    album: parsePositiveInteger(state.album),
   };
 }
 
@@ -100,6 +103,10 @@ function buildUrl(state = {}) {
 
   if (normalizedState.photo) {
     url.searchParams.set('photo', normalizedState.photo);
+  }
+
+  if (normalizedState.album !== null) {
+    url.searchParams.set('album', String(normalizedState.album));
   }
 
   return `${url.pathname}${url.search}`;

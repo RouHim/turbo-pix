@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 pub mod cache_manager;
 pub mod collage_generator;
 pub mod config;

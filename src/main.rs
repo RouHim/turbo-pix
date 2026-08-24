@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use log::{error, info};
 use std::error::Error;
 use std::net::TcpListener;

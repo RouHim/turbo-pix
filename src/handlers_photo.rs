@@ -20,12 +20,12 @@ use crate::warp_helpers::{
 const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
 
 /// Default photo page number (1-based) and page size for list responses.
-const DEFAULT_PAGE: u32 = 1;
-const DEFAULT_PAGE_SIZE: u32 = 50;
+pub(crate) const DEFAULT_PAGE: u32 = 1;
+pub(crate) const DEFAULT_PAGE_SIZE: u32 = 50;
 
 /// Hard bounds on client-supplied pagination.
-const MIN_PAGE_SIZE: u32 = 1;
-const MAX_PAGE_SIZE: u32 = 100;
+pub(crate) const MIN_PAGE_SIZE: u32 = 1;
+pub(crate) const MAX_PAGE_SIZE: u32 = 100;
 
 #[derive(Debug, Deserialize)]
 pub struct PhotoQuery {

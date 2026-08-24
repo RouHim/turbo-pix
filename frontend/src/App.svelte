@@ -9,6 +9,7 @@
     selectionState,
     enterSelectionMode,
     exitSelectionMode,
+    eventAlbums,
   } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
@@ -45,13 +46,15 @@
   };
 
   let ready = $state(false);
-
   const viewTitle = $derived(
-    route.query
-      ? null // search results title handled separately
-      : $t(titleKeys[route.view] || 'ui.all_photos', {
-          default: titleFallbacks[route.view] || 'All Photos',
-        })
+    route.album != null
+      ? (eventAlbums.find((a) => a.id === route.album)?.name ??
+          $t('eventAlbums.sectionTitle', { default: 'Event album' }))
+      : route.query
+        ? null // search results title handled separately
+        : $t(titleKeys[route.view] || 'ui.all_photos', {
+            default: titleFallbacks[route.view] || 'All Photos',
+          })
   );
 
   // FR-013: selection never leaks across surfaces. A different view OR a
@@ -60,6 +63,7 @@
   $effect(() => {
     route.view;
     route.query;
+    route.album;
     untrack(() => {
       if (selectionState.active) exitSelectionMode();
     });
@@ -163,7 +167,7 @@
       </div>
     </div>
 
-    {#if route.view !== 'collages' && route.view !== 'housekeeping'}
+    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.album == null}
       <TimelineSlider />
     {/if}
 

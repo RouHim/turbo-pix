@@ -17,8 +17,8 @@
   function onLogoClick(e) {
     e.preventDefault();
     appState.mobileSearchOpen = false;
-    if (!(route.view === 'all' && !route.query)) {
-      pushState({ view: 'all', query: null });
+    if (!(route.view === 'all' && !route.query && route.album == null)) {
+      pushState({ view: 'all', query: null, album: null });
     }
     appState.sidebarOpen = false;
   }

@@ -100,6 +100,17 @@ export async function loadSavedSearches() {
   }
 }
 
+export const eventAlbums = $state([]);
+
+export async function loadEventAlbums() {
+  try {
+    const data = await api.getEventAlbums();
+    eventAlbums.splice(0, eventAlbums.length, ...(data?.event_albums || []));
+  } catch (error) {
+    console.error('Failed to load event albums', error);
+  }
+}
+
 export const themeState = $state({
   theme: document.documentElement.classList.contains('dark-theme') ? 'dark' : 'light',
 });

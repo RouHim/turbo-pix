@@ -287,6 +287,7 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
+    use crate::db::Photo;
     use crate::db_pool::create_in_memory_pool;
     use crate::warp_helpers::handle_rejection;
 
@@ -404,5 +405,64 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_photos_endpoint_returns_matching_photos() {
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let routes = build_test_routes(db_pool.clone());
+
+        let created: serde_json::Value = serde_json::from_slice(
+            warp::test::request()
+                .method("POST")
+                .path("/api/event-albums")
+                .json(&body("Berlin trip", "2024-01-01", "2024-01-31"))
+                .reply(&routes)
+                .await
+                .body(),
+        )
+        .unwrap();
+        let id = created["id"].as_i64().unwrap();
+
+        let photo = Photo {
+            hash_sha256: "a".repeat(64),
+            file_path: "./test/a.jpg".to_string(),
+            filename: "a.jpg".to_string(),
+            file_size: 0,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(
+                "2024-01-15T12:00:00Z"
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap(),
+            ),
+            width: None,
+            height: None,
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: None,
+            blurhash: None,
+            is_favorite: None,
+            semantic_vector_indexed: None,
+            metadata: serde_json::json!({ "location": { "city": "Berlin" } }),
+            date_modified: chrono::Utc::now(),
+            date_indexed: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        photo.create(&db_pool).await.unwrap();
+
+        let res = warp::test::request()
+            .path(&format!("/api/event-albums/{id}/photos"))
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let parsed: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert_eq!(parsed["photos"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["total"], 1);
+        assert_eq!(parsed["page"], 1);
+        assert_eq!(parsed["limit"], DEFAULT_PAGE_SIZE);
+        assert_eq!(parsed["has_next"], false);
+        assert_eq!(parsed["has_prev"], false);
     }
 }

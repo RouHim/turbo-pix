@@ -167,7 +167,7 @@
       </div>
     </div>
 
-    {#if route.view !== 'collages' && route.view !== 'housekeeping'}
+    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.album == null}
       <TimelineSlider />
     {/if}
 

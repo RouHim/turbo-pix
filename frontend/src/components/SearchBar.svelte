@@ -107,7 +107,7 @@
   function performSearch(q, addToHistory = false) {
     // Update URL immediately for explicit searches
     if (addToHistory) {
-      pushState({ query: q || null });
+      pushState({ query: q || null, album: null });
     }
 
     if (!q) return;
@@ -179,7 +179,7 @@
     photoGridState.currentPage = 1;
 
     if (updateUrl && route.query) {
-      pushState({ query: null });
+      pushState({ query: null, album: null });
     }
   }
 

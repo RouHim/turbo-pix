@@ -10,6 +10,7 @@ pub mod file_scanner;
 pub mod geo_location;
 pub mod handlers_collage;
 pub mod handlers_config;
+pub mod handlers_event_albums;
 pub mod handlers_health;
 pub mod handlers_housekeeping;
 pub mod handlers_indexing;

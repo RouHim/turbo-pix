@@ -11,6 +11,7 @@ use turbo_pix::db;
 use turbo_pix::db_pool;
 use turbo_pix::handlers_collage::build_collage_routes;
 use turbo_pix::handlers_config::build_config_routes;
+use turbo_pix::handlers_event_albums::build_event_albums_routes;
 use turbo_pix::handlers_health::build_health_routes;
 use turbo_pix::handlers_housekeeping::build_housekeeping_routes;
 use turbo_pix::handlers_indexing::build_indexing_routes;
@@ -136,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
     let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
+    let event_albums_routes = build_event_albums_routes(db_pool.clone());
     let config_routes = build_config_routes(config.locale.clone());
     let static_routes = build_static_routes();
 
@@ -154,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or(collage_routes)
                 .or(housekeeping_routes)
                 .or(saved_searches_routes)
+                .or(event_albums_routes)
                 .or(config_routes)
                 .or(static_routes),
         )

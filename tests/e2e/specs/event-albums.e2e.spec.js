@@ -154,4 +154,15 @@ test.describe('Event Albums', () => {
       await expect(page.locator(`[data-photo-id="${hash}"]`)).toHaveCount(1);
     }
   });
+
+  test('leaves the album when navigating to another view', async ({ page }) => {
+    await createAlbumViaApi(page, 'Temp', isoDateDaysFromNow(-10), isoDateDaysFromNow(1));
+    await TestHelpers.goto(page);
+    await page.click('[data-testid="event-album-open"]');
+    await expect(page).toHaveURL(/album=/);
+    await TestHelpers.navigateToView(page, 'favorites');
+    await TestHelpers.verifyActiveView(page, 'favorites');
+    const url = new URL(page.url());
+    expect(url.searchParams.get('album')).toBeNull();
+  });
 });

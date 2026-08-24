@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod db_pool;
 pub mod db_types;
+pub mod event_albums;
 pub mod exif_helpers;
 pub mod file_scanner;
 pub mod geo_location;

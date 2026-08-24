@@ -120,6 +120,24 @@ fn add_general_search_params(params: &mut Vec<String>, query: &str) {
     params.push(pattern);
 }
 
+/// Builds a validated ORDER BY clause (`<field> <order>, hash_sha256 <order>`)
+/// for photo listings. `sort`/`order` are client-supplied but whitelisted by
+/// the match; the `hash_sha256` tiebreak keeps pagination deterministic.
+pub(crate) fn build_order_clause(sort: Option<&str>, order: Option<&str>) -> String {
+    let sort_field = match sort {
+        Some("filename") | Some("name") => "filename",
+        Some("file_size") | Some("size") => "file_size",
+        Some("created_at") => "created_at",
+        Some("date") => "taken_at",
+        _ => "taken_at", // default
+    };
+    let sort_order = match order {
+        Some("asc") => "ASC",
+        _ => "DESC", // default
+    };
+    format!("{sort_field} {sort_order}, hash_sha256 {sort_order}")
+}
+
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
@@ -396,28 +414,9 @@ impl Photo {
             .fetch_one(pool)
             .await?;
 
-        // Build ORDER BY clause
-        let sort_field = match sort {
-            Some("filename") | Some("name") => "filename",
-            Some("file_size") | Some("size") => "file_size",
-            Some("created_at") => "created_at",
-            Some("date") => "taken_at",
-            _ => "taken_at", // default
-        };
-
-        let sort_order = match order {
-            Some("asc") => "ASC",
-            _ => "DESC", // default
-        };
-
-        // Deterministic pagination: `hash_sha256` (unique) breaks ties on the
-        // primary sort key — camera bursts share the identical EXIF second,
-        // and SQLite's tie order follows scan/rowid order, which shifts when
-        // a background rescan inserts/updates rows between page fetches
-        // (photos then appear on two pages or get skipped).
         let query_str = format!(
-            "SELECT * FROM photos ORDER BY {} {}, hash_sha256 {} LIMIT ? OFFSET ?",
-            sort_field, sort_order, sort_order
+            "SELECT * FROM photos ORDER BY {} LIMIT ? OFFSET ?",
+            build_order_clause(sort, order)
         );
 
         let photos = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(query_str))
@@ -842,23 +841,10 @@ impl Photo {
         }
         let total = count_query.fetch_one(pool).await?;
 
-        // Get the actual photos
-        let sort_field = match sort {
-            Some("filename") | Some("name") => "filename",
-            Some("file_size") | Some("size") => "file_size",
-            Some("created_at") => "created_at",
-            Some("date") => "taken_at",
-            _ => "taken_at", // default
-        };
-
-        let sort_order = match order {
-            Some("asc") => "ASC",
-            _ => "DESC", // default
-        };
-
         let data_sql = format!(
-            "SELECT * FROM photos{} ORDER BY {} {}, hash_sha256 {} LIMIT ? OFFSET ?",
-            where_clause, sort_field, sort_order, sort_order
+            "SELECT * FROM photos{} ORDER BY {} LIMIT ? OFFSET ?",
+            where_clause,
+            build_order_clause(sort, order)
         );
 
         let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql));

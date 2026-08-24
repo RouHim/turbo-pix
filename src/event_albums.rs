@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sqlx::{FromRow, Row};
 
-use crate::db::DbPool;
+use crate::db::{build_order_clause, DbPool, Photo};
 
 /// An event album: a named, rule-driven album whose membership is computed
 /// live from photo metadata (taken date within `[start_date, end_date]` and,
@@ -123,6 +123,55 @@ pub async fn delete(pool: &DbPool, id: i64) -> Result<bool, Box<dyn std::error::
     Ok(result.rows_affected() > 0)
 }
 
+/// Query photos matching an album's criteria, newest-first by default.
+/// Membership is the conjunction: taken date within `[start_date, end_date]`
+/// (inclusive, local calendar days) AND (no location OR city matches
+/// case-insensitively). Photos with no taken date are excluded; photos with
+/// no city are excluded when a location is set.
+pub async fn photos_for_album(
+    pool: &DbPool,
+    album: &EventAlbum,
+    limit: i64,
+    offset: i64,
+    sort: Option<&str>,
+    order: Option<&str>,
+) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
+    // `date(taken_at, 'localtime')` normalizes the stored UTC RFC3339 value to
+    // the server's local calendar day so the comparison honors the spec's
+    // "local date boundaries" assumption. start/end are validated YYYY-MM-DD.
+    let mut where_clause = String::from(
+        " WHERE taken_at IS NOT NULL \
+           AND date(taken_at, 'localtime') >= date(?) \
+           AND date(taken_at, 'localtime') <= date(?)",
+    );
+    let mut params: Vec<String> = vec![album.start_date.clone(), album.end_date.clone()];
+
+    if let Some(location) = &album.location {
+        where_clause.push_str(" AND json_extract(metadata, '$.location.city') = ? COLLATE NOCASE");
+        params.push(location.clone());
+    }
+
+    let count_sql = format!("SELECT COUNT(*) FROM photos{where_clause}");
+    let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
+    for p in &params {
+        count_query = count_query.bind(p);
+    }
+    let total = count_query.fetch_one(pool).await?;
+
+    let data_sql = format!(
+        "SELECT * FROM photos{where_clause} ORDER BY {} LIMIT ? OFFSET ?",
+        build_order_clause(sort, order)
+    );
+    let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql));
+    for p in &params {
+        data_query = data_query.bind(p);
+    }
+    data_query = data_query.bind(limit).bind(offset);
+    let photos = data_query.fetch_all(pool).await?;
+
+    Ok((photos, total))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +238,193 @@ mod tests {
         assert!(delete(&pool, created.id).await.unwrap());
         assert!(!delete(&pool, created.id).await.unwrap());
         assert_eq!(list(&pool).await.unwrap().len(), 0);
+    }
+    use chrono::{DateTime, Utc};
+
+    fn h(tag: &str) -> String {
+        // 64-char hash satisfying photos.hash_sha256 CHECK(length = 64).
+        format!("{tag:0>64}")
+    }
+
+    fn test_photo(
+        tag: &str,
+        filename: &str,
+        taken_at: Option<DateTime<Utc>>,
+        city: Option<&str>,
+    ) -> Photo {
+        use crate::db::Photo;
+        let metadata = match city {
+            Some(city) => serde_json::json!({ "location": { "city": city } }),
+            None => serde_json::json!({}),
+        };
+        Photo {
+            hash_sha256: h(tag),
+            file_path: format!("./test/{filename}"),
+            filename: filename.to_string(),
+            file_size: 0,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at,
+            width: None,
+            height: None,
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: None,
+            blurhash: None,
+            is_favorite: None,
+            semantic_vector_indexed: None,
+            metadata,
+            date_modified: Utc::now(),
+            date_indexed: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn album(start: &str, end: &str, location: Option<&str>) -> EventAlbum {
+        EventAlbum {
+            id: 1,
+            name: "album".into(),
+            start_date: start.into(),
+            end_date: end.into(),
+            location: location.map(str::to_string),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_photos_for_album_conjunction_and_case_insensitive_location() {
+        let pool = create_test_db_pool().await.unwrap();
+        let jan15 = "2024-01-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let may15 = "2024-05-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        test_photo("a", "a.jpg", Some(jan15), Some("Berlin"))
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("b", "b.jpg", Some(jan15), Some("Hamburg"))
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("c", "c.jpg", Some(jan15), None)
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("d", "d.jpg", Some(may15), Some("Berlin"))
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("e", "e.jpg", None, Some("Berlin"))
+            .create(&pool)
+            .await
+            .unwrap();
+
+        // Location "berlin" (lowercase) matches city "Berlin" (case-insensitive);
+        // date range excludes May and the null-date photo; wrong-city and no-city excluded.
+        let (photos, total) = photos_for_album(
+            &pool,
+            &album("2024-01-01", "2024-01-31", Some("berlin")),
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].hash_sha256, h("a"));
+    }
+
+    #[tokio::test]
+    async fn test_photos_for_album_no_location_includes_every_date_match() {
+        let pool = create_test_db_pool().await.unwrap();
+        let jan15 = "2024-01-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        test_photo("a", "a.jpg", Some(jan15), Some("Berlin"))
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("b", "b.jpg", Some(jan15), None)
+            .create(&pool)
+            .await
+            .unwrap();
+
+        // No location → every in-range photo, regardless of city presence.
+        let (photos, total) = photos_for_album(
+            &pool,
+            &album("2024-01-01", "2024-01-31", None),
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(photos.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_photos_for_album_pagination_and_out_of_range_exclusion() {
+        let pool = create_test_db_pool().await.unwrap();
+        let jan15 = "2024-01-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let dec15 = "2023-12-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        test_photo("a", "a.jpg", Some(jan15), None)
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("b", "b.jpg", Some(jan15), None)
+            .create(&pool)
+            .await
+            .unwrap();
+        test_photo("c", "c.jpg", Some(dec15), None)
+            .create(&pool)
+            .await
+            .unwrap();
+
+        let (photos, total) = photos_for_album(
+            &pool,
+            &album("2024-01-01", "2024-01-31", None),
+            1,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(total, 2); // the Dec photo is outside the range
+        assert_eq!(photos.len(), 1); // limit honored
+    }
+
+    #[tokio::test]
+    async fn test_photos_for_album_is_dynamic() {
+        let pool = create_test_db_pool().await.unwrap();
+        let a = album("2024-01-01", "2024-01-31", None);
+
+        // SC-002: membership is derived live — empty before any photo matches.
+        let (photos, total) = photos_for_album(&pool, &a, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!((photos.len(), total), (0, 0));
+
+        let jan15 = "2024-01-15T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let photo = test_photo("a", "a.jpg", Some(jan15), None);
+        photo.create(&pool).await.unwrap();
+        let (photos, total) = photos_for_album(&pool, &a, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!((photos.len(), total), (1, 1));
+
+        // Removing the photo (orphan cleanup) removes it from live membership.
+        sqlx::query("DELETE FROM photos WHERE hash_sha256 = ?")
+            .bind(&photo.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (photos, total) = photos_for_album(&pool, &a, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!((photos.len(), total), (0, 0));
     }
 }

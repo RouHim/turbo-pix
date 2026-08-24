@@ -29,20 +29,20 @@
     if (view === 'all') {
       // Clear any active search — matches the Header logo behavior and the
       // old app.js nav handler (which called search.clearSearch()).
-      if (route.view === 'all' && !route.query) {
+      if (route.view === 'all' && !route.query && route.album == null) {
         appState.sidebarOpen = false;
         return;
       }
-      pushState({ view: 'all', query: null });
+      pushState({ view: 'all', query: null, album: null });
       appState.sidebarOpen = false;
       return;
     }
-    if (route.view === view) {
+    if (route.view === view && route.album == null) {
       // Close the drawer even when tapping the already-active view (mobile).
       appState.sidebarOpen = false;
       return;
     }
-    pushState({ view });
+    pushState({ view, album: null });
     appState.sidebarOpen = false;
   }
 
@@ -80,6 +80,7 @@
       sort: item.sort,
       year: item.year,
       month: item.month,
+      album: null,
     });
     appState.sidebarOpen = false;
     // NOTE: photo is deliberately not touched — same as existing view navigation.

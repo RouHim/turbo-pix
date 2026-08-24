@@ -2,9 +2,17 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import Icon from './Icon.svelte';
+  import EventAlbumDialog from './EventAlbumDialog.svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast, appState, loadSavedSearches, savedSearches } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    appState,
+    eventAlbums,
+    loadEventAlbums,
+    loadSavedSearches,
+    savedSearches,
+  } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { handleError } from '../lib/utils.js';
 
@@ -45,11 +53,10 @@
   let renamingId = $state(null);
   let renameName = $state('');
   let renameInputEl = $state(null);
-
   onMount(() => {
     loadSavedSearches();
+    loadEventAlbums();
   });
-
   function isActiveSearch(item) {
     return (
       route.view === item.view &&
@@ -133,6 +140,42 @@
       if (idx !== -1) savedSearches.splice(idx, 1);
     } catch (error) {
       handleError(error, 'delete saved search');
+    }
+  }
+
+  let albumDialogOpen = $state(false);
+  let editingAlbum = $state(null);
+
+  function openCreateAlbum() {
+    editingAlbum = null;
+    albumDialogOpen = true;
+  }
+
+  function openEditAlbum(item) {
+    editingAlbum = item;
+    albumDialogOpen = true;
+  }
+
+  function openAlbum(item) {
+    appState.mobileSearchOpen = false;
+    if (route.album === item.id) {
+      appState.sidebarOpen = false;
+      return;
+    }
+    pushState({ album: item.id, view: 'all', query: null, year: null, month: null });
+    appState.sidebarOpen = false;
+  }
+
+  async function deleteAlbum(item) {
+    try {
+      await api.deleteEventAlbum(item.id);
+      const idx = eventAlbums.findIndex((a) => a.id === item.id);
+      if (idx !== -1) eventAlbums.splice(idx, 1);
+      if (route.album === item.id) {
+        pushState({ album: null, view: 'all' });
+      }
+    } catch (error) {
+      handleError(error, 'delete event album');
     }
   }
 
@@ -223,8 +266,57 @@
         </div>
       {/each}
     {/if}
+    <div class="album-section-header">
+      <span>{$t('eventAlbums.sectionTitle', { default: 'Event albums' })}</span>
+      <button
+        type="button"
+        class="album-new-btn"
+        title={$t('eventAlbums.newAlbum', { default: 'New album' })}
+        aria-label={$t('eventAlbums.newAlbum', { default: 'New album' })}
+        onclick={openCreateAlbum}
+        data-testid="new-album-btn"
+      >
+        <Icon name="plus" width={14} height={14} />
+      </button>
+    </div>
+    {#each eventAlbums as item (item.id)}
+      <div
+        class="saved-search-row"
+        class:active={route.album === item.id}
+        data-testid="event-album-row"
+      >
+        <button
+          type="button"
+          class="saved-search-open"
+          title={item.name}
+          aria-current={route.album === item.id ? 'true' : undefined}
+          onclick={() => openAlbum(item)}
+          data-testid="event-album-open"
+        >
+          <Icon name="calendar" width={14} height={14} />
+          <span class="saved-search-name">{item.name}</span>
+        </button>
+        <button
+          type="button"
+          class="saved-search-action"
+          title={$t('eventAlbums.edit', { default: 'Edit' })}
+          aria-label={$t('eventAlbums.edit', { default: 'Edit' })}
+          onclick={() => openEditAlbum(item)}
+          data-testid="event-album-edit"><Icon name="edit-2" width={14} height={14} /></button
+        >
+        <button
+          type="button"
+          class="saved-search-action"
+          title={$t('eventAlbums.delete', { default: 'Delete' })}
+          aria-label={$t('eventAlbums.delete', { default: 'Delete' })}
+          onclick={() => deleteAlbum(item)}
+          data-testid="event-album-delete"><Icon name="trash-2" width={14} height={14} /></button
+        >
+      </div>
+    {/each}
   </div>
 </nav>
+<EventAlbumDialog bind:open={albumDialogOpen} album={editingAlbum} />
 
 <style>
   .sidebar {
@@ -346,6 +438,33 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
+  }
+
+  .album-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+  }
+
+  .album-new-btn {
+    display: flex;
+    padding: var(--space-1);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-md);
+  }
+
+  .album-new-btn:hover {
+    color: var(--text-primary);
+    background: var(--background-secondary);
   }
 
   .saved-search-row {

@@ -100,14 +100,14 @@ export async function loadSavedSearches() {
   }
 }
 
-export const eventAlbums = $state([]);
+export const albums = $state([]);
 
-export async function loadEventAlbums() {
+export async function loadAlbums() {
   try {
-    const data = await api.getEventAlbums();
-    eventAlbums.splice(0, eventAlbums.length, ...(data?.event_albums || []));
+    const data = await api.getAlbums();
+    albums.splice(0, albums.length, ...(data?.albums || []));
   } catch (error) {
-    console.error('Failed to load event albums', error);
+    console.error('Failed to load albums', error);
   }
 }
 

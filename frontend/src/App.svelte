@@ -9,7 +9,7 @@
     selectionState,
     enterSelectionMode,
     exitSelectionMode,
-    eventAlbums,
+    albums,
   } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
@@ -48,8 +48,8 @@
   let ready = $state(false);
   const viewTitle = $derived(
     route.album != null
-      ? (eventAlbums.find((a) => a.id === route.album)?.name ??
-          $t('eventAlbums.sectionTitle', { default: 'Event album' }))
+      ? (albums.find((a) => a.id === route.album)?.name ??
+          $t('albums.sectionTitle', { default: 'Albums' }))
       : route.query
         ? null // search results title handled separately
         : $t(titleKeys[route.view] || 'ui.all_photos', {

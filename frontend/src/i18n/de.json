@@ -254,9 +254,11 @@
     "renamed": "Album umbenannt",
     "deleted": "Album gelöscht",
     "added": "Fotos zum Album hinzugefügt",
+    "alreadyAdded": "Fotos bereits im Album",
     "removed": "Fotos aus Album entfernt",
     "emptyTitle": "Keine Fotos",
-    "emptyState": "Dieses Album ist leer. Füge Fotos aus der Bibliothek hinzu."
+    "emptyState": "Dieses Album ist leer. Füge Fotos aus der Bibliothek hinzu.",
+    "emptyList": "Noch keine Alben. Erstelle ein Album, um zu beginnen."
   },
   "messages": {
     "indexing_in_progress_title": "Fotos werden indiziert",

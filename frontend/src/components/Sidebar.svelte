@@ -2,18 +2,9 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import Icon from './Icon.svelte';
-  import AlbumDialog from './AlbumDialog.svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import {
-    addToast,
-    albums,
-    appState,
-    loadAlbums,
-    loadSavedSearches,
-    savedSearches,
-    selectionState,
-  } from '../lib/state.svelte.js';
+  import { addToast, appState, loadSavedSearches, savedSearches } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { handleError } from '../lib/utils.js';
 
@@ -21,6 +12,7 @@
     { id: 'all', key: 'ui.all_photos', fallback: 'All Photos' },
     { id: 'favorites', key: 'ui.favorites', fallback: 'Favorites' },
     { id: 'videos', key: 'ui.videos', fallback: 'Videos' },
+    { id: 'albums', key: 'albums.sectionTitle', fallback: 'Albums' },
     { id: 'collages', key: 'ui.collages', fallback: 'Collages' },
     { id: 'housekeeping', key: 'ui.housekeeping', fallback: 'Housekeeping' },
   ];
@@ -56,10 +48,12 @@
   let renameInputEl = $state(null);
   onMount(() => {
     loadSavedSearches();
-    loadAlbums();
   });
   function isActiveSearch(item) {
+    // Saved searches never carry an album; an open album means the search
+    // state is not what is shown, even if view/query/sort/year/month match.
     return (
+      route.album == null &&
       route.view === item.view &&
       route.query === item.query &&
       route.sort === item.sort &&
@@ -145,54 +139,6 @@
     }
   }
 
-  let albumDialogOpen = $state(false);
-  let editingAlbum = $state(null);
-  let createCount = $state(0);
-  let createHashes = $state([]);
-
-  function openCreateAlbum() {
-    editingAlbum = null;
-    // FR-002: an active grid selection is offered for immediate inclusion;
-    // selection keys are photo hash_sha256 strings.
-    if (selectionState.active) {
-      createHashes = Object.keys(selectionState.selected);
-      createCount = createHashes.length;
-    } else {
-      createHashes = [];
-      createCount = 0;
-    }
-    albumDialogOpen = true;
-  }
-
-  function openEditAlbum(item) {
-    editingAlbum = item;
-    albumDialogOpen = true;
-  }
-
-  function openAlbum(item) {
-    appState.mobileSearchOpen = false;
-    if (route.album === item.id) {
-      appState.sidebarOpen = false;
-      return;
-    }
-    pushState({ album: item.id, view: 'all', query: null, year: null, month: null });
-    appState.sidebarOpen = false;
-  }
-
-  async function deleteAlbum(item) {
-    try {
-      await api.deleteAlbum(item.id);
-      const idx = albums.findIndex((a) => a.id === item.id);
-      if (idx !== -1) albums.splice(idx, 1);
-      addToast(get(t)('albums.deleted', { default: 'Album deleted' }), item.name, 'success', 3000);
-      if (route.album === item.id) {
-        pushState({ album: null, view: 'all' });
-      }
-    } catch (error) {
-      handleError(error, 'delete album');
-    }
-  }
-
   // Escape closes the sidebar whenever it is open.
   $effect(() => {
     function onKey(e) {
@@ -216,9 +162,11 @@
       <button
         type="button"
         class="nav-item"
-        class:active={route.view === view.id}
+        class:active={route.view === view.id || (view.id === 'albums' && route.album != null)}
         data-view={view.id}
-        aria-current={route.view === view.id ? 'page' : undefined}
+        aria-current={route.view === view.id || (view.id === 'albums' && route.album != null)
+          ? 'page'
+          : undefined}
         onclick={() => navigate(view.id)}
       >
         {$t(view.key, { default: view.fallback })}
@@ -280,58 +228,8 @@
         </div>
       {/each}
     {/if}
-    <div class="album-section-header">
-      <span>{$t('albums.sectionTitle', { default: 'Albums' })}</span>
-      <button
-        type="button"
-        class="album-new-btn"
-        title={$t('albums.newAlbum', { default: 'New album' })}
-        aria-label={$t('albums.newAlbum', { default: 'New album' })}
-        onclick={openCreateAlbum}
-        data-testid="new-album-btn"
-      >
-        <Icon name="plus" width={14} height={14} />
-      </button>
-    </div>
-    {#each albums as item (item.id)}
-      <div class="saved-search-row" class:active={route.album === item.id} data-testid="album-row">
-        <button
-          type="button"
-          class="saved-search-open"
-          title={item.name}
-          aria-current={route.album === item.id ? 'true' : undefined}
-          onclick={() => openAlbum(item)}
-          data-testid="album-open"
-        >
-          <Icon name="image" width={14} height={14} />
-          <span class="saved-search-name">{item.name}</span>
-        </button>
-        <button
-          type="button"
-          class="saved-search-action"
-          title={$t('albums.rename', { default: 'Rename' })}
-          aria-label={$t('albums.rename', { default: 'Rename' })}
-          onclick={() => openEditAlbum(item)}
-          data-testid="album-rename"><Icon name="edit-2" width={14} height={14} /></button
-        >
-        <button
-          type="button"
-          class="saved-search-action"
-          title={$t('albums.delete', { default: 'Delete' })}
-          aria-label={$t('albums.delete', { default: 'Delete' })}
-          onclick={() => deleteAlbum(item)}
-          data-testid="album-delete"><Icon name="trash-2" width={14} height={14} /></button
-        >
-      </div>
-    {/each}
   </div>
 </nav>
-<AlbumDialog
-  bind:open={albumDialogOpen}
-  album={editingAlbum}
-  initialCount={createCount}
-  initialHashes={createHashes}
-/>
 
 <style>
   .sidebar {
@@ -450,36 +348,7 @@
     margin-top: var(--space-2);
     padding: var(--space-2) var(--space-4);
     font-size: var(--font-sm);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--text-secondary);
-  }
-
-  .album-section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    font-size: var(--font-sm);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-secondary);
-  }
-
-  .album-new-btn {
-    display: flex;
-    padding: var(--space-1);
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-    border-radius: var(--radius-md);
-  }
-
-  .album-new-btn:hover {
-    color: var(--text-primary);
-    background: var(--background-secondary);
   }
 
   .saved-search-row {

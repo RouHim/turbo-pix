@@ -92,15 +92,20 @@
 
   async function removeFromAlbum() {
     if (!canAct || route.album == null) return;
+    // Snapshot the target set: grid toggles stay live during the await, so
+    // re-reading `keys` afterwards could splice cards that were never
+    // removed and keep ones that were.
+    const target = [...keys];
+    const albumId = route.album;
     selectionState.busy = 'removeFromAlbum';
     try {
-      await api.removeAlbumMembers(route.album, keys);
+      await api.removeAlbumMembers(albumId, target);
       // Membership-only removal: the grid splices each card through the
       // shared photoRemoved contract; library photos are untouched (FR-007).
-      for (const hash of keys) {
+      for (const hash of target) {
         window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash } }));
       }
-      dropSelectedKeys(keys);
+      dropSelectedKeys(target);
       addToast($t('albums.removed', { default: 'Photos removed from album' }), '', 'success');
     } catch (error) {
       logger.error('Remove from album failed', { component: 'SelectionBar' }, error);
@@ -458,16 +463,18 @@
     {/if}
   {/each}
 
-  <button
-    type="button"
-    class="btn batch-action-btn"
-    data-action="batch-add-to-album"
-    disabled={!canAct}
-    onclick={() => (pickerOpen = true)}
-  >
-    <Icon name="plus" width={16} height={16} />
-    {$t('albums.addToAlbum', { default: 'Add to album' })}
-  </button>
+  {#if route.view !== 'collages'}
+    <button
+      type="button"
+      class="btn batch-action-btn"
+      data-action="batch-add-to-album"
+      disabled={!canAct}
+      onclick={() => (pickerOpen = true)}
+    >
+      <Icon name="plus" width={16} height={16} />
+      {$t('albums.addToAlbum', { default: 'Add to album' })}
+    </button>
+  {/if}
 
   {#if route.album != null}
     <button

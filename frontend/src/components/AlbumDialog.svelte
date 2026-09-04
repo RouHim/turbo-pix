@@ -99,7 +99,11 @@
 
     {#if !album && initialCount > 0}
       <label class="album-include-row">
-        <input type="checkbox" bind:checked={includeSelection} data-testid="album-include-selection" />
+        <input
+          type="checkbox"
+          bind:checked={includeSelection}
+          data-testid="album-include-selection"
+        />
         {$t('albums.includeSelection', {
           default: 'Include {count} selected photos',
           values: { count: initialCount },

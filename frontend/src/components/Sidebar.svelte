@@ -2,16 +2,17 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import Icon from './Icon.svelte';
-  import EventAlbumDialog from './EventAlbumDialog.svelte';
+  import AlbumDialog from './AlbumDialog.svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import {
     addToast,
+    albums,
     appState,
-    eventAlbums,
-    loadEventAlbums,
+    loadAlbums,
     loadSavedSearches,
     savedSearches,
+    selectionState,
   } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { handleError } from '../lib/utils.js';
@@ -55,7 +56,7 @@
   let renameInputEl = $state(null);
   onMount(() => {
     loadSavedSearches();
-    loadEventAlbums();
+    loadAlbums();
   });
   function isActiveSearch(item) {
     return (
@@ -146,9 +147,20 @@
 
   let albumDialogOpen = $state(false);
   let editingAlbum = $state(null);
+  let createCount = $state(0);
+  let createHashes = $state([]);
 
   function openCreateAlbum() {
     editingAlbum = null;
+    // FR-002: an active grid selection is offered for immediate inclusion;
+    // selection keys are photo hash_sha256 strings.
+    if (selectionState.active) {
+      createHashes = Object.keys(selectionState.selected);
+      createCount = createHashes.length;
+    } else {
+      createHashes = [];
+      createCount = 0;
+    }
     albumDialogOpen = true;
   }
 
@@ -169,14 +181,20 @@
 
   async function deleteAlbum(item) {
     try {
-      await api.deleteEventAlbum(item.id);
-      const idx = eventAlbums.findIndex((a) => a.id === item.id);
-      if (idx !== -1) eventAlbums.splice(idx, 1);
+      await api.deleteAlbum(item.id);
+      const idx = albums.findIndex((a) => a.id === item.id);
+      if (idx !== -1) albums.splice(idx, 1);
+      addToast(
+        get(t)('albums.deleted', { default: 'Album deleted' }),
+        item.name,
+        'success',
+        3000
+      );
       if (route.album === item.id) {
         pushState({ album: null, view: 'all' });
       }
     } catch (error) {
-      handleError(error, 'delete event album');
+      handleError(error, 'delete album');
     }
   }
 
@@ -268,23 +286,23 @@
       {/each}
     {/if}
     <div class="album-section-header">
-      <span>{$t('eventAlbums.sectionTitle', { default: 'Event albums' })}</span>
+      <span>{$t('albums.sectionTitle', { default: 'Albums' })}</span>
       <button
         type="button"
         class="album-new-btn"
-        title={$t('eventAlbums.newAlbum', { default: 'New album' })}
-        aria-label={$t('eventAlbums.newAlbum', { default: 'New album' })}
+        title={$t('albums.newAlbum', { default: 'New album' })}
+        aria-label={$t('albums.newAlbum', { default: 'New album' })}
         onclick={openCreateAlbum}
         data-testid="new-album-btn"
       >
         <Icon name="plus" width={14} height={14} />
       </button>
     </div>
-    {#each eventAlbums as item (item.id)}
+    {#each albums as item (item.id)}
       <div
         class="saved-search-row"
         class:active={route.album === item.id}
-        data-testid="event-album-row"
+        data-testid="album-row"
       >
         <button
           type="button"
@@ -292,32 +310,37 @@
           title={item.name}
           aria-current={route.album === item.id ? 'true' : undefined}
           onclick={() => openAlbum(item)}
-          data-testid="event-album-open"
+          data-testid="album-open"
         >
-          <Icon name="calendar" width={14} height={14} />
+          <Icon name="image" width={14} height={14} />
           <span class="saved-search-name">{item.name}</span>
         </button>
         <button
           type="button"
           class="saved-search-action"
-          title={$t('eventAlbums.edit', { default: 'Edit' })}
-          aria-label={$t('eventAlbums.edit', { default: 'Edit' })}
+          title={$t('albums.rename', { default: 'Rename' })}
+          aria-label={$t('albums.rename', { default: 'Rename' })}
           onclick={() => openEditAlbum(item)}
-          data-testid="event-album-edit"><Icon name="edit-2" width={14} height={14} /></button
+          data-testid="album-rename"><Icon name="edit-2" width={14} height={14} /></button
         >
         <button
           type="button"
           class="saved-search-action"
-          title={$t('eventAlbums.delete', { default: 'Delete' })}
-          aria-label={$t('eventAlbums.delete', { default: 'Delete' })}
+          title={$t('albums.delete', { default: 'Delete' })}
+          aria-label={$t('albums.delete', { default: 'Delete' })}
           onclick={() => deleteAlbum(item)}
-          data-testid="event-album-delete"><Icon name="trash-2" width={14} height={14} /></button
+          data-testid="album-delete"><Icon name="trash-2" width={14} height={14} /></button
         >
       </div>
     {/each}
   </div>
 </nav>
-<EventAlbumDialog bind:open={albumDialogOpen} album={editingAlbum} />
+<AlbumDialog
+  bind:open={albumDialogOpen}
+  album={editingAlbum}
+  initialCount={createCount}
+  initialHashes={createHashes}
+ />
 
 <style>
   .sidebar {

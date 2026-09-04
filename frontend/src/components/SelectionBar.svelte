@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
+  import AlbumPicker from './AlbumPicker.svelte';
   import { api } from '../lib/api.js';
   import { logger } from '../lib/logger.js';
   import { route } from '../lib/router.svelte.js';
@@ -60,6 +61,7 @@
   };
 
   let dateShiftOpen = $state(false);
+  let pickerOpen = $state(false);
   let daysInput = $state('');
   const daysValid = $derived(
     daysInput !== '' && Number.isInteger(Number(daysInput)) && Number(daysInput) !== 0
@@ -85,6 +87,32 @@
         5000
       );
       logger.warn('Batch action reported failures', { component: 'SelectionBar', res });
+    }
+  }
+
+  async function removeFromAlbum() {
+    if (!canAct || route.album == null) return;
+    selectionState.busy = 'removeFromAlbum';
+    try {
+      await api.removeAlbumMembers(route.album, keys);
+      // Membership-only removal: the grid splices each card through the
+      // shared photoRemoved contract; library photos are untouched (FR-007).
+      for (const hash of keys) {
+        window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash } }));
+      }
+      dropSelectedKeys(keys);
+      addToast($t('albums.removed', { default: 'Photos removed from album' }), '', 'success');
+    } catch (error) {
+      logger.error('Remove from album failed', { component: 'SelectionBar' }, error);
+      addToast(
+        $t('errors.batchActionFailed', { default: 'Batch action failed' }),
+        error?.message,
+        'error',
+        5000
+      );
+    } finally {
+      selectionState.busy = null;
+      if (count === 0) exitSelectionMode();
     }
   }
 
@@ -432,6 +460,37 @@
 
   <button
     type="button"
+    class="btn batch-action-btn"
+    data-action="batch-add-to-album"
+    disabled={!canAct}
+    onclick={() => (pickerOpen = true)}
+  >
+    <Icon name="plus" width={16} height={16} />
+    {$t('albums.addToAlbum', { default: 'Add to album' })}
+  </button>
+
+  {#if route.album != null}
+    <button
+      type="button"
+      class="btn batch-action-btn"
+      data-action="batch-remove-from-album"
+      disabled={!canAct}
+      onclick={removeFromAlbum}
+    >
+      {#if selectionState.busy === 'removeFromAlbum'}
+        <span class="spin">
+          <Icon name="loader" width={16} height={16} />
+        </span>
+        {$t('ui.working', { default: 'Working…' })}
+      {:else}
+        <Icon name="x" width={16} height={16} />
+        {$t('albums.removeFromAlbum', { default: 'Remove from album' })}
+      {/if}
+    </button>
+  {/if}
+
+  <button
+    type="button"
     class="btn exit-btn"
     data-action="batch-exit"
     title={$t('ui.cancel_selection', { default: 'Cancel selection' })}
@@ -442,6 +501,10 @@
     <Icon name="x" width={16} height={16} />
   </button>
 </div>
+
+{#if pickerOpen}
+  <AlbumPicker openHashes={keys} onDone={() => (pickerOpen = false)} />
+{/if}
 
 <style>
   #selection-bar {

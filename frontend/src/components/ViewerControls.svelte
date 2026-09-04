@@ -9,6 +9,7 @@
     onFitToScreen = () => {},
     onFavorite = () => {},
     onDownload = () => {},
+    onAddToAlbum = () => {},
     onMetadata = () => {},
     onFullscreen = () => {},
     onRotateLeft = () => {},
@@ -82,6 +83,16 @@
       onclick={onDownload}
     >
       <Icon name="download" width={18} height={18} />
+    </button>
+    <button
+      type="button"
+      class="zoom-btn add-album-btn"
+      data-action="add-to-album"
+      title={$t('albums.addToAlbum', { default: 'Add to album' })}
+      aria-label={$t('albums.addToAlbum', { default: 'Add to album' })}
+      onclick={onAddToAlbum}
+    >
+      <Icon name="plus" width={18} height={18} />
     </button>
     <button
       type="button"

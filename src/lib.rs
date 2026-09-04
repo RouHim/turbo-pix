@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+pub mod albums;
 pub mod cache_manager;
 pub mod collage_generator;
 pub mod config;
@@ -9,6 +10,7 @@ pub mod event_albums;
 pub mod exif_helpers;
 pub mod file_scanner;
 pub mod geo_location;
+pub mod handlers_albums;
 pub mod handlers_collage;
 pub mod handlers_config;
 pub mod handlers_event_albums;

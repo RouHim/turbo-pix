@@ -162,7 +162,7 @@
   async function loadRegularPage(signal) {
     if (route.album != null) {
       const { sort, order } = buildFilters();
-      const response = await api.getEventAlbumPhotos(
+      const response = await api.getAlbumPhotos(
         route.album,
         { page: photoGridState.currentPage, limit: DEFAULT_BATCH_SIZE, sort, order },
         { signal }
@@ -554,19 +554,19 @@
     {:else}
       <div class="error-state">
         <div class="error-state-icon">
-          <Icon name={route.album != null ? 'calendar' : 'camera'} width={64} height={64} />
+          <Icon name={route.album != null ? 'image' : 'camera'} width={64} height={64} />
         </div>
         <div class="error-state-title">
           {#if route.album != null}
-            {$t('eventAlbums.emptyTitle', { default: 'No Photos' })}
+            {$t('albums.emptyTitle', { default: 'No Photos' })}
           {:else}
             {$t('ui.no_photos_found', { default: 'No Photos Found' })}
           {/if}
         </div>
         <div class="error-state-message">
           {#if route.album != null}
-            {$t('eventAlbums.emptyState', {
-              default: "No photos match this album's criteria.",
+            {$t('albums.emptyState', {
+              default: 'This album is empty. Add photos from the library.',
             })}
           {:else if currentQuery}
             {$t('messages.no_photos_match_search', {

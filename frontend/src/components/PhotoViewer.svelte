@@ -18,6 +18,7 @@
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import Icon from './Icon.svelte';
+  import AlbumPicker from './AlbumPicker.svelte';
   import ViewerControls from './ViewerControls.svelte';
   import ViewerMetadata from './ViewerMetadata.svelte';
   import ViewerMetadataEdit from './ViewerMetadataEdit.svelte';
@@ -47,6 +48,17 @@
   // Collage
   let isPendingCollage = $state(false);
   let isAcceptingCollage = $state(false);
+
+  // Album picker: hashes are captured synchronously at open time so later
+  // navigation cannot retarget the add (viewer staleness rule).
+  let pickerOpen = $state(false);
+  let pickerHashes = $state([]);
+
+  function openAlbumPicker() {
+    if (!currentPhoto || isCollagePhoto(currentPhoto)) return;
+    pickerHashes = [currentPhoto.hash_sha256];
+    pickerOpen = true;
+  }
 
   // Rotation state (raw/video disable)
   let rotationDisabled = $state(false);
@@ -1507,6 +1519,7 @@
       onFullscreen={toggleFullscreen}
       onFavorite={toggleFavorite}
       onDownload={downloadPhoto}
+      onAddToAlbum={openAlbumPicker}
       onMetadata={toggleSidebar}
       onRotateLeft={() => rotatePhoto(270)}
       onRotateRight={() => rotatePhoto(90)}
@@ -1580,6 +1593,10 @@
   </div>
 {/if}
 
+{#if pickerOpen}
+  <AlbumPicker openHashes={pickerHashes} onDone={() => (pickerOpen = false)} />
+{/if}
+
 <style>
   .photo-viewer {
     position: fixed;
@@ -1604,11 +1621,11 @@
     opacity: 1;
     visibility: visible;
   }
-
   .photo-viewer.collage-mode :global(.favorite-btn),
   .photo-viewer.collage-mode :global(.metadata-btn),
   .photo-viewer.collage-mode :global(.rotate-left-btn),
   .photo-viewer.collage-mode :global(.rotate-right-btn),
+  .photo-viewer.collage-mode :global(.add-album-btn),
   .photo-viewer.collage-mode :global(.delete-photo-btn) {
     display: none;
   }

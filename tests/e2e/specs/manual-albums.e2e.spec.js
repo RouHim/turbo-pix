@@ -47,6 +47,8 @@ test.describe('Manual Albums', () => {
   });
 
   test('creates an empty album and shows the empty state', async ({ page }) => {
+    await TestHelpers.navigateToView(page, 'albums');
+    await expect(page).toHaveURL(/\/albums/);
     await page.click('[data-testid="new-album-btn"]');
     await page.fill('[data-testid="album-name-input"]', 'Empty album');
     await page.click('[data-testid="album-submit"]');
@@ -67,12 +69,16 @@ test.describe('Manual Albums', () => {
     await page.locator(`[data-photo-id="${first}"]`).click();
     await page.locator(`[data-photo-id="${second}"]`).click();
 
-    await page.click('[data-testid="new-album-btn"]');
-    // FR-002: the creation flow offers to include the selection.
-    await expect(page.locator('[data-testid="album-include-selection"]')).toBeChecked();
-    await page.fill('[data-testid="album-name-input"]', 'From selection');
-    await page.click('[data-testid="album-submit"]');
+    // FR-002: the picker offers to create an album carrying the selection.
+    await page.click('[data-action="batch-add-to-album"]');
+    await page.click('[data-testid="album-pick-new"]');
+    await page.fill('[data-testid="album-pick-new-input"]', 'From selection');
+    const createResponse = TestHelpers.waitForApiCall(page, '/api/albums');
+    await page.click('[data-testid="album-pick-new-submit"]');
+    await createResponse;
+    await page.click('[data-action="batch-exit"]');
 
+    await TestHelpers.navigateToView(page, 'albums');
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(1);
     await page.click('[data-testid="album-open"]');
     await TestHelpers.waitForPhotosToLoad(page);
@@ -90,7 +96,9 @@ test.describe('Manual Albums', () => {
     await page.click('[data-action="select-mode"]');
     await page.locator(`[data-photo-id="${first}"]`).click();
     await page.click('[data-action="batch-add-to-album"]');
+    const firstAddResponse = TestHelpers.waitForApiCall(page, `/api/albums/${album.id}/members`);
     await page.locator(`[data-testid="album-pick-row"][data-album-id="${album.id}"]`).click();
+    await firstAddResponse;
     // Selection is kept after an add (membership is not a library change).
     await expect(page.locator('#selection-bar')).toContainText('1 selected');
     await page.click('[data-action="batch-exit"]');
@@ -99,7 +107,9 @@ test.describe('Manual Albums', () => {
     await TestHelpers.openViewer(page, second);
     await TestHelpers.verifyViewerOpen(page);
     await page.click('[data-action="add-to-album"]');
+    const secondAddResponse = TestHelpers.waitForApiCall(page, `/api/albums/${album.id}/members`);
     await page.locator(`[data-testid="album-pick-row"][data-album-id="${album.id}"]`).click();
+    await secondAddResponse;
     await TestHelpers.closeViewer(page);
 
     // Re-adding an existing member is a no-op success (SC-003).
@@ -120,6 +130,7 @@ test.describe('Manual Albums', () => {
     const album = await createAlbumViaApi(page, 'Prune me', [first]);
 
     await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'albums');
     await page.click('[data-testid="album-open"]');
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(page.locator(`[data-photo-id="${first}"]`)).toHaveCount(1);
@@ -142,19 +153,21 @@ test.describe('Manual Albums', () => {
     const album = await createAlbumViaApi(page, 'Old name', [first]);
 
     await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'albums');
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(1);
 
-    // Rename through the sidebar dialog.
+    // Rename through the album dialog.
     await page.click('[data-testid="album-rename"]');
     await page.fill('[data-testid="album-name-input"]', 'New name');
     await page.click('[data-testid="album-submit"]');
     await expect(page.locator('[data-testid="album-row"]')).toContainText('New name');
     expect(await albumHashesViaApi(page, album.id)).toEqual([first]);
 
-    // Open the album, then delete it: navigation lands on a safe view and
-    // every photo stays in the library (SC-005).
+    // Open the album, back to the overview, then delete it: the album
+    // parameter is gone and every photo stays in the library (SC-005).
     await page.click('[data-testid="album-open"]');
     await expect(page).toHaveURL(/album=/);
+    await TestHelpers.navigateToView(page, 'albums');
     await page.click('[data-testid="album-delete"]');
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
     const url = new URL(page.url());
@@ -170,6 +183,7 @@ test.describe('Manual Albums', () => {
   });
 
   test('rejects an empty album name and saves nothing', async ({ page }) => {
+    await TestHelpers.navigateToView(page, 'albums');
     await page.click('[data-testid="new-album-btn"]');
     await page.fill('[data-testid="album-name-input"]', '   ');
     await page.click('[data-testid="album-submit"]');
@@ -187,6 +201,7 @@ test.describe('Manual Albums', () => {
 
     await page.reload();
     await TestHelpers.waitForSearchReady(page);
+    await TestHelpers.navigateToView(page, 'albums');
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(1);
 
     const res = await page.request.get('/api/albums');

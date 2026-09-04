@@ -24,6 +24,7 @@
   import SelectionBar from './components/SelectionBar.svelte';
   import PhotoGrid from './components/PhotoGrid.svelte';
   import CollagesView from './components/CollagesView.svelte';
+  import AlbumsView from './components/AlbumsView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
   import PhotoViewer from './components/PhotoViewer.svelte';
   import IndexingOrbit from './components/IndexingOrbit.svelte';
@@ -33,6 +34,7 @@
     all: 'ui.all_photos',
     favorites: 'ui.favorites',
     videos: 'ui.videos',
+    albums: 'albums.sectionTitle',
     collages: 'ui.collages',
     housekeeping: 'ui.housekeeping',
   };
@@ -41,6 +43,7 @@
     all: 'All Photos',
     favorites: 'Favorites',
     videos: 'Videos',
+    albums: 'Albums',
     collages: 'Collages',
     housekeeping: 'Housekeeping',
   };
@@ -150,7 +153,7 @@
         {/if}
       </h2>
       <div class="content-actions">
-        {#if route.view !== 'collages' && route.view !== 'housekeeping'}
+        {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.view !== 'albums'}
           <SortControls />
         {/if}
         <button
@@ -159,15 +162,27 @@
           data-action="select-mode"
           onclick={enterSelectionMode}
           aria-pressed={selectionState.active}
-          hidden={selectionState.active}
+          hidden={selectionState.active || (route.view === 'albums' && route.album == null)}
         >
           <Icon name="check-square" width={16} height={16} />
           {$t('ui.select', { default: 'Select' })}
         </button>
+        {#if route.view === 'albums' && route.album == null}
+          <button
+            type="button"
+            class="btn-primary new-album-btn"
+            data-testid="new-album-btn"
+            title={$t('albums.newAlbum', { default: 'New album' })}
+            onclick={() => window.dispatchEvent(new CustomEvent('openCreateAlbum'))}
+          >
+            <Icon name="plus" width={16} height={16} />
+            {$t('albums.newAlbum', { default: 'New album' })}
+          </button>
+        {/if}
       </div>
     </div>
 
-    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.album == null}
+    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.view !== 'albums' && route.album == null}
       <TimelineSlider />
     {/if}
 
@@ -186,6 +201,8 @@
         <CollagesView />
       {:else if route.view === 'housekeeping'}
         <HousekeepingView />
+      {:else if route.view === 'albums' && route.album == null}
+        <AlbumsView />
       {:else}
         <PhotoGrid />
       {/if}
@@ -245,6 +262,12 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+  }
+  .new-album-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
   }
 
   .view-error {

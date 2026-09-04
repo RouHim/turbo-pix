@@ -254,9 +254,11 @@
     "renamed": "Album renamed",
     "deleted": "Album deleted",
     "added": "Photos added to album",
+    "alreadyAdded": "Photos already in album",
     "removed": "Photos removed from album",
     "emptyTitle": "No Photos",
-    "emptyState": "This album is empty. Add photos from the library."
+    "emptyState": "This album is empty. Add photos from the library.",
+    "emptyList": "No albums yet. Create one to get started."
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

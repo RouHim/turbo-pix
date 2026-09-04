@@ -34,13 +34,24 @@
     saving = true;
     error = null;
     try {
-      await api.addAlbumMembers(item.id, openHashes);
-      addToast(
-        get(t)('albums.added', { default: 'Photos added to album' }),
-        item.name,
-        'success',
-        3000
-      );
+      const res = await api.addAlbumMembers(item.id, openHashes);
+      // Member adds are idempotent: added=0 means every hash was already a
+      // member (or unknown), so report that instead of a false success.
+      if (res && typeof res.added === 'number' && res.added === 0) {
+        addToast(
+          get(t)('albums.alreadyAdded', { default: 'Photos already in album' }),
+          item.name,
+          'info',
+          3000
+        );
+      } else {
+        addToast(
+          get(t)('albums.added', { default: 'Photos added to album' }),
+          item.name,
+          'success',
+          3000
+        );
+      }
       close();
     } catch (err) {
       handleError(err, 'add photos to album');

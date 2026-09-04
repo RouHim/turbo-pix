@@ -184,12 +184,7 @@
       await api.deleteAlbum(item.id);
       const idx = albums.findIndex((a) => a.id === item.id);
       if (idx !== -1) albums.splice(idx, 1);
-      addToast(
-        get(t)('albums.deleted', { default: 'Album deleted' }),
-        item.name,
-        'success',
-        3000
-      );
+      addToast(get(t)('albums.deleted', { default: 'Album deleted' }), item.name, 'success', 3000);
       if (route.album === item.id) {
         pushState({ album: null, view: 'all' });
       }
@@ -299,11 +294,7 @@
       </button>
     </div>
     {#each albums as item (item.id)}
-      <div
-        class="saved-search-row"
-        class:active={route.album === item.id}
-        data-testid="album-row"
-      >
+      <div class="saved-search-row" class:active={route.album === item.id} data-testid="album-row">
         <button
           type="button"
           class="saved-search-open"
@@ -340,7 +331,7 @@
   album={editingAlbum}
   initialCount={createCount}
   initialHashes={createHashes}
- />
+/>
 
 <style>
   .sidebar {

@@ -331,37 +331,51 @@ class TurboPixAPI {
     return this.request(`/api/saved-searches/${id}`, { method: 'DELETE' });
   }
 
-  // Event albums
-  async getEventAlbums() {
-    return this.request('/api/event-albums');
+  // Manual albums
+  async getAlbums() {
+    return this.request('/api/albums');
   }
 
-  async createEventAlbum(payload) {
-    return this.request('/api/event-albums', {
+  async createAlbum({ name, initial_hashes = [] }) {
+    return this.request('/api/albums', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name, initial_hashes }),
     });
   }
 
-  async updateEventAlbum(id, payload) {
-    return this.request(`/api/event-albums/${id}`, {
+  async renameAlbum(id, name) {
+    return this.request(`/api/albums/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name }),
     });
   }
 
-  async deleteEventAlbum(id) {
-    return this.request(`/api/event-albums/${id}`, { method: 'DELETE' });
+  async deleteAlbum(id) {
+    return this.request(`/api/albums/${id}`, { method: 'DELETE' });
   }
 
-  async getEventAlbumPhotos(id, params = {}, options = {}) {
+  async getAlbumPhotos(id, params = {}, options = {}) {
     const searchParams = new URLSearchParams();
     if (params.page !== undefined) searchParams.set('page', params.page);
     if (params.limit !== undefined) searchParams.set('limit', params.limit);
     if (params.sort) searchParams.set('sort', params.sort);
     if (params.order) searchParams.set('order', params.order);
     const qs = searchParams.toString();
-    return this.request(`/api/event-albums/${id}/photos${qs ? `?${qs}` : ''}`, options);
+    return this.request(`/api/albums/${id}/photos${qs ? `?${qs}` : ''}`, options);
+  }
+
+  async addAlbumMembers(id, hashes) {
+    return this.request(`/api/albums/${id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ hashes }),
+    });
+  }
+
+  async removeAlbumMembers(id, hashes) {
+    return this.request(`/api/albums/${id}/members`, {
+      method: 'DELETE',
+      body: JSON.stringify({ hashes }),
+    });
   }
 
   // ===========================================================================

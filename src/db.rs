@@ -562,8 +562,9 @@ impl Photo {
     /// key referenced by `housekeeping_candidates.photo_hash` via `ON DELETE CASCADE`
     /// with no `ON UPDATE`) requires deleting the stale candidate rows inside the
     /// same transaction (see `image_editor::rotate_image`). Album memberships
-    /// cascade automatically on migrated databases (migration 11 adds
-    /// `ON UPDATE CASCADE`) and are repointed explicitly below for the rest.
+    /// cascade automatically on migrated databases (the `create_manual_albums`
+    /// migration defines `ON UPDATE CASCADE`) and are repointed explicitly
+    /// below for the rest.
     pub async fn update_with_old_hash(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1420,7 +1421,7 @@ mod tests {
         let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
         photo.create(&pool).await.unwrap();
         let album = crate::albums::create(&pool, "Trip").await.unwrap();
-        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+        crate::albums::add_members(&pool, album.id, std::slice::from_ref(&photo.hash_sha256))
             .await
             .unwrap();
 
@@ -1459,7 +1460,7 @@ mod tests {
         let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
         photo.create(&pool).await.unwrap();
         let album = crate::albums::create(&pool, "Trip").await.unwrap();
-        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+        crate::albums::add_members(&pool, album.id, std::slice::from_ref(&photo.hash_sha256))
             .await
             .unwrap();
 
@@ -1494,7 +1495,7 @@ mod tests {
         let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
         photo.create(&pool).await.unwrap();
         let album = crate::albums::create(&pool, "Trip").await.unwrap();
-        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+        crate::albums::add_members(&pool, album.id, std::slice::from_ref(&photo.hash_sha256))
             .await
             .unwrap();
 

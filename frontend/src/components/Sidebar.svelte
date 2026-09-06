@@ -355,6 +355,8 @@
     margin-top: var(--space-2);
     padding: var(--space-2) var(--space-4);
     font-size: var(--font-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     color: var(--text-secondary);
   }
 

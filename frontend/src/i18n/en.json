@@ -239,7 +239,6 @@
     "createTitle": "New album",
     "renameTitle": "Rename album",
     "name": "Name",
-    "includeSelection": "Include {count} selected photos",
     "create": "Create album",
     "save": "Save changes",
     "cancel": "Cancel",
@@ -260,7 +259,10 @@
     "emptyState": "This album is empty. Add photos from the library.",
     "emptyList": "No albums yet. Create one to get started.",
     "pickerEmpty": "No albums yet — create one below.",
-    "deleteConfirm": "Permanently delete album \"{name}\"? Photos are kept."
+    "deleteConfirm": "Permanently delete album \"{name}\"? Photos are kept.",
+    "deleteSelected": "Delete selected",
+    "batchDeleteConfirm": "Permanently delete {count} album(s)? Photos are kept.",
+    "batchDeleted": "{count} albums deleted"
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

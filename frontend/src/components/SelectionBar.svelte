@@ -11,41 +11,50 @@
     addToast,
     exitSelectionMode,
     selectAllVisible,
+    loadAlbums,
   } from '../lib/state.svelte.js';
 
   const keys = $derived(Object.keys(selectionState.selected));
   const count = $derived(keys.length);
   const canAct = $derived(count > 0 && !selectionState.busy);
+  // Albums overview rows are albums, not photos: selection keys are
+  // String(album.id) (mirroring the collages surface), so only the
+  // album-delete action applies — photo actions would misinterpret keys.
+  const isAlbumOverview = $derived(
+    route.view === 'albums' && route.album == null && route.query == null
+  );
 
   const allVisibleSelected = $derived(
     selectionState.orderedKeys.length > 0 &&
       selectionState.orderedKeys.every((k) => selectionState.selected[k])
   );
-
   // Per-surface action set: housekeeping candidates are photos, so they get
-  // the five photo actions plus keep; collages get accept/reject only.
+  // the five photo actions plus keep; collages get accept/reject only; the
+  // albums overview selects whole albums, so it gets delete-albums only.
   const actionConfig = $derived(
-    route.view === 'collages'
-      ? [
-          { id: 'accept', labelKey: 'ui.accept_collage', icon: 'check' },
-          { id: 'reject', labelKey: 'ui.reject_collage', icon: 'x' },
-        ]
-      : route.view === 'housekeeping'
+    isAlbumOverview
+      ? [{ id: 'deleteAlbums', labelKey: 'albums.deleteSelected', icon: 'trash-2' }]
+      : route.view === 'collages'
         ? [
-            { id: 'keep', labelKey: 'ui.keep_photo', icon: 'check' },
-            { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
-            { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
-            { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-            { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
-            { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+            { id: 'accept', labelKey: 'ui.accept_collage', icon: 'check' },
+            { id: 'reject', labelKey: 'ui.reject_collage', icon: 'x' },
           ]
-        : [
-            { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
-            { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
-            { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-            { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
-            { id: 'export', labelKey: 'ui.export', icon: 'archive' },
-          ]
+        : route.view === 'housekeeping'
+          ? [
+              { id: 'keep', labelKey: 'ui.keep_photo', icon: 'check' },
+              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
+              { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
+              { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
+              { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
+              { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+            ]
+          : [
+              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
+              { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
+              { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
+              { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
+              { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+            ]
   );
 
   // Action button data-action names (E2E contract).
@@ -56,8 +65,7 @@
     removeFavorite: 'batch-remove-favorite',
     dateShift: 'batch-date-shift',
     export: 'batch-export',
-    accept: 'batch-accept',
-    reject: 'batch-reject',
+    deleteAlbums: 'batch-delete-albums',
   };
 
   let dateShiftOpen = $state(false);
@@ -140,6 +148,47 @@
 
   async function runAction(actionId) {
     if (!canAct) return;
+    if (actionId === 'deleteAlbums') {
+      if (!isAlbumOverview) return;
+      const ids = [...keys].map(Number).filter((id) => Number.isInteger(id));
+      if (!ids.length) return;
+      const msg = $t('albums.batchDeleteConfirm', {
+        default: 'Permanently delete {count} album(s)? Photos are kept.',
+        values: { count: ids.length },
+      });
+      if (!confirm(msg)) return;
+      selectionState.busy = 'deleteAlbums';
+      const applied = [];
+      const failed = [];
+      try {
+        for (const id of ids) {
+          try {
+            await api.deleteAlbum(id);
+            applied.push(String(id));
+          } catch (error) {
+            logger.error('Batch album delete failed', { component: 'SelectionBar' }, error);
+            failed.push(String(id));
+          }
+        }
+        // Single delete splices + refetches for the same stale-snapshot
+        // race; one refetch covers the whole batch.
+        loadAlbums();
+        dropSelectedKeys(applied);
+        addToast(
+          $t('albums.batchDeleted', {
+            default: '{count} albums deleted',
+            values: { count: applied.length },
+          }),
+          '',
+          'success'
+        );
+        reportResult({ failed });
+      } finally {
+        selectionState.busy = null;
+        if (count === 0) exitSelectionMode();
+      }
+      return;
+    }
 
     if (actionId === 'delete') {
       const msg = $t('notifications.batchDeleteConfirm', {
@@ -391,10 +440,10 @@
 
   function onKeydown(e) {
     // Escape exits selection mode — but never steal it from an open viewer
-    // or an open dialog (album picker / album dialog): dismissing the modal
-    // with Escape must not also wipe the multi-selection underneath.
+    // or the album picker: dismissing the modal with Escape must not also
+    // wipe the multi-selection underneath.
     if (e.key === 'Escape' && selectionState.active && !selectionState.busy && !route.photo) {
-      if (typeof document !== 'undefined' && document.querySelector('dialog[open]')) return;
+      if (pickerOpen) return;
       exitSelectionMode();
     }
   }
@@ -483,7 +532,7 @@
     {/if}
   {/each}
 
-  {#if route.view !== 'collages'}
+  {#if route.view !== 'collages' && !isAlbumOverview}
     <button
       type="button"
       class="btn batch-action-btn"
@@ -578,6 +627,29 @@
     align-items: center;
     gap: var(--space-1);
     white-space: nowrap;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: var(--font-base);
+    font-family: var(--font-body);
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) {
+    border-color: var(--primary-color);
+  }
+  .btn:focus-visible {
+    outline: none;
+    border-color: var(--primary-color);
+  }
+  .btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .btn :global(svg) {
+    width: 16px;
+    height: 16px;
   }
 
   .spin {

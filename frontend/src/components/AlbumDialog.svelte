@@ -42,6 +42,7 @@
 
   async function onSubmit(e) {
     e.preventDefault();
+    if (saving) return;
     const validationError = validate();
     if (validationError) {
       error = validationError;

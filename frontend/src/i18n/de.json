@@ -258,7 +258,9 @@
     "removed": "Fotos aus Album entfernt",
     "emptyTitle": "Keine Fotos",
     "emptyState": "Dieses Album ist leer. Füge Fotos aus der Bibliothek hinzu.",
-    "emptyList": "Noch keine Alben. Erstelle ein Album, um zu beginnen."
+    "emptyList": "Noch keine Alben. Erstelle ein Album, um zu beginnen.",
+    "pickerEmpty": "Noch keine Alben — erstelle unten eines.",
+    "deleteConfirm": "Album \"{name}\" endgültig löschen? Fotos bleiben erhalten."
   },
   "messages": {
     "indexing_in_progress_title": "Fotos werden indiziert",

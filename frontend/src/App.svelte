@@ -10,6 +10,7 @@
     enterSelectionMode,
     exitSelectionMode,
     albums,
+    loadAlbums,
   } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
@@ -115,7 +116,6 @@
         });
       }
     }, 60000);
-
     (async () => {
       let defaultLocale = 'en';
       try {
@@ -126,6 +126,9 @@
       }
       initI18n(defaultLocale);
       initRouter();
+      // Populate the albums store on fresh loads so deep-linked album
+      // titles (route.album) resolve without AlbumsView/AlbumPicker mounting.
+      loadAlbums();
       ready = true;
     })();
 
@@ -153,7 +156,7 @@
         {/if}
       </h2>
       <div class="content-actions">
-        {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.view !== 'albums'}
+        {#if route.view !== 'collages' && route.view !== 'housekeeping' && (route.view !== 'albums' || route.query != null)}
           <SortControls />
         {/if}
         <button
@@ -162,12 +165,13 @@
           data-action="select-mode"
           onclick={enterSelectionMode}
           aria-pressed={selectionState.active}
-          hidden={selectionState.active || (route.view === 'albums' && route.album == null)}
+          hidden={selectionState.active ||
+            (route.view === 'albums' && route.album == null && route.query == null)}
         >
           <Icon name="check-square" width={16} height={16} />
           {$t('ui.select', { default: 'Select' })}
         </button>
-        {#if route.view === 'albums' && route.album == null}
+        {#if route.view === 'albums' && route.album == null && route.query == null}
           <button
             type="button"
             class="btn-primary new-album-btn"
@@ -182,7 +186,7 @@
       </div>
     </div>
 
-    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.view !== 'albums' && route.album == null}
+    {#if route.view !== 'collages' && route.view !== 'housekeeping' && (route.view !== 'albums' || route.query != null) && route.album == null}
       <TimelineSlider />
     {/if}
 
@@ -201,7 +205,7 @@
         <CollagesView />
       {:else if route.view === 'housekeeping'}
         <HousekeepingView />
-      {:else if route.view === 'albums' && route.album == null}
+      {:else if route.view === 'albums' && route.album == null && route.query == null}
         <AlbumsView />
       {:else}
         <PhotoGrid />

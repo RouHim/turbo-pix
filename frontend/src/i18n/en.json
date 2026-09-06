@@ -258,7 +258,9 @@
     "removed": "Photos removed from album",
     "emptyTitle": "No Photos",
     "emptyState": "This album is empty. Add photos from the library.",
-    "emptyList": "No albums yet. Create one to get started."
+    "emptyList": "No albums yet. Create one to get started.",
+    "pickerEmpty": "No albums yet — create one below.",
+    "deleteConfirm": "Permanently delete album \"{name}\"? Photos are kept."
   },
   "messages": {
     "indexing_in_progress_title": "Indexing Your Photos",

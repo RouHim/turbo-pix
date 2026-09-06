@@ -70,18 +70,44 @@ pub async fn create(pool: &DbPool, name: &str) -> Result<Album, Box<dyn std::err
 
 /// Create an album and include the given photo hashes. Unknown hashes
 /// (no `photos` row) are silently skipped; empty list skips the insert.
+/// The album row plus all member inserts commit atomically: a mid-insert
+/// failure (I/O error, SQLITE_BUSY) leaves no visible row behind, so a
+/// client retry never creates a duplicate empty album.
 pub async fn create_with_members(
     pool: &DbPool,
     name: &str,
     hashes: &[String],
 ) -> Result<Album, Box<dyn std::error::Error>> {
-    let album = create(pool, name).await?;
+    let mut tx = pool.begin().await?;
+    let inserted: (i64,) = sqlx::query_as("INSERT INTO albums (name) VALUES (?) RETURNING id")
+        .bind(name)
+        .fetch_one(&mut *tx)
+        .await?;
+    let album_id = inserted.0;
     if !hashes.is_empty() {
-        add_members(pool, album.id, hashes).await?;
+        let mut added = 0_usize;
+        for chunk in hashes.chunks(IN_CHUNK_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "INSERT OR IGNORE INTO album_members (album_id, photo_hash) \
+                 SELECT ?, hash_sha256 FROM photos WHERE hash_sha256 IN ({placeholders})"
+            );
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(album_id);
+            for hash in chunk {
+                query = query.bind(hash);
+            }
+            added += query.execute(&mut *tx).await?.rows_affected() as usize;
+        }
+        let _ = added;
     }
-    find_by_id(pool, album.id)
-        .await?
-        .ok_or_else(|| "album vanished after create".into())
+    let row = sqlx::query_as::<_, Album>(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT_COLUMNS} FROM albums WHERE id = ?"
+    )))
+    .bind(album_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row)
 }
 
 /// Add members idempotently (`INSERT OR IGNORE`); skips hashes with no

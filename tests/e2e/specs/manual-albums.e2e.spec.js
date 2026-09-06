@@ -168,7 +168,15 @@ test.describe('Manual Albums', () => {
     await page.click('[data-testid="album-open"]');
     await expect(page).toHaveURL(/album=/);
     await TestHelpers.navigateToView(page, 'albums');
+    page.once('dialog', (dialog) => dialog.accept());
+    const deleteResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/albums/${album.id}`) &&
+        response.request().method() === 'DELETE' &&
+        response.ok()
+    );
     await page.click('[data-testid="album-delete"]');
+    await deleteResponse;
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
     const url = new URL(page.url());
     expect(url.searchParams.get('album')).toBeNull();
@@ -208,5 +216,21 @@ test.describe('Manual Albums', () => {
     const { albums = [] } = await res.json();
     expect(albums).toHaveLength(1);
     expect(await albumHashesViaApi(page, albums[0].id)).toEqual([first]);
+
+    // Boot path + initial fetch inside the album view: reload with the album
+    // open, then deep-link ?album=<id> directly. Both must render members.
+    await page.click('[data-testid="album-open"]');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator(`[data-photo-id="${first}"]`)).toHaveCount(1);
+
+    await page.reload();
+    await TestHelpers.waitForSearchReady(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator(`[data-photo-id="${first}"]`)).toHaveCount(1);
+
+    await TestHelpers.goto(page, `/?album=${albums[0].id}`);
+    await TestHelpers.waitForSearchReady(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator(`[data-photo-id="${first}"]`)).toHaveCount(1);
   });
 });

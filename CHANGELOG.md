@@ -1,3 +1,32 @@
+# [2.40.0](https://github.com/RouHim/turbo-pix/compare/2.39.21...2.40.0) (2026-09-06)
+
+
+### Bug Fixes
+
+* **albums:** address review findings from review-fix loop ([f560adf](https://github.com/RouHim/turbo-pix/commit/f560adf1a43a0545ff7e0ec180b33fe90399a3a8))
+* **albums:** clear route.album on non-album navigation; hide timeline in album view ([33394e4](https://github.com/RouHim/turbo-pix/commit/33394e40107034360e5bf8b10ad45bdee83c8481))
+* **albums:** resolve review-fix loop findings (iterations 1-9) ([4f9d64c](https://github.com/RouHim/turbo-pix/commit/4f9d64c38a5985caca4d350e4d7049632f7c21a1))
+* **ci:** raise recursion_limit for warp route chain depth ([418c51f](https://github.com/RouHim/turbo-pix/commit/418c51ff8e452d0fe5bac7fad5c10cacc8d977d5))
+* **selection:** restore batch-accept/reject actions, picker Escape guard, album splice ([11537f9](https://github.com/RouHim/turbo-pix/commit/11537f92b13edc2f81e5d0de2252116dde871036))
+* **viewer:** dismiss album picker before viewer Escape-close ([1f21d36](https://github.com/RouHim/turbo-pix/commit/1f21d36f9bbd09a1da2c5e52b4862e8ea72cfbab))
+
+
+### Features
+
+* **albums:** add /api/albums warp handlers and routes ([7b3f83c](https://github.com/RouHim/turbo-pix/commit/7b3f83ccba9917a57b740a4ccdaad26312db5b31))
+* **albums:** add albums table and model CRUD with membership ([1e78e11](https://github.com/RouHim/turbo-pix/commit/1e78e113514055ae40da4c068b2b4e10b09c5d12))
+* **albums:** add event_albums table and model CRUD ([41044cb](https://github.com/RouHim/turbo-pix/commit/41044cb7c1dbadd755c3d9c1ab2e80e7a70d5dc5))
+* **albums:** add-to-album picker and remove-from-album ([ef8ad27](https://github.com/RouHim/turbo-pix/commit/ef8ad276c27dd1240ef7b6d554e791c0a1454daa))
+* **albums:** batch delete on overview, selection toggle, dark-theme buttons ([e952bfe](https://github.com/RouHim/turbo-pix/commit/e952bfe9c1fd768e791f679e4491f47e33b9285b))
+* **albums:** dynamic membership query and shared order clause ([7c3b731](https://github.com/RouHim/turbo-pix/commit/7c3b73169a73c042858df90e058e9e9e7b5b04ee))
+* **albums:** event-album REST API with membership photos endpoint ([3d37b41](https://github.com/RouHim/turbo-pix/commit/3d37b41ef85c690fe22d6ff5243b7c79d25dbe24))
+* **albums:** frontend data layer and i18n keys for event albums ([de0261c](https://github.com/RouHim/turbo-pix/commit/de0261cc7bdccbca144978372860c0a3a5783c30))
+* **albums:** render album photos in grid and album title ([7497fc5](https://github.com/RouHim/turbo-pix/commit/7497fc5900b64d42ebd240999d7af8ade5ad1598))
+* **albums:** render manual album members in grid ([df92d33](https://github.com/RouHim/turbo-pix/commit/df92d3390e94aba7c14068b93ff64ed617b6ab6c))
+* **albums:** sidebar nav entry with dedicated overview view ([c6b8428](https://github.com/RouHim/turbo-pix/commit/c6b8428a5e04d4ef50e9f54ef85348ea5f6ebd97))
+* **albums:** sidebar section and create/edit dialog ([cb5fa97](https://github.com/RouHim/turbo-pix/commit/cb5fa97b2b953245720c108161c9ac808773cf70))
+* **albums:** sidebar with manual create rename delete open ([171438f](https://github.com/RouHim/turbo-pix/commit/171438f94a38ff54a4aab34d25b7d5c27a35a1fd))
+
 ## [2.39.21](https://github.com/RouHim/turbo-pix/compare/2.39.20...2.39.21) (2026-09-05)
 
 ## [2.39.20](https://github.com/RouHim/turbo-pix/compare/2.39.19...2.39.20) (2026-09-04)

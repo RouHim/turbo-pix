@@ -78,6 +78,9 @@
     try {
       const created = await api.createAlbum({ name, initial_hashes: openHashes });
       albums.unshift(created); // newest-first: fresh row has the max id
+      // Refetch so a loadAlbums that started before this create committed
+      // cannot splice its stale snapshot over the just-created row.
+      loadAlbums();
       addToast(
         get(t)('albums.created', { default: 'Album created' }),
         created.name,

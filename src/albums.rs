@@ -112,6 +112,9 @@ pub async fn create_with_members(
 
 /// Add members idempotently (`INSERT OR IGNORE`); skips hashes with no
 /// photo row. Returns the number of newly inserted rows.
+/// All chunks commit atomically in one transaction: a mid-batch failure
+/// (I/O error, SQLITE_BUSY) rolls back earlier chunks instead of leaving
+/// a half-applied batch behind.
 pub async fn add_members(
     pool: &DbPool,
     album_id: i64,
@@ -120,6 +123,7 @@ pub async fn add_members(
     if hashes.is_empty() {
         return Ok(0);
     }
+    let mut tx = pool.begin().await?;
     let mut added = 0_usize;
     for chunk in hashes.chunks(IN_CHUNK_SIZE) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -131,12 +135,14 @@ pub async fn add_members(
         for hash in chunk {
             query = query.bind(hash);
         }
-        added += query.execute(pool).await?.rows_affected() as usize;
+        added += query.execute(&mut *tx).await?.rows_affected() as usize;
     }
+    tx.commit().await?;
     Ok(added)
 }
 
 /// Remove membership only; never touches photo rows. Returns removed count.
+/// All chunks commit atomically in one transaction, mirroring `add_members`.
 pub async fn remove_members(
     pool: &DbPool,
     album_id: i64,
@@ -145,6 +151,7 @@ pub async fn remove_members(
     if hashes.is_empty() {
         return Ok(0);
     }
+    let mut tx = pool.begin().await?;
     let mut removed = 0_u64;
     for chunk in hashes.chunks(IN_CHUNK_SIZE) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -155,8 +162,9 @@ pub async fn remove_members(
         for hash in chunk {
             query = query.bind(hash);
         }
-        removed += query.execute(pool).await?.rows_affected();
+        removed += query.execute(&mut *tx).await?.rows_affected();
     }
+    tx.commit().await?;
     Ok(removed)
 }
 
@@ -353,5 +361,26 @@ mod tests {
         add_members(&pool, album.id, &[h("d")]).await.unwrap();
         delete(&pool, album.id).await.unwrap();
         assert!(photo_still_in_library(&pool, &h("d")).await);
+    }
+    #[tokio::test]
+    async fn test_multi_chunk_add_remove_round_trip() {
+        // Exercises >1 chunk (>500 members) through the single-transaction
+        // batch path in add_members/remove_members.
+        let pool = create_test_db_pool().await.unwrap();
+        let album = create(&pool, "Big").await.unwrap();
+        let n = IN_CHUNK_SIZE + 100;
+        let mut hashes = Vec::with_capacity(n);
+        for i in 0..n {
+            let tag = format!("chunk-{i:04}");
+            seed_photo(&pool, &tag).await;
+            hashes.push(h(&tag));
+        }
+        assert_eq!(add_members(&pool, album.id, &hashes).await.unwrap(), n);
+        assert_eq!(count_members(&pool, album.id).await.unwrap(), n as i64);
+        assert_eq!(
+            remove_members(&pool, album.id, &hashes).await.unwrap(),
+            n as u64
+        );
+        assert_eq!(count_members(&pool, album.id).await.unwrap(), 0);
     }
 }

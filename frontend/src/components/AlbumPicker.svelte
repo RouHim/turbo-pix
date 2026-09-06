@@ -52,6 +52,11 @@
           3000
         );
       }
+      // Member adds don't touch the albums store, so notify AlbumsView to
+      // refresh the cover when it is still missing (e.g. first photos).
+      window.dispatchEvent(
+        new CustomEvent('albumMembersChanged', { detail: { albumId: item.id } })
+      );
       close();
     } catch (err) {
       handleError(err, 'add photos to album');
@@ -62,6 +67,7 @@
 
   async function createAndAdd(e) {
     e.preventDefault();
+    if (saving) return;
     const name = newName.trim();
     if (!name) {
       error = get(t)('albums.errorNameRequired', { default: 'Name cannot be empty' });
@@ -89,19 +95,26 @@
 
 <dialog bind:this={dialogEl} class="album-picker" onclose={handleClose}>
   <h3>{$t('albums.pickerTitle', { default: 'Choose album' })}</h3>
-
-  {#each albums as item (item.id)}
-    <button
-      type="button"
-      class="picker-row"
-      disabled={saving}
-      onclick={() => addTo(item)}
-      data-testid="album-pick-row"
-      data-album-id={item.id}
-    >
-      <span class="picker-name">{item.name}</span>
-    </button>
-  {/each}
+  {#if albums.length === 0}
+    <p class="picker-empty" data-testid="album-pick-empty">
+      {$t('albums.pickerEmpty', { default: 'No albums yet — create one below.' })}
+    </p>
+  {:else}
+    <div class="picker-list">
+      {#each albums as item (item.id)}
+        <button
+          type="button"
+          class="picker-row"
+          disabled={saving}
+          onclick={() => addTo(item)}
+          data-testid="album-pick-row"
+          data-album-id={item.id}
+        >
+          <span class="picker-name">{item.name}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   {#if showNew}
     <form class="picker-new-form" onsubmit={createAndAdd}>
@@ -155,6 +168,17 @@
   .album-picker h3 {
     margin: 0 0 var(--space-2);
     font-family: var(--font-display);
+  }
+  .picker-list {
+    max-height: min(40vh, 320px);
+    overflow-y: auto;
+    margin: 0 calc(var(--space-3) * -1);
+    padding: 0 var(--space-3);
+  }
+  .picker-empty {
+    margin: var(--space-2) 0;
+    color: var(--text-secondary);
+    font-size: var(--font-sm);
   }
   .picker-row {
     display: flex;

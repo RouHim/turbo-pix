@@ -105,6 +105,12 @@
       for (const hash of target) {
         window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash } }));
       }
+      // A removal can change the cover even when one is cached (and an
+      // emptied album must fall back to the placeholder): notify AlbumsView
+      // to refetch this album's cover, mirroring the add path.
+      window.dispatchEvent(
+        new CustomEvent('albumMembersChanged', { detail: { albumId, removed: true } })
+      );
       dropSelectedKeys(target);
       addToast($t('albums.removed', { default: 'Photos removed from album' }), '', 'success');
     } catch (error) {
@@ -373,8 +379,11 @@
   }
 
   function onKeydown(e) {
-    // Escape exits selection mode — but never steal it from an open viewer.
+    // Escape exits selection mode — but never steal it from an open viewer
+    // or an open dialog (album picker / album dialog): dismissing the modal
+    // with Escape must not also wipe the multi-selection underneath.
     if (e.key === 'Escape' && selectionState.active && !selectionState.busy && !route.photo) {
+      if (typeof document !== 'undefined' && document.querySelector('dialog[open]')) return;
       exitSelectionMode();
     }
   }

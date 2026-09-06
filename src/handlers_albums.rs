@@ -185,7 +185,7 @@ pub async fn list_album_photos(
         .clamp(MIN_PAGE_SIZE, MAX_PAGE_SIZE);
     let offset = (page as u64 - 1) * limit as u64;
 
-    match albums::photos_for_album(
+    let (photos, total) = match albums::photos_for_album(
         &db_pool,
         id,
         limit as i64,
@@ -195,26 +195,41 @@ pub async fn list_album_photos(
     )
     .await
     {
-        Ok((photos, total)) => {
-            let has_next = offset.saturating_add(limit as u64) < total as u64;
-            let has_prev = page > 1;
-            Ok(warp::reply::json(&PhotosResponse {
-                photos,
-                total: total as usize,
-                page,
-                limit,
-                has_next,
-                has_prev,
-            })
-            .into_response())
-        }
+        Ok(ok) => ok,
         Err(e) => {
             log::error!("Failed to list album {id} photos: {e}");
-            Err(reject::custom(DatabaseError {
+            return Err(reject::custom(DatabaseError {
                 message: format!("Failed to list album {id} photos: {e}"),
-            }))
+            }));
+        }
+    };
+    // The album may have been deleted between the existence check above and
+    // this query (members cascade away, so the join reads empty). Re-check
+    // when empty so a concurrent delete still reports 404 instead of 200
+    // with empty results.
+    if total == 0 {
+        match albums::find_by_id(&db_pool, id).await {
+            Ok(None) => return Ok(not_found_reply()),
+            Ok(Some(_)) => {}
+            Err(e) => {
+                log::error!("Failed to load album {id}: {e}");
+                return Err(reject::custom(DatabaseError {
+                    message: format!("Failed to load album {id}: {e}"),
+                }));
+            }
         }
     }
+    let has_next = offset.saturating_add(limit as u64) < total as u64;
+    let has_prev = page > 1;
+    Ok(warp::reply::json(&PhotosResponse {
+        photos,
+        total: total as usize,
+        page,
+        limit,
+        has_next,
+        has_prev,
+    })
+    .into_response())
 }
 
 pub async fn add_album_members(
@@ -233,24 +248,49 @@ pub async fn add_album_members(
             }));
         }
     }
-    let added = match albums::add_members(&db_pool, id, &req.hashes).await {
-        Ok(added) => added,
+    // Await-free arms: the boxed error is not Send, so no await may run
+    // while the match scrutinee is alive. Record the failure and re-check
+    // below, outside the match.
+    let (added, write_error): (usize, Option<String>) =
+        match albums::add_members(&db_pool, id, &req.hashes).await {
+            Ok(added) => (added, None),
+            Err(e) => (0, Some(e.to_string())),
+        };
+    if let Some(detail) = write_error {
+        // The album may have been deleted between the existence check above
+        // and this write (the FK on album_members.album_id then fails).
+        // Re-check so a concurrent delete still reports 404, not 500.
+        if matches!(albums::find_by_id(&db_pool, id).await, Ok(None)) {
+            return Ok(not_found_reply());
+        }
+        log::error!("Failed to add members to album {id}: {detail}");
+        return Err(reject::custom(DatabaseError {
+            message: format!("Failed to add members to album {id}: {detail}"),
+        }));
+    }
+    let total = match albums::count_members(&db_pool, id).await {
+        Ok(total) => total,
         Err(e) => {
-            log::error!("Failed to add members to album {id}: {e}");
+            log::error!("Failed to count album {id} members: {e}");
             return Err(reject::custom(DatabaseError {
-                message: format!("Failed to add members to album {id}: {e}"),
+                message: format!("Failed to count album {id} members: {e}"),
             }));
         }
     };
-    match albums::count_members(&db_pool, id).await {
-        Ok(total) => Ok(warp::reply::json(&AddMembersResponse { added, total }).into_response()),
+    // The album may have been deleted between the write and the count
+    // (members cascade away, so the count reads 0). Re-check before
+    // responding so a concurrent delete still reports 404, not 200.
+    match albums::find_by_id(&db_pool, id).await {
+        Ok(None) => return Ok(not_found_reply()),
+        Ok(Some(_)) => {}
         Err(e) => {
-            log::error!("Failed to count album {id} members: {e}");
-            Err(reject::custom(DatabaseError {
-                message: format!("Failed to count album {id} members: {e}"),
-            }))
+            log::error!("Failed to load album {id}: {e}");
+            return Err(reject::custom(DatabaseError {
+                message: format!("Failed to load album {id}: {e}"),
+            }));
         }
     }
+    Ok(warp::reply::json(&AddMembersResponse { added, total }).into_response())
 }
 
 pub async fn remove_album_members(
@@ -269,26 +309,49 @@ pub async fn remove_album_members(
             }));
         }
     }
-    let removed = match albums::remove_members(&db_pool, id, &req.hashes).await {
-        Ok(removed) => removed,
+    // Await-free arms: the boxed error is not Send, so no await may run
+    // while the match scrutinee is alive. Record the failure and re-check
+    // below, outside the match.
+    let (removed, write_error): (u64, Option<String>) =
+        match albums::remove_members(&db_pool, id, &req.hashes).await {
+            Ok(removed) => (removed, None),
+            Err(e) => (0, Some(e.to_string())),
+        };
+    if let Some(detail) = write_error {
+        // The album may have been deleted between the existence check above
+        // and this write. Re-check so a concurrent delete still reports
+        // 404, not 500.
+        if matches!(albums::find_by_id(&db_pool, id).await, Ok(None)) {
+            return Ok(not_found_reply());
+        }
+        log::error!("Failed to remove members from album {id}: {detail}");
+        return Err(reject::custom(DatabaseError {
+            message: format!("Failed to remove members from album {id}: {detail}"),
+        }));
+    }
+    let total = match albums::count_members(&db_pool, id).await {
+        Ok(total) => total,
         Err(e) => {
-            log::error!("Failed to remove members from album {id}: {e}");
+            log::error!("Failed to count album {id} members: {e}");
             return Err(reject::custom(DatabaseError {
-                message: format!("Failed to remove members from album {id}: {e}"),
+                message: format!("Failed to count album {id} members: {e}"),
             }));
         }
     };
-    match albums::count_members(&db_pool, id).await {
-        Ok(total) => {
-            Ok(warp::reply::json(&RemoveMembersResponse { removed, total }).into_response())
-        }
+    // A DELETE on a missing album touches no rows, so without this the
+    // concurrent-delete case would report 200 with removed=0 instead of
+    // 404. Re-check before responding.
+    match albums::find_by_id(&db_pool, id).await {
+        Ok(None) => return Ok(not_found_reply()),
+        Ok(Some(_)) => {}
         Err(e) => {
-            log::error!("Failed to count album {id} members: {e}");
-            Err(reject::custom(DatabaseError {
-                message: format!("Failed to count album {id} members: {e}"),
-            }))
+            log::error!("Failed to load album {id}: {e}");
+            return Err(reject::custom(DatabaseError {
+                message: format!("Failed to load album {id}: {e}"),
+            }));
         }
     }
+    Ok(warp::reply::json(&RemoveMembersResponse { removed, total }).into_response())
 }
 
 pub fn build_albums_routes(

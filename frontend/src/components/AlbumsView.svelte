@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { getLocale, t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
@@ -32,10 +32,52 @@
     }
     covers = next;
   }
+  // Keep covers in sync with the albums store: drop entries for deleted
+  // ids and fetch covers for ids missing from the map (new albums, or
+  // albums whose first members arrived after the last fetch). Covers are
+  // read inside untrack so cover writes never re-trigger this effect —
+  // only albums-store changes do.
+  function syncCovers(ids) {
+    const live = new Set(ids.map(String));
+    let dropped = false;
+    const next = {};
+    for (const [id, hash] of Object.entries(covers)) {
+      if (live.has(id)) next[id] = hash;
+      else dropped = true;
+    }
+    if (dropped) covers = next;
+    const missing = ids.filter((id) => !(id in next));
+    if (missing.length) loadCovers(missing);
+  }
+  $effect(() => {
+    const ids = albums.map((a) => a.id);
+    untrack(() => syncCovers(ids));
+  });
+  // Member adds via the picker don't touch the albums store, so they
+  // can't trip the effect above — refresh a missing cover on demand.
+  // Removals dispatch the same event with removed:true: a removal can change
+  // the cover even when one is cached, and an emptied album must fall back
+  // to the placeholder — so invalidate the cached cover and refetch.
+  function onMembersChanged(e) {
+    const id = e.detail?.albumId;
+    if (id == null) return;
+    if (e.detail?.removed) {
+      const next = { ...covers };
+      delete next[id];
+      covers = next;
+      loadCovers([id]);
+    } else if (!(id in covers)) {
+      loadCovers([id]);
+    }
+  }
   onMount(() => {
-    loadAlbums().then(() => loadCovers(albums.map((a) => a.id)));
+    loadAlbums();
     window.addEventListener('openCreateAlbum', openCreateAlbum);
-    return () => window.removeEventListener('openCreateAlbum', openCreateAlbum);
+    window.addEventListener('albumMembersChanged', onMembersChanged);
+    return () => {
+      window.removeEventListener('openCreateAlbum', openCreateAlbum);
+      window.removeEventListener('albumMembersChanged', onMembersChanged);
+    };
   });
 
   function openCreateAlbum() {
@@ -55,6 +97,11 @@
   }
 
   async function deleteAlbum(item) {
+    const msg = get(t)('albums.deleteConfirm', {
+      default: 'Permanently delete album "{name}"? Photos are kept.',
+      values: { name: item.name },
+    });
+    if (!confirm(msg)) return;
     try {
       await api.deleteAlbum(item.id);
       const idx = albums.findIndex((a) => a.id === item.id);

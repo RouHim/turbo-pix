@@ -30,12 +30,14 @@
       appState.sidebarOpen = false;
       return;
     }
-    if (route.view === view && route.album == null) {
+    if (route.view === view && route.album == null && (view !== 'albums' || route.query == null)) {
       // Close the drawer even when tapping the already-active view (mobile).
       appState.sidebarOpen = false;
       return;
     }
-    pushState({ view, album: null });
+    // Albums list shows no search results: entering it with ?q= set would
+    // render the grid under an album-list header, so clear the query.
+    pushState(view === 'albums' ? { view, album: null, query: null } : { view, album: null });
     appState.sidebarOpen = false;
   }
 
@@ -159,14 +161,19 @@
 <nav id="sidebar-nav" class="sidebar" class:open={appState.sidebarOpen}>
   <div class="sidebar-content">
     {#each views as view (view.id)}
+      {@const isAlbumsNav =
+        view.id === 'albums' && (route.view === 'albums' || route.album != null)}
+      {@const isAllNav =
+        view.id === 'all'
+          ? route.view === 'all' && route.album == null
+          : route.view === view.id && view.id !== 'albums'}
+      {@const isActive = view.id === 'albums' ? isAlbumsNav : isAllNav}
       <button
         type="button"
         class="nav-item"
-        class:active={route.view === view.id || (view.id === 'albums' && route.album != null)}
+        class:active={isActive}
         data-view={view.id}
-        aria-current={route.view === view.id || (view.id === 'albums' && route.album != null)
-          ? 'page'
-          : undefined}
+        aria-current={isActive ? 'page' : undefined}
         onclick={() => navigate(view.id)}
       >
         {$t(view.key, { default: view.fallback })}

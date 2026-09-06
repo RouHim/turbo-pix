@@ -1284,6 +1284,10 @@
     // Events originating inside the metadata edit modal are handled by the
     // modal itself; the global search input must still close the viewer.
     if (e.target instanceof HTMLElement && e.target.closest('#metadata-edit-modal')) return;
+    // An open album picker (native dialog) handles its own Escape-to-dismiss;
+    // closing the viewer here would strand the picker over a closed viewer
+    // (and preventDefault below would suppress the dialog's native cancel).
+    if (pickerOpen) return;
     // Typing in inputs must not trigger viewer shortcuts (Escape still closes
     // the viewer from the search input).
     if (e.key !== 'Escape') {

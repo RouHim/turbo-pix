@@ -11,6 +11,7 @@
     addToast,
     exitSelectionMode,
     selectAllVisible,
+    albums,
     loadAlbums,
   } from '../lib/state.svelte.js';
 
@@ -61,6 +62,8 @@
   const actionDataName = {
     delete: 'batch-delete',
     keep: 'batch-keep',
+    accept: 'batch-accept',
+    reject: 'batch-reject',
     addFavorite: 'batch-add-favorite',
     removeFavorite: 'batch-remove-favorite',
     dateShift: 'batch-date-shift',
@@ -170,8 +173,13 @@
             failed.push(String(id));
           }
         }
-        // Single delete splices + refetches for the same stale-snapshot
-        // race; one refetch covers the whole batch.
+        // Optimistically splice batch-deleted rows (mirroring the
+        // single-delete path) so they vanish immediately; the refetch
+        // below reconciles with server truth.
+        const deleted = new Set(applied.map(String));
+        for (let i = albums.length - 1; i >= 0; i--) {
+          if (deleted.has(String(albums[i].id))) albums.splice(i, 1);
+        }
         loadAlbums();
         dropSelectedKeys(applied);
         addToast(

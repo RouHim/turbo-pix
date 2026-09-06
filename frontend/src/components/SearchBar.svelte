@@ -105,9 +105,16 @@
   });
 
   function performSearch(q, addToHistory = false) {
-    // Update URL immediately for explicit searches
+    // Update URL immediately for explicit searches. A global search issued
+    // from the Albums section runs against the all-photos scope: keeping
+    // view=albums would mount PhotoGrid under the albums view, whose reset
+    // guard forces the regular (non-semantic) search path.
     if (addToHistory) {
-      pushState({ query: q || null, album: null });
+      pushState({
+        query: q || null,
+        album: null,
+        ...(route.view === 'albums' ? { view: 'all' } : {}),
+      });
     }
 
     if (!q) return;
@@ -229,7 +236,14 @@
     searchTimer = setTimeout(() => {
       if (q.length >= 2) {
         performSearch(q, false);
-        replaceState({ query: q });
+        // Same all-photos scoping as performSearch: live typing leaves album
+        // detail (album:null) exactly like explicit submit, so the grid's
+        // route effect no longer reloads via the album branch.
+        replaceState({
+          query: q,
+          album: null,
+          ...(route.view === 'albums' ? { view: 'all' } : {}),
+        });
       } else if (q.length === 0) {
         clearSearch(false);
         replaceState({ query: null });

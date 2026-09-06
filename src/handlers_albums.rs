@@ -205,9 +205,12 @@ pub async fn list_album_photos(
     };
     // The album may have been deleted between the existence check above and
     // this query (members cascade away, so the join reads empty). Re-check
-    // when empty so a concurrent delete still reports 404 instead of 200
-    // with empty results.
-    if total == 0 {
+    // when the page reads empty so a concurrent delete still reports 404
+    // instead of 200 with empty results. `photos.is_empty()` (not just
+    // `total == 0`) also covers an album deleted between the COUNT and the
+    // SELECT inside `photos_for_album`, where the total is stale (>0) but
+    // the join already reads empty.
+    if photos.is_empty() {
         match albums::find_by_id(&db_pool, id).await {
             Ok(None) => return Ok(not_found_reply()),
             Ok(Some(_)) => {}
@@ -520,6 +523,32 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(second.body()).unwrap();
         assert_eq!(parsed["added"], 0);
         assert_eq!(parsed["total"], 1);
+    }
+
+    // GIVEN an album with members but a page past the end
+    // WHEN GET /api/albums/{id}/photos requests the out-of-range page
+    // THEN it still returns 200 with the stale total and an empty list
+    // (the empty-page existence re-check must not false-positive on a live album;
+    // it only converts to 404 when the album is actually gone)
+    #[tokio::test]
+    async fn test_album_photos_empty_page_still_200_when_album_exists() {
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let routes = build_test_routes(db_pool.clone());
+        let hash = "b".repeat(64);
+        seed_photo(&hash).create(&db_pool).await.unwrap();
+        let created = create_album_via_api(&db_pool, "B").await;
+        let id = created["id"].as_i64().unwrap();
+        albums::add_members(&db_pool, id, &[hash]).await.unwrap();
+
+        let res = warp::test::request()
+            .method("GET")
+            .path(&format!("/api/albums/{id}/photos?page=999&limit=10"))
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let parsed: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert_eq!(parsed["total"], 1);
+        assert_eq!(parsed["photos"].as_array().unwrap().len(), 0);
     }
 
     // GIVEN a missing album id

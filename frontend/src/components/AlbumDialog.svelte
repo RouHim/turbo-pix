@@ -2,7 +2,7 @@
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast, albums } from '../lib/state.svelte.js';
+  import { addToast, albums, loadAlbums } from '../lib/state.svelte.js';
   import { handleError } from '../lib/utils.js';
 
   // `open` must be `let` ($bindable); `album` is a non-bindable prop.
@@ -55,6 +55,9 @@
         const renamed = await api.renameAlbum(album.id, name.trim());
         const idx = albums.findIndex((a) => a.id === renamed.id);
         if (idx !== -1) albums[idx] = renamed;
+        // Reconcile with server truth: a loadAlbums that started before
+        // this rename committed must not splice its stale snapshot back.
+        loadAlbums();
         addToast(
           get(t)('albums.renamed', { default: 'Album renamed' }),
           renamed.name,
@@ -65,6 +68,9 @@
         const hashes = includeSelection && initialCount > 0 ? initialHashes : [];
         const created = await api.createAlbum({ name: name.trim(), initial_hashes: hashes });
         albums.unshift(created); // newest-first: fresh row has the max id
+        // Same staleness guard as rename: refetch so an in-flight list
+        // cannot wipe the just-created row.
+        loadAlbums();
         addToast(
           get(t)('albums.created', { default: 'Album created' }),
           created.name,

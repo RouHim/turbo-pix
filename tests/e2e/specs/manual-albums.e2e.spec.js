@@ -3,9 +3,11 @@ import { TestHelpers } from '../setup/test-helpers.js';
 
 async function deleteAllAlbums(page) {
   const res = await page.request.get('/api/albums');
+  expect(res.ok()).toBe(true);
   const { albums = [] } = await res.json();
   for (const album of albums) {
-    await page.request.delete(`/api/albums/${album.id}`);
+    const del = await page.request.delete(`/api/albums/${album.id}`);
+    expect(del.ok()).toBe(true);
   }
 }
 

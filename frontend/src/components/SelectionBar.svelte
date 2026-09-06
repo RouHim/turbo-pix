@@ -62,6 +62,15 @@
 
   let dateShiftOpen = $state(false);
   let pickerOpen = $state(false);
+  // Snapshot at picker-open time (mirrors PhotoViewer staleness rule): the
+  // picker must not bind live selection keys, which a route change can clear
+  // (Back/Forward exits selection mode) while the modal is still open.
+  let pickerHashes = $state([]);
+  function openAlbumPicker() {
+    if (!canAct) return;
+    pickerHashes = [...keys];
+    pickerOpen = true;
+  }
   let daysInput = $state('');
   const daysValid = $derived(
     daysInput !== '' && Number.isInteger(Number(daysInput)) && Number(daysInput) !== 0
@@ -91,7 +100,9 @@
   }
 
   async function removeFromAlbum() {
-    if (!canAct || route.album == null) return;
+    // Collage selections are keyed by collage id, not photo hash — the
+    // button is hidden there (see below), this guard covers the race.
+    if (!canAct || route.album == null || route.view === 'collages') return;
     // Snapshot the target set: grid toggles stay live during the await, so
     // re-reading `keys` afterwards could splice cards that were never
     // removed and keep ones that were.
@@ -478,14 +489,14 @@
       class="btn batch-action-btn"
       data-action="batch-add-to-album"
       disabled={!canAct}
-      onclick={() => (pickerOpen = true)}
+      onclick={openAlbumPicker}
     >
       <Icon name="plus" width={16} height={16} />
       {$t('albums.addToAlbum', { default: 'Add to album' })}
     </button>
   {/if}
 
-  {#if route.album != null}
+  {#if route.album != null && route.view !== 'collages'}
     <button
       type="button"
       class="btn batch-action-btn"
@@ -519,7 +530,7 @@
 </div>
 
 {#if pickerOpen}
-  <AlbumPicker openHashes={keys} onDone={() => (pickerOpen = false)} />
+  <AlbumPicker openHashes={pickerHashes} onDone={() => (pickerOpen = false)} />
 {/if}
 
 <style>

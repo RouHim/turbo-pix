@@ -276,8 +276,10 @@ pub async fn rotate_image(
     updated_photo.semantic_vector_indexed = Some(false); // Semantic vector invalidated
     updated_photo.updated_at = chrono::Utc::now();
 
-    // Rewriting hash_sha256 violates housekeeping_candidates' FK (no ON UPDATE);
-    // drop the stale candidate row inside the same transaction (AGENTS.md known bug).
+    // Rewriting hash_sha256 touches two child FKs: housekeeping_candidates
+    // (no ON UPDATE — drop the stale row here) and album_members (ON UPDATE
+    // CASCADE on migrated DBs, plus an explicit repoint inside
+    // update_with_old_hash) — all inside the same transaction.
     let mut tx = db_pool.begin().await.map_err(|e| {
         ImageEditError::DatabaseError(format!("Failed to begin transaction: {}", e))
     })?;

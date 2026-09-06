@@ -559,9 +559,11 @@ impl Photo {
     /// # Transaction Requirement
     ///
     /// Caller must provide an active transaction: rewriting `hash_sha256` (the parent
-    /// PK referenced by `housekeeping_candidates.photo_hash` via `ON DELETE CASCADE`
-    /// with no `ON UPDATE`) requires deleting/repainting the stale candidate rows
-    /// inside the same transaction (see `image_editor::rotate_image`).
+    /// key referenced by `housekeeping_candidates.photo_hash` via `ON DELETE CASCADE`
+    /// with no `ON UPDATE`) requires deleting the stale candidate rows inside the
+    /// same transaction (see `image_editor::rotate_image`). Album memberships
+    /// cascade automatically on migrated databases (migration 11 adds
+    /// `ON UPDATE CASCADE`) and are repointed explicitly below for the rest.
     pub async fn update_with_old_hash(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -614,6 +616,31 @@ impl Photo {
                 old_hash
             )
             .into());
+        }
+        // Repoint album memberships to the new hash. On migrated databases
+        // the ON UPDATE CASCADE already moved these rows (both statements
+        // below match 0 rows); on older schemas the explicit repoint keeps
+        // the photo in its albums instead of failing the parent-key update.
+        // Copy-then-delete (rather than a bare UPDATE) also survives the
+        // degenerate case where the new hash is already a member.
+        // Byte-identical rotate output (e.g. a solid-color PNG) yields
+        // new hash == old hash: the photos UPDATE above is then a harmless
+        // self-rewrite, but copy-then-delete below would be destructive —
+        // INSERT OR IGNORE no-ops (the rows already match) while the DELETE
+        // removes every membership. Skip the repoint: nothing moved.
+        if self.hash_sha256 != old_hash {
+            sqlx::query(
+                "INSERT OR IGNORE INTO album_members (album_id, photo_hash, added_at)
+                 SELECT album_id, ?1, added_at FROM album_members WHERE photo_hash = ?2",
+            )
+            .bind(&self.hash_sha256)
+            .bind(old_hash)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query("DELETE FROM album_members WHERE photo_hash = ?")
+                .bind(old_hash)
+                .execute(&mut **tx)
+                .await?;
         }
         Ok(())
     }
@@ -672,6 +699,25 @@ impl Photo {
         .bind(&self.hash_sha256)
         .fetch_optional(&mut **tx)
         .await?;
+        // Carry album memberships across the re-key: the DELETE below
+        // cascades the replaced rows' album_members entries, so snapshot
+        // them first and re-attach to the new hash after the upsert
+        // (mirrors the is_favorite carry above). Gated on a replaced row
+        // existing so the common path costs no extra query.
+        let carried_members: Vec<(i64, String)> = if replaced_favorite.is_some() {
+            sqlx::query_as(
+                "SELECT album_id, COALESCE(added_at, datetime('now')) FROM album_members
+                 WHERE photo_hash IN (
+                     SELECT hash_sha256 FROM photos WHERE file_path = ? AND hash_sha256 != ?
+                 )",
+            )
+            .bind(&self.file_path)
+            .bind(&self.hash_sha256)
+            .fetch_all(&mut **tx)
+            .await?
+        } else {
+            Vec::new()
+        };
 
         sqlx::query("DELETE FROM photos WHERE file_path = ? AND hash_sha256 != ?")
             .bind(&self.file_path)
@@ -738,6 +784,22 @@ impl Photo {
         .bind(Utc::now().to_rfc3339())
         .execute(&mut **tx)
         .await?;
+
+        // Re-attach the memberships snapshotted above to the new hash. The
+        // parent row now exists again, so the FK is satisfied with or
+        // without ON UPDATE CASCADE; OR IGNORE absorbs degenerate
+        // double-memberships from merging duplicate paths.
+        for (album_id, added_at) in &carried_members {
+            sqlx::query(
+                "INSERT OR IGNORE INTO album_members (album_id, photo_hash, added_at)
+                 VALUES (?, ?, ?)",
+            )
+            .bind(album_id)
+            .bind(&self.hash_sha256)
+            .bind(added_at)
+            .execute(&mut **tx)
+            .await?;
+        }
 
         Ok(())
     }
@@ -1350,6 +1412,165 @@ mod tests {
             Some(true),
             "same-hash upsert must keep the favorite"
         );
+    }
+
+    #[tokio::test]
+    async fn test_update_with_old_hash_repoints_album_members() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
+        photo.create(&pool).await.unwrap();
+        let album = crate::albums::create(&pool, "Trip").await.unwrap();
+        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+            .await
+            .unwrap();
+
+        // WHEN: the PK is rewritten exactly like rotate_image does
+        let mut updated = photo.clone();
+        updated.hash_sha256 = "b".repeat(64);
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("DELETE FROM housekeeping_candidates WHERE photo_hash = ?")
+            .bind(&photo.hash_sha256)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        updated
+            .update_with_old_hash(&mut tx, &photo.hash_sha256)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // THEN: no FK failure and the membership followed the new hash
+        assert_eq!(
+            crate::albums::count_members(&pool, album.id).await.unwrap(),
+            1
+        );
+        let member_hash: String =
+            sqlx::query_scalar("SELECT photo_hash FROM album_members WHERE album_id = ?")
+                .bind(album.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(member_hash, "b".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn test_update_with_old_hash_same_hash_keeps_album_members() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
+        photo.create(&pool).await.unwrap();
+        let album = crate::albums::create(&pool, "Trip").await.unwrap();
+        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+            .await
+            .unwrap();
+
+        // WHEN: rotate_image produces byte-identical output (solid-color PNG),
+        // so the new hash equals the old hash
+        let updated = photo.clone();
+        let mut tx = pool.begin().await.unwrap();
+        updated
+            .update_with_old_hash(&mut tx, &photo.hash_sha256)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // THEN: the membership survives (copy-then-delete must no-op, not
+        // INSERT-noop + DELETE-everything)
+        assert_eq!(
+            crate::albums::count_members(&pool, album.id).await.unwrap(),
+            1
+        );
+        let member_hash: String =
+            sqlx::query_scalar("SELECT photo_hash FROM album_members WHERE album_id = ?")
+                .bind(album.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(member_hash, "a".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_carries_album_members_across_rekey() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_date(&"a".repeat(64), "rotate.jpg", Utc::now());
+        photo.create(&pool).await.unwrap();
+        let album = crate::albums::create(&pool, "Trip").await.unwrap();
+        crate::albums::add_members(&pool, album.id, &[photo.hash_sha256.clone()])
+            .await
+            .unwrap();
+
+        // WHEN: the same path is re-keyed under a different hash (rescan
+        // after an in-place edit) — the DELETE would cascade memberships
+        let mut reprocessed = photo.clone();
+        reprocessed.hash_sha256 = "b".repeat(64);
+        let mut tx = pool.begin().await.unwrap();
+        reprocessed
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // THEN: the membership survived under the new hash
+        assert_eq!(
+            crate::albums::count_members(&pool, album.id).await.unwrap(),
+            1
+        );
+        let member_hash: String =
+            sqlx::query_scalar("SELECT photo_hash FROM album_members WHERE album_id = ?")
+                .bind(album.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(member_hash, "b".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_upsert_round_trips_timestamps() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_date(&"c".repeat(64), "scan.jpg", Utc::now());
+        let mut tx = pool.begin().await.unwrap();
+        photo
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Raw check: every bound column must be non-null. A dropped bind
+        // shifts the trailing values so ?20=updated_at binds NULL.
+        let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT date_indexed, created_at, updated_at FROM photos WHERE hash_sha256 = ?",
+        )
+        .bind(&photo.hash_sha256)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.is_some(), "upsert must store date_indexed");
+        assert!(row.1.is_some(), "upsert must store created_at");
+        assert!(row.2.is_some(), "upsert must store updated_at");
+
+        // Read path: Photo::from_row decodes updated_at as a non-optional
+        // String, so a NULL updated_at fails the query — the round-trip
+        // must succeed.
+        let found = Photo::find_by_hash(&pool, &photo.hash_sha256)
+            .await
+            .unwrap()
+            .expect("upserted photo must be readable");
+        assert_eq!(found.hash_sha256, photo.hash_sha256);
+
+        // Same-hash rescan (ON CONFLICT DO UPDATE path) must keep
+        // updated_at non-null too.
+        let mut tx = pool.begin().await.unwrap();
+        photo
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let updated_at: Option<String> =
+            sqlx::query_scalar("SELECT updated_at FROM photos WHERE hash_sha256 = ?")
+                .bind(&photo.hash_sha256)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(updated_at.is_some(), "rescan upsert must keep updated_at");
     }
 
     #[tokio::test]

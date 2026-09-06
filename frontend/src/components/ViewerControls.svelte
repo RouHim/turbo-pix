@@ -92,7 +92,7 @@
       aria-label={$t('albums.addToAlbum', { default: 'Add to album' })}
       onclick={onAddToAlbum}
     >
-      <Icon name="plus" width={18} height={18} />
+      <Icon name="image" width={18} height={18} />
     </button>
     <button
       type="button"

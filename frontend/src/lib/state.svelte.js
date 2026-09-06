@@ -102,9 +102,18 @@ export async function loadSavedSearches() {
 
 export const albums = $state([]);
 
+// Monotonic load token: App, AlbumsView, and AlbumPicker can all have a
+// GET /api/albums in flight at once, and a slow (stale) response must not
+// splice over a newer list — or over a create/rename/delete that landed
+// meanwhile (the mutating call sites reconcile with a fresh loadAlbums
+// below, so dropping the stale snapshot converges on server truth).
+let albumsLoadToken = 0;
+
 export async function loadAlbums() {
+  const token = ++albumsLoadToken;
   try {
     const data = await api.getAlbums();
+    if (token !== albumsLoadToken) return;
     albums.splice(0, albums.length, ...(data?.albums || []));
   } catch (error) {
     console.error('Failed to load albums', error);

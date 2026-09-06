@@ -3,7 +3,16 @@
   import { get } from 'svelte/store';
   import { getLocale, t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast, albums, appState, loadAlbums } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    albums,
+    appState,
+    loadAlbums,
+    selectionState,
+    toggleSelected,
+    selectRange,
+    pruneSelection,
+  } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { getThumbnailUrl, handleError } from '../lib/utils.js';
   import Icon from './Icon.svelte';
@@ -96,6 +105,32 @@
     pushState({ album: item.id, view: 'all', query: null, year: null, month: null });
   }
 
+  function handleRowClick(e, item) {
+    if (selectionState.active) {
+      const key = String(item.id);
+      if (e.shiftKey && selectionState.anchorKey != null) {
+        selectRange(
+          selectionState.anchorKey,
+          key,
+          albums.map((a) => String(a.id))
+        );
+      } else {
+        toggleSelected(key);
+      }
+      return;
+    }
+    openAlbum(item);
+  }
+
+  // Surface keys in display order for select-all-visible and range
+  // selection (album ids as strings, mirroring the collages surface);
+  // prune keys of albums deleted elsewhere.
+  $effect(() => {
+    const ids = albums.map((a) => String(a.id));
+    selectionState.orderedKeys = ids;
+    untrack(() => pruneSelection(ids));
+  });
+
   async function deleteAlbum(item) {
     const msg = get(t)('albums.deleteConfirm', {
       default: 'Permanently delete album "{name}"? Photos are kept.',
@@ -138,12 +173,23 @@
   {:else}
     <div class="album-list">
       {#each albums as item, index (item.id)}
-        <div class="album-row" style="--index: {index}" data-testid="album-row">
+        {@const selected = !!selectionState.selected[String(item.id)]}
+        <div class="album-row" style="--index: {index}" data-testid="album-row" class:selected>
+          {#if selectionState.active}
+            <span
+              class="album-select-badge"
+              aria-hidden="true"
+              onclick={(e) => handleRowClick(e, item)}
+            >
+              <Icon name={selected ? 'check-square' : 'square'} width={18} height={18} />
+            </span>
+          {/if}
           <button
             type="button"
             class="album-open"
             title={item.name}
-            onclick={() => openAlbum(item)}
+            onclick={(e) => handleRowClick(e, item)}
+            aria-pressed={selectionState.active ? selected : undefined}
             data-testid="album-open"
           >
             <span class="album-tile">
@@ -165,29 +211,31 @@
               {/if}
             </span>
           </button>
-          <button
-            type="button"
-            class="album-action"
-            title={$t('albums.rename', { default: 'Rename' })}
-            aria-label={$t('albums.rename', { default: 'Rename' })}
-            onclick={() => openEditAlbum(item)}
-            data-testid="album-rename"><Icon name="edit-2" width={14} height={14} /></button
-          >
-          <button
-            type="button"
-            class="album-action album-delete"
-            title={$t('albums.delete', { default: 'Delete' })}
-            aria-label={$t('albums.delete', { default: 'Delete' })}
-            onclick={() => deleteAlbum(item)}
-            data-testid="album-delete"><Icon name="trash-2" width={14} height={14} /></button
-          >
+          {#if !selectionState.active}
+            <button
+              type="button"
+              class="album-action"
+              title={$t('albums.rename', { default: 'Rename' })}
+              aria-label={$t('albums.rename', { default: 'Rename' })}
+              onclick={() => openEditAlbum(item)}
+              data-testid="album-rename"><Icon name="edit-2" width={14} height={14} /></button
+            >
+            <button
+              type="button"
+              class="album-action album-delete"
+              title={$t('albums.delete', { default: 'Delete' })}
+              aria-label={$t('albums.delete', { default: 'Delete' })}
+              onclick={() => deleteAlbum(item)}
+              data-testid="album-delete"><Icon name="trash-2" width={14} height={14} /></button
+            >
+          {/if}
         </div>
       {/each}
     </div>
   {/if}
 </div>
 
-<AlbumDialog bind:open={albumDialogOpen} album={editingAlbum} initialCount={0} initialHashes={[]} />
+<AlbumDialog bind:open={albumDialogOpen} album={editingAlbum} />
 
 <style>
   .albums-view {
@@ -243,6 +291,9 @@
     flex-direction: column;
   }
 
+  .album-row.selected {
+    background: color-mix(in oklch, var(--primary-color) 14%, transparent);
+  }
   .album-row {
     display: flex;
     align-items: center;
@@ -250,11 +301,19 @@
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--divider-color);
     animation: album-enter var(--transition-medium) backwards;
-    animation-delay: calc(var(--index, 0) * 40ms);
+    animation-delay: calc(min(var(--index, 0), 10) * 40ms);
   }
 
   .album-row:first-child {
     border-top: 1px solid var(--divider-color);
+  }
+
+  .album-select-badge {
+    display: flex;
+    align-items: center;
+    flex: none;
+    color: var(--primary-color);
+    cursor: pointer;
   }
 
   @keyframes album-enter {

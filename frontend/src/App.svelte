@@ -161,12 +161,10 @@
         {/if}
         <button
           type="button"
-          class="btn"
+          class="select-mode-btn"
           data-action="select-mode"
-          onclick={enterSelectionMode}
+          onclick={() => (selectionState.active ? exitSelectionMode() : enterSelectionMode())}
           aria-pressed={selectionState.active}
-          hidden={selectionState.active ||
-            (route.view === 'albums' && route.album == null && route.query == null)}
         >
           <Icon name="check-square" width={16} height={16} />
           {$t('ui.select', { default: 'Select' })}
@@ -266,6 +264,35 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+  }
+  .select-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: var(--font-base);
+    font-family: var(--font-body);
+    cursor: pointer;
+  }
+  .select-mode-btn:hover {
+    border-color: var(--primary-color);
+  }
+  .select-mode-btn[aria-pressed='true'] {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+  }
+  .select-mode-btn:focus-visible {
+    outline: none;
+    border-color: var(--primary-color);
+  }
+  .select-mode-btn :global(svg) {
+    width: 16px;
+    height: 16px;
   }
   .new-album-btn {
     display: inline-flex;

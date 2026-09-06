@@ -85,7 +85,6 @@ pub async fn create_with_members(
         .await?;
     let album_id = inserted.0;
     if !hashes.is_empty() {
-        let mut added = 0_usize;
         for chunk in hashes.chunks(IN_CHUNK_SIZE) {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let sql = format!(
@@ -96,9 +95,8 @@ pub async fn create_with_members(
             for hash in chunk {
                 query = query.bind(hash);
             }
-            added += query.execute(&mut *tx).await?.rows_affected() as usize;
+            query.execute(&mut *tx).await?;
         }
-        let _ = added;
     }
     let row = sqlx::query_as::<_, Album>(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLUMNS} FROM albums WHERE id = ?"

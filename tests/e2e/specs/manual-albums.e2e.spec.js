@@ -192,6 +192,36 @@ test.describe('Manual Albums', () => {
     }
   });
 
+  test('selects multiple albums on the overview and deletes them as a batch', async ({ page }) => {
+    await createAlbumViaApi(page, 'Batch A');
+    await createAlbumViaApi(page, 'Batch B');
+
+    await TestHelpers.navigateToView(page, 'albums');
+    await expect(page.locator('[data-testid="album-row"]')).toHaveCount(2);
+
+    // The overview selects whole albums: only the album delete action
+    // applies, photo actions (add-to-album) stay hidden.
+    await page.click('[data-action="select-mode"]');
+    await expect(page.locator('[data-action="batch-delete-albums"]')).toBeVisible();
+    await expect(page.locator('[data-action="batch-add-to-album"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="album-row"]').nth(0).click();
+    await page.locator('[data-testid="album-row"]').nth(1).click();
+    await expect(page.locator('#selection-bar')).toContainText('2 selected');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    const deleteResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/albums/') && response.request().method() === 'DELETE'
+    );
+    await page.click('[data-action="batch-delete-albums"]');
+    await deleteResponse;
+    await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
+
+    const res = await page.request.get('/api/albums');
+    expect((await res.json()).albums ?? []).toHaveLength(0);
+  });
+
   test('rejects an empty album name and saves nothing', async ({ page }) => {
     await TestHelpers.navigateToView(page, 'albums');
     await page.click('[data-testid="new-album-btn"]');

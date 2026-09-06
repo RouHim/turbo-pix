@@ -261,9 +261,4 @@
     font-family: var(--font-body);
     cursor: pointer;
   }
-  @media (prefers-reduced-motion: reduce) {
-    .album-picker {
-      transition: none;
-    }
-  }
 </style>

@@ -195,7 +195,7 @@
   {:else if error}
     <div class="error-message">
       {$t('ui.housekeeping_load_failed', { default: 'Could not check for issues' })}
-      <button type="button" class="btn" onclick={loadAndRender}>
+      <button type="button" class="retry-btn" onclick={loadAndRender}>
         {$t('ui.try_again', { default: 'Try Again' })}
       </button>
     </div>
@@ -247,6 +247,23 @@
     flex-direction: column;
     align-items: center;
     gap: var(--space-4);
+  }
+  .retry-btn {
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: var(--font-base);
+    font-family: var(--font-body);
+    cursor: pointer;
+  }
+  .retry-btn:hover {
+    border-color: var(--primary-color);
+  }
+  .retry-btn:focus-visible {
+    outline: none;
+    border-color: var(--primary-color);
   }
 
   .no-photos {

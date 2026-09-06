@@ -6,13 +6,10 @@
   import { handleError } from '../lib/utils.js';
 
   // `open` must be `let` ($bindable); `album` is a non-bindable prop.
-  // In create mode with an active grid selection, `initialHashes` carries the
-  // selected photo hashes and the dialog offers to include them (FR-002).
   // eslint-disable-next-line prefer-const
-  let { open = $bindable(false), album = null, initialCount = 0, initialHashes = [] } = $props();
+  let { open = $bindable(false), album = null } = $props();
 
   let name = $state('');
-  let includeSelection = $state(true);
   let error = $state(null);
   let saving = $state(false);
   let dialogEl = $state(null);
@@ -20,7 +17,6 @@
   $effect(() => {
     if (open) {
       name = album?.name ?? '';
-      includeSelection = true;
       error = null;
       saving = false;
       dialogEl?.showModal();
@@ -65,8 +61,7 @@
           3000
         );
       } else {
-        const hashes = includeSelection && initialCount > 0 ? initialHashes : [];
-        const created = await api.createAlbum({ name: name.trim(), initial_hashes: hashes });
+        const created = await api.createAlbum({ name: name.trim(), initial_hashes: [] });
         albums.unshift(created); // newest-first: fresh row has the max id
         // Same staleness guard as rename: refetch so an in-flight list
         // cannot wipe the just-created row.
@@ -103,20 +98,6 @@
       maxlength="200"
       data-testid="album-name-input"
     />
-
-    {#if !album && initialCount > 0}
-      <label class="album-include-row">
-        <input
-          type="checkbox"
-          bind:checked={includeSelection}
-          data-testid="album-include-selection"
-        />
-        {$t('albums.includeSelection', {
-          default: 'Include {count} selected photos',
-          values: { count: initialCount },
-        })}
-      </label>
-    {/if}
 
     {#if error}
       <p class="album-error" role="alert" data-testid="album-error">{error}</p>
@@ -174,11 +155,6 @@
     outline: none;
     border-color: var(--primary-color);
   }
-  .album-include-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
   .album-error {
     color: var(--danger-color, var(--error-color));
     font-size: var(--font-sm);
@@ -208,10 +184,5 @@
   .album-submit:disabled {
     opacity: 0.6;
     cursor: default;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .album-dialog {
-      transition: none;
-    }
   }
 </style>

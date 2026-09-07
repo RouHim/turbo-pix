@@ -1,3 +1,10 @@
+## [2.40.1](https://github.com/RouHim/turbo-pix/compare/2.40.0...2.40.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **container:** add CA certificates to scratch image ([df7a372](https://github.com/RouHim/turbo-pix/commit/df7a372cb98a6632694dc710071d2aee199d87e7))
+
 # [2.40.0](https://github.com/RouHim/turbo-pix/compare/2.39.21...2.40.0) (2026-09-06)
 
 

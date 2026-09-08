@@ -341,6 +341,7 @@
   }
   .timeline-rail {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--space-4);
   }
@@ -393,6 +394,8 @@
   }
   .timeline-month-strip {
     display: grid;
+    flex: 1 1 100%;
+    order: 1;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: var(--space-2);
     margin-top: var(--space-3);

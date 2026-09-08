@@ -25,7 +25,7 @@ test('timeline should have no axe violations on desktop', async ({ page }) => {
   );
   test.skip(density.length === 0, 'Timeline needs at least one month bucket');
 
-  await expect(page.locator('.timeline-input')).toHaveCount(1);
+  await expect(page.locator('.timeline-year-rail .timeline-year').first()).toBeVisible();
 
   const results = await new AxeBuilder({ page })
     .include('.timeline-container')

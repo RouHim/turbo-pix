@@ -1,69 +1,32 @@
 <script>
-  import { onDestroy } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
+  import { buildYearAggregates, getYearAggregate } from '../lib/timeline.js';
   import Icon from './Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
 
   let data = $state(null);
   let currentFilter = $state(null);
-  let debounceTimer = null;
-  let selectedIndex = $state(null);
-  let sliderValue = $state(0);
-  let ribbonEl = $state(null);
+  let selectedYear = $state(null);
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
-  let hoveredIndex = $state(null);
-  let tooltipX = $state(0);
-  let tooltipY = $state(0);
-  // Set while a desktop slider drag is being debounced; the route-restore
-  // $effect must not wipe the in-progress filter before the URL push fires.
-  let dragInProgress = false;
 
-  const positions = $derived(
-    data?.density?.map((d) => ({
-      year: d.year,
-      month: d.month,
-      count: d.count,
-    })) ?? []
+  const aggregates = $derived(buildYearAggregates(data?.density ?? []));
+
+  // The mobile dropdowns below are intentionally untouched and still iterate
+  // `years`; derive it from aggregates (same descending order) so they keep
+  // working until a later task rewrites them.
+  const years = $derived(aggregates.map((a) => a.year));
+
+  const selectedAggregate = $derived(
+    selectedYear === null ? null : getYearAggregate(aggregates, selectedYear)
   );
-
-  const years = $derived(
-    data?.density ? [...new Set(data.density.map((d) => d.year))].sort((a, b) => b - a) : []
-  );
-
-  const maxSlider = $derived(Math.max(0, positions.length - 1));
-
-  const maxCount = $derived(Math.max(1, ...positions.map((p) => p.count)));
-
-  // Year landmarks: start bucket index per year; dense rule when > 6 years.
-  // Ordered ascending (positions are oldest-first) so ticks read left to right
-  // under the ribbon; the first tick is left-aligned to avoid clipping.
-  const yearTicks = $derived.by(() => {
-    const ticks = [...years]
-      .sort((a, b) => a - b)
-      .map((year) => ({
-        year,
-        startIndex: positions.findIndex((p) => p.year === year),
-      }));
-    if (ticks.length <= 6) return ticks;
-    return ticks.filter((_, i) => i === 0 || i === ticks.length - 1 || i % 2 === 0);
-  });
-
-  function monthYearLabel(year, month) {
-    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
-    const monthName = $t(`ui.months.${monthKey}`, {
-      locale: activeLocale,
-      default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
-    });
-    return `${monthName} ${year}`;
-  }
 
   const labelText = $derived.by(() => {
     if (!currentFilter) {
@@ -75,16 +38,22 @@
     return monthYearLabel(currentFilter.year, currentFilter.month);
   });
 
+  const monthYearLabel = (year, month) => {
+    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
+    const monthName = $t(`ui.months.${monthKey}`, {
+      locale: activeLocale,
+      default: `${monthKey.charAt(0).toUpperCase()}${monthKey.slice(1)}`,
+    });
+    return `${monthName} ${year}`;
+  };
+
   $effect(() => {
     fetchTimelineData();
   });
 
-  async function fetchTimelineData() {
+  const fetchTimelineData = async () => {
     try {
       data = await api.request('/api/photos/timeline');
-      if (data?.density?.length > 0) {
-        sliderValue = data.density.length - 1;
-      }
     } catch (error) {
       console.error('Failed to initialize timeline:', error);
       addToast(
@@ -95,130 +64,83 @@
       );
       initError = true;
     }
-  }
+  };
 
-  function applyFilter(updateUrl = true) {
-    if (updateUrl) {
-      const year = currentFilter?.year ?? null;
-      const month = currentFilter?.month ?? null;
-      // Never push month without year
-      pushState({ year, month: year ? month : null });
+  const pushFilter = () => {
+    const year = currentFilter?.year ?? null;
+    const month = currentFilter?.month ?? null;
+    pushState({ year, month: year ? month : null });
+  };
+
+  const selectYear = (year) => {
+    if (selectedYear === year && (currentFilter?.month ?? null) === null) {
+      currentFilter = null;
+      selectedYear = null;
+    } else if (selectedYear === year) {
+      currentFilter = { year, month: null };
+    } else {
+      currentFilter = { year, month: null };
+      selectedYear = year;
     }
-  }
+    if (selectedYear !== null && currentFilter !== null && currentFilter.year !== selectedYear) {
+      selectedYear = currentFilter.year;
+    }
+    if (currentFilter === null) selectedYear = null;
+    pushFilter();
+  };
 
-  function resetFilter() {
+  const resetFilter = () => {
     currentFilter = null;
-    selectedIndex = null;
-    if (positions.length > 0) {
-      sliderValue = positions.length - 1;
-    }
+    selectedYear = null;
     if (yearSelectEl) yearSelectEl.value = '';
     if (monthSelectEl) monthSelectEl.value = '';
-    applyFilter();
-  }
+    pushFilter();
+  };
 
-  function handleSliderInput(e) {
-    const index = parseInt(e.target.value);
-    if (index >= positions.length - 1) {
-      currentFilter = null;
-      selectedIndex = null;
-    } else {
-      const pos = positions[index];
-      currentFilter = { year: pos.year, month: pos.month };
-      selectedIndex = index;
-    }
-    // The route-restore $effect reads currentFilter as a dependency, so it
-    // re-runs on every drag tick — with route.year still null it would reset
-    // the filter and snap the thumb back before the debounced push fires.
-    dragInProgress = true;
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      dragInProgress = false;
-      applyFilter();
-    }, 300);
-  }
-
-  function handleDropdownChange() {
+  const handleDropdownChange = () => {
     const year = yearSelectEl?.value;
     let month = monthSelectEl?.value;
     if (!year) {
-      // A month without a year is not a valid filter — clear the stale selection.
       month = null;
       if (monthSelectEl) monthSelectEl.value = '';
     }
     if (!year && !month) {
       currentFilter = null;
+      selectedYear = null;
     } else {
+      const parsedYear = year ? parseInt(year, 10) : null;
       currentFilter = {
-        year: year ? parseInt(year) : null,
-        month: month ? parseInt(month) : null,
+        year: parsedYear,
+        month: month ? parseInt(month, 10) : null,
       };
+      selectedYear = parsedYear;
     }
-    applyFilter();
-  }
+    pushFilter();
+  };
 
-  function handleTrackHover(e) {
-    if (!ribbonEl || positions.length === 0) return;
-    const rect = ribbonEl.getBoundingClientRect();
-    if (rect.width === 0) return;
-    const gap = 2; // .timeline-ribbon gap, keep in sync with CSS
-    const barWidth = (rect.width - gap * (positions.length - 1)) / positions.length;
-    if (barWidth <= 0) return; // degenerate: more buckets than the track can hold
-    const pitch = barWidth + gap;
-    let index = Math.floor((e.clientX - rect.left) / pitch);
-    if (index < 0 || index >= positions.length) index = -1;
-    hoveredIndex = index >= 0 ? index : null;
-    // Clamp so the tooltip never overflows the viewport (it is centered via
-    // translateX(-50%) and offset 60px above the cursor).
-    tooltipX = Math.min(Math.max(e.clientX, 110), window.innerWidth - 110);
-    tooltipY = Math.max(e.clientY - 60, 8);
-  }
-
-  function handleTrackLeave() {
-    hoveredIndex = null;
-  }
-
-  /**
-   * Applies a route-driven filter (URL restore / popstate). Must run before
-   * the drag guard in the effect below — see the comment there.
-   */
-  function restoreFilterFromRoute(year, month) {
+  const restoreFilterFromRoute = (year, month) => {
     if (!year && !month) {
-      // Reset to no filter (only if we have a current filter)
       if (currentFilter) {
         currentFilter = null;
-        selectedIndex = null;
-        if (positions.length > 0) {
-          sliderValue = positions.length - 1;
-        }
+        selectedYear = null;
         if (yearSelectEl) yearSelectEl.value = '';
         if (monthSelectEl) monthSelectEl.value = '';
       }
     } else if (year) {
-      const matchIndex = positions.findIndex((p) => p.year === year && p.month === month);
       currentFilter = { year, month: month || null };
-      selectedIndex = matchIndex >= 0 ? matchIndex : null;
-      if (matchIndex >= 0) {
-        sliderValue = matchIndex;
-      }
-      if (yearSelectEl && year) yearSelectEl.value = String(year);
+      selectedYear = year;
+      if (yearSelectEl) yearSelectEl.value = String(year);
       if (monthSelectEl) monthSelectEl.value = month ? String(month) : '';
     }
-  }
+  };
 
-  // Restore filter from route state (URL restore / popstate)
+  // Restore filter from route state (URL restore / popstate).
+  // Reads route BEFORE any guard: an early return that reads nothing empties
+  // the effect's dependency set and permanently unsubscribes it.
   $effect(() => {
-    // Read route BEFORE the drag guard: an early return that reads nothing
-    // empties the effect's dependency set and permanently unsubscribes it
-    // (Svelte 5 replaces deps with what this run read).
     const year = route.year;
     const month = route.month;
-    if (dragInProgress) return;
     restoreFilterFromRoute(year, month);
-  });
-
-  onDestroy(() => {
-    if (debounceTimer) clearTimeout(debounceTimer);
   });
 </script>
 
@@ -230,12 +152,12 @@
         <div class="timeline-label">{labelText}</div>
       </div>
     </div>
-  {:else if positions.length === 0}
+  {:else if aggregates.length === 0}
     <!-- Empty library: nothing to filter, render nothing -->
   {:else}
     <div class="timeline-container">
-      <!-- Desktop: Slider -->
-      <div class="timeline-slider desktop-only">
+      <!-- Desktop: Year rail + month strip -->
+      <div class="timeline-rail desktop-only">
         <button
           type="button"
           class="timeline-reset"
@@ -245,61 +167,24 @@
         >
           <Icon name="x" width={14} height={14} />
         </button>
-        <div class="timeline-track-stack">
-          <!-- The track itself is presentational: hover only drives the tooltip, the range input below is the keyboard-accessible control -->
-          <div
-            class="timeline-track"
-            role="presentation"
-            onmousemove={handleTrackHover}
-            onmouseleave={handleTrackLeave}
-          >
-            <div class="timeline-groove" aria-hidden="true">
-              <div class="timeline-ribbon" bind:this={ribbonEl}>
-                {#each positions as pos, i (i)}
-                  <div
-                    class="timeline-bar"
-                    class:selected={selectedIndex === i}
-                    class:hovered={hoveredIndex === i}
-                    style="--bar-ratio: {pos.count / maxCount}; --bar-opacity: {0.35 +
-                      0.55 * (pos.count / maxCount)}; animation-delay: {Math.min(i * 8, 300)}ms"
-                  ></div>
-                {/each}
-              </div>
-            </div>
-            <input
-              type="range"
-              class="timeline-input"
-              min="0"
-              max={maxSlider}
-              value={sliderValue}
-              aria-label={$t('ui.timeline_slider_aria', { default: 'Timeline filter' })}
-              aria-valuetext={labelText}
-              oninput={handleSliderInput}
-              ondblclick={resetFilter}
-            />
-            {#if hoveredIndex !== null}
-              {@const pos = positions[hoveredIndex]}
-              <div class="timeline-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
-                <div class="timeline-tooltip-date">{monthYearLabel(pos.year, pos.month)}</div>
-                <div class="timeline-tooltip-count">
-                  {$t('ui.photos_count', {
-                    values: { count: pos.count },
-                    default: '{count} photos',
-                  })}
-                </div>
-              </div>
-            {/if}
-          </div>
-          <div class="timeline-ticks" aria-hidden="true">
-            {#each yearTicks as tick, i (tick.year)}
-              <span
-                class="timeline-year-tick"
-                class:first={i === 0}
-                class:last={i === yearTicks.length - 1}
-                style="left: {(tick.startIndex / positions.length) * 100}%">{tick.year}</span
-              >
-            {/each}
-          </div>
+        <div
+          class="timeline-year-rail"
+          role="group"
+          aria-label={$t('ui.timeline_years_label', { default: 'Years' })}
+        >
+          {#each aggregates as agg (agg.year)}
+            <button
+              type="button"
+              class="timeline-year"
+              class:active={selectedYear === agg.year}
+              aria-pressed={selectedYear === agg.year}
+              aria-label={`${agg.year}, ${$t('ui.photos_count', { values: { count: agg.total }, default: '{count} photos' })}`}
+              onclick={() => selectYear(agg.year)}
+            >
+              <span class="timeline-year-label">{agg.year}</span>
+              <span class="timeline-year-count">{agg.total}</span>
+            </button>
+          {/each}
         </div>
         <div class="timeline-label" class:filtered={currentFilter !== null}>{labelText}</div>
       </div>

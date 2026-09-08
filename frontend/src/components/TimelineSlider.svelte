@@ -89,6 +89,16 @@
     pushFilter();
   };
 
+  const selectMonth = (month, count) => {
+    if (count === 0 || selectedYear === null) return;
+    if (currentFilter?.month === month) {
+      currentFilter = { year: selectedYear, month: null };
+    } else {
+      currentFilter = { year: selectedYear, month };
+    }
+    pushFilter();
+  };
+
   const resetFilter = () => {
     currentFilter = null;
     selectedYear = null;
@@ -186,6 +196,37 @@
             </button>
           {/each}
         </div>
+        {#if selectedAggregate}
+          {@const agg = selectedAggregate}
+          <div
+            class="timeline-month-strip"
+            role="group"
+            aria-label={$t('ui.timeline_months_label', { default: 'Months' })}
+          >
+            {#each agg.months as slot (slot.month)}
+              {@const monthKey = APP_CONSTANTS.MONTH_KEYS[slot.month - 1]}
+              {@const monthName = $t(`ui.months.${monthKey}`, {
+                locale: activeLocale,
+                default: `${monthKey.charAt(0).toUpperCase()}${monthKey.slice(1)}`,
+              })}
+              <button
+                type="button"
+                class="timeline-month"
+                class:active={currentFilter?.month === slot.month}
+                class:empty={slot.count === 0}
+                disabled={slot.count === 0}
+                aria-pressed={currentFilter?.month === slot.month}
+                aria-label={slot.count === 0
+                  ? `${monthName} ${agg.year}, ${$t('ui.timeline_no_photos_month', { default: 'No photos' })}`
+                  : `${monthName} ${agg.year}, ${$t('ui.photos_count', { values: { count: slot.count }, default: '{count} photos' })}`}
+                onclick={() => selectMonth(slot.month, slot.count)}
+              >
+                <span class="timeline-month-label">{monthName}</span>
+                <span class="timeline-month-count">{slot.count}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div class="timeline-label" class:filtered={currentFilter !== null}>{labelText}</div>
       </div>
 

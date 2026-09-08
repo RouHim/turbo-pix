@@ -344,7 +344,7 @@
     align-items: flex-start;
     gap: var(--space-4);
   }
-  + .timeline-year-rail {
+  .timeline-year-rail {
     flex: 1;
     display: flex;
     gap: var(--space-2);
@@ -353,7 +353,7 @@
     flex-wrap: nowrap;
     padding-block: var(--space-1);
   }
-  + .timeline-year {
+  .timeline-year {
     flex: 0 0 auto;
     display: flex;
     align-items: baseline;
@@ -366,15 +366,15 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  + .timeline-year:hover {
+  .timeline-year:hover {
     border-color: var(--primary-color);
   }
-  + .timeline-year.active {
+  .timeline-year.active {
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
     border-color: var(--primary-color);
     color: var(--primary-dark);
   }
-  + .timeline-year:focus-visible,
+  .timeline-year:focus-visible,
   .timeline-month:focus-visible,
   .timeline-reset:focus-visible {
     outline: none;
@@ -382,22 +382,22 @@
       0 0 0 2px var(--surface-color),
       0 0 0 4px var(--primary-color);
   }
-  + .timeline-year-label {
+  .timeline-year-label {
     font-size: var(--font-sm);
     font-weight: var(--font-medium);
   }
-  + .timeline-year-count,
+  .timeline-year-count,
   .timeline-month-count {
     font-size: var(--font-xs);
     color: var(--text-secondary);
   }
-  + .timeline-month-strip {
+  .timeline-month-strip {
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: var(--space-2);
     margin-top: var(--space-3);
   }
-  + .timeline-month {
+  .timeline-month {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -410,18 +410,18 @@
     cursor: pointer;
     min-width: 0;
   }
-  + .timeline-month:hover:not(:disabled) {
+  .timeline-month:hover:not(:disabled) {
     border-color: var(--primary-color);
   }
-  + .timeline-month.active {
+  .timeline-month.active {
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
     border-color: var(--primary-color);
   }
-  + .timeline-month.empty {
+  .timeline-month.empty {
     opacity: 0.55;
     cursor: not-allowed;
   }
-  + .timeline-rail :global(svg) {
+  .timeline-rail :global(svg) {
     width: 14px;
     height: 14px;
   }

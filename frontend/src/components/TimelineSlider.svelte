@@ -285,172 +285,6 @@
     box-shadow: var(--shadow-light);
   }
 
-  .timeline-slider {
-    display: flex;
-    align-items: center;
-    gap: var(--space-5);
-  }
-
-  .timeline-track-stack {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    min-width: 0;
-  }
-
-  .timeline-track {
-    position: relative;
-    height: 40px;
-    display: flex;
-    align-items: center;
-  }
-
-  .timeline-groove {
-    position: absolute;
-    inset: 4px 0;
-    display: flex;
-    align-items: center;
-    background: var(--background-secondary);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-lg);
-    padding: 2px 4px;
-  }
-
-  .timeline-ribbon {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    width: 100%;
-    height: 100%;
-  }
-
-  .timeline-bar {
-    flex: 1 1 0;
-    min-width: 0;
-    height: calc(6px + var(--bar-ratio) * 20px);
-    border-radius: var(--radius-full);
-    background: var(--primary-color);
-    opacity: var(--bar-opacity);
-    transform-origin: bottom;
-    animation: timeline-bar-grow 0.4s var(--ease-spring) backwards;
-    transition: opacity var(--transition-fast);
-  }
-
-  .timeline-bar.selected {
-    opacity: 1;
-  }
-
-  .timeline-bar.hovered {
-    opacity: 0.9;
-  }
-
-  @keyframes timeline-bar-grow {
-    from {
-      transform: scaleY(0);
-    }
-    to {
-      transform: scaleY(1);
-    }
-  }
-
-  .timeline-input {
-    position: absolute;
-    top: 50%;
-    left: 0;
-    width: 100%;
-    transform: translateY(-50%);
-    z-index: 2;
-    -webkit-appearance: none;
-    appearance: none;
-    background: transparent;
-    cursor: grab;
-    height: 40px;
-    margin: 0;
-    border-radius: var(--radius-lg);
-  }
-
-  .timeline-input:active {
-    cursor: grabbing;
-  }
-
-  .timeline-input:focus-visible {
-    outline: none;
-    box-shadow:
-      0 0 0 2px var(--surface-color),
-      0 0 0 4px var(--primary-color);
-  }
-
-  .timeline-input::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    background: var(--primary-color);
-    border: 2px solid var(--surface-color);
-    cursor: grab;
-    box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
-    transition: transform var(--transition-fast);
-  }
-
-  .timeline-input::-webkit-slider-thumb:hover {
-    transform: scale(1.1);
-    box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
-  }
-
-  .timeline-input:active::-webkit-slider-thumb {
-    cursor: grabbing;
-    transform: scale(1.05);
-  }
-
-  .timeline-input::-moz-range-thumb {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    background: var(--primary-color);
-    border: 2px solid var(--surface-color);
-    cursor: grab;
-    box-shadow: 0 1px 4px oklch(0% 0 0deg / 20%);
-    transition: transform var(--transition-fast);
-  }
-
-  .timeline-input::-moz-range-thumb:hover {
-    transform: scale(1.1);
-    box-shadow: 0 2px 8px oklch(0% 0 0deg / 30%);
-  }
-
-  .timeline-input:active::-moz-range-thumb {
-    cursor: grabbing;
-    transform: scale(1.05);
-  }
-
-  .timeline-ticks {
-    position: relative;
-    height: 16px;
-    overflow: hidden;
-    pointer-events: none;
-  }
-
-  .timeline-year-tick {
-    position: absolute;
-    top: 0;
-    transform: translateX(-50%);
-    font-size: var(--font-xs);
-    line-height: 16px;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    user-select: none;
-  }
-
-  .timeline-year-tick.first {
-    transform: none;
-  }
-
-  .timeline-year-tick.last {
-    transform: translateX(-100%);
-  }
-
   .timeline-label {
     flex-shrink: 0;
     min-width: 104px;
@@ -468,40 +302,6 @@
   .timeline-label.filtered {
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
     color: var(--primary-dark);
-  }
-
-  .timeline-tooltip {
-    position: fixed;
-    transform: translateX(-50%);
-    background: var(--surface-elevated);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-md);
-    padding: var(--space-2) var(--space-3);
-    box-shadow: var(--shadow-heavy);
-    pointer-events: none;
-    z-index: var(--z-tooltip);
-    animation: timeline-tooltip-in 0.15s ease-out;
-  }
-
-  @keyframes timeline-tooltip-in {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
-
-  .timeline-tooltip-date {
-    font-size: var(--font-md);
-    font-weight: var(--font-semibold);
-    color: var(--text-primary);
-    margin-bottom: var(--space-1);
-  }
-
-  .timeline-tooltip-count {
-    font-size: var(--font-sm);
-    color: var(--text-secondary);
   }
 
   .timeline-reset {
@@ -538,6 +338,92 @@
     box-shadow:
       0 0 0 2px var(--surface-color),
       0 0 0 4px var(--primary-color);
+  }
+  .timeline-rail {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+  }
+  + .timeline-year-rail {
+    flex: 1;
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-block: var(--space-1);
+  }
+  + .timeline-year {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  + .timeline-year:hover {
+    border-color: var(--primary-color);
+  }
+  + .timeline-year.active {
+    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
+    border-color: var(--primary-color);
+    color: var(--primary-dark);
+  }
+  + .timeline-year:focus-visible,
+  .timeline-month:focus-visible,
+  .timeline-reset:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+  + .timeline-year-label {
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+  }
+  + .timeline-year-count,
+  .timeline-month-count {
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+  }
+  + .timeline-month-strip {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  + .timeline-month {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    min-width: 0;
+  }
+  + .timeline-month:hover:not(:disabled) {
+    border-color: var(--primary-color);
+  }
+  + .timeline-month.active {
+    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
+    border-color: var(--primary-color);
+  }
+  + .timeline-month.empty {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  + .timeline-rail :global(svg) {
+    width: 14px;
+    height: 14px;
   }
 
   .timeline-skeleton {
@@ -624,19 +510,11 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .timeline-bar,
+    .timeline-year,
+    .timeline-month,
     .timeline-label,
     .timeline-label.filtered,
-    .timeline-tooltip,
-    .timeline-input::-webkit-slider-thumb,
     .timeline-reset {
-      animation: none;
-      transition: none;
-    }
-    /* NOTE: keep the -moz thumb in its own rule — Chromium drops the WHOLE
-       selector list when it contains an unknown pseudo-element, which would
-       empty this media query (and `animation: none` never applied). */
-    .timeline-input::-moz-range-thumb {
       animation: none;
       transition: none;
     }

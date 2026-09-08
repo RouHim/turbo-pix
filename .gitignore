@@ -55,3 +55,4 @@ test-e2e-data/
 test-server.pid
 .sisyphus/
 .worktrees/
+.superpowers/

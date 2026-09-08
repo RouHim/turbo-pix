@@ -162,7 +162,7 @@ test.describe('URL Routing', () => {
       await TestHelpers.goto(page);
       await TestHelpers.waitForPhotosToLoad(page);
 
-      // WHEN: User drags the timeline slider to the oldest month bucket
+      // WHEN: User picks a year then a month in the timeline rail
       const density = await page.evaluate(() =>
         fetch('/api/photos/timeline')
           .then((response) => response.json())
@@ -172,19 +172,23 @@ test.describe('URL Routing', () => {
 
       const target = density[0];
 
-      const slider = page.locator('.timeline-input');
-      await expect(slider).toHaveAttribute('max', String(density.length - 1));
-      await slider.evaluate((el) => {
-        el.value = '0';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      });
+      await page
+        .locator('.timeline-year-rail .timeline-year', { hasText: String(target.year) })
+        .first()
+        .click();
+      await TestHelpers.waitForUrlParam(page, 'year', String(target.year));
+      const bucket = density.find((d) => d.year === target.year && d.count > 0);
+      await page
+        .locator('.timeline-month-strip .timeline-month')
+        .nth(bucket.month - 1)
+        .click();
 
       // THEN: URL contains year and month params matching the selected bucket
-      await TestHelpers.waitForUrlParam(page, 'year', String(target.year));
-      await TestHelpers.waitForUrlParam(page, 'month', String(target.month));
+      await TestHelpers.waitForUrlParam(page, 'year', String(bucket.year));
+      await TestHelpers.waitForUrlParam(page, 'month', String(bucket.month));
       const state = TestHelpers.getUrlState(page);
-      expect(state.year).toBe(target.year);
-      expect(state.month).toBe(target.month);
+      expect(state.year).toBe(bucket.year);
+      expect(state.month).toBe(bucket.month);
     });
 
     test('should restore timeline from URL on page load', async ({ page }) => {

@@ -1,3 +1,11 @@
+## [2.40.7](https://github.com/RouHim/turbo-pix/compare/2.40.6...2.40.7) (2026-09-14)
+
+
+### Bug Fixes
+
+* **viewer:** keep native video controls clear of the action bar ([3609637](https://github.com/RouHim/turbo-pix/commit/36096372120743a88fc49b1d74c6a5e98cacbf0b))
+* **viewer:** let the action bar consume the viewer geometry tokens ([e22a6d1](https://github.com/RouHim/turbo-pix/commit/e22a6d130a976ca8e1c7ccabd52840b723f993e3))
+
 ## [2.40.6](https://github.com/RouHim/turbo-pix/compare/2.40.5...2.40.6) (2026-09-13)
 
 ## [2.40.5](https://github.com/RouHim/turbo-pix/compare/2.40.4...2.40.5) (2026-09-12)

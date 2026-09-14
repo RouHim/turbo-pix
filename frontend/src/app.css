@@ -128,6 +128,12 @@
     --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
     --text-on-accent: oklch(20% 0.01 260deg);
 
+    /* Viewer action bar geometry. A native <video> paints its control strip
+       inside its own bottom edge, so the media box reserves this same band
+       and the video stops above the bar (see PhotoViewer video-mode). */
+    --viewer-controls-offset: var(--space-6);
+    --viewer-controls-height: calc(var(--button-size-sm) + (var(--space-2) * 2) + 2px);
+
     /* Legacy aliases for backward compatibility */
     --border-radius: var(--radius-md);
     --border-radius-lg: var(--radius-lg);
@@ -840,7 +846,7 @@
 
 .viewer-controls {
   position: absolute;
-  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--viewer-controls-offset) + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   background: var(--glass-bg);
@@ -859,10 +865,6 @@
     &:hover {
       background: var(--color-success-hover, oklch(58% 0.18 155deg));
     }
-  }
-
-  @media (width <= 768px) {
-    bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -1564,6 +1566,12 @@
 }
 
 @media (width <= 768px) {
+  :root {
+    /* The mobile bar sits one step higher (was a nested override on
+       .viewer-controls); the media box reserve follows this token. */
+    --viewer-controls-offset: var(--space-8);
+  }
+
   .viewer-sidebar {
     position: absolute;
     z-index: 15;

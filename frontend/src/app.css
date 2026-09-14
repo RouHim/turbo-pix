@@ -844,91 +844,11 @@
   }
 }
 
-.viewer-controls {
-  position: absolute;
-  bottom: calc(var(--viewer-controls-offset) + env(safe-area-inset-bottom, 0px));
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px) saturate(1.5);
-  -webkit-backdrop-filter: blur(16px) saturate(1.5);
-  border: 1px solid var(--glass-border, var(--divider-color));
-  box-shadow: var(--shadow-medium);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  z-index: 10;
-  max-width: 88%;
-
-  & .accept-collage-btn {
-    background: var(--color-success, oklch(65% 0.18 155deg));
-
-    &:hover {
-      background: var(--color-success-hover, oklch(58% 0.18 155deg));
-    }
-  }
-}
-
-.viewer-controls-inner {
-  display: flex;
-  gap: var(--space-2);
-  overflow: auto hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.viewer-controls-inner::-webkit-scrollbar {
-  display: none;
-}
-
-.viewer-controls::before,
-.viewer-controls::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 40px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.viewer-controls::before {
-  left: 0;
-  background: linear-gradient(to right, var(--glass-bg), transparent);
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-}
-
-.viewer-controls::after {
-  right: 0;
-  background: linear-gradient(to left, var(--glass-bg), transparent);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-}
-
-.zoom-btn {
-  width: var(--button-size-sm);
-  height: var(--button-size-sm);
-  border: none;
-  border-radius: var(--radius-full);
-  background: var(--viewer-btn-bg);
-  backdrop-filter: blur(8px) saturate(1.5);
-  -webkit-backdrop-filter: blur(8px) saturate(1.5);
-  color: var(--viewer-btn-color);
-  font-size: var(--font-xl);
-  font-weight: var(--font-bold);
-  cursor: pointer;
-  transition: var(--transition-fast);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  position: relative;
-  z-index: 2;
-
-  &:hover {
-    background: var(--viewer-btn-hover-bg);
-    transform: scale(1.1);
-  }
-}
+/* The viewer action bar and everything inside it (`.viewer-controls`,
+   `.viewer-controls-inner` + its scrollbar, the gradient `::before`/`::after`
+   edges, `.zoom-btn`) is styled by the component that renders it
+   (ViewerControls.svelte): its scoped selectors outrank any global copy, so
+   nothing here duplicates them. */
 
 .viewer-main {
   grid-area: main;

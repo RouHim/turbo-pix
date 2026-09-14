@@ -1742,7 +1742,9 @@
   /* Chromium renders a native <video>'s control strip inside the element's own
      bottom edge, so a height-bound video (any portrait clip) would drop the
      scrubber straight onto the action bar. Reserve the bar's band here: the
-     video then stops above the bar instead of behind it. */
+     video then stops above the bar instead of behind it. The reserve applies to
+     every video — a 16:9 clip is already height-bound in a 16:9 viewport — so
+     videos end up slightly shorter than they otherwise would. */
   .viewer-main.video-mode {
     padding-bottom: calc(
       var(--viewer-controls-offset) + var(--viewer-controls-height) + var(--space-6) +

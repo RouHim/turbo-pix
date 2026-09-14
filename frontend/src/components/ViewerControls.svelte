@@ -154,7 +154,10 @@
 <style>
   .viewer-controls {
     position: absolute;
-    bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+    /* Offset via the shared token, not a literal: the video-mode reserve in
+       PhotoViewer.svelte reads the same one, so the bar and the media box it
+       must clear stay in sync. */
+    bottom: calc(var(--viewer-controls-offset) + env(safe-area-inset-bottom, 0px));
     left: 50%;
     transform: translateX(-50%);
     background: var(--glass-bg);
@@ -176,10 +179,6 @@
   }
 
   @media (width <= 768px) {
-    .viewer-controls {
-      bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
-    }
-
     .viewer-controls-inner {
       gap: var(--space-3);
     }

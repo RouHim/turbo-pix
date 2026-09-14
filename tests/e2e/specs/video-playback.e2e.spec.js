@@ -49,6 +49,12 @@ test.describe('Native-first video playback', () => {
   test('video box stops above the action bar (no native-control collision)', async ({ page }) => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
 
+    // Pin the 1920x1080 desktop viewport: the premise below (and the
+    // viewport-height guard) only holds at this size, so it must not silently
+    // inherit whatever playwright.config defaults to.
+    await TestHelpers.setDesktopViewport(page);
+    expect(page.viewportSize()).toEqual({ width: 1920, height: 1080 });
+
     await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
     await TestHelpers.navigateToView(page, 'videos');

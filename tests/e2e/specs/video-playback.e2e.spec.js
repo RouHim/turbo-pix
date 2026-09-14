@@ -46,6 +46,47 @@ test.describe('Native-first video playback', () => {
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
+  test('video box stops above the action bar (no native-control collision)', async ({ page }) => {
+    const h264 = await findVideoByFilename(page, 'test_video.mp4');
+
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await TestHelpers.navigateToView(page, 'videos');
+
+    // GIVEN the 1920x1080 fixture is open in the 1920x1080 desktop viewport —
+    // height-bound, so its box would reach the viewport bottom
+    const card = page.locator(TestHelpers.selectors.photoCard(h264.hash_sha256));
+    await card.click();
+    await TestHelpers.verifyViewerOpen(page);
+    const video = page.locator(TestHelpers.selectors.viewerVideo);
+    await expect(video).toBeVisible({ timeout: 30_000 });
+
+    // WHEN measuring the media box against the action bar
+    // (after the video's own dimensions resolve — before metadata arrives the
+    // element lays out at Chromium's 300x150 default and the box never reaches
+    // the bar, which would make the assertion below pass vacuously)
+    await page.waitForFunction(() => document.querySelector('#viewer-video').videoWidth > 0);
+    const geometry = await page.evaluate(() => {
+      const video = document.querySelector('#viewer-video').getBoundingClientRect();
+      return {
+        videoBottom: video.bottom,
+        videoHeight: video.height,
+        controlsTop: document.querySelector('.viewer-controls').getBoundingClientRect().top,
+        viewportHeight: window.innerHeight,
+      };
+    });
+
+    // Premise: the fixture is height-bound, i.e. it fills the height the media
+    // box offers instead of sitting small in the middle of it
+    expect(geometry.videoHeight).toBeGreaterThan(geometry.viewportHeight * 0.6);
+
+    // THEN the box ends at or above the bar's top edge: Chromium paints the
+    // native control strip inside the video's own bottom edge, so any overlap
+    // buries the scrubber under the toolbar
+    expect(geometry.videoBottom).toBeLessThanOrEqual(geometry.controlsTop);
+    expect(geometry.videoBottom).toBeLessThan(geometry.viewportHeight);
+  });
+
   test('server-driven decision endpoint picks direct vs transcode', async ({ page }) => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');

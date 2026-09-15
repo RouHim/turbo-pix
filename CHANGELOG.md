@@ -1,3 +1,20 @@
+# [2.41.0](https://github.com/RouHim/turbo-pix/compare/2.40.7...2.41.0) (2026-09-15)
+
+
+### Bug Fixes
+
+* **timeline:** remove stray diff markers breaking rail CSS build ([88fc452](https://github.com/RouHim/turbo-pix/commit/88fc452163a364e2be6cd20ccb155ae386f6e77c))
+* **timeline:** wrap month strip below year rail ([3d07397](https://github.com/RouHim/turbo-pix/commit/3d073973aed1d5818237e1c36bc04ce410a5b95b))
+
+
+### Features
+
+* **timeline:** add month strip with empty-month guard ([801fa3f](https://github.com/RouHim/turbo-pix/commit/801fa3f98ec3d2162d3c45f3f473f70973b54b38))
+* **timeline:** add year-aggregate helper with unit tests ([c7d0418](https://github.com/RouHim/turbo-pix/commit/c7d0418cfbe8d06774642caa1b2da709e3cd152b))
+* **timeline:** add year-rail and month-strip i18n keys ([3eee48a](https://github.com/RouHim/turbo-pix/commit/3eee48a44ec1bd691ff99e1a50e42b6d9b6fcea5))
+* **timeline:** replace desktop slider with year rail ([9cb4e31](https://github.com/RouHim/turbo-pix/commit/9cb4e316dd4abd63a351aa251960d13db8a814b4))
+* **timeline:** style year rail and month strip ([7fbeb42](https://github.com/RouHim/turbo-pix/commit/7fbeb42ef80049af2245cedc655333dd9dd78de7))
+
 ## [2.40.7](https://github.com/RouHim/turbo-pix/compare/2.40.6...2.40.7) (2026-09-14)
 
 

@@ -1200,11 +1200,15 @@ pub async fn update_photo_city(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sqlx::Row;
 
-    fn create_test_photo_with_date(hash: &str, filename: &str, taken_at: DateTime<Utc>) -> Photo {
+    pub(crate) fn create_test_photo_with_date(
+        hash: &str,
+        filename: &str,
+        taken_at: DateTime<Utc>,
+    ) -> Photo {
         Photo {
             hash_sha256: hash.to_string(),
             file_path: format!("./test/{}", filename),
@@ -1229,7 +1233,7 @@ mod tests {
         }
     }
 
-    fn create_test_photo(filename: String, hash: String) -> Photo {
+    pub(crate) fn create_test_photo(filename: String, hash: String) -> Photo {
         // Ensure hash is 64 characters for SHA256
         let hash_64 = if hash.len() < 64 {
             format!("{:0<64}", hash)

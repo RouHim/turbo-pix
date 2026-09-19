@@ -53,24 +53,46 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     return false;
   }
 
-  async function pump(reader, start) {
+  /**
+   * Append one chunk, waiting out any in-flight update: appending while the
+   * buffer updates throws InvalidStateError, and the element's own seek can
+   * start an internal update between the check and the call.
+   */
+  async function appendWhenReady(buffer, value) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      while (buffer.updating) await once(buffer, 'updateend');
+      try {
+        buffer.appendBuffer(value);
+        return;
+      } catch (error) {
+        if (error.name !== 'InvalidStateError') throw error;
+      }
+    }
+    throw new Error('SourceBuffer stayed busy');
+  }
+
+  /**
+   * Feed one stream run's chunks into that run's own SourceBuffer, until the
+   * stream ends or the run is superseded (`signal` aborted by a newer run or
+   * by `destroy()`). Without the signal check a superseded pump would keep
+   * appending the previous photo's/offset's media into the new buffer.
+   */
+  async function pump({ reader, buffer, source, signal }) {
     for (;;) {
       const { done, value } = await reader.read();
-      if (destroyed) return;
+      if (destroyed || signal.aborted) return;
       if (done) {
         try {
-          if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+          if (source.readyState === 'open') source.endOfStream();
         } catch {
           /* the source may already be closed */
         }
         state('ended');
         return;
       }
-      if (sourceBuffer.updating) await once(sourceBuffer, 'updateend');
-      if (destroyed) return;
-      sourceBuffer.timestampOffset = start;
-      sourceBuffer.appendBuffer(value);
-      if (sourceBuffer.buffered.length > 0) state('buffering');
+      await appendWhenReady(buffer, value);
+      if (destroyed || signal.aborted) return;
+      if (buffer.buffered.length > 0) state('buffering');
     }
   }
 
@@ -78,7 +100,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     if (destroyed || starting) return;
     starting = true;
     controller?.abort();
-    if (restartTimer !== null) clearTimeout(restartTimer);
+    clearTimeout(restartTimer);
     try {
       mediaSource?.endOfStream?.();
     } catch {
@@ -86,6 +108,8 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     }
 
     let reader;
+    let buffer;
+    let signal;
     try {
       mediaSource = new MediaSource();
       videoEl.src = URL.createObjectURL(mediaSource);
@@ -95,11 +119,12 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) {
         mediaSource.duration = duration;
       }
-      sourceBuffer = mediaSource.addSourceBuffer(mime);
-      sourceBuffer.timestampOffset = seconds;
+      buffer = mediaSource.addSourceBuffer(mime);
+      buffer.timestampOffset = seconds;
 
       controller = new AbortController();
-      const response = await fetch(urlFor(seconds), { signal: controller.signal });
+      signal = controller.signal;
+      const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok || !response.body) {
         throw new Error(`stream HTTP ${response.status}`);
       }
@@ -109,10 +134,10 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       reader = response.body.getReader();
       // First bytes arrived: we are buffering, not waiting.
       const first = await reader.read();
-      if (restartTimer !== null) clearTimeout(restartTimer);
+      clearTimeout(restartTimer);
       if (destroyed || first.done) return;
       state('buffering');
-      sourceBuffer.appendBuffer(first.value);
+      await appendWhenReady(buffer, first.value);
       // Position the element on the real timeline (each run starts at 0) and
       // remember it, so the `seeking` event this assignment causes is not
       // mistaken for a user seek.
@@ -131,9 +156,10 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       starting = false;
     }
     // Reaching this point means the stream is live: every bail-out above
-    // returned. The pump then feeds the rest of the chunks in the background.
+    // returned. The pump then feeds the rest of the chunks in the background,
+    // bailing out as soon as this run is superseded.
     try {
-      await pump(reader, seconds);
+      await pump({ reader, buffer, source: mediaSource, signal });
     } catch (error) {
       if (!destroyed && error.name !== 'AbortError') onError?.(error);
     }
@@ -161,7 +187,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
 
   function destroy() {
     destroyed = true;
-    if (restartTimer !== null) clearTimeout(restartTimer);
+    clearTimeout(restartTimer);
     controller?.abort();
     videoEl.removeEventListener('seeking', onSeeking);
     videoEl.removeEventListener('seeked', onSeeked);

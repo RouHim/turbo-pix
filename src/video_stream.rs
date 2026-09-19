@@ -142,7 +142,10 @@ pub fn build_args(mode: StreamMode, input: &Path, start_secs: f64) -> Vec<String
 /// codecs the run actually emits. Transcode always emits H.264 + AAC; Audio and
 /// Remux copy the source video codec and (Remux) the source audio codec, so
 /// declaring a hard-coded `avc1,mp4a.40.2` there would make the client's
-/// SourceBuffer drop exactly the track it declared support for.
+/// SourceBuffer drop exactly the track it declared support for. A silent source
+/// (`-map 0:a:0?` emits no audio track) yields a video-only init segment, so
+/// the MIME must not promise an audio codec the segment does not carry —
+/// Chromium rejects that append with `CHUNK_DEMUXER_ERROR_APPEND_FAILED`.
 pub fn output_mime(mode: StreamMode, video_codec: &str, audio_codec: Option<&str>) -> String {
     let video = match (mode, video_codec) {
         (StreamMode::Transcode, _) => "avc1.42E01E",
@@ -153,16 +156,20 @@ pub fn output_mime(mode: StreamMode, video_codec: &str, audio_codec: Option<&str
         _ => "avc1.42E01E",
     };
     let audio = match (mode, audio_codec) {
-        (StreamMode::Transcode | StreamMode::Audio, _) | (_, None | Some("aac")) => "mp4a.40.2",
-        (_, Some("opus")) => "opus",
-        (_, Some("mp3")) => "mp4a.6B",
-        (_, Some("ac3")) => "ac-3",
-        (_, Some("eac3")) => "ec-3",
-        (_, Some("dts")) => "dts",
-        (_, Some("flac")) => "flac",
-        (_, Some(_)) => "mp4a.40.2",
+        (_, None | Some("")) => None,
+        (StreamMode::Transcode | StreamMode::Audio, _) | (_, Some("aac")) => Some("mp4a.40.2"),
+        (_, Some("opus")) => Some("opus"),
+        (_, Some("mp3")) => Some("mp4a.6B"),
+        (_, Some("ac3")) => Some("ac-3"),
+        (_, Some("eac3")) => Some("ec-3"),
+        (_, Some("dts")) => Some("dts"),
+        (_, Some("flac")) => Some("flac"),
+        (_, Some(_)) => Some("mp4a.40.2"),
     };
-    format!("video/mp4; codecs=\"{video},{audio}\"")
+    match audio {
+        Some(audio) => format!("video/mp4; codecs=\"{video},{audio}\""),
+        None => format!("video/mp4; codecs=\"{video}\""),
+    }
 }
 
 #[derive(Debug)]
@@ -361,6 +368,16 @@ mod tests {
         assert_eq!(
             output_mime(StreamMode::Remux, "h264", Some("ac3")),
             "video/mp4; codecs=\"avc1.42E01E,ac-3\""
+        );
+        // A silent source produces a video-only init segment: promising an
+        // audio codec makes the browser reject the append outright.
+        assert_eq!(
+            output_mime(StreamMode::Transcode, "hevc", None),
+            "video/mp4; codecs=\"avc1.42E01E\""
+        );
+        assert_eq!(
+            output_mime(StreamMode::Remux, "h264", Some("")),
+            "video/mp4; codecs=\"avc1.42E01E\""
         );
     }
 

@@ -97,28 +97,28 @@ test.describe('Native-first video playback', () => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
 
-    // GIVEN a client that can only play 8-bit h264, the ?decision probe
-    // MUST report direct for h264 and a streamed conversion for hevc (the
-    // server owns the codec+container decision from the capability record +
-    // declared codecs). Decision URLs carry the client declaration so the
-    // media request re-decides with it.
+    // GIVEN a client that can play 8-bit h264 + aac, the ?decision probe MUST
+    // report direct for h264 and a streamed conversion for hevc (the server
+    // owns the codec+container decision from the capability record + declared
+    // codecs). Decision URLs carry the client declaration so the media request
+    // re-decides with it.
     const direct = await page.request.get(
-      `/api/photos/${h264.hash_sha256}/video?decision&client=h264-8`
+      `/api/photos/${h264.hash_sha256}/video?decision&client=h264-8,aac`
     );
     expect(direct.ok()).toBeTruthy();
     const directJson = await direct.json();
     expect(directJson.action).toBe('direct');
-    expect(directJson.url).toBe(`/api/photos/${h264.hash_sha256}/video?client=h264-8`);
+    expect(directJson.url).toBe(`/api/photos/${h264.hash_sha256}/video?client=h264-8%2Caac`);
 
     const stream = await page.request.get(
-      `/api/photos/${hevc.hash_sha256}/video?decision&client=h264-8`
+      `/api/photos/${hevc.hash_sha256}/video?decision&client=h264-8,aac`
     );
     expect(stream.ok()).toBeTruthy();
     const streamJson = await stream.json();
     expect(streamJson.action).toBe('stream');
     expect(streamJson.mode).toBe('transcode');
     // Neither `mode` nor `start` belongs in the URL: the player appends them.
-    expect(streamJson.url).toBe(`/api/photos/${hevc.hash_sha256}/video/stream?client=h264-8`);
+    expect(streamJson.url).toBe(`/api/photos/${hevc.hash_sha256}/video/stream?client=h264-8%2Caac`);
     expect(streamJson.mime).toContain('video/mp4');
   });
 });

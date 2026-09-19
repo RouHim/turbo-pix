@@ -740,7 +740,7 @@
         setVideoSource(photo, legacy, false);
         return;
       }
-      await playStream(photo, decision);
+      playStream(photo, decision);
       return;
     }
     if (decision.action === 'empty') {
@@ -764,7 +764,7 @@
    * MP4 and the player appends it to a SourceBuffer, so playback starts long
    * before the conversion finishes.
    */
-  async function playStream(photo, decision, modeOverride = null) {
+  function playStream(photo, decision, modeOverride = null) {
     if (!videoEl) return;
     destroyStreamPlayer();
     hasUserChosenOriginal = false;
@@ -800,12 +800,10 @@
     videoEl.classList.add('loaded');
     if (imageEl) imageEl.style.display = 'none';
     swipeableViewer?.reset();
-    try {
-      await streamPlayer.start(0);
-      streamPlayer = null; // destroyed by the next playStream/destroy call
-    } catch (error) {
-      onStreamError(photo, decision, error);
-    }
+    // Fire and forget: `start()` only settles when the stream ends, and the
+    // viewer must not stay "loading" until then. The handle stays set so the
+    // next playStream/destroyStreamPlayer tears this run down.
+    streamPlayer.start(0).catch((error) => onStreamError(photo, decision, error));
   }
 
   function destroyStreamPlayer() {

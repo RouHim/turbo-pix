@@ -36,6 +36,9 @@ test.describe('Transcoding', () => {
     test.setTimeout(120_000);
 
     const hevcPhoto = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    // A conversion notice is only shown while the video streams: a playthrough
+    // earlier in the run may already have cached the whole file.
+    await TestHelpers.clearCachedConversions(hevcPhoto.hash_sha256);
 
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);

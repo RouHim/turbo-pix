@@ -23,6 +23,16 @@ use crate::video_processor::{
 /// 503 + Retry-After.
 pub const STREAM_QUEUE_WAIT_SECS_DEFAULT: u64 = 20;
 
+/// Longest `start` still counted as a run from the head of the source.
+///
+/// The player restarts the stream at `start=<seconds>` on every seek, and a
+/// seek run converts only the tail of the file — finishing one says nothing
+/// about the rest of the source, so only a run at (or within half a second of)
+/// the head counts as a full playthrough. Handlers use this to decide whether a
+/// finished run may fill the whole-file cache; it never gates playback, because
+/// the cache is only ever a fast path (FR-010).
+pub const FULL_RUN_MAX_START_SECS: f64 = 0.5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamMode {
     Remux,

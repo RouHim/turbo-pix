@@ -13,6 +13,7 @@
     { id: 'favorites', key: 'ui.favorites', fallback: 'Favorites' },
     { id: 'videos', key: 'ui.videos', fallback: 'Videos' },
     { id: 'albums', key: 'albums.sectionTitle', fallback: 'Albums' },
+    { id: 'map', key: 'ui.map', fallback: 'Map' },
     { id: 'collages', key: 'ui.collages', fallback: 'Collages' },
     { id: 'housekeeping', key: 'ui.housekeeping', fallback: 'Housekeeping' },
   ];

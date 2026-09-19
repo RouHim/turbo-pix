@@ -1,6 +1,6 @@
 import { normalizeDateFilter } from './timelineRoute.js';
 
-const validViews = ['all', 'favorites', 'videos', 'albums', 'collages', 'housekeeping'];
+const validViews = ['all', 'favorites', 'videos', 'albums', 'collages', 'housekeeping', 'map'];
 const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
 
 const defaultState = {

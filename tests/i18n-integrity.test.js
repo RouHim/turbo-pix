@@ -162,7 +162,7 @@ test('i18n key integrity', () => {
       const end = text.indexOf('};', start + marker.length);
       const titleKeysText = text.slice(start, end);
       for (const match of titleKeysText.matchAll(
-        /^\s*(?:all|favorites|videos|collages|housekeeping):\s*'([^']+)'/gm
+        /^\s*(?:all|favorites|videos|collages|housekeeping|map):\s*'([^']+)'/gm
       )) {
         use(match[1], rel, lineOf(text, start + match.index));
       }

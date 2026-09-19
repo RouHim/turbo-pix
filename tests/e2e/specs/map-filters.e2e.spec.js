@@ -1,8 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
-const BASE_URL = 'http://localhost:18473';
-
 /** Unique-coordinate count of a map endpoint response. */
 async function expectedLocations(page, endpoint) {
   return page.evaluate(async (url) => {
@@ -64,6 +62,41 @@ async function focusLocation(page, key) {
   return page.locator(`[data-map-location="${key}"]`);
 }
 
+/**
+ * The year of the newest dated photo. Read as UTC, like the server's
+ * `strftime('%Y', taken_at)`: a local-year conversion could name the
+ * neighbouring year right after New Year.
+ */
+async function latestYear(page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/api/photos/map');
+    const { photos } = await response.json();
+    const withDate = photos.find((photo) => photo.taken_at);
+    return withDate ? new Date(withDate.taken_at).getUTCFullYear() : null;
+  });
+}
+
+/**
+ * The map's own `/api/photos/map` request for a filter, so an assertion runs
+ * against the filtered render instead of the one that was already on screen.
+ */
+function mapRequest(page, params) {
+  return page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    if (url.pathname !== '/api/photos/map') return false;
+    return Object.entries(params).every(([key, value]) => url.searchParams.get(key) === value);
+  });
+}
+
+/**
+ * The loading overlay is removed after the loaded photo set has been applied,
+ * so waiting for it to go away is what makes a state assertion (marker counts,
+ * unlocated notice) read the finished render rather than a transient one.
+ */
+async function waitForMapLoad(page) {
+  await expect(page.locator('[data-testid="map-loading"]')).toHaveCount(0);
+}
+
 test.describe('Map filters', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -73,14 +106,7 @@ test.describe('Map filters', () => {
   test('year filter plots exactly the geo-located subset of that year', async ({ page }) => {
     await TestHelpers.goto(page, '/map');
 
-    const year = await page.evaluate(async () => {
-      const response = await fetch('/api/photos/map');
-      const { photos } = await response.json();
-      const withDate = photos.find((photo) => photo.taken_at);
-      // UTC like the server's strftime('%Y', taken_at): a local-year conversion
-      // could name the neighbouring year right after New Year.
-      return withDate ? new Date(withDate.taken_at).getUTCFullYear() : null;
-    });
+    const year = await latestYear(page);
     test.skip(year === null, 'No dated photos in the test library');
 
     const filteredEndpoint = `/api/photos/map?year=${year}`;
@@ -120,15 +146,25 @@ test.describe('Map filters', () => {
     });
     test.skip(!city, 'No resolved city in the seeded photos');
 
+    const query = `location:${city}`;
     const expected = await expectedLocations(
       page,
-      `/api/photos/map?q=${encodeURIComponent(`location:${city}`)}`
+      `/api/photos/map?q=${encodeURIComponent(query)}`
     );
     expect(expected).toBeGreaterThan(0);
 
-    await TestHelpers.performSearch(page, `location:${city}`);
+    // Wait for the map's own filtered request, so everything below reads the
+    // filtered render instead of the unfiltered one still on screen.
+    const filteredLoad = mapRequest(page, { q: query });
+    await TestHelpers.performSearch(page, query);
+    await filteredLoad;
+    await waitForMapLoad(page);
 
     await expect.poll(() => renderedLocations(page)).toBe(expected);
+    // Teeth: every photo the city matches carries coordinates, while the
+    // unfiltered render shows this notice for the unlocated videos and receipt.
+    // A dropped query leaves the notice in place and fails here.
+    await expect(page.locator('[data-testid="map-unlocated-notice"]')).toHaveCount(0);
   });
 
   test('semantic search plots the geo-located subset of the CLIP result set', async ({ page }) => {
@@ -149,9 +185,14 @@ test.describe('Map filters', () => {
     await TestHelpers.performSearch(page, 'car');
     const search = await (await semanticLoad).json();
 
+    // lib/map.js keeps paging until a page comes back short, so a short first
+    // page proves this response is the whole result set (no paging to mirror).
+    const hashes = (search.results ?? []).map((entry) => entry.hash);
+    expect(hashes.length).toBeLessThan(200);
+
     const photos = await Promise.all(
-      (search.results ?? []).map(async (entry) => {
-        const response = await page.request.get(`${BASE_URL}/api/photos/${entry.hash}`);
+      hashes.map(async (hash) => {
+        const response = await page.request.get(`/api/photos/${hash}`);
         return response.ok() ? response.json() : null;
       })
     );
@@ -164,6 +205,14 @@ test.describe('Map filters', () => {
       }
     }
     const expected = keys.size;
+
+    // Teeth: the CLIP hits are the car photos, which all carry coordinates,
+    // while the unfiltered render shows the unlocated notice for the videos and
+    // the receipt. Waiting for the map's own semantic load to finish and then
+    // asserting the notice is gone fails if the semantic path ever plots the
+    // whole library instead of its result set.
+    await waitForMapLoad(page);
+    await expect(page.locator('[data-testid="map-unlocated-notice"]')).toHaveCount(0);
 
     // Results can lie outside the fitted viewport (the map deliberately keeps
     // the user's viewport on filter changes), so zoom out to the world first.
@@ -202,7 +251,7 @@ test.describe('Map filters', () => {
     });
     test.skip(distinct.length === 0, 'Need geo-located photos to build an album from');
 
-    const createResponse = await page.request.post(`${BASE_URL}/api/albums`, {
+    const createResponse = await page.request.post('/api/albums', {
       data: { name: 'Map E2E Album', initial_hashes: distinct.slice(0, 2) },
     });
     expect(createResponse.ok()).toBe(true);
@@ -235,7 +284,7 @@ test.describe('Map filters', () => {
       await expect(marker).toBeVisible();
       await expect(marker).toHaveAttribute('data-map-location-count', String(count));
     } finally {
-      await page.request.delete(`${BASE_URL}/api/albums/${album.id}`);
+      await page.request.delete(`/api/albums/${album.id}`);
     }
   });
 
@@ -247,7 +296,7 @@ test.describe('Map filters', () => {
     // `?q=type:video` empty-state assertion of the map shell spec.
     TestHelpers.setPhotoLocationInDb('test_video.mp4', 52.52, 13.405);
     try {
-      const listing = await page.request.get(`${BASE_URL}/api/photos?q=type:video&limit=100`);
+      const listing = await page.request.get('/api/photos?q=type:video&limit=100');
       const { photos } = await listing.json();
       const video = photos.find((photo) => photo.filename === 'test_video.mp4');
       expect(video, 'test_video.mp4 must be seeded and indexed').toBeTruthy();
@@ -275,11 +324,34 @@ test.describe('Map filters', () => {
     await TestHelpers.goto(page, '/map');
     await expect(page.locator('[data-testid="map-canvas"]')).toBeVisible();
 
+    // A real filter first: the router listens for popstate, so this is the same
+    // mechanism a user's filter change goes through.
+    const year = await latestYear(page);
+    test.skip(year === null, 'No dated photos in the test library');
+    const expected = await expectedLocations(page, `/api/photos/map?year=${year}`);
+
+    const filteredLoad = mapRequest(page, { year: String(year) });
+    await page.evaluate((value) => {
+      window.history.pushState({}, '', `/map?year=${value}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, year);
+    await expect(page).toHaveURL(new RegExp(`/map\\?year=${year}`));
+    await filteredLoad;
+    await waitForMapLoad(page);
+    await expect.poll(() => renderedLocations(page)).toBe(expected);
+
+    // Leaving the map keeps the filter in the history entry (the router
+    // serializes the whole state), so Back has to restore it.
     await TestHelpers.navigateToView(page, 'videos');
+    await expect(page).toHaveURL(/\/videos/);
     await page.goBack();
 
-    await expect(page).toHaveURL(/\/map$/);
+    await expect(page).toHaveURL(new RegExp(`/map\\?year=${year}`));
     await TestHelpers.verifyActiveView(page, 'map');
     await expect(page.locator('[data-testid="map-canvas"]')).toBeVisible();
+    // The map remounts on the way back, so its markers have to be re-plotted
+    // from the restored filter — a filterless return renders the unfiltered
+    // location count, which this poll rejects whenever the two differ.
+    await expect.poll(() => renderedLocations(page), { timeout: 15000 }).toBe(expected);
   });
 });

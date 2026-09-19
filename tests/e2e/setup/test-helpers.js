@@ -1,5 +1,9 @@
 export class TestHelpers {
-  /** 1×1 transparent PNG — a valid image response for stubbed tile requests. */
+  /**
+   * 1×1 PNG — a valid image response for stubbed tile requests. The committed
+   * bytes decode to a single opaque pixel, RGBA (19, 87, 138, 255): the map
+   * specs need a decodable image, never a transparent one.
+   */
   static TINY_PNG = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mMQDu/6DwADaQH0rwEuVwAAAABJRU5ErkJggg==',
     'base64'
@@ -47,6 +51,19 @@ export class TestHelpers {
       (route) =>
         route.fulfill({ status: 200, contentType: 'image/png', body: TestHelpers.TINY_PNG })
     );
+  }
+
+  /**
+   * Writes GPS coordinates through the metadata endpoint, so a spec can place a
+   * photo at a known point (the seeded EXIF coordinates are not per-test).
+   */
+  static async setPhotoCoordinates(page, hash, latitude, longitude) {
+    const response = await page.request.patch(`/api/photos/${hash}/metadata`, {
+      data: { latitude, longitude },
+    });
+    if (!response.ok()) {
+      throw new Error(`PATCH metadata for ${hash} failed: ${response.status()}`);
+    }
   }
 
   static async verifyActiveView(page, viewName) {

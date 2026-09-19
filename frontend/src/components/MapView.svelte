@@ -1,7 +1,9 @@
 <script>
   import { get } from 'svelte/store';
-  import { onMount, untrack } from 'svelte';
+  import { mount, onMount, unmount, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import L from 'leaflet';
+  import Supercluster from 'supercluster';
   import 'leaflet/dist/leaflet.css';
 
   import { t } from '../lib/i18n.js';
@@ -12,11 +14,16 @@
   import {
     buildMapFilters,
     fetchSemanticPhotoSet,
+    formatCoordinates,
+    getLocationLabel,
     groupPhotosByLocation,
     isSemanticQuery,
   } from '../lib/map.js';
+  import MapPopup from './MapPopup.svelte';
 
   const MAX_ZOOM = 19;
+  const CLUSTER_RADIUS = 60;
+  const CLUSTER_MAX_ZOOM = 18;
   const INITIAL_CENTER = [20, 0];
   const INITIAL_ZOOM = 2;
   const FIT_MAX_ZOOM = 14;
@@ -32,14 +39,27 @@
   let mapEl = null;
   let map = null;
   let tileLayer = null;
+  let clusterLayer = null;
+  let clusterIndex = null;
   let resizeObserver = null;
   let abortController = null;
   let loadToken = 0;
   let anyTileLoaded = false;
   let hasFittedOnce = false;
+  // Location key of the open popup, and whether a marker re-render was asked
+  // for while it was open (see renderClusters).
+  let openPopupKey = null;
+  let renderPending = false;
+  // Marker → mounted MapPopup component, so a popup's DOM is torn down with it.
+  // (SvelteMap: the linter rejects a plain Map in component scope; this one is
+  // only ever read imperatively.)
+  const popupHandles = new SvelteMap();
+  // Location key → its current marker, so focus can be restored to the marker
+  // that survives a re-render.
+  const locationMarkers = new SvelteMap();
 
-  // Locations are the shell's aggregation unit: the unlocated notice counts the
-  // photos left over, and Task 6 renders one marker per location.
+  // Locations are the aggregation unit: the unlocated notice counts the photos
+  // left over, and each location renders as exactly one marker (FR-009).
   const locations = $derived(groupPhotosByLocation(photos));
   const unlocatedCount = $derived(
     photos.length - locations.reduce((count, location) => count + location.photos.length, 0)
@@ -118,6 +138,211 @@
     });
   }
 
+  // ── Marker rendering ──────────────────────────────────────────────────────
+
+  /** Shifts a longitude into the wrapped copy of the viewport (SC: antimeridian). */
+  function wrapLongitudeForView(longitude, bounds) {
+    if (bounds.getEast() > 180 && longitude < 0) return longitude + 360;
+    if (bounds.getWest() < -180 && longitude > 0) return longitude - 360;
+    return longitude;
+  }
+
+  /** Count bubble; grows with the number it carries so 3+ digits stay readable. */
+  function clusterIcon(count) {
+    const size = count < 10 ? 34 : count < 100 ? 42 : 48;
+    return L.divIcon({
+      className: 'map-cluster-marker',
+      html: `<span>${count}</span>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+  }
+
+  /** A location is one dot, whatever the number of photos behind it (FR-009). */
+  function locationIcon() {
+    return L.divIcon({ className: 'map-location-marker', iconSize: [18, 18], iconAnchor: [9, 9] });
+  }
+
+  function labelFor(location) {
+    return getLocationLabel(location) ?? formatCoordinates(location);
+  }
+
+  /**
+   * Leaflet only opens a popup on Enter (its own `keypress` path), so both
+   * marker kinds handle Enter and Space themselves (FR-018).
+   */
+  function activateOnKeyboard(element, handler) {
+    element.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      // The default would let Leaflet's keypress handler toggle the popup shut
+      // again right after this opens it.
+      event.preventDefault();
+      handler();
+    });
+  }
+
+  function bindLocationMarker(marker, location) {
+    const popupNode = document.createElement('div');
+    popupNode.className = 'map-popup-host';
+    marker.bindPopup(popupNode, { maxWidth: 320, minWidth: 260, autoPan: true, closeButton: true });
+
+    // Leaflet detaches the popup's DOM before it fires `popupclose`, which drops
+    // focus to <body> — so "was focus inside the popup?" has to be tracked while
+    // the popup is still alive.
+    let focusWasInside = false;
+    popupNode.addEventListener('focusin', () => {
+      focusWasInside = true;
+    });
+    popupNode.addEventListener('focusout', (event) => {
+      // A focusout that names no new target is the popup's own teardown (its DOM
+      // is detached before `popupclose`); a user moving on always names one.
+      if (!event.relatedTarget) return;
+      if (!popupNode.contains(event.relatedTarget)) focusWasInside = false;
+    });
+    // Leaflet's Escape-to-close lives in its map keyboard handler, which unhooks
+    // itself while focus is inside the popup — so the popup closes itself.
+    popupNode.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      marker.closePopup();
+    });
+
+    marker.on('popupopen', () => {
+      focusWasInside = false;
+      openPopupKey = location.key;
+      popupHandles.set(
+        marker,
+        mount(MapPopup, {
+          target: popupNode,
+          props: { location, onOpenPhoto: (photo) => openViewer(photo) },
+        })
+      );
+      // Popup panes come after the marker pane in DOM order, but with many
+      // markers Tab would walk through every marker first — move focus into the
+      // popup so keyboard users land on the thumbnails (FR-018).
+      requestAnimationFrame(() => popupNode.querySelector('button')?.focus());
+    });
+
+    marker.on('popupclose', () => {
+      const restoreFocus = focusWasInside;
+      focusWasInside = false;
+      const handle = popupHandles.get(marker);
+      if (handle) {
+        popupHandles.delete(marker);
+        void unmount(handle);
+      }
+      if (openPopupKey === location.key) openPopupKey = null;
+      // A render requested while the popup was open replaces every marker, so it
+      // has to run before focus is handed back — otherwise it would tear the
+      // just-focused icon back out of the DOM.
+      if (renderPending) {
+        renderPending = false;
+        renderClusters();
+      }
+      // Only take focus back if the popup had it: a mouse user closing the popup
+      // must not have focus yanked onto a marker.
+      const icon = (locationMarkers.get(location.key) ?? marker).getElement();
+      if (restoreFocus && icon?.isConnected) icon.focus();
+    });
+  }
+
+  /** Zooms to the level at which the cluster's members become individual dots. */
+  function expandCluster(clusterId, latlng) {
+    if (!map || !clusterIndex) return;
+    const zoom = clusterIndex.getClusterExpansionZoom(clusterId);
+    map.setView(latlng, Math.min(zoom, MAX_ZOOM), { animate: !prefersReducedMotion });
+  }
+
+  function renderClusters() {
+    if (!map || !clusterLayer || !clusterIndex) return;
+
+    if (openPopupKey) {
+      // Removing a marker closes the popup bound to it (Leaflet's bindPopup
+      // registers `remove: closePopup`), and opening a popup pans the map when
+      // it would not fit — so rendering on that moveend would close the popup
+      // the pan was for. Render once the popup is closed instead.
+      renderPending = true;
+      return;
+    }
+
+    const bounds = map.getBounds();
+    const features = clusterIndex.getClusters(
+      [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
+      Math.round(map.getZoom())
+    );
+    const byKey = new Map(locations.map((location) => [location.key, location]));
+    // A re-render replaces every marker; a keyboard user parked on one keeps
+    // their place by having focus moved to its replacement.
+    const focusedLocation = document.activeElement?.getAttribute?.('data-map-location') ?? null;
+
+    clusterLayer.clearLayers();
+    locationMarkers.clear();
+
+    for (const feature of features) {
+      const [rawLongitude, latitude] = feature.geometry.coordinates;
+      const longitude = wrapLongitudeForView(rawLongitude, bounds);
+
+      if (feature.properties.cluster) {
+        const count = feature.properties.point_count;
+        const marker = L.marker([latitude, longitude], {
+          icon: clusterIcon(count),
+          keyboard: true,
+        });
+        marker.addTo(clusterLayer);
+        const element = marker.getElement();
+        if (element) {
+          element.setAttribute('data-map-cluster', String(count));
+          element.setAttribute(
+            'aria-label',
+            get(t)('map.clusterLabel', {
+              values: { count },
+              default: '{count} photos, activate to zoom in',
+            })
+          );
+          activateOnKeyboard(element, () =>
+            expandCluster(feature.properties.cluster_id, [latitude, longitude])
+          );
+        }
+        continue;
+      }
+
+      const location = byKey.get(feature.properties.key);
+      if (!location) continue;
+
+      const marker = L.marker([latitude, longitude], {
+        icon: locationIcon(),
+        keyboard: true,
+      });
+      marker.addTo(clusterLayer);
+      locationMarkers.set(location.key, marker);
+      const element = marker.getElement();
+      if (element) {
+        element.setAttribute('data-map-location', location.key);
+        element.setAttribute('data-map-location-count', String(location.photos.length));
+        element.setAttribute(
+          'aria-label',
+          get(t)('map.markerLabel', {
+            values: { count: location.photos.length, place: labelFor(location) },
+            default: '{count} photos at {place}',
+          })
+        );
+        activateOnKeyboard(element, () => marker.openPopup());
+      }
+      bindLocationMarker(marker, location);
+    }
+
+    if (focusedLocation) {
+      const focusedIcon = locationMarkers.get(focusedLocation)?.getElement();
+      if (focusedIcon?.isConnected) focusedIcon.focus();
+    }
+  }
+
+  function openViewer(photo) {
+    // FR-011: the viewer gets the map's complete filtered, sorted set — the
+    // same array the grid would page through — so next/previous stay in scope.
+    window.dispatchEvent(new CustomEvent('openViewer', { detail: { photo, photos } }));
+  }
+
   onMount(() => {
     map = L.map(mapEl, {
       center: INITIAL_CENTER,
@@ -150,6 +375,11 @@
       tilesFailed = true;
     }
 
+    // Markers live in their own group so a re-render can replace them without
+    // touching tiles or the map itself.
+    clusterLayer = L.layerGroup().addTo(map);
+    map.on('moveend zoomend', renderClusters);
+
     // The shell resizes (sidebar toggle, window resize) without remounting the
     // view, so Leaflet must be told to re-measure its container.
     resizeObserver = new ResizeObserver(() => map?.invalidateSize());
@@ -162,9 +392,21 @@
       resizeObserver?.disconnect();
       resizeObserver = null;
       abortController?.abort();
+      map?.off('moveend zoomend', renderClusters);
+      // Leaflet does not remove layers on map.remove(), so a popup left open by
+      // a view change would keep its component instance alive.
+      for (const handle of popupHandles.values()) {
+        void unmount(handle);
+      }
+      popupHandles.clear();
+      locationMarkers.clear();
+      openPopupKey = null;
+      renderPending = false;
       map?.remove();
       map = null;
       tileLayer = null;
+      clusterLayer = null;
+      clusterIndex = null;
     };
   });
 
@@ -177,6 +419,74 @@
     route.month;
     route.album;
     untrack(() => loadPhotos());
+  });
+
+  $effect(() => {
+    // FR-006: cluster the unique coordinate locations; the index is rebuilt
+    // whenever the result set changes, and markers follow immediately.
+    clusterIndex = new Supercluster({ radius: CLUSTER_RADIUS, maxZoom: CLUSTER_MAX_ZOOM }).load(
+      locations.map((location) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] },
+        properties: { key: location.key },
+      }))
+    );
+    untrack(() => renderClusters());
+  });
+
+  // ── Viewer feedback ───────────────────────────────────────────────────────
+
+  // The viewer shares the map's `photos` array, so viewer actions mutate it in
+  // place and the map (markers, unlocated count) stays coherent (FR-011).
+  function handlePhotoRemoved(event) {
+    const { hash } = event.detail || {};
+    if (!hash) return;
+    const index = photos.findIndex((photo) => photo.hash_sha256 === hash);
+    if (index !== -1) photos.splice(index, 1);
+  }
+
+  function handlePhotoUpdated(event) {
+    const updatedPhoto = event.detail?.photo;
+    if (!updatedPhoto?.hash_sha256) return;
+    // Rotation rewrites hash_sha256, so match on the old hash too.
+    const oldHash = event.detail?.oldHash;
+    const index = photos.findIndex(
+      (photo) =>
+        (oldHash && photo.hash_sha256 === oldHash) ||
+        photo.hash_sha256 === updatedPhoto.hash_sha256 ||
+        (photo.file_path && updatedPhoto.file_path && photo.file_path === updatedPhoto.file_path)
+    );
+    if (index !== -1) photos[index] = updatedPhoto;
+  }
+
+  function handleFavoriteToggled(event) {
+    const { photoHash, isFavorite } = event.detail || {};
+    const index = photos.findIndex((photo) => photo.hash_sha256 === photoHash);
+    if (index === -1) return;
+    photos[index].is_favorite = isFavorite;
+    // An `is_favorite:true` query stops matching the photo once unfavorited.
+    if (!isFavorite && route.query?.split(/\s+/).includes('is_favorite:true')) {
+      photos.splice(index, 1);
+    }
+  }
+
+  $effect(() => {
+    const reload = () => loadPhotos();
+    const listeners = {
+      photoRemoved: handlePhotoRemoved,
+      photoUpdated: handlePhotoUpdated,
+      favoriteToggled: handleFavoriteToggled,
+      indexingCompleted: reload,
+      photosReloadRequested: reload,
+    };
+    for (const [name, handler] of Object.entries(listeners)) {
+      window.addEventListener(name, handler);
+    }
+    return () => {
+      for (const [name, handler] of Object.entries(listeners)) {
+        window.removeEventListener(name, handler);
+      }
+    };
   });
 </script>
 
@@ -267,6 +577,35 @@
     position: absolute;
     inset: 0;
     background: var(--surface-color);
+  }
+
+  /* Leaflet owns the marker DOM, so these are global on purpose. */
+  :global(.map-location-marker) {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--background-color);
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+    cursor: pointer;
+  }
+
+  :global(.map-cluster-marker) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 3px solid var(--background-color);
+    border-radius: 50%;
+    background: var(--primary-color);
+    color: var(--background-color);
+    font-size: var(--font-sm);
+    font-weight: var(--font-semibold);
+  }
+
+  :global(.map-location-marker:focus-visible),
+  :global(.map-cluster-marker:focus-visible) {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 3px;
   }
 
   /* Above every Leaflet pane (markers 600, popups 700) but below the control

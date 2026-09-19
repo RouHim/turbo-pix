@@ -201,6 +201,96 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
     }
 }
 
+/// Builds the reusable WHERE clause for photo searches: the `q` token grammar
+/// (`type:` / `is_favorite:` / `location:` / general LIKE), `year` and `month`.
+/// Returns the clause (starting with `" WHERE 1=1"`) plus its string parameters
+/// in placeholder order. Shared by `Photo::search_photos` and
+/// `Photo::list_all_filtered` so both honor identical filter semantics.
+fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
+    let mut where_clause = String::from(" WHERE 1=1");
+    let mut params: Vec<String> = Vec::new();
+
+    if let Some(q) = &query.q {
+        // Split on whitespace and AND per-token conditions so combined
+        // queries like "sunset is_favorite:true" work. A token with an
+        // unknown type:/is_favorite: value falls back to general search.
+        let tokens: Vec<&str> = q.split_whitespace().collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            let token = tokens[i];
+            if let Some(media_type) = token.strip_prefix("type:") {
+                match media_type {
+                    "video" => where_clause.push_str(" AND mime_type LIKE 'video/%'"),
+                    "image" => where_clause.push_str(" AND mime_type LIKE 'image/%'"),
+                    _ => {
+                        // Unknown type, fall back to general search
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(build_general_search_condition());
+                        add_general_search_params(&mut params, token);
+                    }
+                }
+            } else if let Some(favorite_value) = token.strip_prefix("is_favorite:") {
+                match favorite_value {
+                    "true" => where_clause.push_str(" AND is_favorite = 1"),
+                    "false" => {
+                        where_clause.push_str(" AND (is_favorite = 0 OR is_favorite IS NULL)");
+                    }
+                    _ => {
+                        // Unknown value, fall back to general search
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(build_general_search_condition());
+                        add_general_search_params(&mut params, token);
+                    }
+                }
+            } else if token.starts_with("location:") {
+                // Absorb following words until the next prefix token or
+                // end, so multi-word cities ("location:New York") keep
+                // working.
+                let mut city = token.strip_prefix("location:").unwrap_or("").to_string();
+                while i + 1 < tokens.len()
+                    && !tokens[i + 1].starts_with("type:")
+                    && !tokens[i + 1].starts_with("is_favorite:")
+                    && !tokens[i + 1].starts_with("location:")
+                {
+                    i += 1;
+                    city.push(' ');
+                    city.push_str(tokens[i]);
+                }
+                if city.trim().is_empty() {
+                    // Bare "location:" token — no city to match, skip it
+                    // (LIKE '%%' would match every row with a city).
+                } else {
+                    // Trim once: "location: New York" accumulates a leading
+                    // space during absorption that would break the LIKE
+                    // pattern ('% New York%' matches nothing).
+                    let city = city.trim();
+                    where_clause.push_str(
+                        " AND json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\'",
+                    );
+                    params.push(format!("%{}%", escape_like(city)));
+                }
+            } else {
+                // General search across multiple fields (filename + JSON metadata)
+                where_clause.push_str(" AND ");
+                where_clause.push_str(build_general_search_condition());
+                add_general_search_params(&mut params, token);
+            }
+            i += 1;
+        }
+    }
+
+    if let Some(year) = query.year {
+        where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
+        params.push(year.to_string());
+    }
+
+    if let Some(month) = query.month {
+        where_clause.push_str(" AND strftime('%m', taken_at) = ?");
+        params.push(format!("{:02}", month));
+    }
+    (where_clause, params)
+}
+
 impl Photo {
     // ===== METADATA ACCESSORS (for Rust code) =====
     // Frontend reads metadata.* directly from JSON
@@ -813,88 +903,7 @@ impl Photo {
         sort: Option<&str>,
         order: Option<&str>,
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-        // Build the WHERE clause (reusable for both count and data queries)
-        let mut where_clause = String::from(" WHERE 1=1");
-        let mut params: Vec<String> = Vec::new();
-
-        if let Some(q) = &query.q {
-            // Split on whitespace and AND per-token conditions so combined
-            // queries like "sunset is_favorite:true" work. A token with an
-            // unknown type:/is_favorite: value falls back to general search.
-            let tokens: Vec<&str> = q.split_whitespace().collect();
-            let mut i = 0;
-            while i < tokens.len() {
-                let token = tokens[i];
-                if let Some(media_type) = token.strip_prefix("type:") {
-                    match media_type {
-                        "video" => where_clause.push_str(" AND mime_type LIKE 'video/%'"),
-                        "image" => where_clause.push_str(" AND mime_type LIKE 'image/%'"),
-                        _ => {
-                            // Unknown type, fall back to general search
-                            where_clause.push_str(" AND ");
-                            where_clause.push_str(build_general_search_condition());
-                            add_general_search_params(&mut params, token);
-                        }
-                    }
-                } else if let Some(favorite_value) = token.strip_prefix("is_favorite:") {
-                    match favorite_value {
-                        "true" => where_clause.push_str(" AND is_favorite = 1"),
-                        "false" => {
-                            where_clause.push_str(" AND (is_favorite = 0 OR is_favorite IS NULL)");
-                        }
-                        _ => {
-                            // Unknown value, fall back to general search
-                            where_clause.push_str(" AND ");
-                            where_clause.push_str(build_general_search_condition());
-                            add_general_search_params(&mut params, token);
-                        }
-                    }
-                } else if token.starts_with("location:") {
-                    // Absorb following words until the next prefix token or
-                    // end, so multi-word cities ("location:New York") keep
-                    // working.
-                    let mut city = token.strip_prefix("location:").unwrap_or("").to_string();
-                    while i + 1 < tokens.len()
-                        && !tokens[i + 1].starts_with("type:")
-                        && !tokens[i + 1].starts_with("is_favorite:")
-                        && !tokens[i + 1].starts_with("location:")
-                    {
-                        i += 1;
-                        city.push(' ');
-                        city.push_str(tokens[i]);
-                    }
-                    if city.trim().is_empty() {
-                        // Bare "location:" token — no city to match, skip it
-                        // (LIKE '%%' would match every row with a city).
-                    } else {
-                        // Trim once: "location: New York" accumulates a leading
-                        // space during absorption that would break the LIKE
-                        // pattern ('% New York%' matches nothing).
-                        let city = city.trim();
-                        where_clause.push_str(
-                            " AND json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\'",
-                        );
-                        params.push(format!("%{}%", escape_like(city)));
-                    }
-                } else {
-                    // General search across multiple fields (filename + JSON metadata)
-                    where_clause.push_str(" AND ");
-                    where_clause.push_str(build_general_search_condition());
-                    add_general_search_params(&mut params, token);
-                }
-                i += 1;
-            }
-        }
-
-        if let Some(year) = query.year {
-            where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
-            params.push(year.to_string());
-        }
-
-        if let Some(month) = query.month {
-            where_clause.push_str(" AND strftime('%m', taken_at) = ?");
-            params.push(format!("{:02}", month));
-        }
+        let (where_clause, params) = build_search_where(query);
 
         // Get total count
         let count_sql = format!("SELECT COUNT(*) FROM photos{}", where_clause);
@@ -919,6 +928,44 @@ impl Photo {
         let photos = data_query.fetch_all(pool).await?;
 
         Ok((photos, total))
+    }
+
+    /// Returns every photo matching `query` (optionally scoped to one album)
+    /// with no pagination. The Map view needs the complete filtered set: it
+    /// plots the geo-located subset and hands the same sorted array to the
+    /// viewer so next/previous span exactly the grid's result set
+    /// (FR-005, FR-011). Album scoping mirrors the grid's album detail view,
+    /// which ignores q/year/month.
+    pub async fn list_all_filtered(
+        pool: &DbPool,
+        query: &SearchQuery,
+        sort: Option<&str>,
+        order: Option<&str>,
+        album: Option<i64>,
+    ) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
+        let (mut where_clause, params) = build_search_where(query);
+
+        if album.is_some() {
+            where_clause.push_str(
+                " AND hash_sha256 IN (SELECT photo_hash FROM album_members WHERE album_id = ?)",
+            );
+        }
+
+        let sql = format!(
+            "SELECT * FROM photos{} ORDER BY {}",
+            where_clause,
+            build_order_clause(sort, order)
+        );
+
+        let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(sql));
+        for param in &params {
+            data_query = data_query.bind(param);
+        }
+        if let Some(album_id) = album {
+            data_query = data_query.bind(album_id);
+        }
+
+        Ok(data_query.fetch_all(pool).await?)
     }
 
     pub async fn get_timeline_data(
@@ -2328,5 +2375,126 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, ny_video_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_filtered_returns_every_match_without_pagination() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        for index in 0..120 {
+            // `create_test_photo` zero-pads short hashes to 64 chars, so
+            // "bulk1" and "bulk10" would collapse to the same padded hash
+            // (11 collisions across 0..120). Fixed-width digits keep them
+            // distinct.
+            let mut photo =
+                create_test_photo(format!("bulk_{index}.jpg"), format!("bulk{index:03}"));
+            photo.metadata = json!({
+                "location": { "latitude": 48.1, "longitude": 11.5 }
+            });
+            photo.create(&pool).await.unwrap();
+        }
+
+        let photos = Photo::list_all_filtered(
+            &pool,
+            &SearchQuery {
+                q: None,
+                year: None,
+                month: None,
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // The paginated endpoint caps at 100; the map listing must not truncate.
+        assert_eq!(photos.len(), 120);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_filtered_applies_search_tokens_and_year() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        let mut berlin_2020 = create_test_photo_with_date(
+            &"1".repeat(64),
+            "berlin_2020.jpg",
+            DateTime::parse_from_rfc3339("2020-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        berlin_2020.metadata = json!({ "location": { "city": "Berlin" } });
+        berlin_2020.create(&pool).await.unwrap();
+
+        let mut berlin_2024 = create_test_photo_with_date(
+            &"2".repeat(64),
+            "berlin_2024.jpg",
+            DateTime::parse_from_rfc3339("2024-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        berlin_2024.metadata = json!({ "location": { "city": "Berlin" } });
+        berlin_2024.create(&pool).await.unwrap();
+
+        let mut rome = create_test_photo_with_date(
+            &"3".repeat(64),
+            "rome.jpg",
+            DateTime::parse_from_rfc3339("2020-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        rome.metadata = json!({ "location": { "city": "Rome" } });
+        rome.create(&pool).await.unwrap();
+
+        let photos = Photo::list_all_filtered(
+            &pool,
+            &SearchQuery {
+                q: Some("location:Berlin".to_string()),
+                year: Some(2020),
+                month: None,
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].filename, "berlin_2020.jpg");
+    }
+
+    #[tokio::test]
+    async fn test_list_all_filtered_scopes_to_album() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        let mut in_album = create_test_photo("in_album.jpg".to_string(), "inalbum".to_string());
+        in_album.metadata = json!({ "location": { "latitude": 1.0, "longitude": 2.0 } });
+        in_album.create(&pool).await.unwrap();
+
+        let outside = create_test_photo("outside.jpg".to_string(), "outside".to_string());
+        outside.create(&pool).await.unwrap();
+
+        let album =
+            crate::albums::create_with_members(&pool, "Trip", &[in_album.hash_sha256.clone()])
+                .await
+                .unwrap();
+
+        let photos = Photo::list_all_filtered(
+            &pool,
+            &SearchQuery {
+                q: None,
+                year: None,
+                month: None,
+            },
+            None,
+            None,
+            Some(album.id),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].hash_sha256, in_album.hash_sha256);
     }
 }

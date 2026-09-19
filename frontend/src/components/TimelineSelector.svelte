@@ -156,6 +156,7 @@
       startY: event.clientY,
       moved: false,
       captured: false,
+      aborted: false,
       baseSelection,
       previousSelection: selection,
       baseView: view,
@@ -190,7 +191,10 @@
   };
 
   const handlePointerMove = (event) => {
-    if (drag === null || event.pointerId !== drag.pointerId) return;
+    // An aborted gesture keeps its capture until the pointer is released so the
+    // release cannot reach a column (see the Escape handler), but it must not
+    // follow the pointer any more.
+    if (drag === null || drag.aborted || event.pointerId !== drag.pointerId) return;
     const element = drag.zone === 'pan' ? rulerEl : laneEl;
     if (element === null || view === null || model.length === 0) return;
     const x = pointerX(event, element);
@@ -230,7 +234,7 @@
 
   const endGesture = (event) => {
     if (drag === null || event.pointerId !== drag.pointerId) return;
-    const { moved, zone, selection: dragged } = drag;
+    const { moved, zone, selection: dragged, aborted } = drag;
     endDrag();
     if (!moved) return;
     // Review Focus 1: a drag that ends over a column must not also activate it.
@@ -238,7 +242,9 @@
     // can never reach a column and a flag set here would instead swallow the
     // next keyboard activation.
     if (zone !== 'pan') suppressClick = true;
-    if (zone !== 'pan' && dragged !== null) onchange(dragged, { commit: true });
+    // An Escape-cancelled gesture has already committed the pre-drag selection;
+    // committing the last dragged value now would overwrite it.
+    if (zone !== 'pan' && dragged !== null && !aborted) onchange(dragged, { commit: true });
   };
 
   // A gesture that ends over a column retargets the compatibility click to the
@@ -404,16 +410,22 @@
       : (columns[0]?.gridStart ?? null)
   );
 
-  // Escape abandons the gesture and puts the pre-drag view/selection back —
-  // as a committed action, so the aborted gesture leaves one history entry
-  // rather than the replaced one the live scrub wrote.
+  // Escape abandons the gesture and puts the pre-drag view/selection back — as
+  // a committed action, so the aborted gesture leaves one history entry rather
+  // than the replaced one the live scrub wrote. The gesture stays open (and
+  // keeps its pointer capture) until the pointer is released: releasing the
+  // capture here would send the release's compatibility click to whatever
+  // column the pointer happens to be over, and that activation would filter on
+  // top of the selection Escape just restored. Kept open, the release takes the
+  // ordinary drag-end path — click suppressed, no second commit.
   $effect(() => {
     if (drag === null) return;
     const onKeyDown = (event) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || drag.aborted) return;
       event.preventDefault();
       const { zone, previousSelection, baseView } = drag;
-      endDrag();
+      drag.aborted = true;
+      drag.selection = previousSelection;
       if (zone === 'pan') view = baseView;
       else onchange(previousSelection, { commit: true });
     };
@@ -500,6 +512,10 @@
 
     {#if overlay !== null}
       <div class="timeline-selection" style="left: {overlay.left}px; width: {overlay.width}px">
+        <!-- Pointer-operable bounds. Keyboard operation for these sliders
+             (roving focus, arrow/Home/End, the announced value text) is Task 9's
+             scope: until then they are reachable by Tab but move by pointer
+             only. -->
         <div
           class="timeline-handle start"
           role="slider"

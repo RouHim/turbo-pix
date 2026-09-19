@@ -311,6 +311,137 @@ test.describe('Timeline', () => {
     expect(state.month).toBe(3);
     expect(state.toYear).toBeNull();
     expect(state.toMonth).toBeNull();
+
+    // WHEN: widening the collapsed period left again, down to January 2012
+    // (24144) — two zoom steps are enough to bring January into the lane
+    await page.locator('.timeline-zoom-out').click();
+    await page.locator('.timeline-zoom-out').click();
+    const widenedHandle = await page.locator('.timeline-handle.start').boundingBox();
+    const january = await page.locator('.timeline-column[data-period-start="24144"]').boundingBox();
+    await page.mouse.move(widenedHandle.x + widenedHandle.width / 2, lane.y + lane.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(january.x + january.width / 2, lane.y + lane.height / 2, { steps: 6 });
+    await page.mouse.up();
+
+    // THEN: the end bound is still March — the drag moved only the start, so the
+    // range reads January–March 2012 (January is the implicit start of the
+    // whole-year form, hence the absent month and the explicit to_month)
+    const widened = TestHelpers.getUrlState(page);
+    expect(widened.year).toBe(2012);
+    expect(widened.month).toBeNull();
+    expect(widened.toYear).toBe(2012);
+    expect(widened.toMonth).toBe(3);
+  });
+
+  test('should translate a range by dragging its body and clamp at the data ends', async ({
+    page,
+  }) => {
+    // GIVEN: February 2012 – May 2014, a range inside the library
+    await page.goto('/?year=2012&month=2&to_year=2014&to_month=5');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    // Rendered month width, averaged over the month columns on screen
+    const monthPx = () =>
+      page.evaluate(() => {
+        const columns = [...document.querySelectorAll('.timeline-column[data-unit="1"]')].map(
+          (element) => ({
+            start: Number(element.dataset.periodStart),
+            x: element.getBoundingClientRect().left,
+          })
+        );
+        columns.sort((a, b) => a.start - b.start);
+        const first = columns[0];
+        const last = columns[columns.length - 1];
+        return (last.x - first.x) / (last.start - first.start);
+      });
+    const dragBody = async (months) => {
+      const y = lane.y + lane.height / 2;
+      await page.mouse.move(lane.x + lane.width / 2, y);
+      await page.mouse.down();
+      await page.mouse.move(lane.x + lane.width / 2 + months * (await monthPx()), y, { steps: 10 });
+      await page.mouse.up();
+    };
+    const bounds = async () => {
+      const dragged = TestHelpers.getUrlState(page);
+      return [dragged.year, dragged.month, dragged.toYear, dragged.toMonth];
+    };
+
+    // WHEN: the body is dragged three months later, then three months back
+    await dragBody(3);
+
+    // THEN: the span is preserved and both bounds moved with the pointer
+    expect(await bounds()).toEqual([2012, 5, 2014, 8]);
+    await dragBody(-3);
+    expect(await bounds()).toEqual([2012, 2, 2014, 5]);
+
+    // AND: at the library start the drag clamps instead of shifting the span out
+    // of the model (March 1962 is the oldest bucket)
+    await page.goto('/?year=1962&month=3&to_year=1963&to_month=2');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await dragBody(-3);
+    expect(await bounds()).toEqual([1962, 3, 1963, 2]);
+
+    // AND: at the library end the same holds, for a range ending on the newest
+    // bucket the fixture seeded
+    const density = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) => data.density || [])
+    );
+    test.skip(density.length === 0, 'Timeline needs at least one month bucket');
+    const lastBucket = density[density.length - 1];
+    const endIndex = lastBucket.year * 12 + lastBucket.month - 1;
+    const firstIndex = endIndex - 11;
+    const firstBucket = {
+      year: Math.floor(firstIndex / 12),
+      month: (firstIndex % 12) + 1,
+    };
+    await page.goto(
+      `/?year=${firstBucket.year}&month=${firstBucket.month}` +
+        `&to_year=${lastBucket.year}&to_month=${lastBucket.month}`
+    );
+    await TestHelpers.waitForPhotosToLoad(page);
+    await dragBody(3);
+    expect(await bounds()).toEqual([
+      firstBucket.year,
+      firstBucket.month,
+      lastBucket.year,
+      lastBucket.month,
+    ]);
+  });
+
+  test('should cancel a gesture back to the pre-drag selection on Escape', async ({ page }) => {
+    // GIVEN: the 2012 year view, where the pointer will end over a populated
+    // column (March 2012 holds the seeded legacy_05)
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const february = await page
+      .locator('.timeline-column[data-period-start="24145"]')
+      .boundingBox();
+    const march = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+
+    // WHEN: a brush is started, Escape is pressed mid-gesture, *then* the
+    // pointer is released over the March column
+    await page.mouse.move(february.x + february.width / 2, lane.y + lane.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(march.x + march.width / 2, lane.y + lane.height / 2, { steps: 8 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+
+    // THEN: the release does not activate the column it lands on — a filter
+    // there would overwrite the selection Escape restored — and no bound was
+    // committed by the aborted gesture
+    const state = TestHelpers.getUrlState(page);
+    expect([state.year, state.month, state.toYear, state.toMonth]).toEqual([
+      2012,
+      null,
+      null,
+      null,
+    ]);
   });
 
   test('should ignore activation of an empty period and clear back to the full span', async ({
@@ -319,12 +450,15 @@ test.describe('Timeline', () => {
     await page.goto('/?year=2012');
     await TestHelpers.waitForPhotosToLoad(page);
 
-    // April 2012 (24147) has no photos: activating it must not filter. It
-    // carries `aria-disabled="true"` (an empty period announces itself as
-    // unavailable, but is never given the DOM `disabled` attribute, so it
-    // stays focusable and its activation still reaches the handler) — a state
-    // Playwright's actionability gate treats as not-enabled, hence `force`.
-    await page.locator('.timeline-column[data-period-start="24147"]').click({ force: true });
+    // April 2012 (24147) has no photos: activating it must not filter. The
+    // click is a raw input click, not `locator.click()`: the column carries
+    // `aria-disabled="true"` (an empty period announces itself as unavailable
+    // but is never given the DOM `disabled` attribute, so it stays focusable
+    // and its activation still reaches the handler) and Playwright's
+    // actionability gate treats that as not-enabled. A real click also proves
+    // the column is reachable: an empty period still renders a pointer target.
+    const april = await page.locator('.timeline-column[data-period-start="24147"]').boundingBox();
+    await page.mouse.click(april.x + april.width / 2, april.y + april.height / 2);
     const state = TestHelpers.getUrlState(page);
     expect(state.month).toBeNull();
     expect(state.toMonth).toBeNull();

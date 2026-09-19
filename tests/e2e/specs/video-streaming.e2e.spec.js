@@ -3,10 +3,15 @@ import { TestHelpers } from '../setup/test-helpers.js';
 
 /**
  * Fixtures (see test-data/, generated with ffmpeg):
- *   test_video_long.mp4  20 s h264+aac progressive
- *   test_video_long.mkv  20 s h264+aac Matroska
- *   test_video_ac3.mp4   20 s h264 + AC-3
- *   test_video_hevc.mp4  2 s hevc
+ *   test_video_long.mp4     20 s h264+aac progressive
+ *   test_video_long.mkv     20 s h264+aac Matroska
+ *   test_video_ac3.mp4      20 s h264 + AC-3
+ *   test_video_hevc.mp4     2 s hevc
+ *   test_video_10bit.mp4    10 s h264 High 10 (yuv420p10le)
+ *   test_video_noaudio.mp4  10 s h264, no audio track
+ *   test_video_multitrack.mp4 20 s h264 + aac + ac3
+ *   test_video_moov_end.mp4 20 s h264+aac with moov at the end
+ *   test_video_legacy.avi   10 s mpeg4 + mp3
  */
 
 async function findVideoByFilename(page, filename) {
@@ -426,5 +431,72 @@ test.describe('On-the-fly streaming playback', () => {
       { timeout: 30_000 }
     );
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
+
+  // The capability matrix: each row is a (fixture, client declaration) pair and
+  // the decision the server must resolve it to. `mode` is null for actions that
+  // carry no conversion mode. Every row clears its own file's cache first: an
+  // artifact cached by a playthrough in an earlier test legitimately answers
+  // `direct`/`cached`, which would hide the decision under test and make the
+  // row order-dependent.
+  const matrix = [
+    // file, client declaration, expected action/mode
+    ['test_video.mp4', 'h264-8,aac', 'direct', null],
+    ['test_video_moov_end.mp4', 'h264-8,aac', 'stream', 'remux'],
+    ['test_video_long.mkv', 'h264-8,aac', 'stream', 'remux'],
+    ['test_video_ac3.mp4', 'h264-8,aac', 'stream', 'audio'],
+    ['test_video_10bit.mp4', 'h264-8,aac', 'stream', 'transcode'],
+    ['test_video_legacy.avi', 'h264-8,aac', 'stream', 'transcode'],
+    ['test_video_hevc.mp4', 'h264-8,hevc,aac', 'direct', null],
+    ['test_video_hevc.mp4', 'h264-8,aac', 'stream', 'transcode'],
+    ['test_video_noaudio.mp4', 'h264-8,aac', 'direct', null],
+  ];
+
+  for (const [filename, client, action, mode] of matrix) {
+    test(`decision matrix: ${filename} with [${client}] → ${action}/${mode}`, async ({ page }) => {
+      const photo = await findVideoByFilename(page, filename);
+      await TestHelpers.clearCachedConversions(photo.hash_sha256);
+      const response = await page.request.get(
+        `/api/photos/${photo.hash_sha256}/video?decision&client=${encodeURIComponent(client)}`
+      );
+      expect(response.ok()).toBeTruthy();
+      const decision = await response.json();
+      expect(decision.action).toBe(action);
+      expect(decision.mode).toBe(mode);
+      if (action === 'stream') {
+        expect(decision.mime).toContain('video/mp4');
+        expect(decision.duration).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  test('multi-track and silent sources play without audio errors', async ({ page }) => {
+    test.setTimeout(120_000);
+    for (const filename of ['test_video_multitrack.mp4', 'test_video_noaudio.mp4']) {
+      const photo = await findVideoByFilename(page, filename);
+      // Both fixtures are h264 the browser decodes, so they play directly —
+      // and a direct source only auto-plays when the viewer's autoPlay setting
+      // is on (the MSE path always self-plays). Enable it before opening them,
+      // or `currentTime > 0` below would only ever be reached by a user
+      // gesture.
+      await page.evaluate(() =>
+        localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+      );
+      await openVideo(page, photo);
+      await page.waitForFunction(
+        () => {
+          const el = document.querySelector('#viewer-video');
+          return el && el.currentTime > 0 && !el.error;
+        },
+        null,
+        { timeout: 30_000 }
+      );
+      // The multi-track source plays its first (AAC) track — the second (AC-3)
+      // one must not be picked — and the silent source has no track to pick:
+      // neither may fail the media element with an audio error.
+      const error = await videoHandle(page).evaluate((el) => el.error?.code ?? null);
+      expect(error).toBeNull();
+      await TestHelpers.closeViewer(page);
+    }
   });
 });

@@ -206,7 +206,56 @@ async function seedTestMedia() {
     }
   }
 
+  // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
+  // silent h264, an h264 with two audio tracks, a progressive-less h264 and a
+  // legacy MPEG-4/AVI rip. Each pins a DISTINCT date OLDER than the cluster
+  // seed, so the newest video cards stay the h264 fixtures the older specs
+  // open as the first card, and no matrix row depends on the order two of
+  // these share.
+  const matrixFixtures = [
+    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 1],
+    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 2],
+    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 3],
+    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 4],
+    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 5],
+  ];
+  for (const [fixture, daysAgo] of matrixFixtures) {
+    const source = path.join('test-data', fixture);
+    const destination = path.join(photosDir, fixture);
+    if (existsSync(source)) {
+      await copyFile(source, destination);
+      const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+      await utimes(destination, date, date);
+    } else {
+      console.warn(`Video fixture not found at ${source}`);
+    }
+  }
+
   console.log('Generated test media ready');
+}
+
+/**
+ * Indexing faststarts every video in place (photo_processor's
+ * `maybe_fix_moov_for_video`), so the progressive-less fixture is progressive
+ * again before any spec runs and the matrix's moov-layout row would never meet
+ * a non-progressive MP4. Re-seed the fixture after indexing — the state a file
+ * reaches the decision in when the in-place fix could not run (a read-only
+ * library, a file that arrived after the scan) — so the serve-time remux
+ * decision is exercised instead of silently answering `direct`. The stored
+ * capability record carries no `capability_version` yet (the indexer writes
+ * codec/container facts only), so the decision probes the restored file rather
+ * than answering from the record.
+ */
+async function reseedNonProgressiveFixture() {
+  const source = path.join('test-data', 'test_video_moov_end.mp4');
+  const destination = path.join(TEST_DATA_DIR, 'photos', 'test_video_moov_end.mp4');
+  if (!existsSync(source)) {
+    console.warn(`Progressive-less fixture not found at ${source}`);
+    return;
+  }
+  const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 1) * 24 * 60 * 60 * 1000);
+  await copyFile(source, destination);
+  await utimes(destination, date, date);
 }
 
 async function waitForHealthCheck(baseURL, maxRetries = MAX_HEALTH_RETRIES) {
@@ -525,6 +574,10 @@ export default async function globalSetup() {
     // phase and starts with DELETE FROM housekeeping_candidates — wait for
     // full completion so the seeded candidate is not wiped by the scan.
     await waitForIndexingComplete(baseURL);
+    // Indexing rewrites progressive-less videos in place; restore the fixture
+    // to its moov-at-the-end state so the serve-time layout decision is
+    // testable (see reseedNonProgressiveFixture).
+    await reseedNonProgressiveFixture();
     await ensureHousekeepingCandidate(baseURL);
     await seedPendingCollages();
 

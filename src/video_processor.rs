@@ -1111,11 +1111,11 @@ pub(crate) mod tests {
     // the same thread can acquire the lock again. Without the drop-decrement the
     // depth would leak and every subsequent acquire on that thread would silently
     // return without locking.
-    pub(crate) struct TestEnvGuard {
+    pub(crate) struct TestEnvLock {
         _mutex: Option<MutexGuard<'static, ()>>,
     }
 
-    impl Drop for TestEnvGuard {
+    impl Drop for TestEnvLock {
         fn drop(&mut self) {
             TEST_ENV_LOCK_DEPTH.with(|depth| {
                 depth.set(depth.get().saturating_sub(1));
@@ -1123,12 +1123,12 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn acquire_test_env_lock() -> TestEnvGuard {
+    pub(crate) fn acquire_test_env_lock() -> TestEnvLock {
         TEST_ENV_LOCK_DEPTH.with(|depth| {
             let current = depth.get();
             depth.set(current + 1);
 
-            TestEnvGuard {
+            TestEnvLock {
                 // Recover from a poisoned mutex: one panicking env-dependent
                 // test must not cascade failures across every other test that
                 // shells out to ffprobe/ffmpeg.
@@ -1141,14 +1141,17 @@ pub(crate) mod tests {
         })
     }
 
-    struct EnvVarGuard {
+    /// Sets an environment variable for the lifetime of the guard, holding the
+    /// shared env lock so no other env-dependent test observes it mid-way. The
+    /// original value (or absence) is restored on drop.
+    pub(crate) struct TestEnvGuard {
         key: &'static str,
         original: Option<String>,
-        _lock: TestEnvGuard,
+        _lock: TestEnvLock,
     }
 
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
+    impl TestEnvGuard {
+        pub(crate) fn set(key: &'static str, value: &str) -> Self {
             let lock = acquire_test_env_lock();
             let original = std::env::var(key).ok();
             unsafe {
@@ -1162,7 +1165,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl Drop for EnvVarGuard {
+    impl Drop for TestEnvGuard {
         fn drop(&mut self) {
             unsafe {
                 if let Some(value) = &self.original {
@@ -1227,8 +1230,8 @@ pub(crate) mod tests {
     #[test]
     fn test_verify_ffmpeg_available_fails_not_found() {
         // GIVEN missing ffmpeg and ffprobe paths
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
-        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+        let _ffprobe_guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
 
         // WHEN ffmpeg availability is verified
         let result = verify_ffmpeg_available();
@@ -1250,8 +1253,8 @@ pub(crate) mod tests {
         std::fs::write(&ffmpeg_script, "#!/usr/bin/env sh\nexit 0\n").unwrap();
         make_executable(&ffmpeg_script);
 
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
-        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _ffprobe_guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
 
         // WHEN ffmpeg availability is verified
         let result = verify_ffmpeg_available();
@@ -1655,7 +1658,7 @@ pub(crate) mod tests {
         // TURBO_PIX_MAX_TRANSCODES=0 disables transcoding. acquire checks
         // transcode_max_pool() == 0 BEFORE acquiring the (possibly already
         // initialized) semaphore, so this is deterministic.
-        let _env = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
+        let _env = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
         let err = acquire_transcode_permit().await.unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1667,9 +1670,9 @@ pub(crate) mod tests {
 
     #[test]
     fn test_transcode_max_pool_parses_env() {
-        let _env = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "4");
+        let _env = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "4");
         assert_eq!(transcode_max_pool(), 4);
-        let _env2 = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
+        let _env2 = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
         assert_eq!(transcode_max_pool(), 0, "0 must mean disabled");
     }
 
@@ -1697,8 +1700,8 @@ pub(crate) mod tests {
         .unwrap();
         make_executable(&ffmpeg_script);
 
-        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _ffprobe_guard = TestEnvGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
 
         let input = temp_dir.path().join("input.mp4");
         let output = temp_dir.path().join("output.mp4");
@@ -1896,7 +1899,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_error_message_not_found_ffprobe_extract_metadata() {
         // GIVEN a nonexistent ffprobe path
-        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+        let _guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
 
         // WHEN extract_video_metadata is called
         let result = extract_video_metadata(Path::new("/any/path")).await;
@@ -1917,7 +1920,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_error_message_not_found_ffmpeg_extract_frame() {
         // GIVEN a nonexistent ffmpeg path
-        let _guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+        let _guard = TestEnvGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
 
         // WHEN extract_frame_at_time is called
         let result =
@@ -1939,7 +1942,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_error_message_not_found_ffprobe_is_hevc() {
         // GIVEN a nonexistent ffprobe path
-        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+        let _guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
 
         // WHEN is_hevc_video is called
         let result = is_hevc_video(Path::new("/any/video")).await;
@@ -1960,7 +1963,7 @@ pub(crate) mod tests {
     #[test]
     fn test_error_message_not_found_ffprobe_has_moov() {
         // GIVEN a nonexistent ffprobe path
-        let _guard = EnvVarGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
+        let _guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
 
         // WHEN has_moov_at_start is called
         let result = has_moov_at_start(Path::new("/any/video"));
@@ -1997,8 +2000,8 @@ pub(crate) mod tests {
         .unwrap();
         make_executable(&ffprobe_script);
 
-        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
-        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+        let _ffprobe_guard = TestEnvGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
 
         let temp_video = temp_dir.path().join("test.mp4");
         std::fs::write(&temp_video, b"fake-video").unwrap();

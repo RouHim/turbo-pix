@@ -49,6 +49,9 @@
   // object holds MediaSource/DOM references and closures that must never be
   // proxied, and nothing renders from it.
   let streamPlayer = null;
+  // Single-flight timer for retrying a stream run the server refused because
+  // every conversion slot was taken. Plain field, torn down with the player.
+  let streamRetryTimer = null;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -760,11 +763,21 @@
   }
 
   /**
+   * How long a refused (503) stream run waits before retrying. The server
+   * answers immediately when the pool is full, so the viewer owns the pacing.
+   */
+  const STREAM_RETRY_DELAY_MS = 1500;
+
+  /**
    * Play a server-streamed conversion through MSE: the server pipes fragmented
    * MP4 and the player appends it to a SourceBuffer, so playback starts long
    * before the conversion finishes.
+   *
+   * `keepWaitingNotice` is set by the saturation retry: the "waiting for a
+   * free conversion slot" notice must stay up instead of flashing back to the
+   * generic "preparing" one on every attempt.
    */
-  function playStream(photo, decision, modeOverride = null) {
+  function playStream(photo, decision, modeOverride = null, { keepWaitingNotice = false } = {}) {
     if (!videoEl) return;
     destroyStreamPlayer();
     hasUserChosenOriginal = false;
@@ -774,9 +787,11 @@
     // appends `start=<seconds>` itself (msePlayer.urlFor), and `mode` is the
     // server-authorized mode the player may only escalate.
     const streamUrl = `${decision.url}${separator}mode=${mode}`;
-    showTranscodeToast(
-      get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })
-    );
+    if (!keepWaitingNotice) {
+      showTranscodeToast(
+        get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })
+      );
+    }
     streamPlayer = createStreamPlayer(videoEl, {
       streamUrl,
       mime: decision.mime,
@@ -793,7 +808,7 @@
           hideTranscodeToast();
         }
       },
-      onError: (error) => onStreamError(photo, decision, error),
+      onError: (error) => handleStreamFailure(photo, decision, modeOverride, error),
     });
     videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.style.display = 'block';
@@ -802,11 +817,52 @@
     swipeableViewer?.reset();
     // Fire and forget: `start()` only settles when the stream ends, and the
     // viewer must not stay "loading" until then. The handle stays set so the
-    // next playStream/destroyStreamPlayer tears this run down.
-    streamPlayer.start(0).catch((error) => onStreamError(photo, decision, error));
+    // next playStream/destroyStreamPlayer tears this run down. Setup failures
+    // arrive on `onError`; the rejection path covers everything past setup.
+    streamPlayer
+      .start(0)
+      .catch((error) => handleStreamFailure(photo, decision, modeOverride, error));
+  }
+
+  /**
+   * A refused conversion slot is not a playback failure. The pool is simply
+   * full, so keep the waiting notice visible and retry the same mode until the
+   * viewer moves on — retries cannot stack (single-flight timer) and they stop
+   * with the viewer. Every other error is a real one.
+   */
+  function handleStreamFailure(photo, decision, modeOverride, error) {
+    if (error?.status !== 503) {
+      onStreamError(photo, decision, error);
+      return;
+    }
+    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    showTranscodeToast(
+      get(t)('video.stream.waiting', { default: 'Waiting for a free conversion slot…' })
+    );
+    const photoHash = photo.hash_sha256;
+    scheduleStreamRetry(() => {
+      if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
+      playStream(photo, decision, modeOverride, { keepWaitingNotice: true });
+    }, STREAM_RETRY_DELAY_MS);
+  }
+
+  /**
+   * Arm the one pending saturation retry. `destroyStreamPlayer` disarms it, so
+   * a closed viewer or a new photo never leaves a retry running.
+   */
+  function scheduleStreamRetry(callback, delayMs) {
+    if (streamRetryTimer !== null) return;
+    streamRetryTimer = setTimeout(() => {
+      streamRetryTimer = null;
+      callback();
+    }, delayMs);
   }
 
   function destroyStreamPlayer() {
+    if (streamRetryTimer !== null) {
+      clearTimeout(streamRetryTimer);
+      streamRetryTimer = null;
+    }
     if (!streamPlayer) return;
     streamPlayer.destroy();
     streamPlayer = null;

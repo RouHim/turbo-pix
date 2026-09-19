@@ -12,6 +12,20 @@ export function mseSupported(mime) {
   return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mime);
 }
 
+/**
+ * The stream endpoint refused a run with an HTTP status. `503` means "no
+ * conversion slot right now" — a saturated worker pool the viewer answers by
+ * waiting and retrying — while anything else is a real playback failure.
+ */
+export class StreamHttpError extends Error {
+  /** @param {number} status */
+  constructor(status) {
+    super(`stream HTTP ${status}`);
+    this.name = 'StreamHttpError';
+    this.status = status;
+  }
+}
+
 function once(target, event) {
   return new Promise((resolve) => target.addEventListener(event, resolve, { once: true }));
 }
@@ -121,12 +135,15 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       }
       buffer = mediaSource.addSourceBuffer(mime);
       buffer.timestampOffset = seconds;
+      // The run's own buffer: `isBuffered` (and therefore the seek restart)
+      // asks about the media source that is actually attached to the element.
+      sourceBuffer = buffer;
 
       controller = new AbortController();
       signal = controller.signal;
       const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok || !response.body) {
-        throw new Error(`stream HTTP ${response.status}`);
+        throw new StreamHttpError(response.status);
       }
       // Show "waiting for a free conversion slot" when the server holds the
       // request open because every worker is busy.

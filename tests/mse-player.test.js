@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const modulePath = process.env.MSE_PLAYER_MODULE
   ? path.resolve(process.env.MSE_PLAYER_MODULE)
   : fileURLToPath(new URL('../frontend/src/lib/video/msePlayer.js', import.meta.url));
-const { createStreamPlayer } = await import(pathToFileURL(modulePath).href);
+const { createStreamPlayer, StreamHttpError } = await import(pathToFileURL(modulePath).href);
 
 const realFetch = globalThis.fetch;
 const realMediaSource = globalThis.MediaSource;
@@ -316,6 +316,50 @@ test('playback is reported only when the element actually plays', async () => {
 
   video.dispatch('playing');
   assert.equal(states.at(-1), 'playing');
+
+  player.destroy();
+});
+
+test('a seek inside the buffered range does not restart the stream', async () => {
+  const video = fakeVideo();
+  const { fetchImpl, calls } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video);
+
+  await player.start(0);
+  await settle(10);
+
+  // The element can serve this target from the buffer it already holds:
+  // restarting the run would re-request and re-convert media nobody needs.
+  video._currentTime = 1;
+  video.dispatch('seeking');
+  await settle();
+
+  assert.equal(calls.length, 1, 'a buffered target must not start a stream run');
+
+  player.destroy();
+});
+
+test('a refused run reports the HTTP status so saturation is distinguishable', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: false,
+      status: 503,
+      headers: new Headers({ 'retry-after': '2' }),
+      body: null,
+    });
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  // The viewer keys its retry on `503`; a bare Error would be indistinguishable
+  // from a real playback failure and would end the user's playback.
+  assert.equal(errors.length, 1, 'the refusal reaches the viewer');
+  assert.ok(errors[0] instanceof StreamHttpError, 'the failure is typed');
+  assert.equal(errors[0].status, 503, 'the status survives to the viewer');
 
   player.destroy();
 });

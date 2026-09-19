@@ -121,4 +121,44 @@ test.describe('On-the-fly streaming playback', () => {
     expect(src).toContain(`/api/photos/${h264.hash_sha256}/video`);
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
+
+  test('saturated conversions wait visibly and then start', async ({ page }) => {
+    test.setTimeout(60_000);
+    const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
+
+    // Answer the first two stream requests with 503 + Retry-After, then let the
+    // real request through: this is exactly what a full worker pool looks like.
+    let refusals = 0;
+    await page.route('**/video/stream*', async (route) => {
+      if (refusals < 2) {
+        refusals += 1;
+        await route.fulfill({
+          status: 503,
+          headers: { 'retry-after': '1', 'content-type': 'application/json' },
+          body: JSON.stringify({ error: 'no conversion slot available' }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await openVideo(page, hevc);
+    await expect(page.locator('.transcode-toast')).toContainText(
+      'Waiting for a free conversion slot',
+      {
+        timeout: 10_000,
+      }
+    );
+
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+    expect(refusals).toBe(2);
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
 });

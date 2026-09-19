@@ -1,7 +1,75 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
+/** Waits until the map has drawn at least one feature. */
+async function waitForMapFeatures(page) {
+  await expect
+    .poll(async () => page.locator('[data-map-cluster], [data-map-location]').count(), {
+      timeout: 15000,
+    })
+    .toBeGreaterThan(0);
+}
+
 test.describe('Map view', () => {
+  // The seeded library holds one unique coordinate, which would leave every
+  // cluster assertion skipped. Moving one photo to a nearby-but-distinct point
+  // makes the fitted view cluster deterministically: `radius: 60` is a ~30px
+  // threshold at 256px tiles, and the pair sits ~8px apart at the fit zoom.
+  test.beforeAll(async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+    try {
+      const page = await context.newPage();
+      await TestHelpers.goto(page, '/map');
+      const pair = await page.evaluate(async () => {
+        const response = await fetch('/api/photos/map');
+        const { photos } = await response.json();
+        const byLocation = new Map();
+        for (const photo of photos) {
+          const latitude = photo.metadata?.location?.latitude;
+          const longitude = photo.metadata?.location?.longitude;
+          if (photo.mime_type !== 'image/jpeg') continue;
+          if (typeof latitude !== 'number' || typeof longitude !== 'number') continue;
+          const key = `${latitude},${longitude}`;
+          if (!byLocation.has(key)) byLocation.set(key, { latitude, longitude, hashes: [] });
+          byLocation.get(key).hashes.push(photo.hash_sha256);
+        }
+        // Anchor on the densest location so the pair always sits next to it,
+        // whatever an earlier run left behind.
+        const [anchor] = [...byLocation.values()].sort((a, b) => b.hashes.length - a.hashes.length);
+        return { hash: anchor.hashes[0], latitude: anchor.latitude, longitude: anchor.longitude };
+      });
+      await TestHelpers.setPhotoCoordinates(
+        page,
+        pair.hash,
+        pair.latitude + 0.0005,
+        pair.longitude
+      );
+      // The metadata write makes the server re-index the file: wait until the
+      // listing actually shows the split, so no test races that re-index.
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(async () => {
+              const response = await fetch('/api/photos/map');
+              const { photos } = await response.json();
+              const keys = new Set(
+                photos
+                  .filter((photo) => typeof photo.metadata?.location?.latitude === 'number')
+                  .map(
+                    (photo) =>
+                      `${photo.metadata.location.latitude},${photo.metadata.location.longitude}`
+                  )
+              );
+              return keys.size;
+            }),
+          { timeout: 15000 }
+        )
+        .toBeGreaterThan(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
     await TestHelpers.stubMapTiles(page);
@@ -101,6 +169,8 @@ test.describe('Map view', () => {
 
   test('cluster click separates the cluster into individual markers', async ({ page }) => {
     await TestHelpers.goto(page, '/map');
+    // The skip below is about the library, not about the load still running.
+    await waitForMapFeatures(page);
 
     const cluster = page.locator('[data-map-cluster]').first();
     test.skip((await cluster.count()) === 0, 'Test library has no cluster at the initial zoom');
@@ -116,6 +186,7 @@ test.describe('Map view', () => {
   // Expand clusters until individual location markers render, then open the
   // first one's popup.
   async function openFirstLocationPopup(page) {
+    await waitForMapFeatures(page);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       if ((await page.locator('[data-map-location]').count()) > 0) break;
       const cluster = page.locator('[data-map-cluster]').first();
@@ -184,6 +255,7 @@ test.describe('Map view', () => {
     test.skip(!expected, 'No geo-located photos in the test library');
 
     const [key, count] = expected;
+    await waitForMapFeatures(page);
 
     for (let attempt = 0; attempt < 6; attempt += 1) {
       if ((await page.locator(`[data-map-location="${key}"]`).count()) > 0) break;
@@ -209,5 +281,71 @@ test.describe('Map view', () => {
       }));
       expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
     }
+  });
+
+  test('cluster markers expand on click and on Enter', async ({ page }) => {
+    await TestHelpers.goto(page, '/map');
+    await waitForMapFeatures(page);
+
+    const cluster = page.locator('[data-map-cluster]').first();
+    await expect(cluster).toBeVisible();
+    await expect(cluster).toHaveAttribute('data-map-cluster', '2');
+    await expect(cluster).toHaveAttribute('aria-label', /photos, activate to zoom in/);
+
+    const before = await page.locator('[data-map-location]').count();
+    await cluster.click();
+    await expect
+      .poll(async () => page.locator('[data-map-location]').count())
+      .toBeGreaterThan(before);
+
+    // A fresh load restores the fitted (clustered) view for the keyboard pass.
+    await TestHelpers.goto(page, '/map');
+    await waitForMapFeatures(page);
+    const keyboardCluster = page.locator('[data-map-cluster]').first();
+    await expect(keyboardCluster).toBeVisible();
+
+    const beforeKeyboard = await page.locator('[data-map-location]').count();
+    await keyboardCluster.focus();
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(async () => page.locator('[data-map-location]').count())
+      .toBeGreaterThan(beforeKeyboard);
+  });
+
+  test('keyboard opens a popup, Escape closes it and restores focus, Enter reopens it', async ({
+    page,
+  }) => {
+    await TestHelpers.goto(page, '/map');
+    await waitForMapFeatures(page);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if ((await page.locator('[data-map-location]').count()) > 0) break;
+      const cluster = page.locator('[data-map-cluster]').first();
+      if ((await cluster.count()) === 0) break;
+      await cluster.click();
+      await expect(page.locator('.leaflet-zoom-anim')).toHaveCount(0);
+    }
+
+    const marker = page.locator('[data-map-location]').first();
+    await expect(marker).toBeVisible();
+    await marker.focus();
+    await page.keyboard.press('Enter');
+
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-map-popup-photo]').first()).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(popup).toBeHidden();
+    await expect(page.locator('[data-map-location]:focus')).toHaveCount(1);
+
+    // The reopen is the regression guard: focus has to land inside the popup
+    // again, or Escape would have nothing to act on.
+    await page.keyboard.press('Enter');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-map-popup-photo]').first()).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(popup).toBeHidden();
   });
 });

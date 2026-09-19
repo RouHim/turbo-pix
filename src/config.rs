@@ -26,6 +26,7 @@ pub struct Config {
     pub transcode_timeout_secs: u64,
     pub locale: String,
     pub nominatim_url: String,
+    pub tile_url: String,
 }
 
 impl Config {
@@ -76,6 +77,12 @@ impl Config {
         let nominatim_url = env::var("TURBO_PIX_NOMINATIM_URL")
             .unwrap_or_else(|_| "https://nominatim.openstreetmap.org".to_string());
 
+        // Operator-configurable raster tile endpoint (FR-002). The default is
+        // the public OSM service; self-hosted/alternative OSM-compatible
+        // endpoints need this env var only — no code change or rebuild.
+        let tile_url = env::var("TURBO_PIX_TILE_URL")
+            .unwrap_or_else(|_| "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string());
+
         let transcode_timeout_secs = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "300".to_string())
             .parse()?;
@@ -96,6 +103,7 @@ impl Config {
             transcode_timeout_secs,
             locale,
             nominatim_url,
+            tile_url,
         })
     }
 }
@@ -254,6 +262,34 @@ mod tests {
             } else {
                 env::remove_var("TURBO_PIX_NOMINATIM_URL");
             }
+        });
+    }
+
+    #[test]
+    fn uses_default_tile_url_when_env_var_is_missing() {
+        with_env_lock(|| {
+            let original = std::env::var("TURBO_PIX_TILE_URL").ok();
+            restore_env_var("TURBO_PIX_TILE_URL", None);
+            let config = Config::from_env().expect("config should parse");
+            assert_eq!(
+                config.tile_url,
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            );
+            restore_env_var("TURBO_PIX_TILE_URL", original);
+        });
+    }
+
+    #[test]
+    fn reads_custom_tile_url_from_env() {
+        with_env_lock(|| {
+            let original = std::env::var("TURBO_PIX_TILE_URL").ok();
+            std::env::set_var(
+                "TURBO_PIX_TILE_URL",
+                "http://tiles.example.lan/{z}/{x}/{y}.png",
+            );
+            let config = Config::from_env().expect("config should parse");
+            assert_eq!(config.tile_url, "http://tiles.example.lan/{z}/{x}/{y}.png");
+            restore_env_var("TURBO_PIX_TILE_URL", original);
         });
     }
 

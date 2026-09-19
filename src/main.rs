@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
     let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
     let albums_routes = build_albums_routes(db_pool.clone());
-    let config_routes = build_config_routes(config.locale.clone());
+    let config_routes = build_config_routes(config.locale.clone(), config.tile_url.clone());
     let static_routes = build_static_routes();
 
     // Security posture: reject cross-origin browser requests (no CORS

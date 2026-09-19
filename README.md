@@ -127,6 +127,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_ALLOWED_HOSTS` | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | *(loopback names)* | No       |
 | `TURBO_PIX_LOCALE`        | Default UI locale (`en`, `de`)                    | `en`                                  | No       |
 | `TURBO_PIX_NOMINATIM_URL` | Base URL for the Nominatim geocoding service      | `https://nominatim.openstreetmap.org` | No       |
+| `TURBO_PIX_TILE_URL`      | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
 | `RUST_LOG`                | Log level (trace, debug, info, warn, error)       | `info`                                | No       |
 
 ### Derived Paths

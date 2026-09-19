@@ -523,7 +523,7 @@
   });
 </script>
 
-<div class="map-view" data-testid="map-view">
+<div class="map-view" data-testid="map-view" data-reduced-motion={String(prefersReducedMotion)}>
   <div class="map-status">
     {#if !loading && !loadError && unlocatedCount > 0}
       <p class="map-notice" data-testid="map-unlocated-notice">
@@ -630,7 +630,11 @@
     border: 3px solid var(--background-color);
     border-radius: 50%;
     background: var(--primary-color);
-    color: var(--background-color);
+    /* White, not `--background-color`: on `--primary-color` the token reaches
+       only 4.47:1, under the 4.5:1 the count needs at 13px (SC-008). White is
+       what the app already puts on `--primary-color` (see `.btn-primary`) and
+       measures 4.83:1. */
+    color: white;
     font-size: var(--font-sm);
     font-weight: var(--font-semibold);
   }

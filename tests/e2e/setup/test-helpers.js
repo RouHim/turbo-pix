@@ -1,4 +1,10 @@
 export class TestHelpers {
+  /** 1×1 transparent PNG — a valid image response for stubbed tile requests. */
+  static TINY_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mMQDu/6DwADaQH0rwEuVwAAAABJRU5ErkJggg==',
+    'base64'
+  );
+
   static selectors = {
     navItem: (view) => `button[data-view="${view}"]`,
     photoCard: (hash) => `[data-photo-id="${hash}"]`,
@@ -28,6 +34,19 @@ export class TestHelpers {
 
   static async goto(page, path = '/') {
     await page.goto(path, { waitUntil: 'domcontentloaded' });
+  }
+
+  /**
+   * Answers every slippy-map tile request with TINY_PNG so map specs run
+   * without network access. The pathname shape (`/{z}/{x}/{y}.png`) matches the
+   * default OSM endpoint and any custom TURBO_PIX_TILE_URL template.
+   */
+  static async stubMapTiles(page) {
+    await page.route(
+      (url) => /\/\d+\/\d+\/\d+\.png$/.test(url.pathname),
+      (route) =>
+        route.fulfill({ status: 200, contentType: 'image/png', body: TestHelpers.TINY_PNG })
+    );
   }
 
   static async verifyActiveView(page, viewName) {

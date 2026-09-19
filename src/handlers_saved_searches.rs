@@ -122,9 +122,21 @@ fn validate_create(req: &CreateSavedSearchRequest) -> Result<CreateFields, Valid
         to_month: req.to_month,
     };
     // Mirrors router normalizeState: reversed bounds become ascending ones.
+    // Checked arithmetic: a year whose month index overflows i64 is not a valid
+    // calendar bound for this app, and wrapping would misjudge `end < start`
+    // (persisting a reversed range) or panic in debug builds.
     if let (Some(year), Some(to_year)) = (filter.year, filter.to_year) {
-        let start = year * 12 + filter.month.unwrap_or(1) - 1;
-        let end = to_year * 12 + filter.to_month.unwrap_or(12) - 1;
+        let start = year
+            .checked_mul(12)
+            .and_then(|index| index.checked_add(filter.month.unwrap_or(1) - 1));
+        let end = to_year
+            .checked_mul(12)
+            .and_then(|index| index.checked_add(filter.to_month.unwrap_or(12) - 1));
+        let (Some(start), Some(end)) = (start, end) else {
+            return Err(ValidationError {
+                message: "Invalid year range".to_string(),
+            });
+        };
         if end < start {
             filter = SavedSearchFilter {
                 year: Some(to_year),
@@ -400,17 +412,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_rejects_invalid_range_bounds() {
-        for (to_year, to_month) in [
-            (Some(2012), Some(13)),
-            (Some(2012), Some(0)),
-            (None, Some(3)),
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let routes = build_test_routes(db_pool);
+
+        for (year, to_year, to_month) in [
+            (2015, Some(2012), Some(13)),
+            (2015, Some(2012), Some(0)),
+            (2015, None, Some(3)),
+            (2015, Some(0), None),
+            (i64::MAX, Some(1), None),
+            (2015, Some(i64::MAX), None),
         ] {
             let request = CreateSavedSearchRequest {
                 name: "Range".to_string(),
                 query: None,
                 view: "all".to_string(),
                 sort: "date_desc".to_string(),
-                year: Some(2015),
+                year: Some(year),
                 month: Some(8),
                 to_year,
                 to_month,
@@ -418,7 +436,32 @@ mod tests {
             let result = validate_create(&request);
             assert!(
                 result.is_err(),
-                "({to_year:?}, {to_month:?}) must be rejected"
+                "({year}, {to_year:?}, {to_month:?}) must be rejected"
+            );
+
+            // The rejection must reach the wire as 400: the swap arithmetic is
+            // checked, so an overflowing year cannot panic the handler task or
+            // wrap into a persisted reversed range.
+            let body = serde_json::json!({
+                "name": "Range",
+                "query": serde_json::Value::Null,
+                "view": "all",
+                "sort": "date_desc",
+                "year": year,
+                "month": 8,
+                "to_year": to_year,
+                "to_month": to_month,
+            });
+            let response = warp::test::request()
+                .method("POST")
+                .path("/api/saved-searches")
+                .json(&body)
+                .reply(&routes)
+                .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "({year}, {to_year:?}, {to_month:?}) must answer 400"
             );
         }
     }
@@ -466,6 +509,31 @@ mod tests {
             other.is_ok(),
             "distinct ranges must not collide on the unique index"
         );
+
+        // Re-sending the exact range hits the conflict lookup: it must match on
+        // the bounds too, otherwise the lookup misses and the handler answers
+        // 500 ("vanished") instead of 409 with the existing row.
+        let duplicate = saved_searches::create(
+            &pool,
+            "Summer again",
+            None,
+            "all",
+            "date_desc",
+            &saved_searches::SavedSearchFilter {
+                year: Some(2012),
+                month: Some(3),
+                to_year: Some(2015),
+                to_month: Some(8),
+            },
+        )
+        .await;
+        match duplicate {
+            Err(saved_searches::CreateError::Duplicate(existing)) => {
+                assert_eq!(existing.id, row.id, "the lookup must find the exact range");
+            }
+            Err(other) => panic!("expected Duplicate for the same range, got {:?}", other),
+            Ok(_) => panic!("expected Duplicate for the same range, got Ok"),
+        }
     }
 
     #[tokio::test]

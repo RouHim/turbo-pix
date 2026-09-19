@@ -47,6 +47,9 @@ jobs:
       - name: Run i18n integrity check
         run: npm run test:i18n
 
+      - name: Run frontend unit tests
+        run: node --test tests/map-aggregates.test.js
+
   rust-tests:
     runs-on: ubuntu-latest
 

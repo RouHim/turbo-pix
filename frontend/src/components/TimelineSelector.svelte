@@ -207,7 +207,10 @@
     endDrag();
     if (!moved) return;
     // Review Focus 1: a drag that ends over a column must not also activate it.
-    suppressClick = true;
+    // A ruler pan is exempt: it captures the ruler, so its compatibility click
+    // can never reach a column and a flag set here would instead swallow the
+    // next keyboard activation.
+    if (zone !== 'pan') suppressClick = true;
     if (zone !== 'pan' && dragged !== null) onchange(dragged, { commit: true });
   };
 
@@ -404,8 +407,9 @@
   </div>
 
   <!-- The lane only *hosts* the interactive columns and the slider handles; the
-       pointer gesture is a zoom/brush surface, not a widget of its own. -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
+       pointer gesture is a zoom/brush surface, not a widget of its own, and its
+       click handler only clears the post-drag suppression flag. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
   <div
     class="timeline-lane"
     bind:this={laneEl}

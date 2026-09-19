@@ -197,6 +197,14 @@ test.describe('Timeline', () => {
       'data-period-start',
       String(Math.floor(libraryEnd / unit) * unit)
     );
+
+    // AND: the pan left no gesture flag behind, so the first keyboard
+    // activation after a pan is not swallowed (2004 = legacy_04's year, which
+    // the panned-to view is showing at year granularity)
+    const populated = page.locator('.timeline-column[data-period-start="24048"]');
+    await populated.focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/year=2004/);
   });
 
   test('should clear the filter and fit the view from the reset control', async ({ page }) => {

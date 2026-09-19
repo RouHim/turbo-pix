@@ -257,7 +257,10 @@ async function waitForIndexing(baseURL, maxRetries = MAX_INDEXING_RETRIES) {
   );
 }
 
-async function waitForIndexingComplete(baseURL, maxRetries = 120) {
+// A generous budget: the fixture seeds 24 photos across six decades and sibling worktrees share the same cores, so the final phase (housekeeping) can outlast a two-minute wait. A longer wait, not a weaker check.
+const INDEXING_COMPLETE_RETRIES = 600;
+
+async function waitForIndexingComplete(baseURL, maxRetries = INDEXING_COMPLETE_RETRIES) {
   console.log('Waiting for indexing to fully complete (is_complete)...');
 
   // The housekeeping phase runs LAST and starts with DELETE FROM

@@ -14,7 +14,7 @@ export default defineConfig({
   globalSetup: './tests/e2e/setup/global-setup.js',
   globalTeardown: './tests/e2e/setup/global-teardown.js',
   use: {
-    baseURL: 'http://localhost:18473',
+    baseURL: `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: process.env.CI ? 'on' : 'off',

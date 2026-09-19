@@ -1,30 +1,64 @@
 import { readFile, unlink } from 'fs/promises';
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readlinkSync } from 'fs';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
 const PID_FILE = 'test-server.pid';
 const GRACEFUL_SHUTDOWN_DELAY_MS = 2000;
+const SERVER_PORT = process.env.TURBO_PIX_E2E_PORT ?? '18473';
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 // The PID file tracks the `cargo run` wrapper (global-setup writes
 // serverProcess.pid), so signaling it may leave the actual server binary
-// alive. Kill the binary directly too — the deliberately narrow pattern is
-// documented in AGENTS.md; a broader `-f turbo-pix` would match the Playwright
-// runner itself (its argv contains the repo path).
+// alive. Kill the binary directly too, but only when its executable lives in
+// THIS checkout's target directory (a sibling worktree's server must survive;
+// the old machine-wide pattern killed it mid-run). The pattern stays narrow so
+// it cannot match the Playwright runner: its argv contains the repo root but
+// never the binary path.
 const SERVER_BINARY_PATTERN = 'target/(debug|release)/turbo-pix';
+const SERVER_TARGET_PREFIX = `${path.join(REPO_ROOT, 'target')}${path.sep}`;
+
+if (new RegExp(SERVER_BINARY_PATTERN).test(process.argv.join(' '))) {
+  throw new Error(`Server reap pattern matches the Playwright runner: ${SERVER_BINARY_PATTERN}`);
+}
 
 function killServerBinary() {
+  let pids = [];
   try {
-    execSync(`pkill -9 -f '${SERVER_BINARY_PATTERN}'`, { stdio: 'ignore' });
-    console.log('Killed server binary (pkill)');
+    pids = execSync(`pgrep -f '${SERVER_BINARY_PATTERN}' || true`, { encoding: 'utf-8' })
+      .split(/\s+/)
+      .filter(Boolean);
   } catch {
-    // pkill exits non-zero when no process matches — that is the expected case
-    // after a successful graceful shutdown.
-    console.log('No server binary process matched pkill');
+    pids = [];
+  }
+
+  const mine = pids.filter((pid) => {
+    try {
+      const exe = readlinkSync(`/proc/${pid}/exe`);
+      return exe.startsWith(SERVER_TARGET_PREFIX) && exe.endsWith(`${path.sep}turbo-pix`);
+    } catch {
+      return false;
+    }
+  });
+
+  if (mine.length === 0) {
+    console.log('No server binary process matched pgrep');
+    return;
+  }
+
+  try {
+    execSync(`kill -9 ${mine.join(' ')}`, { stdio: 'ignore' });
+    console.log(`Killed server binary (PIDs: ${mine.join(', ')})`);
+  } catch {
+    // The process exited between pgrep and kill — the expected case after a
+    // successful graceful shutdown.
+    console.log('No server binary process matched kill');
   }
 }
 
 async function killServer() {
-  console.log('\n=== TurboPix E2E Test Teardown ===\n');
+  console.log(`\n=== TurboPix E2E Test Teardown (port ${SERVER_PORT}) ===\n`);
 
   if (!existsSync(PID_FILE)) {
     console.log('No PID file found, server may have already stopped');

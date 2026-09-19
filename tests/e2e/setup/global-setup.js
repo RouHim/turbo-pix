@@ -1,13 +1,16 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { copyFile, mkdir, rm, utimes, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readlink, rm, utimes, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 const execAsync = promisify(exec);
 
 const TEST_DATA_DIR = 'test-e2e-data';
-const SERVER_PORT = '18473';
+// Sibling worktrees run this same suite; TURBO_PIX_E2E_PORT keeps their servers
+// (and Playwright's baseURL) on distinct ports instead of racing one port.
+const SERVER_PORT = process.env.TURBO_PIX_E2E_PORT ?? '18473';
 const MAX_HEALTH_RETRIES = 30;
 const MAX_INDEXING_RETRIES = 600;
 const MAX_DB_RETRIES = 30;
@@ -16,7 +19,55 @@ const RECENT_PHOTO_COUNT = 10;
 const ARCHIVE_PHOTO_COUNT = 4;
 const CLUSTER_DAYS_AGO = 7;
 const ARCHIVE_DAYS_AGO = 400;
+// Legacy seeds: six photos spread over six decades give the timeline real
+// decade/year granularity, a populated gap-free modern cluster, and one empty
+// decade (the 1990s) so gaps are exercised. Dates are written by
+// updateTestPhotoDates() — the source image's own EXIF/mtime never matters.
+const LEGACY_PHOTOS = [
+  ['legacy_01.jpg', '1962-03-15T12:00:00.000Z'],
+  ['legacy_02.jpg', '1974-09-02T12:00:00.000Z'],
+  ['legacy_03.jpg', '1985-06-20T12:00:00.000Z'],
+  ['legacy_04.jpg', '2004-11-05T12:00:00.000Z'],
+  ['legacy_05.jpg', '2012-03-15T12:00:00.000Z'],
+  ['legacy_06.jpg', '2019-07-01T12:00:00.000Z'],
+];
 const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+
+// Reap only THIS checkout's stale server: the previous machine-wide pattern
+// killed a sibling worktree's server mid-run. The spawned binary's argv is
+// relative (`target/debug/turbo-pix`), so a path-anchored pkill pattern can
+// never match it — the checkout is identified from /proc/<pid>/exe instead.
+// The pattern itself stays narrow so it cannot match the Playwright runner
+// (whose argv contains the repo root but never the binary path).
+const SERVER_BINARY_PATTERN = 'target/(debug|release)/turbo-pix';
+const SERVER_TARGET_PREFIX = `${path.join(REPO_ROOT, 'target')}${path.sep}`;
+
+if (new RegExp(SERVER_BINARY_PATTERN).test(process.argv.join(' '))) {
+  throw new Error(`Server reap pattern matches the Playwright runner: ${SERVER_BINARY_PATTERN}`);
+}
+
+async function reapStaleServers() {
+  const { stdout } = await execAsync(`pgrep -f '${SERVER_BINARY_PATTERN}' || true`).catch(() => ({
+    stdout: '',
+  }));
+  const mine = [];
+  for (const pid of stdout.split(/\s+/).filter(Boolean)) {
+    try {
+      const exe = await readlink(`/proc/${pid}/exe`);
+      if (exe.startsWith(SERVER_TARGET_PREFIX) && exe.endsWith(`${path.sep}turbo-pix`)) {
+        mine.push(pid);
+      }
+    } catch {
+      // Exited between pgrep and readlink, or not visible to this user.
+    }
+  }
+
+  if (mine.length > 0) {
+    await execAsync(`kill -9 ${mine.join(' ')}`).catch(() => {});
+    console.log(`Reaped stale server process(es): ${mine.join(', ')}`);
+  }
+}
 
 async function buildBinary() {
   console.log('Building TurboPix binary...');
@@ -82,6 +133,16 @@ async function seedTestMedia() {
     const filename = `archive_${String(i).padStart(2, '0')}.jpg`;
     const filePath = path.join(photosDir, filename);
     await copyFile(clusterSource, filePath);
+    await utimes(filePath, archiveDate, archiveDate);
+  }
+
+  const legacySource = path.join('test-data', 'test_image_1.jpg');
+  if (!existsSync(legacySource)) {
+    throw new Error(`Missing legacy source image at ${legacySource}`);
+  }
+  for (const [filename] of LEGACY_PHOTOS) {
+    const filePath = path.join(photosDir, filename);
+    await copyFile(legacySource, filePath);
     await utimes(filePath, archiveDate, archiveDate);
   }
 
@@ -237,12 +298,19 @@ async function updateTestPhotoDates(baseURL) {
   const recentTakenAt = recentDate.toISOString();
   const archiveTakenAt = archiveDate.toISOString();
 
+  const legacySql = LEGACY_PHOTOS.map(
+    ([filename, takenAt]) =>
+      `UPDATE photos SET taken_at = '${takenAt}', updated_at = CURRENT_TIMESTAMP ` +
+      `WHERE filename = '${filename}';`
+  ).join(' ');
+
   const sql =
     `PRAGMA busy_timeout=5000; ` +
     `UPDATE photos SET taken_at = '${recentTakenAt}', updated_at = CURRENT_TIMESTAMP ` +
     `WHERE filename LIKE 'cluster_%'; ` +
     `UPDATE photos SET taken_at = '${archiveTakenAt}', updated_at = CURRENT_TIMESTAMP ` +
-    `WHERE filename LIKE 'archive_%';`;
+    `WHERE filename LIKE 'archive_%'; ` +
+    legacySql;
 
   try {
     await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);
@@ -414,11 +482,9 @@ async function startServer() {
 export default async function globalSetup() {
   console.log('\n=== TurboPix E2E Test Setup ===\n');
 
-  // Kill stale dev servers so the health check / port binding can't race a
-  // leftover process (AGENTS.md 'E2E port collision' learning). The pattern
-  // must match only the server binary: a broad 'turbo-pix' match also hits
-  // this runner (its argv contains the repo path via node_modules).
-  await execAsync("pkill -9 -f 'target/(debug|release)/turbo-pix' || true").catch(() => {});
+  // Kill THIS checkout's stale dev server so the health check / port binding
+  // can't race a leftover process (AGENTS.md 'E2E port collision' learning).
+  await reapStaleServers();
 
   try {
     await buildBinary();

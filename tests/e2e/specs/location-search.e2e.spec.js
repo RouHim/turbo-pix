@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
-const BASE_URL = 'http://localhost:18473';
+const BASE_URL = `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`;
 
 test.describe('Location Search', () => {
   let cityName = null;

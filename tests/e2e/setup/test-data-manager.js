@@ -4,9 +4,10 @@ import path from 'path';
 
 const TEST_DATA_DIR = 'test-e2e-data';
 const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
+const DEFAULT_BASE_URL = `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`;
 
 export class TestDataManager {
-  constructor(baseURL = 'http://localhost:18473') {
+  constructor(baseURL = DEFAULT_BASE_URL) {
     this.baseURL = baseURL;
     this.photoHashes = new Map();
   }
@@ -120,7 +121,7 @@ export class TestDataManager {
    * global-setup's ensureHousekeepingCandidate): the current first photo.
    */
   static async reseedHousekeepingCandidate() {
-    const response = await fetch('http://localhost:18473/api/photos?limit=200');
+    const response = await fetch(`${DEFAULT_BASE_URL}/api/photos?limit=200`);
     if (!response.ok) {
       throw new Error(`Failed to fetch photos for housekeeping reseed: ${response.statusText}`);
     }

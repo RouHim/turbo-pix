@@ -1,60 +1,91 @@
 <script>
+  import { untrack } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { route, pushState } from '../lib/router.svelte.js';
+  import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
-  import { buildTimelineModel, countInRange, toMonthIndex } from '../lib/timeline.js';
+  import { buildTimelineModel, formatPeriodName, formatSelectionLabel } from '../lib/timeline.js';
+  import {
+    filterEquals,
+    filterFromSelection,
+    normalizeDateFilter,
+    selectionFromFilter,
+  } from '../lib/timelineRoute.js';
+  import TimelineSelector from './TimelineSelector.svelte';
   import Icon from './Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
 
   let data = $state(null);
-  let currentFilter = $state(null);
-  let selectedYear = $state(null);
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
 
   const model = $derived(buildTimelineModel(data?.density ?? []));
-
-  // Transitional adapter for the legacy year rail + month strip, which is
-  // replaced by TimelineSelector in a later task.
-  const aggregates = $derived(
-    model.years.map((year) => ({
-      year,
-      total: countInRange(model, toMonthIndex(year, 1), toMonthIndex(year, 12)),
-      months: Array.from({ length: 12 }, (_, i) => ({
-        month: i + 1,
-        count: countInRange(model, toMonthIndex(year, i + 1), toMonthIndex(year, i + 1)),
-      })),
-    }))
+  const filter = $derived(
+    normalizeDateFilter({
+      year: route.year,
+      month: route.month,
+      to_year: route.to_year,
+      to_month: route.to_month,
+    })
   );
-
-  const years = $derived(aggregates.map((a) => a.year));
-
-  const selectedAggregate = $derived(
-    selectedYear === null ? null : (aggregates.find((a) => a.year === selectedYear) ?? null)
-  );
+  const selection = $derived(selectionFromFilter(filter, model));
 
   const labelText = $derived.by(() => {
-    if (!currentFilter) {
-      return $t('ui.all_dates', { locale: activeLocale, default: 'All Dates' });
-    }
-    if (!currentFilter.month) {
-      return String(currentFilter.year);
-    }
-    return monthYearLabel(currentFilter.year, currentFilter.month);
+    const monthName = (month) => {
+      const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
+      return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
+    };
+    return formatSelectionLabel(selection, {
+      allDates: $t('ui.all_dates', { locale: activeLocale, default: 'All Dates' }),
+      monthName,
+      periodName: (index) => formatPeriodName(index, monthName),
+      rangeTemplate: (start, end) =>
+        $t('ui.timeline_range_label', { values: { start, end }, default: '{start} – {end}' }),
+    });
   });
 
-  const monthYearLabel = (year, month) => {
-    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
-    const monthName = $t(`ui.months.${monthKey}`, {
-      locale: activeLocale,
-      default: `${monthKey.charAt(0).toUpperCase()}${monthKey.slice(1)}`,
-    });
-    return `${monthName} ${year}`;
+  let resetNonce = $state(0);
+  let liveTimer = null;
+  let pendingLive = null;
+
+  const LIVE_COMMIT_MS = 100;
+
+  // Live scrubbing must not spam history or the grid: the overlay follows the
+  // pointer immediately, the route (and therefore the grid) trails by <=100 ms.
+  const handleChange = (next, { commit = true } = {}) => {
+    if (commit) {
+      if (liveTimer !== null) {
+        clearTimeout(liveTimer);
+        liveTimer = null;
+        pendingLive = null;
+      }
+      pushState(filterFromSelection(next));
+      return;
+    }
+    pendingLive = next;
+    liveTimer ??= setTimeout(() => {
+      liveTimer = null;
+      const pending = pendingLive;
+      pendingLive = null;
+      if (pending) replaceState(filterFromSelection(pending));
+    }, LIVE_COMMIT_MS);
+  };
+
+  const clearFilter = () => {
+    resetNonce += 1;
+    pushState({ year: null, month: null, to_year: null, to_month: null });
+  };
+
+  // Mobile dropdowns: the plan shape is a single period, so using either
+  // dropdown collapses an active desktop range to its start period.
+  const handleDropdownChange = () => {
+    const year = yearSelectEl?.value ? parseInt(yearSelectEl.value, 10) : null;
+    const month = year !== null && monthSelectEl?.value ? parseInt(monthSelectEl.value, 10) : null;
+    pushState({ year, month, to_year: null, to_month: null });
   };
 
   $effect(() => {
@@ -76,91 +107,18 @@
     }
   };
 
-  const pushFilter = () => {
-    const year = currentFilter?.year ?? null;
-    const month = currentFilter?.month ?? null;
-    pushState({ year, month: year ? month : null, to_year: null, to_month: null });
-  };
-
-  const selectYear = (year) => {
-    if (selectedYear === year && (currentFilter?.month ?? null) === null) {
-      currentFilter = null;
-      selectedYear = null;
-    } else if (selectedYear === year) {
-      currentFilter = { year, month: null };
-    } else {
-      currentFilter = { year, month: null };
-      selectedYear = year;
-    }
-    if (selectedYear !== null && currentFilter !== null && currentFilter.year !== selectedYear) {
-      selectedYear = currentFilter.year;
-    }
-    if (currentFilter === null) selectedYear = null;
-    pushFilter();
-  };
-
-  const selectMonth = (month, count) => {
-    if (count === 0 || selectedYear === null) return;
-    if (currentFilter?.month === month) {
-      currentFilter = { year: selectedYear, month: null };
-    } else {
-      currentFilter = { year: selectedYear, month };
-    }
-    pushFilter();
-  };
-
-  const resetFilter = () => {
-    currentFilter = null;
-    selectedYear = null;
-    if (yearSelectEl) yearSelectEl.value = '';
-    if (monthSelectEl) monthSelectEl.value = '';
-    pushFilter();
-  };
-
-  const handleDropdownChange = () => {
-    const year = yearSelectEl?.value;
-    let month = monthSelectEl?.value;
-    if (!year) {
-      month = null;
-      if (monthSelectEl) monthSelectEl.value = '';
-    }
-    if (!year && !month) {
-      currentFilter = null;
-      selectedYear = null;
-    } else {
-      const parsedYear = year ? parseInt(year, 10) : null;
-      currentFilter = {
-        year: parsedYear,
-        month: month ? parseInt(month, 10) : null,
-      };
-      selectedYear = parsedYear;
-    }
-    pushFilter();
-  };
-
-  const restoreFilterFromRoute = (year, month) => {
-    if (!year && !month) {
-      if (currentFilter) {
-        currentFilter = null;
-        selectedYear = null;
-        if (yearSelectEl) yearSelectEl.value = '';
-        if (monthSelectEl) monthSelectEl.value = '';
-      }
-    } else if (year) {
-      currentFilter = { year, month: month || null };
-      selectedYear = year;
-      if (yearSelectEl) yearSelectEl.value = String(year);
-      if (monthSelectEl) monthSelectEl.value = month ? String(month) : '';
-    }
-  };
-
-  // Restore filter from route state (URL restore / popstate).
-  // Reads route BEFORE any guard: an early return that reads nothing empties
-  // the effect's dependency set and permanently unsubscribes it.
+  // Rewrite the route to the clamped, canonical filter once the density has
+  // actually loaded — an in-flight or failed fetch must never be mistaken for
+  // "the data is gone" and wipe a restored filter. Reads every dependency
+  // BEFORE any guard (AGENTS.md #2).
   $effect(() => {
-    const year = route.year;
-    const month = route.month;
-    restoreFilterFromRoute(year, month);
+    const loaded = data !== null;
+    const current = filter;
+    const canonical = filterFromSelection(selection);
+    untrack(() => {
+      if (!loaded || filterEquals(current, canonical)) return;
+      replaceState(canonical);
+    });
   });
 </script>
 
@@ -172,86 +130,41 @@
         <div class="timeline-label">{labelText}</div>
       </div>
     </div>
-  {:else if aggregates.length === 0}
+  {:else if model.length === 0}
     <!-- Empty library: nothing to filter, render nothing -->
   {:else}
     <div class="timeline-container">
-      <!-- Desktop: Year rail + month strip -->
+      <!-- Desktop: zoomable overview -->
       <div class="timeline-rail desktop-only">
-        <button
-          type="button"
-          class="timeline-reset"
-          title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-          aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-          onclick={resetFilter}
-        >
-          <Icon name="x" width={14} height={14} />
-        </button>
-        <div
-          class="timeline-year-rail"
-          role="group"
-          aria-label={$t('ui.timeline_years_label', { default: 'Years' })}
-        >
-          {#each aggregates as agg (agg.year)}
-            <button
-              type="button"
-              class="timeline-year"
-              class:active={selectedYear === agg.year}
-              aria-pressed={selectedYear === agg.year}
-              aria-label={`${agg.year}, ${$t('ui.photos_count', { values: { count: agg.total }, default: '{count} photos' })}`}
-              onclick={() => selectYear(agg.year)}
-            >
-              <span class="timeline-year-label">{agg.year}</span>
-              <span class="timeline-year-count">{agg.total}</span>
-            </button>
-          {/each}
-        </div>
-        {#if selectedAggregate}
-          {@const agg = selectedAggregate}
-          <div
-            class="timeline-month-strip"
-            role="group"
-            aria-label={$t('ui.timeline_months_label', { default: 'Months' })}
+        <div class="timeline-header">
+          <div class="timeline-label" class:filtered={selection !== null}>{labelText}</div>
+          <button
+            type="button"
+            class="timeline-reset"
+            title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+            aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+            onclick={clearFilter}
           >
-            {#each agg.months as slot (slot.month)}
-              {@const monthKey = APP_CONSTANTS.MONTH_KEYS[slot.month - 1]}
-              {@const monthName = $t(`ui.months.${monthKey}`, {
-                locale: activeLocale,
-                default: `${monthKey.charAt(0).toUpperCase()}${monthKey.slice(1)}`,
-              })}
-              <button
-                type="button"
-                class="timeline-month"
-                class:active={currentFilter?.month === slot.month}
-                class:empty={slot.count === 0}
-                disabled={slot.count === 0}
-                aria-pressed={currentFilter?.month === slot.month}
-                aria-label={slot.count === 0
-                  ? `${monthName} ${agg.year}, ${$t('ui.timeline_no_photos_month', { default: 'No photos' })}`
-                  : `${monthName} ${agg.year}, ${$t('ui.photos_count', { values: { count: slot.count }, default: '{count} photos' })}`}
-                onclick={() => selectMonth(slot.month, slot.count)}
-              >
-                <span class="timeline-month-label">{monthName}</span>
-                <span class="timeline-month-count">{slot.count}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-        <div class="timeline-label" class:filtered={currentFilter !== null}>{labelText}</div>
+            <Icon name="x" width={14} height={14} />
+          </button>
+        </div>
+        <TimelineSelector {model} {selection} onchange={handleChange} {resetNonce} />
       </div>
 
-      <!-- Mobile: Dropdowns -->
+      <!-- Mobile: Dropdowns (unchanged behaviour; a desktop range collapses to
+           its start period when one of these is used) -->
       <div class="timeline-dropdowns mobile-only">
         <select
           id="timeline-year-select"
           class="timeline-year-select"
           bind:this={yearSelectEl}
           aria-label={$t('ui.year_select', { default: 'Year' })}
+          value={filter.year === null ? '' : String(filter.year)}
           onchange={handleDropdownChange}
         >
           <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
-          {#each years as year (year)}
-            <option value={year}>{year}</option>
+          {#each model.years as year (year)}
+            <option value={String(year)}>{year}</option>
           {/each}
         </select>
         <select
@@ -259,15 +172,14 @@
           class="timeline-month-select"
           bind:this={monthSelectEl}
           aria-label={$t('ui.month_select', { default: 'Month' })}
-          disabled={!currentFilter?.year}
+          disabled={filter.year === null}
+          value={filter.month === null ? '' : String(filter.month)}
           onchange={handleDropdownChange}
         >
           <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
           {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i (i)}
-            <option value={i + 1}
-              >{$t(`ui.months.${monthKey}`, {
-                default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
-              })}</option
+            <option value={String(i + 1)}
+              >{$t(`ui.months.${monthKey}`, { default: monthKey })}</option
             >
           {/each}
         </select>
@@ -276,7 +188,7 @@
           class="timeline-reset"
           title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
           aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-          onclick={resetFilter}
+          onclick={clearFilter}
         >
           <Icon name="x" width={14} height={14} />
         </button>
@@ -349,91 +261,24 @@
       0 0 0 2px var(--surface-color),
       0 0 0 4px var(--primary-color);
   }
+
+  /* Single-class selector on purpose: the mobile block's `.desktop-only
+     { display: none }` must win on source order, which a compound
+     `.timeline-rail.desktop-only` (higher specificity) would defeat. */
   .timeline-rail {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: var(--space-4);
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
   }
-  .timeline-year-rail {
-    flex: 1;
+
+  .timeline-header {
     display: flex;
-    gap: var(--space-2);
-    min-width: 0;
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    padding-block: var(--space-1);
-  }
-  .timeline-year {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-full);
-    background: transparent;
-    color: var(--text-primary);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .timeline-year:hover {
-    border-color: var(--primary-color);
-  }
-  .timeline-year.active {
-    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
-    border-color: var(--primary-color);
-    color: var(--primary-dark);
-  }
-  .timeline-year:focus-visible,
-  .timeline-month:focus-visible,
-  .timeline-reset:focus-visible {
-    outline: none;
-    box-shadow:
-      0 0 0 2px var(--surface-color),
-      0 0 0 4px var(--primary-color);
-  }
-  .timeline-year-label {
-    font-size: var(--font-sm);
-    font-weight: var(--font-medium);
-  }
-  .timeline-year-count,
-  .timeline-month-count {
-    font-size: var(--font-xs);
-    color: var(--text-secondary);
-  }
-  .timeline-month-strip {
-    display: grid;
-    flex: 1 1 100%;
-    order: 1;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: var(--space-2);
-    margin-top: var(--space-3);
-  }
-  .timeline-month {
-    display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--text-primary);
-    cursor: pointer;
-    min-width: 0;
+    gap: var(--space-3);
   }
-  .timeline-month:hover:not(:disabled) {
-    border-color: var(--primary-color);
-  }
-  .timeline-month.active {
-    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
-    border-color: var(--primary-color);
-  }
-  .timeline-month.empty {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
+
   .timeline-rail :global(svg) {
     width: 14px;
     height: 14px;
@@ -523,8 +368,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .timeline-year,
-    .timeline-month,
     .timeline-label,
     .timeline-label.filtered,
     .timeline-reset {

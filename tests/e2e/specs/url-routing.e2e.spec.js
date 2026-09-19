@@ -2,6 +2,10 @@ import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
 const CLUSTER_DAYS_AGO = 7;
+
+// The E2E port is env-overridable (TURBO_PIX_E2E_PORT), so assert the app root
+// by path + query instead of by host:port.
+const isAppRoot = (url) => url.pathname === '/' && url.search === '';
 const ARCHIVE_DAYS_AGO = 400;
 
 test.describe('URL Routing', () => {
@@ -157,38 +161,57 @@ test.describe('URL Routing', () => {
     const recentYear = recentDate.getFullYear();
     const recentMonth = recentDate.getMonth() + 1;
 
-    test('should write ?year= and ?month= on timeline selection', async ({ page }) => {
-      // GIVEN: User is on the homepage with timeline visible
-      await TestHelpers.goto(page);
+    test('should write ?year= and ?month= when a month is selected in the timeline', async ({
+      page,
+    }) => {
+      // GIVEN: a deep link already filtered to 2012 (global-setup seeds
+      // legacy_05.jpg in March 2012), with the timeline rendered
+      await TestHelpers.goto(page, '/?year=2012');
       await TestHelpers.waitForPhotosToLoad(page);
+      await expect(page.locator('.timeline-column').first()).toBeVisible();
 
-      // WHEN: User picks a year then a month in the timeline rail
-      const density = await page.evaluate(() =>
-        fetch('/api/photos/timeline')
-          .then((response) => response.json())
-          .then((data) => data.density || [])
-      );
-      test.skip(density.length < 2, 'Timeline needs at least two month buckets to select');
+      // WHEN: the user drills in by activating the column that contains a
+      // month index — the fit-all view may offer decades or years, so the
+      // granularity is read from the DOM instead of assumed, and each
+      // refinement is awaited (the columns only ever get finer).
+      const columns = page.locator('.timeline-column');
+      // Month-granular and populated: an empty column renders a zero-height
+      // box, so it is never "visible" to Playwright.
+      const march2012 = page.locator('.timeline-column[data-unit="1"][data-period-start="24146"]');
 
-      const target = density[0];
+      for (let step = 0; step < 3 && (await march2012.count()) === 0; step += 1) {
+        const periodStart = await page.evaluate((index) => {
+          const column = [...document.querySelectorAll('.timeline-column')].find((candidate) => {
+            const start = Number(candidate.dataset.periodStart);
+            return start <= index && index < start + Number(candidate.dataset.unit);
+          });
+          return column ? Number(column.dataset.periodStart) : null;
+        }, 2012 * 12);
+        const target = page.locator(`.timeline-column[data-period-start="${periodStart}"]`);
+        const unit = await target.getAttribute('data-unit');
+        await target.click();
+        await expect(columns.first()).not.toHaveAttribute('data-unit', unit);
+      }
 
-      await page
-        .locator('.timeline-year-rail .timeline-year', { hasText: String(target.year) })
-        .first()
-        .click();
-      await TestHelpers.waitForUrlParam(page, 'year', String(target.year));
-      const bucket = density.find((d) => d.year === target.year && d.count > 0);
-      await page
-        .locator('.timeline-month-strip .timeline-month')
-        .nth(bucket.month - 1)
-        .click();
+      // THEN the columns are months and the March 2012 column can be selected
+      await expect(march2012).toBeVisible();
+      await march2012.click();
 
       // THEN: URL contains year and month params matching the selected bucket
-      await TestHelpers.waitForUrlParam(page, 'year', String(bucket.year));
-      await TestHelpers.waitForUrlParam(page, 'month', String(bucket.month));
+      await TestHelpers.waitForUrlParam(page, 'year', '2012');
+      await TestHelpers.waitForUrlParam(page, 'month', '3');
       const state = TestHelpers.getUrlState(page);
-      expect(state.year).toBe(bucket.year);
-      expect(state.month).toBe(bucket.month);
+      expect(state.year).toBe(2012);
+      expect(state.month).toBe(3);
+
+      // AND: the grid shows exactly that month's photos
+      const month = await page.evaluate(() =>
+        fetch('/api/photos?year=2012&month=3')
+          .then((response) => response.json())
+          .then((data) => (data.photos || []).map((photo) => photo.filename))
+      );
+      expect(month).toEqual(['legacy_05.jpg']);
+      await expect(page.locator('.photo-card')).toHaveCount(month.length);
     });
 
     test('should restore timeline from URL on page load', async ({ page }) => {
@@ -323,7 +346,7 @@ test.describe('URL Routing', () => {
       await page.goBack();
 
       // THEN: The browser stays inside TurboPix, viewer is closed
-      await expect(page).toHaveURL(/localhost:18473\/$/);
+      await expect(page).toHaveURL(isAppRoot);
       await expect(page.locator(TestHelpers.selectors.viewer)).not.toHaveClass(/active/);
     });
 
@@ -336,7 +359,7 @@ test.describe('URL Routing', () => {
       )[0].getAttribute('data-photo-id');
       await TestHelpers.openViewer(page, firstHash);
       await page.goBack();
-      await expect(page).toHaveURL(/localhost:18473\/$/);
+      await expect(page).toHaveURL(isAppRoot);
 
       // WHEN: User presses Forward
       await page.goForward();
@@ -360,7 +383,7 @@ test.describe('URL Routing', () => {
       // THEN: URL no longer carries the photo param (refresh won't reopen the viewer)
       const state = TestHelpers.getUrlState(page);
       expect(state.photo).toBeNull();
-      await expect(page).toHaveURL(/localhost:18473\/$/);
+      await expect(page).toHaveURL(isAppRoot);
     });
   });
 

@@ -86,6 +86,34 @@ test('zooming anchors on the pointer and clamps to one month at the closest view
   assert.deepEqual(pinned, maxed, 'input at the zoom limit changes nothing');
 });
 
+test('a pinch is one zoom step anchored between the two pointers', () => {
+  const width = 1200;
+  const view = createView(width, denseModel);
+  const leftPx = 400;
+  const rightPx = 800;
+  const midpoint = (leftPx + rightPx) / 2;
+
+  // Fingers spreading to twice their distance is factor 2 about the midpoint.
+  const pinched = zoomView({ view, factor: 2, anchorPx: midpoint, width, model: denseModel });
+  assert.equal(pinched.scale, view.scale * 2);
+  assert.ok(
+    Math.abs(indexFromX(midpoint, pinched) - indexFromX(midpoint, view)) < 1,
+    'the pinch midpoint stays under the fingers'
+  );
+
+  // The factor is multiplicative, so the pointer-event plumbing can feed one
+  // step per move without drifting from a single combined step.
+  const stepwise = zoomView({
+    view: zoomView({ view, factor: 1.25, anchorPx: midpoint, width, model: denseModel }),
+    factor: 1.6,
+    anchorPx: midpoint,
+    width,
+    model: denseModel,
+  });
+  assert.ok(Math.abs(stepwise.scale - pinched.scale) < 1e-9);
+  assert.ok(Math.abs(stepwise.origin - pinched.origin) < 1e-9);
+});
+
 test('panning clamps to the data span', () => {
   const width = 1200;
   const view = zoomView({

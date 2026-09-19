@@ -1,3 +1,8 @@
+import { execSync } from 'child_process';
+
+/** The E2E server's SQLite file, relative to the runner's cwd (repo root). */
+const TEST_DB_PATH = 'test-e2e-data/database/turbo-pix.db';
+
 export class TestHelpers {
   /**
    * 1×1 PNG — a valid image response for stubbed tile requests. The committed
@@ -64,6 +69,33 @@ export class TestHelpers {
     if (!response.ok()) {
       throw new Error(`PATCH metadata for ${hash} failed: ${response.status()}`);
     }
+  }
+
+  /**
+   * Writes coordinates straight into the indexed row — videos cannot take EXIF
+   * writes, and a direct UPDATE needs no re-index. Every spec shares one
+   * server and one database, so a spec that seeds a location must restore it
+   * with clearPhotoLocationInDb before it finishes.
+   */
+  static setPhotoLocationInDb(fileName, latitude, longitude) {
+    const metadata = JSON.stringify({ location: { latitude, longitude } });
+    execSync(
+      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', ${latitude}, '$.location.longitude', ${longitude}) WHERE filename = '${fileName}'"`,
+      { stdio: 'pipe' }
+    );
+    return metadata;
+  }
+
+  /**
+   * Reverts setPhotoLocationInDb: the row keeps a JSON null location, which the
+   * map's coordinate validation (lib/map.js) and every query that reads
+   * `metadata.location` treat as "no location".
+   */
+  static clearPhotoLocationInDb(fileName) {
+    execSync(
+      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', null, '$.location.longitude', null) WHERE filename = '${fileName}'"`,
+      { stdio: 'pipe' }
+    );
   }
 
   static async verifyActiveView(page, viewName) {

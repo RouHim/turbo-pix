@@ -22,6 +22,58 @@ pub fn parse_pix_fmt_bit_depth(pix_fmt: Option<&str>) -> Option<u32> {
     }
 }
 
+/// Container family after normalising the ffprobe `format_name` token and the
+/// file extension. ffprobe reports `"matroska,webm"` for BOTH `.mkv` and
+/// `.webm`, so the extension is the only reliable discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerFamily {
+    Mp4,
+    Matroska,
+    Webm,
+    Avi,
+    MpegTs,
+    Ogg,
+    Other,
+}
+
+impl ContainerFamily {
+    pub fn from_record(container: Option<&str>, file_name: &str) -> Self {
+        let ext = file_name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        match container.unwrap_or_default().to_ascii_lowercase().as_str() {
+            "mp4" | "mov" | "m4v" | "m4a" | "3gp" | "3g2" | "mj2" => Self::Mp4,
+            "webm" => Self::Webm,
+            "matroska" | "mkv" => {
+                if ext == "webm" {
+                    Self::Webm
+                } else {
+                    Self::Matroska
+                }
+            }
+            "avi" => Self::Avi,
+            "mpegts" => Self::MpegTs,
+            "ogg" => Self::Ogg,
+            _ => match ext.as_str() {
+                "mp4" | "mov" | "m4v" => Self::Mp4,
+                "mkv" => Self::Matroska,
+                "webm" => Self::Webm,
+                "avi" => Self::Avi,
+                "ts" | "m2ts" => Self::MpegTs,
+                "ogv" | "ogg" => Self::Ogg,
+                _ => Self::Other,
+            },
+        }
+    }
+
+    /// Matroska-family containers carry no `moov` atom; only MP4-family files
+    /// have a progressive-playback layout that can be wrong.
+    pub fn has_moov_layout(self) -> bool {
+        matches!(self, Self::Mp4)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DirectPlay {
     Yes,

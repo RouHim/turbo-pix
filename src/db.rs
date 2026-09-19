@@ -565,6 +565,41 @@ impl Photo {
         Ok(photo)
     }
 
+    /// Merge-patch the stored `photos.metadata` JSON in one statement (SQLite
+    /// `json_patch` implements RFC 7396), so concurrent capability writes
+    /// cannot tear each other's metadata and unrelated keys survive untouched.
+    pub async fn persist_metadata_patch(
+        pool: &DbPool,
+        hash: &str,
+        patch: &serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        let patch = patch.to_string();
+        sqlx::query("UPDATE photos SET metadata = json_patch(metadata, ?1) WHERE hash_sha256 = ?2")
+            .bind(patch)
+            .bind(hash)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Fill in a duration the indexer never captured; never overwrites a
+    /// positive stored value.
+    pub async fn persist_duration_if_missing(
+        pool: &DbPool,
+        hash: &str,
+        duration_secs: f64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE photos SET duration = ?1 \
+             WHERE hash_sha256 = ?2 AND (duration IS NULL OR duration <= 0)",
+        )
+        .bind(duration_secs)
+        .bind(hash)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Check if a photo exists with matching path, size, and modification time
     /// Returns the full Photo if unchanged, None if new/modified
     pub async fn find_unchanged_photo(
@@ -2682,5 +2717,29 @@ pub(crate) mod tests {
 
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].hash_sha256, in_album.hash_sha256);
+    }
+
+    #[tokio::test]
+    async fn persist_metadata_patch_merges_without_clobbering() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        // `photos.hash_sha256` carries a `length(...) = 64` CHECK constraint, so
+        // the brief's short literal is padded to a valid hash.
+        let hash = format!("{:0<64}", "hash-patch");
+        let mut photo = create_test_photo_with_date(&hash, "patch.mp4", Utc::now());
+        photo.metadata = json!({ "camera": { "make": "Canon" } });
+        photo.create(&pool).await.expect("create");
+
+        Photo::persist_metadata_patch(
+            &pool,
+            &hash,
+            &json!({ "video": { "capability_version": 1, "codec": "h264" } }),
+        )
+        .await
+        .expect("patch");
+
+        let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
+        assert_eq!(stored.metadata["camera"]["make"], "Canon");
+        assert_eq!(stored.metadata["video"]["codec"], "h264");
+        assert_eq!(stored.metadata["video"]["capability_version"], 1);
     }
 }

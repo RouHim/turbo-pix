@@ -484,11 +484,22 @@ test.describe('On-the-fly streaming playback', () => {
       );
       await openVideo(page, photo);
       await page.waitForFunction(
-        () => {
+        (hash) => {
           const el = document.querySelector('#viewer-video');
-          return el && el.currentTime > 0 && !el.error;
+          // Anchored on the photo this element holds: closing the viewer only
+          // pauses and hides it, so on the second fixture the previous source's
+          // stale `currentTime > 0` would satisfy a bare playback predicate
+          // before the silent source ever loaded — and an audio error on a
+          // track-less file could pass unnoticed.
+          return (
+            el &&
+            el.dataset.photoHash === hash &&
+            el.readyState >= 2 &&
+            el.currentTime > 0 &&
+            !el.error
+          );
         },
-        null,
+        photo.hash_sha256,
         { timeout: 30_000 }
       );
       // The multi-track source plays its first (AAC) track — the second (AC-3)

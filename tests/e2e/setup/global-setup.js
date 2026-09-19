@@ -208,10 +208,10 @@ async function seedTestMedia() {
 
   // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
   // silent h264, an h264 with two audio tracks, a progressive-less h264 and a
-  // legacy MPEG-4/AVI rip. Each pins a DISTINCT date OLDER than the cluster
-  // seed, so the newest video cards stay the h264 fixtures the older specs
-  // open as the first card, and no matrix row depends on the order two of
-  // these share.
+  // legacy MPEG-4/AVI rip. The dates pinned here only fix each file's
+  // `date_modified` (the conversion cache key); the sort order the videos view
+  // and the first-card specs see is pinned in updateTestPhotoDates, because a
+  // video's `taken_at` falls back to its birth time, not its mtime.
   const matrixFixtures = [
     ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 1],
     ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 2],
@@ -372,6 +372,34 @@ async function updateTestPhotoDates(baseURL) {
       `UPDATE photos SET taken_at = '${takenAt}', updated_at = CURRENT_TIMESTAMP ` +
       `WHERE filename = '${filename}';`
   ).join(' ');
+  // The seeded videos carry no embedded creation_time (the hevc fixture is the
+  // exception), so their `taken_at` falls back to the file's BIRTH time — the
+  // moment this setup copied them, i.e. the seeding order — and `utimes` cannot
+  // pin it. That would put the last-copied fixture (the legacy AVI) at the top
+  // of the videos view and ahead of nothing at all in the photos view. Pin
+  // every seeded video to a distinct day older than the cluster seed instead:
+  // `test_video.mp4` stays the newest video (the fixture the older specs open
+  // as the first card), the matrix fixtures keep a stable order among
+  // themselves, and no video can displace the cluster photos from `photos[0]`.
+  const videoTakenAt = [
+    ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
+    ['test_video_long.mp4', CLUSTER_DAYS_AGO + 2],
+    ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
+    ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
+    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],
+    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 6],
+    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 7],
+    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 8],
+    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 9],
+  ]
+    .map(([filename, daysAgo]) => {
+      const takenAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+      return (
+        `UPDATE photos SET taken_at = '${takenAt}', updated_at = CURRENT_TIMESTAMP ` +
+        `WHERE filename = '${filename}'; `
+      );
+    })
+    .join('');
 
   const sql =
     `PRAGMA busy_timeout=5000; ` +
@@ -379,7 +407,8 @@ async function updateTestPhotoDates(baseURL) {
     `WHERE filename LIKE 'cluster_%'; ` +
     `UPDATE photos SET taken_at = '${archiveTakenAt}', updated_at = CURRENT_TIMESTAMP ` +
     `WHERE filename LIKE 'archive_%'; ` +
-    legacySql;
+    legacySql +
+    videoTakenAt;
 
   try {
     await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);

@@ -395,4 +395,36 @@ test.describe('On-the-fly streaming playback', () => {
     expect(duration).toBeGreaterThan(19.5);
     expect(duration).toBeLessThan(20.5);
   });
+
+  test("a streamed run is typed from its own MIME, not the decision's", async ({ page }) => {
+    test.setTimeout(60_000);
+    const ac3 = await findVideoByFilename(page, 'test_video_ac3.mp4');
+    await TestHelpers.clearCachedConversions(ac3.hash_sha256);
+
+    // Simulate the mismatch the ladder runs into: the decision advertises a
+    // video-only type while the rung the server actually runs emits video +
+    // AAC. Chromium rejects an append whose init segment does not match the
+    // SourceBuffer's declared type, so a buffer typed from the decision would
+    // fail a delivery that is perfectly playable — and the ladder would burn
+    // its remaining rungs on it.
+    await page.route('**/video?decision*', async (route) => {
+      const response = await route.fetch();
+      const decision = await response.json();
+      await route.fulfill({
+        response,
+        json: { ...decision, mime: 'video/mp4; codecs="avc1.42E01E"' },
+      });
+    });
+
+    await openVideo(page, ac3);
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
 });

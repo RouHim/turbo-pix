@@ -991,15 +991,36 @@ pub struct StreamQuery {
 /// offset; sources longer than a day are out of scope.
 const MAX_STREAM_START_SECS: f64 = 86_400.0;
 
+/// The delivery mode one stream request runs: the plan's mode, raised by the
+/// client's `?mode=` hint when the hint asks for a stronger conversion.
+///
+/// The client escalates on its own (a remux it cannot decode becomes audio,
+/// then a full transcode), so the hint is a *request* for more work, never a
+/// downgrade: a client that cannot play a streamed conversion must not be able
+/// to talk the server down from the conversion the plan requires, and an
+/// unknown or absent hint simply falls back to the plan (FR-012).
+fn escalated(plan: Delivery, requested: Option<StreamMode>) -> StreamMode {
+    let planned = match plan {
+        Delivery::StreamRemux => StreamMode::Remux,
+        Delivery::StreamAudio => StreamMode::Audio,
+        Delivery::Direct | Delivery::StreamTranscode => StreamMode::Transcode,
+    };
+    match requested {
+        Some(StreamMode::Transcode) => StreamMode::Transcode,
+        Some(StreamMode::Audio) if planned != StreamMode::Transcode => StreamMode::Audio,
+        _ => planned,
+    }
+}
+
 /// Stream a video as fragmented MP4 straight out of ffmpeg.
 ///
-/// `mode` is an explicit, validated query param here; Task 6 derives it from
-/// the playback decision instead, which is why mode selection stays confined
-/// to [`StreamMode::from_query`] and the `mode` binding below.
+/// The mode is the playback plan's, raised by the client's `?mode=` hint when
+/// that hint asks for more: an unknown hint value is ignored rather than
+/// rejected, so an old client's query cannot break playback.
 pub async fn stream_video(
     photo_hash: String,
     query: StreamQuery,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     db_pool: DbPool,
 ) -> Result<Box<dyn Reply>, Rejection> {
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
@@ -1021,10 +1042,25 @@ pub async fn stream_video(
         return Ok(Box::new(response));
     }
 
-    let requested = query.mode.as_deref().unwrap_or("transcode");
-    let Some(mode) = StreamMode::from_query(requested) else {
-        return Err(reject::custom(NotFoundError));
-    };
+    // The client declaration that drove the decision: the request header (for
+    // clients that can set one) takes precedence over the `?client=` param the
+    // decision URL carries. Neither → conservative (h264-8, no audio), which
+    // escalates rather than guesses.
+    let client_param = headers
+        .get("X-TurboPix-Codecs")
+        .and_then(|v| v.to_str().ok())
+        .or(query.client.as_deref())
+        .unwrap_or_default();
+    let client = ClientCodecs::parse(Some(client_param));
+
+    // The plan decides the mode, and this is the same decision the client got
+    // from `?decision`: deriving it here rather than trusting the client keeps
+    // a stream request honest even when it names a weaker mode.
+    let caps = crate::video_probe::resolve(&db_pool, &photo).await;
+    let mode = escalated(
+        plan(&caps, &client),
+        query.mode.as_deref().and_then(StreamMode::from_query),
+    );
     let start = query.start.unwrap_or(0.0).clamp(0.0, MAX_STREAM_START_SECS);
 
     let handle = match start_stream(mode, source, start).await {
@@ -1061,11 +1097,10 @@ pub async fn stream_video(
     };
 
     let mode = handle.mode;
-    // Derive the emitted codecs from the resolved capabilities, not the stored
-    // record: a first hit on a legacy row probes and persists them, so the
-    // MIME the client's SourceBuffer is created with always matches the codecs
-    // this run actually copies.
-    let caps = crate::video_probe::resolve(&db_pool, &photo).await;
+    // The MIME advertised here comes from the capabilities resolved above, not
+    // from the stored record: a first hit on a legacy row probes and persists
+    // them, so the MIME the client's SourceBuffer is created with always
+    // matches the codecs this run actually copies.
     let duration = caps.duration_secs;
 
     let StreamHandle {
@@ -2219,7 +2254,9 @@ mod tests {
             StreamQuery {
                 start: Some(0.0),
                 mode: Some("remux".to_string()),
-                client: None,
+                // The client that gets the remux plan: h264-8 and AAC, with a
+                // non-progressive MP4 layout — container/layout only.
+                client: Some("h264-8,aac".to_string()),
             },
             HeaderMap::new(),
             db_pool.clone(),
@@ -3151,6 +3188,107 @@ mod tests {
         clear_transcode_status(&hash);
     }
 
+    #[test]
+    fn requested_mode_can_only_escalate_the_planned_mode() {
+        // The client's `?mode=` hint is how the ladder self-heals: each rung
+        // asks for strictly more conversion work than the one that failed.
+        assert_eq!(
+            escalated(Delivery::StreamRemux, Some(StreamMode::Transcode)),
+            StreamMode::Transcode
+        );
+        assert_eq!(
+            escalated(Delivery::StreamRemux, Some(StreamMode::Audio)),
+            StreamMode::Audio,
+            "the ladder's middle rung must be honored"
+        );
+        assert_eq!(
+            escalated(Delivery::StreamAudio, Some(StreamMode::Transcode)),
+            StreamMode::Transcode
+        );
+        // …and it can never ask for less. A genuinely required conversion stays
+        // required, whatever the client claims it can play: otherwise one bad
+        // hint would hand a client bytes it cannot decode, forever.
+        assert_eq!(
+            escalated(Delivery::StreamTranscode, Some(StreamMode::Remux)),
+            StreamMode::Transcode,
+            "a client hint must never downgrade a genuinely required conversion"
+        );
+        assert_eq!(
+            escalated(Delivery::StreamTranscode, Some(StreamMode::Audio)),
+            StreamMode::Transcode,
+            "audio is still weaker than a full transcode"
+        );
+        assert_eq!(
+            escalated(Delivery::StreamAudio, Some(StreamMode::Remux)),
+            StreamMode::Audio
+        );
+        // No hint (or one the server does not recognize) → the plan's mode.
+        assert_eq!(escalated(Delivery::StreamAudio, None), StreamMode::Audio);
+        assert_eq!(escalated(Delivery::StreamRemux, None), StreamMode::Remux);
+        assert_eq!(
+            escalated(Delivery::StreamTranscode, None),
+            StreamMode::Transcode
+        );
+        // A directly playable file has no streaming mode of its own: a stream
+        // request for one is served as a full transcode.
+        assert_eq!(
+            escalated(Delivery::Direct, Some(StreamMode::Remux)),
+            StreamMode::Transcode
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_request_cannot_downgrade_the_modes_the_plan_requires() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d";
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // HEVC the conservative client cannot decode → the plan is a full
+        // transcode, and a `?mode=remux` hint (or an unknown one) cannot talk
+        // the server down from it.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "hevc", "container": "mp4", "bit_depth": 10,
+                "audio_codec": "aac", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nprintf '\\000\\000\\000\\030ftypiso5'\n",
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        for hint in [Some("remux".to_string()), Some("nonsense".to_string()), None] {
+            let response = stream_video(
+                hash.to_string(),
+                StreamQuery {
+                    start: Some(0.0),
+                    mode: hint.clone(),
+                    client: Some("h264-8,aac".to_string()),
+                },
+                HeaderMap::new(),
+                db_pool.clone(),
+            )
+            .await
+            .expect("stream should reply")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()["x-turbopix-mode"],
+                "transcode",
+                "hint {hint:?} must not downgrade a required transcode"
+            );
+            let _ = collect_response_body(response).await;
+        }
+    }
+
     /// Take every conversion permit and keep holding them, so the transcode pool
     /// stays saturated for as long as the returned guards live. Drain, pause,
     /// drain again: another test's ffmpeg can still be running inside the
@@ -3178,6 +3316,17 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         setup_test_video(&db_pool, &temp_dir, hash).await;
+        // Matroska h264 + AAC: nothing needs re-encoding, only the container
+        // rewritten — which is what makes the plan a remux.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "h264", "container": "matroska", "bit_depth": 8,
+                "audio_codec": "aac", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
 
         let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
         create_script(
@@ -3193,7 +3342,7 @@ mod tests {
             StreamQuery {
                 start: Some(0.0),
                 mode: Some("remux".to_string()),
-                client: None,
+                client: Some("h264-8,aac".to_string()),
             },
             HeaderMap::new(),
             db_pool,

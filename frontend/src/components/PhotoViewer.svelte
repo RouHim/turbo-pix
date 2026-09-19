@@ -778,6 +778,27 @@
   const STREAM_RETRY_DELAY_MAX_MS = 10_000;
 
   /**
+   * The client's escalation ladder for a delivered stream that turned out not
+   * to play (FR-009): the same video, converted one step harder each time —
+   * remux (container only) → audio (video copied, audio re-encoded) → transcode
+   * (everything re-encoded). The server decides what a mode actually means and
+   * never downgrades, so a rung is a request for more work, not a promise the
+   * bytes will differ; the ladder is therefore bounded by its own end, with
+   * "play original anyway" as the way out.
+   */
+  const STREAM_LADDER = ['remux', 'audio', 'transcode'];
+
+  /**
+   * The rung after `currentMode`, or `null` when the ladder is exhausted. The
+   * last rung has no successor, which is what terminates the ladder: at most
+   * three attempts per photo, then the error state.
+   */
+  function nextStreamMode(currentMode) {
+    const index = STREAM_LADDER.indexOf(currentMode);
+    return index >= 0 && index < STREAM_LADDER.length - 1 ? STREAM_LADDER[index + 1] : null;
+  }
+
+  /**
    * Play a server-streamed conversion through MSE: the server pipes fragmented
    * MP4 and the player appends it to a SourceBuffer, so playback starts long
    * before the conversion finishes.
@@ -829,7 +850,7 @@
           hideTranscodeToast();
         }
       },
-      onError: (error) => handleStreamFailure(photo, decision, modeOverride, error),
+      onError: (error) => handleStreamFailure(photo, decision, mode, error),
     });
     videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.style.display = 'block';
@@ -840,9 +861,7 @@
     // viewer must not stay "loading" until then. The handle stays set so the
     // next playStream/destroyStreamPlayer tears this run down. Setup failures
     // arrive on `onError`; the rejection path covers everything past setup.
-    streamPlayer
-      .start(startAt)
-      .catch((error) => handleStreamFailure(photo, decision, modeOverride, error));
+    streamPlayer.start(startAt).catch((error) => handleStreamFailure(photo, decision, mode, error));
   }
 
   /**
@@ -851,10 +870,13 @@
    * reachable, in case the wait is a permanent pool of 0) and retry the same
    * run until the viewer moves on — retries cannot stack (single-flight timer)
    * and they stop with the viewer. Every other error is a real one.
+   *
+   * `attemptedMode` is the mode the failed run actually asked for, and the
+   * retry stays on it: a refusal says nothing about the mode.
    */
-  function handleStreamFailure(photo, decision, modeOverride, error) {
+  function handleStreamFailure(photo, decision, attemptedMode, error) {
     if (error?.status !== 503) {
-      onStreamError(photo, decision, error);
+      onStreamError(photo, decision, attemptedMode, error);
       return;
     }
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
@@ -866,7 +888,7 @@
     const startAt = Number.isFinite(error.startAt) ? error.startAt : 0;
     scheduleStreamRetry(() => {
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
-      playStream(photo, decision, modeOverride, { keepWaitingNotice: true, startAt });
+      playStream(photo, decision, attemptedMode, { keepWaitingNotice: true, startAt });
     }, streamRetryDelayMs(error));
   }
 
@@ -905,14 +927,30 @@
   }
 
   /**
-   * A streamed conversion failed (spawn error, undecodable bytes). Surfaces the
-   * failure and leaves "play original anyway" available — Task 6 escalates
-   * through the mode ladder before giving up.
+   * A streamed conversion failed for real (spawn error, refused response,
+   * undecodable bytes). Self-heal first: climb one rung of the ladder and try
+   * the same video again, converted harder. Only when the ladder is exhausted
+   * (`transcode` has no successor) does the failure surface, with "play
+   * original anyway" as the escape hatch.
+   *
+   * The escalation starts from `attemptedMode` — the mode that just FAILED —
+   * never from `decision.mode`: escalating from the decision would send an
+   * `audio` failure back to `remux`, which is the loop the ladder exists to
+   * avoid. One step per failure, and the ladder's end bounds the retries.
    */
-  function onStreamError(photo, decision, error) {
-    logger?.warn('stream playback failed', error, { component: 'PhotoViewer', decision });
+  function onStreamError(photo, decision, attemptedMode, error) {
+    logger?.warn('stream playback failed', error, {
+      component: 'PhotoViewer',
+      decision,
+      attemptedMode,
+    });
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
     destroyStreamPlayer();
+    const nextMode = nextStreamMode(attemptedMode);
+    if (nextMode) {
+      playStream(photo, decision, nextMode);
+      return;
+    }
     // The error toast owns the notice (and its own escape hatch) from here on.
     streamWaiting = false;
     showTranscodeToast(

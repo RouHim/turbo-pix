@@ -29,6 +29,31 @@ function videoHandle(page) {
   return page.locator(TestHelpers.selectors.viewerVideo);
 }
 
+/**
+ * Answer the stream requests for the modes named in `failModes` with bytes the
+ * browser cannot decode — the server answered, the delivery is unusable, which
+ * is exactly what a remux the client cannot actually play looks like on the
+ * wire — and record every mode the app asked for, in request order. The modes
+ * not named keep hitting the real server, so a successful rung still plays.
+ */
+async function failStreamModes(page, failModes) {
+  const requestedModes = [];
+  await page.route('**/video/stream*', async (route) => {
+    const mode = new URL(route.request().url()).searchParams.get('mode');
+    requestedModes.push(mode);
+    if (failModes.includes(mode)) {
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'video/mp4' },
+        body: 'not-mp4',
+      });
+      return;
+    }
+    await route.continue();
+  });
+  return requestedModes;
+}
+
 test.describe('On-the-fly streaming playback', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -244,5 +269,130 @@ test.describe('On-the-fly streaming playback', () => {
       ),
       'the cached conversion must be served as a file'
     ).toBe(true);
+  });
+
+  test('a failed remux stream escalates one step and recovers', async ({ page }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    // The ladder only runs on a stream delivery: a cached artifact would be
+    // played as a file, with no stream request to fail.
+    await TestHelpers.clearCachedConversions(mkv.hash_sha256);
+    const requestedModes = await failStreamModes(page, ['remux']);
+
+    await openVideo(page, mkv);
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+
+    // Exactly one rung: the undecodable remux becomes audio, and the ladder
+    // never falls back to the rung that just failed.
+    expect(requestedModes[0]).toBe('remux');
+    expect(requestedModes.filter((mode) => mode === 'remux')).toHaveLength(1);
+    expect(new Set(requestedModes.slice(1))).toEqual(new Set(['audio']));
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
+
+  test('an exhausted ladder shows the error and keeps the original playable', async ({ page }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(mkv.hash_sha256);
+    const requestedModes = await failStreamModes(page, ['remux', 'audio', 'transcode']);
+
+    await openVideo(page, mkv);
+    await expect(page.locator('.transcode-toast')).toContainText('Video conversion failed', {
+      timeout: 30_000,
+    });
+
+    // One rung per failure, in order, and the ladder stops at its end: three
+    // attempts, never a fourth.
+    expect(requestedModes).toEqual(['remux', 'audio', 'transcode']);
+    // The escape hatch is offered instead of a dead end.
+    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
+  });
+
+  test('a seek restart keeps the declared duration', async ({ page }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(mkv.hash_sha256);
+
+    // A seek only restarts the stream when its target is not buffered yet, and
+    // this 20 s remux buffers in a few hundred milliseconds: throttle the
+    // delivery so the seek below is a real restart, which is where the inflated
+    // duration came from in the first place (a seek run is a stream copy whose
+    // last packet lands past the source's own duration).
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 40,
+      downloadThroughput: 150 * 1024,
+      uploadThroughput: 150 * 1024,
+      connectionType: 'cellular3g',
+    });
+
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator(TestHelpers.selectors.photoCard(mkv.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    const video = videoHandle(page);
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+
+    // Seek to 15 s the moment playback starts, while the target is still
+    // unbuffered: the player answers by restarting the stream there.
+    const restarted = await video.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const el = document.querySelector('#viewer-video');
+          const timer = setInterval(() => {
+            if (!el || el.buffered.length === 0) return;
+            if (el.buffered.end(el.buffered.length - 1) >= 15) return;
+            if (el.currentTime <= 0) return;
+            clearInterval(timer);
+            el.currentTime = 15;
+            resolve(true);
+          }, 10);
+          setTimeout(() => {
+            clearInterval(timer);
+            resolve(false);
+          }, 25_000);
+        })
+    );
+    expect(restarted, 'the seek must restart the stream at an unbuffered target').toBe(true);
+
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      connectionType: 'none',
+    });
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.currentTime >= 15 && el.readyState >= 2;
+      },
+      null,
+      { timeout: 20_000 }
+    );
+
+    // The element reports the source's own duration (20.02 s), not the end of
+    // the fragment the restart delivered (21 s) — the seek bar must not grow
+    // past the end of the video.
+    const duration = await video.evaluate((el) => el.duration);
+    expect(duration).toBeGreaterThan(19.5);
+    expect(duration).toBeLessThan(20.5);
   });
 });

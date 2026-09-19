@@ -72,10 +72,34 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
   // that assignment too; treating it as user intent would restart the stream
   // in a loop and leave the element paused at 0.
   let expectedSeek = null;
+  // One failure report per run: a bad delivery raises `error` on both the
+  // SourceBuffer and the element, and each report would otherwise advance the
+  // viewer's escalation ladder a step.
+  let failureReported = false;
+  // Tears down the current run's media-error listeners.
+  let detachRunErrors = null;
+
+  // The declared duration of the SOURCE, when the server knows it. The media
+  // source grows its own duration to the end of the media appended to it, so a
+  // stream-copied fragment whose last packet lands past the source's duration
+  // (common on a seek restart) inflates it: a 20.02 s video reads 21 s.
+  const declaredDuration =
+    typeof duration === 'number' && Number.isFinite(duration) && duration > 0 ? duration : null;
 
   const state = (value) => {
     if (!destroyed) onState?.(value);
   };
+
+  /**
+   * Report a failure of the run `signal` belongs to. A superseded run's late
+   * error must not reach the viewer: it would escalate a ladder step for a run
+   * that is already the escalated one.
+   */
+  function reportError(signal, error) {
+    if (destroyed || signal?.aborted || failureReported) return;
+    failureReported = true;
+    onError?.(error);
+  }
 
   function urlFor(seconds) {
     const separator = streamUrl.includes('?') ? '&' : '?';
@@ -93,6 +117,68 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
   }
 
   /**
+   * Drop the buffered media in `[start, end)` and wait for the update to end.
+   * Chromium refuses to shrink the duration below the buffered end and names
+   * this as the way out, so it is not optional.
+   */
+  async function removeRange(buffer, start, end) {
+    while (buffer.updating) await once(buffer, 'updateend');
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        buffer.removeEventListener('updateend', onEnd);
+        buffer.removeEventListener('error', onError);
+      };
+      const onEnd = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error('the buffered tail could not be removed'));
+      };
+      buffer.addEventListener('updateend', onEnd);
+      buffer.addEventListener('error', onError);
+      try {
+        buffer.remove(start, end);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Re-assert the declared duration after an append.
+   *
+   * Appending media whose end lands past the declared duration makes the media
+   * source adopt that later end as its duration, which the element then reports
+   * (a 20.02 s source whose seek-restart fragment runs to 21 s reads 21 s, and
+   * its seek bar grows past the end of the video). The server's declared
+   * duration is the truth for the whole timeline, so put it back — only when it
+   * is known, and only once no update is in flight, because the setter refuses
+   * to run during one.
+   */
+  async function clampDuration(buffer) {
+    if (declaredDuration === null || destroyed) return;
+    while (buffer.updating) await once(buffer, 'updateend');
+    if (destroyed || buffer.buffered.length === 0) return;
+    const end = buffer.buffered.end(buffer.buffered.length - 1);
+    if (end <= declaredDuration) return;
+    if (mediaSource?.readyState !== 'open') return;
+    try {
+      // Chromium will not take the shorter duration while media past it is
+      // still buffered ("Setting duration below highest presentation timestamp
+      // of any buffered coded frames is disallowed"), so the phantom tail goes
+      // first — it is media beyond the end of the source, nothing playable.
+      await removeRange(buffer, declaredDuration, end);
+      if (destroyed || mediaSource.readyState !== 'open') return;
+      mediaSource.duration = declaredDuration;
+    } catch {
+      /* an update raced this; the next append clamps again */
+    }
+  }
+
+  /**
    * Append one chunk, waiting out any in-flight update: appending while the
    * buffer updates throws InvalidStateError, and the element's own seek can
    * start an internal update between the check and the call.
@@ -102,10 +188,12 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       while (buffer.updating) await once(buffer, 'updateend');
       try {
         buffer.appendBuffer(value);
-        return;
       } catch (error) {
         if (error.name !== 'InvalidStateError') throw error;
+        continue;
       }
+      await clampDuration(buffer);
+      return;
     }
     throw new Error('SourceBuffer stayed busy');
   }
@@ -139,6 +227,13 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     if (destroyed || starting) return;
     starting = true;
     controller?.abort();
+    controller = new AbortController();
+    const signal = controller.signal;
+    // The run about to be attached owns the failures from here on: whatever the
+    // superseded run reports late belongs to a mode the viewer already left.
+    detachRunErrors?.();
+    detachRunErrors = null;
+    failureReported = false;
     clearTimeout(restartTimer);
     try {
       mediaSource?.endOfStream?.();
@@ -148,15 +243,14 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
 
     let reader;
     let buffer;
-    let signal;
     try {
       mediaSource = new MediaSource();
       videoEl.src = URL.createObjectURL(mediaSource);
       await once(mediaSource, 'sourceopen');
       if (destroyed) return;
 
-      if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) {
-        mediaSource.duration = duration;
+      if (declaredDuration !== null) {
+        mediaSource.duration = declaredDuration;
       }
       buffer = mediaSource.addSourceBuffer(mime);
       buffer.timestampOffset = seconds;
@@ -164,8 +258,21 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       // asks about the media source that is actually attached to the element.
       sourceBuffer = buffer;
 
-      controller = new AbortController();
-      signal = controller.signal;
+      // The delivered bytes can turn out to be undecodable (a remux the
+      // browser cannot actually play). Chromium reports that on the
+      // SourceBuffer and on the element — never on `appendBuffer` — so without
+      // these listeners the viewer would sit on a frozen frame instead of
+      // escalating the mode (FR-009).
+      const onMediaError = () => {
+        reportError(signal, new Error('the delivered stream failed to decode'));
+      };
+      buffer.addEventListener('error', onMediaError);
+      videoEl.addEventListener('error', onMediaError);
+      detachRunErrors = () => {
+        buffer.removeEventListener('error', onMediaError);
+        videoEl.removeEventListener('error', onMediaError);
+      };
+
       const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok || !response.body) {
         throw new StreamHttpError(response.status, {
@@ -191,10 +298,10 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       videoEl.play().catch((error) => {
         // AbortError: this play() was superseded by another source. Anything
         // else (e.g. a refused autoplay) is a real failure, not a silent one.
-        if (!destroyed && error.name !== 'AbortError') onError?.(error);
+        if (error.name !== 'AbortError') reportError(signal, error);
       });
     } catch (error) {
-      if (!destroyed && error.name !== 'AbortError') onError?.(error);
+      if (error.name !== 'AbortError') reportError(signal, error);
       return;
     } finally {
       // Setup finished (or bailed): `seeking` events are user intent again.
@@ -206,7 +313,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     try {
       await pump({ reader, buffer, source: mediaSource, signal });
     } catch (error) {
-      if (!destroyed && error.name !== 'AbortError') onError?.(error);
+      if (error.name !== 'AbortError') reportError(signal, error);
     }
   }
 
@@ -224,7 +331,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     const target = videoEl.currentTime;
     if (expectedSeek !== null && Math.abs(target - expectedSeek) <= 0.25) return;
     if (isBuffered(target)) return;
-    start(target).catch((error) => !destroyed && onError?.(error));
+    start(target).catch((error) => reportError(controller?.signal, error));
   };
   videoEl.addEventListener('seeking', onSeeking);
   videoEl.addEventListener('seeked', onSeeked);
@@ -234,6 +341,8 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     destroyed = true;
     clearTimeout(restartTimer);
     controller?.abort();
+    detachRunErrors?.();
+    detachRunErrors = null;
     videoEl.removeEventListener('seeking', onSeeking);
     videoEl.removeEventListener('seeked', onSeeked);
     videoEl.removeEventListener('playing', onPlaying);

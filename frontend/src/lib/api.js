@@ -140,11 +140,10 @@ class TurboPixAPI {
   /**
    * Ask the server for the recommended playback action for a video.
    * Uses a raw fetch (not `request`) because a 202 is a valid "transcoding
-   * started" response here, not an error. The server echoes the capability
-   * string back as the header value it made its decision with.
+   * started" response here, not an error.
    * @param {string} hash - photo hash
-   * @param {string} clientCodecs - e.g. 'h264-8,h264-10' (from getClientCodecsString)
-   * @returns {Promise<{action: string, url?: string, reason?: string, pollUrl?: string}>}
+   * @param {string} clientCodecs - e.g. 'h264-8,aac' (from getClientCodecsString)
+   * @returns {Promise<{action: string, url?: string, mode?: string|null, mime?: string|null, duration?: number|null, cached?: boolean, reason?: string|null, pollUrl?: string}>}
    */
   async getVideoDecision(hash, clientCodecs) {
     try {
@@ -157,7 +156,15 @@ class TurboPixAPI {
       }
       if (!res.ok) return { action: 'error', reason: `HTTP ${res.status}` };
       const data = await res.json();
-      return data;
+      return {
+        action: data.action,
+        url: data.url,
+        mode: data.mode ?? null,
+        mime: data.mime ?? null,
+        duration: typeof data.duration === 'number' ? data.duration : null,
+        cached: Boolean(data.cached),
+        reason: data.reason ?? null,
+      };
     } catch (e) {
       if (logger) {
         logger.warn('getVideoDecision failed', e, { component: 'API', hash });

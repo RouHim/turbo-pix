@@ -56,6 +56,7 @@ export default [
         ResizeObserver: 'readonly',
         MutationObserver: 'readonly',
         MediaMetadata: 'readonly',
+        MediaSource: 'readonly',
         SvelteURL: 'readonly',
         confirm: 'readonly',
       },

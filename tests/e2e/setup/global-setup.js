@@ -190,6 +190,22 @@ async function seedTestMedia() {
     console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
   }
 
+  // Streaming-playback fixtures (video-streaming.e2e.spec.js): a progressive
+  // 20 s h264+aac MP4, the same content in Matroska (remux case) and an
+  // h264 + AC-3 MP4 (audio-only conversion case). Same pinned date as the
+  // videos above, so nothing here displaces the first video card with the
+  // existing h264 fixtures.
+  for (const fixture of ['test_video_long.mp4', 'test_video_long.mkv', 'test_video_ac3.mp4']) {
+    const source = path.join('test-data', fixture);
+    const destination = path.join(photosDir, fixture);
+    if (existsSync(source)) {
+      await copyFile(source, destination);
+      await utimes(destination, recentDate, recentDate);
+    } else {
+      console.warn(`Video fixture not found at ${source}`);
+    }
+  }
+
   console.log('Generated test media ready');
 }
 

@@ -300,6 +300,10 @@
       "timeout": "Videokonvertierung: Zeitlimit überschritten",
       "progress": "Wird konvertiert… {percent}%"
     },
+    "stream": {
+      "buffering": "Video wird für die Wiedergabe vorbereitet…",
+      "waiting": "Warte auf einen freien Konvertierungsplatz…"
+    },
     "file_empty": "Dieses Video ist leer oder wird noch synchronisiert.",
     "conversion_reason": "Video konnte nicht konvertiert werden: {reason}",
     "play_original": "Original trotzdem abspielen"

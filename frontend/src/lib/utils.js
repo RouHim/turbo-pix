@@ -240,14 +240,22 @@ export function getThumbnailUrl(photo, size = 'medium') {
 
 /**
  * Get a video URL for a photo, optionally with transcoding.
+ *
+ * `clientCodecs` is the client's declaration (`getClientCodecsString()`); it
+ * travels as `?client=` because a media element's own request cannot carry the
+ * `X-TurboPix-Codecs` header, and the serve-time re-decision must see the same
+ * declaration the decision was made with.
  * @param {string} photoHash
- * @param {{transcode?: boolean}} options
+ * @param {{transcode?: boolean, clientCodecs?: string}} options
  * @returns {string}
  */
 export function getVideoUrl(photoHash, options = {}) {
   const params = new URLSearchParams();
   if (options.transcode) {
     params.set('transcode', 'true');
+  }
+  if (options.clientCodecs) {
+    params.set('client', options.clientCodecs);
   }
   const queryString = params.toString();
   return `/api/photos/${photoHash}/video${queryString ? `?${queryString}` : ''}`;
@@ -381,10 +389,31 @@ export const videoCodecSupport = {
   },
 
   /**
+   * Audio-codec probes; tokens mirror the server's ClientCodecs audio set.
+   * @returns {string[]}
+   */
+  audioProbeTokens() {
+    const mp4 = (codec) => `audio/mp4; codecs="${codec}"`;
+    const webm = (codec) => `audio/webm; codecs="${codec}"`;
+    const probes = [
+      ['aac', mp4('mp4a.40.2')],
+      ['opus', webm('opus')],
+      ['mp3', 'audio/mpeg'],
+      ['flac', 'audio/flac'],
+      ['ac3', mp4('ac-3')],
+      ['eac3', mp4('ec-3')],
+      ['dts', mp4('dts')],
+      ['vorbis', webm('vorbis')],
+    ];
+    return probes.filter(([, mime]) => this.canPlayType(mime)).map(([token]) => token);
+  },
+
+  /**
    * The client's supported codec set as a comma-joined capability string for
-   * the `X-TurboPix-Codecs` header (server's ClientCodecs::parse format:
-   * `h264-8,h264-10,hevc,av1,vp9,vp8`; only supported tokens are emitted).
-   * Memoized; call `clearCache()` to recompute.
+   * the `X-TurboPix-Codecs` header and the `?client=` query param (server's
+   * ClientCodecs::parse format: `h264-8,h264-10,hevc,av1,vp9,vp8,aac,…`;
+   * only supported tokens are emitted). Memoized; call `clearCache()` to
+   * recompute.
    * @returns {string}
    */
   getClientCodecsString() {
@@ -396,6 +425,7 @@ export const videoCodecSupport = {
     if (this.canPlayAV1()) parts.push('av1');
     if (this.canPlayVP9()) parts.push('vp9');
     if (this.canPlayVP8()) parts.push('vp8');
+    parts.push(...this.audioProbeTokens());
     this._clientString = parts.join(',');
     return this._clientString;
   },

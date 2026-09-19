@@ -93,27 +93,32 @@ test.describe('Native-first video playback', () => {
     expect(geometry.videoBottom).toBeLessThan(geometry.viewportHeight);
   });
 
-  test('server-driven decision endpoint picks direct vs transcode', async ({ page }) => {
+  test('server-driven decision endpoint picks direct vs stream', async ({ page }) => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
 
     // GIVEN a client that can only play 8-bit h264, the ?decision probe
-    // MUST report direct for h264 and transcode for hevc (the server owns the
-    // codec+container decision from the capability record + declared codecs).
+    // MUST report direct for h264 and a streamed conversion for hevc (the
+    // server owns the codec+container decision from the capability record +
+    // declared codecs). Decision URLs carry the client declaration so the
+    // media request re-decides with it.
     const direct = await page.request.get(
       `/api/photos/${h264.hash_sha256}/video?decision&client=h264-8`
     );
     expect(direct.ok()).toBeTruthy();
     const directJson = await direct.json();
     expect(directJson.action).toBe('direct');
-    expect(directJson.url).toBe(`/api/photos/${h264.hash_sha256}/video`);
+    expect(directJson.url).toBe(`/api/photos/${h264.hash_sha256}/video?client=h264-8`);
 
-    const transcode = await page.request.get(
+    const stream = await page.request.get(
       `/api/photos/${hevc.hash_sha256}/video?decision&client=h264-8`
     );
-    expect(transcode.ok()).toBeTruthy();
-    const transcodeJson = await transcode.json();
-    expect(transcodeJson.action).toBe('transcode');
-    expect(transcodeJson.url).toBe(`/api/photos/${hevc.hash_sha256}/video?transcode=true`);
+    expect(stream.ok()).toBeTruthy();
+    const streamJson = await stream.json();
+    expect(streamJson.action).toBe('stream');
+    expect(streamJson.mode).toBe('transcode');
+    // Neither `mode` nor `start` belongs in the URL: the player appends them.
+    expect(streamJson.url).toBe(`/api/photos/${hevc.hash_sha256}/video/stream?client=h264-8`);
+    expect(streamJson.mime).toContain('video/mp4');
   });
 });

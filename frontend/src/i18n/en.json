@@ -300,6 +300,10 @@
       "timeout": "Video conversion timed out",
       "progress": "Converting… {percent}%"
     },
+    "stream": {
+      "buffering": "Video is being prepared for playback…",
+      "waiting": "Waiting for a free conversion slot…"
+    },
     "file_empty": "This video file is empty or still being synced.",
     "conversion_reason": "Could not convert this video: {reason}",
     "play_original": "Play original anyway"

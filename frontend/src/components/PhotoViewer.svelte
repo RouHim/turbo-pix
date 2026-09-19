@@ -15,6 +15,7 @@
     videoCodecSupport,
   } from '../lib/utils.js';
   import { logger } from '../lib/logger.js';
+  import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import Icon from './Icon.svelte';
@@ -44,6 +45,10 @@
   // failure; suppresses the onerror transcode-retry so a failing original
   // cannot loop back into the transcode decision. Logic-only (never rendered).
   let hasUserChosenOriginal = false;
+  // Active MSE stream playback (Task 3). A plain field, not `$state`: the
+  // object holds MediaSource/DOM references and closures that must never be
+  // proxied, and nothing renders from it.
+  let streamPlayer = null;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -477,6 +482,9 @@
     } else {
       hideTranscodeToast();
     }
+    // Stop the MSE stream (and its fetch) too: a hidden viewer must not keep
+    // pulling conversion bytes, and the blob URL must be released.
+    destroyStreamPlayer();
     metadataEditRef?.close?.();
     isOpen = false;
     isPendingCollage = false;
@@ -683,11 +691,17 @@
 
   async function displayVideo(photo, forceTranscode = false) {
     if (!videoEl) return;
+    // A different video may be on screen: its stream (and any pending
+    // SourceBuffer) belongs to the old photo.
+    destroyStreamPlayer();
 
     if (forceTranscode) {
       // Explicit retry (e.g. HEVC playback failure): jump straight to the
       // transcode flow, no decision round-trip.
-      const url = getVideoUrl(photo.hash_sha256, { transcode: true });
+      const url = getVideoUrl(photo.hash_sha256, {
+        transcode: true,
+        clientCodecs: videoCodecSupport.getClientCodecsString(),
+      });
       if (await tryStartTranscode(url, photo)) return;
       setVideoSource(photo, url, false);
       return;
@@ -697,9 +711,10 @@
     // "play original" choice so a normal playback failure can retry transcode.
     hasUserChosenOriginal = false;
 
-    // Ask the server for the recommended path (Direct Play / remux /
-    // transcode / empty). The server owns the codec+container decision using
-    // our declared capability set, so we do not re-guess HEVC support client-side.
+    // Ask the server for the recommended path (direct play / streamed remux /
+    // streamed audio+video conversion / empty). The server owns the
+    // codec+container decision using our declared capability set, so we do not
+    // re-guess HEVC support client-side.
     const decision = await api.getVideoDecision(
       photo.hash_sha256,
       videoCodecSupport.getClientCodecsString()
@@ -709,30 +724,109 @@
     // decision was loading — a hidden viewer must not start playback.
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
-    if (decision.action === 'direct' || decision.action === 'remux') {
+    if (decision.action === 'direct') {
       setVideoSource(photo, decision.url, true);
-    } else if (decision.action === 'transcode') {
-      const url = decision.url || getVideoUrl(photo.hash_sha256, { transcode: true });
-      if (await tryStartTranscode(url, photo)) return;
-      // No 202 (cached transcode streams as 200) or the start fetch failed:
-      // fall through to playing the (already-available) transcoded stream.
-      setVideoSource(photo, url, false);
-    } else if (decision.action === 'empty') {
-      showTranscodeToast(
-        get(t)('video.file_empty', {
-          default: 'This video file is empty or still being synced.',
-        }),
-        true
-      );
-    } else {
-      showTranscodeToast(
-        get(t)('video.conversion_reason', {
-          values: { reason: decision.reason || '' },
-          default: 'Could not convert this video: {reason}',
-        }),
-        true
-      );
+      return;
     }
+    if (decision.action === 'stream') {
+      if (!decision.mime || !mseSupported(decision.mime)) {
+        // Legacy fallback: whole-file conversion for browsers without MSE for
+        // this codec; keeps the escape hatch intact.
+        const legacy = getVideoUrl(photo.hash_sha256, {
+          transcode: true,
+          clientCodecs: videoCodecSupport.getClientCodecsString(),
+        });
+        if (await tryStartTranscode(legacy, photo)) return;
+        setVideoSource(photo, legacy, false);
+        return;
+      }
+      await playStream(photo, decision);
+      return;
+    }
+    if (decision.action === 'empty') {
+      showTranscodeToast(
+        get(t)('video.file_empty', { default: 'This video file is empty or still being synced.' }),
+        true
+      );
+      return;
+    }
+    showTranscodeToast(
+      get(t)('video.conversion_reason', {
+        values: { reason: decision.reason || '' },
+        default: 'Could not convert this video: {reason}',
+      }),
+      true
+    );
+  }
+
+  /**
+   * Play a server-streamed conversion through MSE: the server pipes fragmented
+   * MP4 and the player appends it to a SourceBuffer, so playback starts long
+   * before the conversion finishes.
+   */
+  async function playStream(photo, decision, modeOverride = null) {
+    if (!videoEl) return;
+    destroyStreamPlayer();
+    hasUserChosenOriginal = false;
+    const mode = modeOverride || decision.mode;
+    const separator = decision.url.includes('?') ? '&' : '?';
+    // The decision URL carries neither `mode` nor `start`: the player always
+    // appends `start=<seconds>` itself (msePlayer.urlFor), and `mode` is the
+    // server-authorized mode the player may only escalate.
+    const streamUrl = `${decision.url}${separator}mode=${mode}`;
+    showTranscodeToast(
+      get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })
+    );
+    streamPlayer = createStreamPlayer(videoEl, {
+      streamUrl,
+      mime: decision.mime,
+      duration: decision.duration,
+      onState: (state) => {
+        if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+        if (state === 'waiting') {
+          showTranscodeToast(
+            get(t)('video.stream.waiting', {
+              default: 'Waiting for a free conversion slot…',
+            })
+          );
+        } else if (state === 'playing' || state === 'ended') {
+          hideTranscodeToast();
+        }
+      },
+      onError: (error) => onStreamError(photo, decision, error),
+    });
+    videoEl.dataset.photoHash = photo.hash_sha256;
+    videoEl.style.display = 'block';
+    videoEl.classList.add('loaded');
+    if (imageEl) imageEl.style.display = 'none';
+    swipeableViewer?.reset();
+    try {
+      await streamPlayer.start(0);
+      streamPlayer = null; // destroyed by the next playStream/destroy call
+    } catch (error) {
+      onStreamError(photo, decision, error);
+    }
+  }
+
+  function destroyStreamPlayer() {
+    if (!streamPlayer) return;
+    streamPlayer.destroy();
+    streamPlayer = null;
+  }
+
+  /**
+   * A streamed conversion failed (spawn error, refused slot, undecodable
+   * bytes). Surfaces the failure and leaves "play original anyway" available —
+   * Task 6 escalates through the mode ladder before giving up.
+   */
+  function onStreamError(photo, decision, error) {
+    logger?.warn('stream playback failed', error, { component: 'PhotoViewer', decision });
+    if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    destroyStreamPlayer();
+    showTranscodeToast(
+      get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+      true
+    );
   }
 
   function showTranscodeToast(message, isError = false) {
@@ -814,7 +908,10 @@
             clearInterval(intervalId);
             if (transcodePollTimer === intervalId) transcodePollTimer = null;
             hideTranscodeToast();
-            const newUrl = getVideoUrl(photo.hash_sha256, { transcode: true });
+            const newUrl = getVideoUrl(photo.hash_sha256, {
+              transcode: true,
+              clientCodecs: videoCodecSupport.getClientCodecsString(),
+            });
             setVideoSource(photo, newUrl, false);
             resolve('Completed');
           } else if (status.state === 'Failed') {
@@ -864,7 +961,13 @@
     if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
     hasUserChosenOriginal = true;
     hideTranscodeToast();
-    setVideoSource(photo, getVideoUrl(photo.hash_sha256, {}), false);
+    setVideoSource(
+      photo,
+      getVideoUrl(photo.hash_sha256, {
+        clientCodecs: videoCodecSupport.getClientCodecsString(),
+      }),
+      false
+    );
   }
 
   function setVideoSource(photo, videoUrl, retryOnFailure) {
@@ -1581,7 +1684,11 @@
 />
 
 {#if transcodeMessage}
-  <div class="transcode-toast transcode-toast-visible" class:transcode-toast-error={transcodeError}>
+  <div
+    class="transcode-toast transcode-toast-visible"
+    class:transcode-toast-error={transcodeError}
+    role={transcodeError ? 'alert' : 'status'}
+  >
     <Icon name={transcodeError ? 'alert-triangle' : 'loader'} width={18} height={18} />
     <span class="transcode-toast-message">{transcodeMessage}</span>
     {#if transcodeError}

@@ -5,7 +5,7 @@
   import { addToast } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
-  import { buildYearAggregates, getYearAggregate } from '../lib/timeline.js';
+  import { buildTimelineModel, countInRange, toMonthIndex } from '../lib/timeline.js';
   import Icon from './Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
@@ -17,15 +17,25 @@
   let monthSelectEl = $state(null);
   let initError = $state(false);
 
-  const aggregates = $derived(buildYearAggregates(data?.density ?? []));
+  const model = $derived(buildTimelineModel(data?.density ?? []));
 
-  // The mobile dropdowns below are intentionally untouched and still iterate
-  // `years`; derive it from aggregates (same descending order) so they keep
-  // working until a later task rewrites them.
+  // Transitional adapter for the legacy year rail + month strip, which is
+  // replaced by TimelineSelector in a later task.
+  const aggregates = $derived(
+    model.years.map((year) => ({
+      year,
+      total: countInRange(model, toMonthIndex(year, 1), toMonthIndex(year, 12)),
+      months: Array.from({ length: 12 }, (_, i) => ({
+        month: i + 1,
+        count: countInRange(model, toMonthIndex(year, i + 1), toMonthIndex(year, i + 1)),
+      })),
+    }))
+  );
+
   const years = $derived(aggregates.map((a) => a.year));
 
   const selectedAggregate = $derived(
-    selectedYear === null ? null : getYearAggregate(aggregates, selectedYear)
+    selectedYear === null ? null : (aggregates.find((a) => a.year === selectedYear) ?? null)
   );
 
   const labelText = $derived.by(() => {

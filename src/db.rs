@@ -207,8 +207,13 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
 /// absent end bound makes the filter a single period. A missing month means
 /// January for a start bound and December for an end bound, so `year=2012`
 /// still means "all of 2012" and `from=2012-03,to=2015` stops at December
-/// 2015. Out-of-range months are formatted as-is, which makes the string
-/// comparison match nothing — the same result the equality filter produced.
+/// 2015. A month outside `1..=12` is not formattable, and formatting it as a
+/// literal `YYYY-MM` would silently turn it into a valid *ordering point*
+/// (`2012-13` sorts after every 2012 row but before `2013-01`, so
+/// `month=13&to_year=2015` would widen the range to 2013-01…2015-12); such a
+/// bound yields an inverted interval that no row satisfies, keeping the old
+/// equality filter's "month = 13 matches nothing" result. `to_year` without
+/// `year` filters nothing, because a bound is only formed from `year`.
 fn month_range_bounds(
     year: Option<i32>,
     month: Option<i32>,
@@ -216,11 +221,16 @@ fn month_range_bounds(
     to_month: Option<i32>,
 ) -> Option<(String, String)> {
     let year = year?;
-    let from = format!("{:04}-{:02}", year, month.unwrap_or(1));
-    let to = match to_year {
-        Some(to_year) => format!("{:04}-{:02}", to_year, to_month.unwrap_or(12)),
-        None => format!("{:04}-{:02}", year, month.unwrap_or(12)),
+    let from_month = month.unwrap_or(1);
+    let end_month = match to_year {
+        Some(_) => to_month.unwrap_or(12),
+        None => month.unwrap_or(12),
     };
+    if !(1..=12).contains(&from_month) || !(1..=12).contains(&end_month) {
+        return Some(("9999-99".to_string(), "0000-00".to_string()));
+    }
+    let from = format!("{:04}-{:02}", year, from_month);
+    let to = format!("{:04}-{:02}", to_year.unwrap_or(year), end_month);
     Some((from, to))
 }
 
@@ -2096,9 +2106,30 @@ mod tests {
             .unwrap();
         assert_eq!(total, 6);
 
-        // An out-of-range month is formatted as-is, so the string comparison
-        // matches nothing — the same result the old equality filter produced.
+        // An end year without a start year filters nothing either.
+        let query = date_filter_query(None, None, Some(2015), None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 6);
+
+        // An out-of-range start month matches nothing, with or without an end
+        // bound: `2012-13` must not become a valid ordering point that lets a
+        // later end year widen the range to 2013-01…2015-12.
         let query = date_filter_query(Some(2012), Some(13), None, None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+
+        let query = date_filter_query(Some(2012), Some(13), Some(2015), None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+
+        // Likewise for an out-of-range end month.
+        let query = date_filter_query(Some(2012), None, Some(2015), Some(13));
         let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
             .await
             .unwrap();

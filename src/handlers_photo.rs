@@ -36,6 +36,8 @@ pub struct PhotoQuery {
     pub q: Option<String>,
     pub year: Option<i32>,
     pub month: Option<i32>,
+    pub to_year: Option<i32>,
+    pub to_month: Option<i32>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -54,11 +56,18 @@ async fn fetch_photos(
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<Photo>, i64), String> {
-    if query.q.is_some() || query.year.is_some() || query.month.is_some() {
+    if query.q.is_some()
+        || query.year.is_some()
+        || query.month.is_some()
+        || query.to_year.is_some()
+        || query.to_month.is_some()
+    {
         let search_query = SearchQuery {
             q: query.q.clone(),
             year: query.year,
             month: query.month,
+            to_year: query.to_year,
+            to_month: query.to_month,
         };
         Photo::search_photos(
             db_pool,
@@ -1273,7 +1282,7 @@ mod tests {
     use super::*;
     use crate::db::create_in_memory_pool;
     use crate::warp_helpers::handle_rejection;
-    use chrono::{Datelike, TimeZone};
+    use chrono::{DateTime, Datelike, TimeZone, Utc};
     use std::convert::Infallible;
     use std::fs;
     use std::path::PathBuf;
@@ -1319,6 +1328,51 @@ mod tests {
             .expect("Failed to create test photo");
 
         temp_image
+    }
+
+    /// Same fixture as `create_photo_row` but with an explicit `taken_at`.
+    async fn create_dated_photo_row(
+        db_pool: &DbPool,
+        temp_dir: &TempDir,
+        hash: &str,
+        filename: &str,
+        taken_at: &str,
+    ) {
+        let test_image = Path::new("test-data/IMG_9377.jpg");
+        let temp_image = temp_dir.path().join(filename);
+        fs::copy(test_image, &temp_image).expect("Failed to copy test image");
+
+        let photo = Photo {
+            hash_sha256: hash.to_string(),
+            file_path: temp_image.to_str().unwrap().to_string(),
+            filename: filename.to_string(),
+            file_size: 12345,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: Some(
+                DateTime::parse_from_rfc3339(taken_at)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            width: Some(800),
+            height: Some(600),
+            orientation: Some(1),
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        photo
+            .create(db_pool)
+            .await
+            .expect("Failed to create test photo");
     }
 
     async fn setup_test_photo(
@@ -1512,6 +1566,41 @@ mod tests {
             body.get("hash_sha256").is_none(),
             "timeline route must not return photo JSON"
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_photos_month_range_filter() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().to_path_buf());
+
+        for (hash, filename, taken_at) in [
+            ("a", "mar2012.jpg", "2012-03-15T10:00:00Z"),
+            ("b", "aug2015.jpg", "2015-08-31T23:30:00Z"),
+            ("c", "sep2015.jpg", "2015-09-01T00:00:00Z"),
+        ] {
+            create_dated_photo_row(&db_pool, &temp_dir, &hash.repeat(64), filename, taken_at).await;
+        }
+
+        let response = warp::test::request()
+            .path("/api/photos?year=2012&month=3&to_year=2015&to_month=8")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["total"], 2, "range must be inclusive on both bounds");
+        let filenames: Vec<&str> = body["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["filename"].as_str().unwrap())
+            .collect();
+        assert!(filenames.contains(&"mar2012.jpg"));
+        assert!(filenames.contains(&"aug2015.jpg"));
+        assert!(!filenames.contains(&"sep2015.jpg"));
     }
 
     #[tokio::test]

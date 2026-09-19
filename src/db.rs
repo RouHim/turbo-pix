@@ -201,6 +201,29 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
     }
 }
 
+/// Inclusive month-granular filter bounds as zero-padded `YYYY-MM` strings.
+///
+/// `year`/`month` is the start bound, `to_year`/`to_month` the end bound; an
+/// absent end bound makes the filter a single period. A missing month means
+/// January for a start bound and December for an end bound, so `year=2012`
+/// still means "all of 2012" and `from=2012-03,to=2015` stops at December
+/// 2015. Out-of-range months are formatted as-is, which makes the string
+/// comparison match nothing — the same result the equality filter produced.
+fn month_range_bounds(
+    year: Option<i32>,
+    month: Option<i32>,
+    to_year: Option<i32>,
+    to_month: Option<i32>,
+) -> Option<(String, String)> {
+    let year = year?;
+    let from = format!("{:04}-{:02}", year, month.unwrap_or(1));
+    let to = match to_year {
+        Some(to_year) => format!("{:04}-{:02}", to_year, to_month.unwrap_or(12)),
+        None => format!("{:04}-{:02}", year, month.unwrap_or(12)),
+    };
+    Some((from, to))
+}
+
 impl Photo {
     // ===== METADATA ACCESSORS (for Rust code) =====
     // Frontend reads metadata.* directly from JSON
@@ -886,14 +909,18 @@ impl Photo {
             }
         }
 
-        if let Some(year) = query.year {
-            where_clause.push_str(" AND strftime('%Y', taken_at) = ?");
-            params.push(year.to_string());
-        }
-
-        if let Some(month) = query.month {
-            where_clause.push_str(" AND strftime('%m', taken_at) = ?");
-            params.push(format!("{:02}", month));
+        // Month-granular inclusive range. `strftime('%Y-%m', …)` is compared
+        // lexicographically: zero-padded `YYYY-MM` sorts chronologically, and
+        // NULL `taken_at` fails the comparison exactly like the old equality
+        // filter did.
+        if let Some((from, to)) =
+            month_range_bounds(query.year, query.month, query.to_year, query.to_month)
+        {
+            where_clause.push_str(
+                " AND strftime('%Y-%m', taken_at) >= ? AND strftime('%Y-%m', taken_at) <= ?",
+            );
+            params.push(from);
+            params.push(to);
         }
 
         // Get total count
@@ -1155,6 +1182,7 @@ pub async fn update_photo_city(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
     use sqlx::Row;
 
     fn create_test_photo_with_date(hash: &str, filename: &str, taken_at: DateTime<Utc>) -> Photo {
@@ -1218,6 +1246,8 @@ mod tests {
             q: Some(query.to_string()),
             year: None,
             month: None,
+            to_year: None,
+            to_month: None,
         }
     }
     #[tokio::test]
@@ -1975,6 +2005,123 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, berlin_photo.file_path);
+    }
+
+    fn dated_photo(hash: &str, filename: &str, taken_at: &str) -> Photo {
+        create_test_photo_with_date(
+            hash,
+            filename,
+            DateTime::parse_from_rfc3339(taken_at)
+                .unwrap()
+                .with_timezone(&Utc),
+        )
+    }
+
+    fn date_filter_query(
+        year: Option<i32>,
+        month: Option<i32>,
+        to_year: Option<i32>,
+        to_month: Option<i32>,
+    ) -> SearchQuery {
+        SearchQuery {
+            q: None,
+            year,
+            month,
+            to_year,
+            to_month,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_photos_filters_inclusive_month_range() {
+        let pool = create_test_db_pool().await.unwrap();
+        for (hash, filename, taken_at) in [
+            ("a", "feb2012.jpg", "2012-02-10T10:00:00Z"),
+            ("b", "mar2012.jpg", "2012-03-15T10:00:00Z"),
+            ("c", "dec2012.jpg", "2012-12-31T23:00:00Z"),
+            ("d", "jan2013.jpg", "2013-01-01T00:30:00Z"),
+            ("e", "aug2015.jpg", "2015-08-31T23:30:00Z"),
+            ("f", "sep2015.jpg", "2015-09-01T00:00:00Z"),
+        ] {
+            dated_photo(&hash.repeat(64), filename, taken_at)
+                .create(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Single month (start bound only).
+        let query = date_filter_query(Some(2012), Some(3), None, None);
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos[0].filename, "mar2012.jpg");
+
+        // Whole year (no month) stays a single-year filter.
+        let query = date_filter_query(Some(2012), None, None, None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 3);
+
+        // Month-granular range spanning years, both bounds inclusive.
+        let query = date_filter_query(Some(2012), Some(3), Some(2015), Some(8));
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 4);
+        let names: Vec<&str> = photos.iter().map(|p| p.filename.as_str()).collect();
+        assert!(!names.contains(&"feb2012.jpg"));
+        assert!(!names.contains(&"sep2015.jpg"));
+
+        // Year-precision end bound stops at December of that year.
+        let query = date_filter_query(Some(2012), Some(3), Some(2012), None);
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(photos[0].taken_at.unwrap().year(), 2012);
+
+        // Reversed bounds match nothing (the router normalises before it gets here).
+        let query = date_filter_query(Some(2015), Some(8), Some(2012), Some(3));
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+
+        // A month bound without a year filters nothing.
+        let query = date_filter_query(None, Some(3), None, None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 6);
+
+        // An out-of-range month is formatted as-is, so the string comparison
+        // matches nothing — the same result the old equality filter produced.
+        let query = date_filter_query(Some(2012), Some(13), None, None);
+        let (_, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_photos_range_ignores_null_taken_at() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut undated = create_test_photo("undated.jpg".to_string(), "undated".to_string());
+        undated.taken_at = None;
+        undated.create(&pool).await.unwrap();
+        dated_photo(&"c".repeat(64), "mar2012.jpg", "2012-03-15T10:00:00Z")
+            .create(&pool)
+            .await
+            .unwrap();
+
+        let query = date_filter_query(Some(2012), Some(1), Some(2012), Some(12));
+        let (photos, total) = Photo::search_photos(&pool, &query, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos[0].filename, "mar2012.jpg");
     }
 
     #[tokio::test]

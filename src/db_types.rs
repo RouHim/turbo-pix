@@ -6,6 +6,8 @@ pub struct SearchQuery {
     pub q: Option<String>,
     pub year: Option<i32>,
     pub month: Option<i32>,
+    pub to_year: Option<i32>,
+    pub to_month: Option<i32>,
 }
 
 // Timeline related structs

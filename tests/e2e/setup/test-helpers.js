@@ -371,15 +371,22 @@ export class TestHelpers {
    * through is legitimately served as `direct`/`cached` from then on. Tests
    * asserting the *cold* first-play behaviour (a `stream`/`remux` decision, a
    * visible conversion notice) clear it first.
+   *
+   * Both halves of the cache matter: whole-file conversions live in
+   * `transcoded/`, the lossless faststart sidecars of remux playthroughs in
+   * `remux/`. A missing subdirectory is not an error (nothing was cached yet).
    */
   static async clearCachedConversions(hash) {
     // Same per-run cache global-setup hands the server via TRANSCODE_CACHE_DIR.
     const cacheDir = path.join(TEST_DATA_DIR, 'transcode-cache');
-    const entries = await readdir(cacheDir).catch(() => []);
-    await Promise.all(
-      entries
-        .filter((name) => name.startsWith(`${hash}_`))
-        .map((name) => rm(path.join(cacheDir, name), { force: true }))
-    );
+    for (const kind of ['transcoded', 'remux']) {
+      const dir = path.join(cacheDir, kind);
+      const entries = await readdir(dir).catch(() => []);
+      await Promise.all(
+        entries
+          .filter((name) => name.startsWith(`${hash}_`))
+          .map((name) => rm(path.join(dir, name), { force: true }))
+      );
+    }
   }
 }

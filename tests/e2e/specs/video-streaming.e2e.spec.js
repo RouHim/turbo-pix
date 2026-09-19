@@ -96,11 +96,11 @@ test.describe('On-the-fly streaming playback', () => {
 
   test('AC-3 audio converts without re-encoding video', async ({ page }) => {
     const ac3 = await findVideoByFilename(page, 'test_video_ac3.mp4');
-    // A cold cache: a playthrough fills the whole-file cache, and the second
-    // open is then (by design) a direct play instead of an audio conversion.
+    // A cold cache: a playthrough fills the cache (video copied, audio
+    // converted), after which the same probe legitimately answers
+    // `direct`/`cached`. Probe *before* playing so the answer is the first-play
+    // one rather than a race against the background fill.
     await TestHelpers.clearCachedConversions(ac3.hash_sha256);
-    await openVideo(page, ac3);
-
     const response = await page.request.get(
       `/api/photos/${ac3.hash_sha256}/video?decision&client=h264-8,aac`
     );
@@ -108,6 +108,7 @@ test.describe('On-the-fly streaming playback', () => {
     expect(decision.action).toBe('stream');
     expect(decision.mode).toBe('audio');
 
+    await openVideo(page, ac3);
     await page.waitForFunction(
       () => {
         const el = document.querySelector('#viewer-video');
@@ -209,7 +210,12 @@ test.describe('On-the-fly streaming playback', () => {
     expect(decision.cached).toBe(true);
 
     // Reopen: playback starts natively from the cache, without a byte of
-    // streaming and without a conversion notice.
+    // streaming and without a conversion notice. A `direct` source only
+    // auto-plays when the viewer's autoPlay setting is on (the MSE path always
+    // self-plays), so enable it before measuring.
+    await page.evaluate(() =>
+      localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+    );
     const requests = [];
     page.on('request', (request) => requests.push(request.url()));
     await TestHelpers.closeViewer(page);
@@ -218,7 +224,12 @@ test.describe('On-the-fly streaming playback', () => {
     await page.waitForFunction(
       () => {
         const el = document.querySelector('#viewer-video');
-        return el && el.readyState >= 2 && el.currentTime > 0;
+        // Anchor on the cached artifact itself: closing the viewer only pauses
+        // and revokes the media, so the previous playthrough's element state is
+        // still observable until the reopen swaps the source.
+        return (
+          el && el.currentSrc.includes('transcode=true') && el.readyState >= 2 && el.currentTime > 0
+        );
       },
       null,
       { timeout: 2000 }

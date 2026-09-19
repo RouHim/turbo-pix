@@ -63,8 +63,9 @@ use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
 use crate::video_capability::{plan, ClientCodecs, Delivery};
 use crate::video_processor::{
-    claim_transcode, get_transcode_status, get_transcoded_path_versioned, set_transcode_status,
-    transcode_codec_to_h264_with_progress, TranscodeClaim, TranscodeState, TranscodeStatus,
+    claim_transcode, convert_video_with_progress, get_transcode_status,
+    get_transcoded_path_versioned, remux_to_faststart_mp4, set_transcode_status, FileConversion,
+    TranscodeClaim, TranscodeState, TranscodeStatus,
 };
 use crate::video_stream::{
     output_mime, start_stream, supervise, StreamHandle, StreamMode, StreamStartError,
@@ -605,7 +606,15 @@ async fn serve_whole_file_transcode(
             TranscodeClaim::Started => {
                 // We own the slot (claim_transcode inserted the InProgress status): start a fresh
                 // transcode.
-                spawn_whole_file_transcode(photo, transcoded_path.clone(), photo.audio_codec());
+                // The escape hatch exists for clients that cannot consume the
+                // stream at all, so its artifact must play everywhere: a full
+                // re-encode, never a video copy.
+                spawn_whole_file_transcode(
+                    photo,
+                    transcoded_path.clone(),
+                    FileConversion::Reencode,
+                    photo.audio_codec(),
+                );
 
                 let response = warp::reply::with_status(
                     warp::reply::json(&json!({
@@ -647,22 +656,32 @@ async fn serve_whole_file_transcode(
     }
 }
 
-/// Spawn the whole-file H.264 conversion for `photo` into `output_path` in the
+/// Spawn a whole-file conversion of `photo` into `output_path` in the
 /// background, keeping the transcode status the poll endpoint reports up to
 /// date while it runs. The caller owns the claim (see [`claim_transcode`]), so
 /// two encoders for one hash can never overlap.
 ///
-/// `audio_codec` is the source's audio codec as best known (the resolved
-/// capabilities where they are at hand, the stored record otherwise); it
-/// decides whether the audio track is copied or converted, see
-/// [`crate::video_processor::build_transcode_args`].
-fn spawn_whole_file_transcode(photo: &Photo, output_path: PathBuf, audio_codec: Option<&str>) {
+/// `conversion` picks the video handling and `audio_codec` (the source's audio
+/// codec as best known: the resolved capabilities where they are at hand, the
+/// stored record otherwise) decides whether the audio track is copied or
+/// converted — see [`crate::video_processor::build_conversion_args`].
+fn spawn_whole_file_transcode(
+    photo: &Photo,
+    output_path: PathBuf,
+    conversion: FileConversion,
+    audio_codec: Option<&str>,
+) {
     let hash = photo.hash_sha256.clone();
     let hash_short = hash.get(..12).unwrap_or(&hash).to_string();
     let input_path = PathBuf::from(&photo.file_path);
     let audio_codec = audio_codec.map(str::to_string);
     log::info!(
-        "Transcoding video to H.264: {} (hash: {})",
+        "Converting video ({}): {} (hash: {})",
+        if conversion == FileConversion::VideoCopy {
+            "video copy"
+        } else {
+            "re-encode to H.264"
+        },
         photo.filename,
         hash_short
     );
@@ -685,9 +704,10 @@ fn spawn_whole_file_transcode(photo: &Photo, output_path: PathBuf, audio_codec: 
         })
     };
     tokio::spawn(async move {
-        match transcode_codec_to_h264_with_progress(
+        match convert_video_with_progress(
             &input_path,
             &output_path,
+            conversion,
             audio_codec.as_deref(),
             on_progress,
         )
@@ -752,23 +772,62 @@ fn spawn_whole_file_transcode(photo: &Photo, output_path: PathBuf, audio_codec: 
     });
 }
 
-/// Fill the whole-file cache after a successful full playthrough, so the next
-/// open starts like a native play (FR-010, SC-007): the conversion has been
-/// paid for once already, and paying for it again on every open is waste.
+/// Fill the cache after a successful full playthrough, so the next open starts
+/// like a native play (FR-010, SC-007): the work has been paid for once
+/// already, and paying for it again on every open is waste.
+///
+/// What gets cached is what the run itself produced, so the artifact is never
+/// weaker than the stream it replaces:
+/// - `StreamTranscode` (the client cannot decode the source video) → the
+///   whole-file H.264 + AAC conversion.
+/// - `StreamAudio` (the client decodes the video, not the audio) → the same
+///   file with the video track *copied* and only the audio converted.
+/// - `StreamRemux` (container/layout only) → the lossless faststart sidecar
+///   under `{TRANSCODE_CACHE_DIR}/remux/`, i.e. exactly the path the playback
+///   decision reuses for a moov-at-end source. A re-encode here would degrade
+///   video the client already plays.
 ///
 /// Runs after the stream the client was playing has ended — it can never gate
-/// first playback — and is bounded by the same claim + worker pool as the
-/// escape hatch, so a hash that is already converting (or whose attempt failed
-/// within the retry cooldown) is left alone instead of queueing a second
-/// encoder.
-fn spawn_cache_fill(photo: &Photo, audio_codec: Option<&str>) {
+/// first playback — and is bounded by the same claim + worker pool (or the
+/// remux semaphore for the sidecar) as every other conversion, so a hash that
+/// is already converting (or whose attempt failed within the retry cooldown) is
+/// left alone instead of queueing a second job.
+fn spawn_cache_fill(photo: &Photo, mode: StreamMode, audio_codec: Option<&str>) {
+    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
+
+    if mode == StreamMode::Remux {
+        let sidecar = remux_sidecar_path(
+            &cache_dir,
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        if sidecar.exists() {
+            return;
+        }
+        // The unconditional remux, not `ensure_progressive_mp4`: a finished
+        // remux run already proved the source cannot be played as it is (a
+        // Matroska has no moov for the serve-time probe to find, and its sidecar
+        // is the whole point). The core re-checks existence under the remux
+        // semaphore and atomically renames a unique temp file into place, so
+        // concurrent fills cannot interleave.
+        let source = PathBuf::from(&photo.file_path);
+        let hash = photo.hash_sha256.clone();
+        tokio::spawn(async move {
+            match remux_to_faststart_mp4(&source, &sidecar).await {
+                Ok(()) => log::info!("Remux cache ready for {hash}"),
+                Err(e) => log::warn!("Remux cache fill failed for {hash}: {e}"),
+            }
+        });
+        return;
+    }
+
     // Only start on a free slot: a background fill must never become the job
     // the next user-facing conversion waits behind.
     if crate::video_processor::transcode_semaphore().available_permits() == 0 {
         return;
     }
-    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
     let output = get_transcoded_path_versioned(
         Path::new(&cache_dir),
         &photo.hash_sha256,
@@ -782,7 +841,13 @@ fn spawn_cache_fill(photo: &Photo, audio_codec: Option<&str>) {
     if claim_transcode(&photo.hash_sha256) != TranscodeClaim::Started {
         return;
     }
-    spawn_whole_file_transcode(photo, output, audio_codec);
+    let conversion = match mode {
+        StreamMode::Audio => FileConversion::VideoCopy,
+        // `StreamRemux` returned above and `Direct` never streams, so the only
+        // remaining mode is a full transcode.
+        StreamMode::Transcode | StreamMode::Remux => FileConversion::Reencode,
+    };
+    spawn_whole_file_transcode(photo, output, conversion, audio_codec);
 }
 
 /// Faststart remux sidecar path under `{TRANSCODE_CACHE_DIR}/remux/`, versioned
@@ -979,7 +1044,7 @@ pub async fn stream_video(
         drop(permit);
         if outcome.is_ok() {
             if let Some((photo, audio_codec)) = fill_source {
-                spawn_cache_fill(&photo, audio_codec.as_deref());
+                spawn_cache_fill(&photo, mode, audio_codec.as_deref());
             }
         }
     });
@@ -1883,7 +1948,7 @@ mod tests {
         );
         assert!(!cached.exists(), "nothing is cached before the fill");
 
-        spawn_cache_fill(&photo, Some("mp3"));
+        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
         wait_for_completed_transcode(hash).await;
 
         assert_eq!(
@@ -1925,14 +1990,14 @@ mod tests {
 
         // Already converted: the artifact is the whole point, so a second
         // playthrough must not re-encode it.
-        spawn_cache_fill(&photo, Some("mp3"));
+        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
 
         // Already converting (another request owns the claim): the pool bound
         // admits one encoder per hash, so this playthrough must not queue a
         // second one either.
         std::fs::remove_file(&cached).expect("failed to clear the artifact");
         assert_eq!(claim_transcode(hash), TranscodeClaim::Started);
-        spawn_cache_fill(&photo, Some("mp3"));
+        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
 
         // Neither call may have started an encoder.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1941,6 +2006,209 @@ mod tests {
             "no fill may run for an already converted or already claimed hash"
         );
         clear_transcode_status(hash);
+    }
+
+    /// A run the client could decode as-is (audio conversion only) must cache
+    /// the same thing it streamed: the video track is copied, so the artifact
+    /// the next open is served is not a re-encode of video that already played.
+    #[tokio::test]
+    async fn audio_playthrough_fills_a_video_copy_artifact() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "h264", "container": "mp4", "bit_depth": 8,
+                "audio_codec": "ac3", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let args_file = temp_dir.path().join("convert-args.txt");
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            &format!(
+                "#!/usr/bin/env sh\nlast=\"\"\nfor arg in \"$@\"; do last=\"$arg\"; done\nif [ \"$last\" = \"pipe:1\" ]; then\n  printf '\\000\\000\\000\\030ftypiso5'\nelse\n  printf '%s\\n' \"$@\" > '{}'\n  printf 'converted' > \"$last\"\nfi\n",
+                args_file.display()
+            ),
+        );
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nprintf '{\"format\":{\"duration\":\"1.0\"}}'\n",
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: Some("audio".to_string()),
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool.clone(),
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+        let _ = collect_response_body(response).await;
+
+        wait_for_completed_transcode(hash).await;
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let cached = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        assert!(
+            cached.exists(),
+            "the playthrough must leave a whole-file artifact"
+        );
+
+        let args = std::fs::read_to_string(&args_file).expect("conversion args must be recorded");
+        assert!(
+            args.lines().any(|line| line == "-c:v") && args.contains("\ncopy\n"),
+            "the video track must be copied, not re-encoded: {args}"
+        );
+        assert!(
+            !args.contains("libx264"),
+            "an audio-mode cache must not re-encode video: {args}"
+        );
+        assert!(
+            args.contains("-c:a") && args.contains("\naac\n"),
+            "the undecodable audio must be converted: {args}"
+        );
+
+        // …and the next open is served that artifact instead of streaming.
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: Some("h264-8,aac".to_string()),
+                decision: Some("true".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("decision reply")
+        .into_response();
+        let body = collect_response_body(response).await;
+        let decision: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["cached"], true);
+    }
+
+    /// A remux run is a container/layout copy, so the cache holds exactly that:
+    /// the lossless sidecar the decision reuses, never a re-encode of video the
+    /// client already plays. The fill remuxes unconditionally — the run that
+    /// just finished is the proof it was needed — which is also what makes a
+    /// Matroska source (no moov for the serve-time probe to find) cacheable.
+    #[tokio::test]
+    async fn remux_playthrough_fills_the_lossless_sidecar() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "h264", "container": "mp4", "bit_depth": 8,
+                "audio_codec": "aac", "moov_at_start": false, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\nif [ \"$last\" = \"pipe:1\" ]; then\n  printf '\\000\\000\\000\\030ftypiso5'\nelse\n  printf 'faststart-sidecar' > \"$last\"\nfi\n",
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: Some("remux".to_string()),
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool.clone(),
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+        let _ = collect_response_body(response).await;
+
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let sidecar = remux_sidecar_path(
+            temp_dir.path().to_str().unwrap(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        for _ in 0..200 {
+            if sidecar.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&sidecar).expect("the playthrough must fill the sidecar"),
+            "faststart-sidecar"
+        );
+        let transcoded = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        assert!(
+            !transcoded.exists(),
+            "a remux run must not leave a re-encoded artifact behind"
+        );
+
+        // The sidecar is exactly what the decision's cached arm looks for.
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: Some("h264-8,aac".to_string()),
+                decision: Some("true".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("decision reply")
+        .into_response();
+        let body = collect_response_body(response).await;
+        let decision: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["cached"], true);
     }
 
     #[tokio::test]

@@ -688,13 +688,34 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
 /// progressive playback immediately. This is a cheap stream copy (no re-encode,
 /// no decoder), separate from the full HEVC transcode path. No-op (returns
 /// `Ok(())`) when the input already has moov at the start or the sidecar
-/// already exists. Writes to a unique temp file then atomically renames into
-/// place, so concurrent requests for the same sidecar cannot interleave into
-/// a corrupt output.
+/// already exists.
 pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    // Bound the whole remux (moov probe + ffmpeg copy) by the remux semaphore
-    // so a burst of NeedsRemux requests cannot spawn unbounded blocking
-    // ffprobe/ffmpeg processes on the async runtime.
+    // `has_moov_at_start` runs a blocking ffprobe; offload it so it cannot
+    // stall a tokio worker thread.
+    let probe_input = input_path.to_path_buf();
+    let moov_at_start = tokio::task::spawn_blocking(move || has_moov_at_start(&probe_input))
+        .await
+        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe task panicked: {e}")))??;
+    if moov_at_start {
+        return Ok(());
+    }
+
+    remux_to_faststart_mp4(input_path, output_path).await
+}
+
+/// Copy `input` into `output` as a faststart MP4 without re-encoding.
+///
+/// Unlike [`ensure_progressive_mp4`] this does not second-guess the caller: a
+/// remux stream that just finished is proof that the remux was needed. That
+/// matters for sources whose container never had a moov atom to move (Matroska
+/// answers the moov probe with "nothing to fix") and whose sidecar is the only
+/// way to cache the work the finished run already paid for. No-op when the
+/// sidecar exists. Writes to a unique temp file then atomically renames into
+/// place, so concurrent requests for the same sidecar cannot interleave into a
+/// corrupt output.
+pub async fn remux_to_faststart_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+    // Bound the remux by the remux semaphore so a burst of requests cannot
+    // spawn unbounded blocking ffmpeg processes on the async runtime.
     let _permit = get_remox_semaphore().acquire().await.map_err(|e| {
         CacheError::VideoProcessingError(format!(
             "Failed to acquire remux semaphore for {}: {}",
@@ -706,16 +727,6 @@ pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> Ca
     // Re-check under the permit: another request may have completed the remux
     // while this one queued on the semaphore.
     if output_path.exists() {
-        return Ok(());
-    }
-
-    // `has_moov_at_start` runs a blocking ffprobe; offload it so it cannot
-    // stall a tokio worker thread.
-    let probe_input = input_path.to_path_buf();
-    let moov_at_start = tokio::task::spawn_blocking(move || has_moov_at_start(&probe_input))
-        .await
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe task panicked: {e}")))??;
-    if moov_at_start {
         return Ok(());
     }
 
@@ -783,36 +794,42 @@ fn remux_temp_path(output_path: &Path) -> PathBuf {
         .unwrap_or("remux");
     parent.join(format!("{stem}.{}.{}.tmp", std::process::id(), seq))
 }
-/// Transcode any video codec to H.264 for browser compatibility.
-pub async fn transcode_codec_to_h264(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    transcode_codec_to_h264_with_timeout(
-        input_path,
-        output_path,
-        None,
-        Duration::from_secs(transcode_timeout_secs()),
-        None,
-    )
-    .await
+/// What a whole-file conversion does to the video track.
+///
+/// The whole-file cache holds one artifact per source version, and the client
+/// that reopens the video is the one whose stream produced it — so the artifact
+/// must not be weaker than the stream it replaces: a source whose video the
+/// client can already decode is copied, never re-encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileConversion {
+    /// Re-encode the video to H.264 (libx264) for a source no browser decodes.
+    Reencode,
+    /// Copy the video track bit-for-bit and convert only the audio, for a
+    /// source whose video the client plays but whose audio it cannot.
+    VideoCopy,
 }
 
-/// Transcode any video codec to H.264, reporting progress percentage to
-/// `on_progress` as ffmpeg emits `-progress pipe:1` lines. `on_progress` is
-/// called with `Some(percent)` (0..=100) whenever a progress line arrives and
-/// the input duration is known, and never with a decreasing value. When the
-/// duration is unknown, `on_progress(None)` signals "working, no percent".
+/// Write a whole-file conversion of `input` to `output`, reporting progress
+/// percentage to `on_progress` as ffmpeg emits `-progress pipe:1` lines.
+/// `on_progress` is called with `Some(percent)` (0..=100) whenever a progress
+/// line arrives and the input duration is known, and never with a decreasing
+/// value. When the duration is unknown, `on_progress(None)` signals "working,
+/// no percent".
 ///
-/// `audio_codec` is the source's audio codec when known (the capability record
-/// or a probe): it decides whether the audio track is copied or converted, see
-/// [`build_transcode_args`].
-pub async fn transcode_codec_to_h264_with_progress(
+/// `conversion` picks the video handling and `audio_codec` (the source's audio
+/// codec when known, from the capability record or a probe) decides whether the
+/// audio track is copied or converted — see [`build_conversion_args`].
+pub async fn convert_video_with_progress(
     input_path: &Path,
     output_path: &Path,
+    conversion: FileConversion,
     audio_codec: Option<&str>,
     on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>,
 ) -> CacheResult<()> {
-    transcode_codec_to_h264_with_timeout(
+    convert_video_with_timeout(
         input_path,
         output_path,
+        conversion,
         audio_codec,
         Duration::from_secs(transcode_timeout_secs()),
         Some(on_progress),
@@ -820,17 +837,19 @@ pub async fn transcode_codec_to_h264_with_progress(
     .await
 }
 
-async fn transcode_codec_to_h264_with_timeout(
+async fn convert_video_with_timeout(
     input_path: &Path,
     output_path: &Path,
+    conversion: FileConversion,
     audio_codec: Option<&str>,
     timeout_duration: Duration,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
 ) -> CacheResult<()> {
     let ffmpeg_path = get_ffmpeg_path();
-    transcode_codec_to_h264_with_timeout_and_path(
+    convert_video_with_timeout_and_path(
         input_path,
         output_path,
+        conversion,
         audio_codec,
         timeout_duration,
         ffmpeg_path,
@@ -839,7 +858,7 @@ async fn transcode_codec_to_h264_with_timeout(
     .await
 }
 
-/// ffmpeg arguments for the whole-file H.264 conversion.
+/// ffmpeg arguments for a whole-file conversion (see [`FileConversion`]).
 ///
 /// `-map 0:v:0` takes the first video track and nothing else: without an
 /// explicit map ffmpeg muxes everything it can into the MP4 (a second audio
@@ -848,42 +867,48 @@ async fn transcode_codec_to_h264_with_timeout(
 /// audio track; the trailing `?` is what makes a silent source convert instead
 /// of failing with "Stream map '0:a:0' matches no streams".
 ///
-/// Audio is copied only when the source already carries a codec every browser
-/// decodes (AAC, MP3). Anything else — AC-3, E-AC-3, DTS, PCM — is converted
-/// to AAC: an output file whose audio track the client cannot decode is not
-/// playable at all, which defeats the purpose of every cache artifact and of
-/// the whole-file escape hatch alike.
-pub fn build_transcode_args(
+/// Audio is copied only when the run re-encodes the video and the source
+/// already carries a codec every browser decodes (AAC, MP3). Anything else —
+/// AC-3, E-AC-3, DTS, PCM — becomes AAC, because an output file whose audio
+/// track the client cannot decode is not playable at all, which defeats the
+/// purpose of every cache artifact and of the whole-file escape hatch alike.
+pub fn build_conversion_args(
     input: &Path,
     output: &Path,
+    conversion: FileConversion,
     audio_codec: Option<&str>,
     with_progress: bool,
 ) -> Vec<String> {
-    let audio_args: &[&str] = match audio_codec {
-        Some("aac") | Some("mp3") => &["-c:a", "copy"],
+    let input_path = input.to_string_lossy().into_owned();
+    let mut args: Vec<String> = ["-i", &input_path, "-map", "0:v:0", "-map", "0:a:0?"]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect();
+    match conversion {
+        FileConversion::Reencode => {
+            // Hardware-accelerated decoding is worth asking for only when the
+            // video is actually decoded (a copy never is).
+            args.splice(0..0, ["-hwaccel", "auto"].iter().map(|arg| arg.to_string()));
+            args.extend(
+                [
+                    "-c:v", "libx264", // More widely available than libopenh264
+                    "-preset", "fast", // Good for real-time transcoding
+                    "-crf", "23", // 18-28, lower = better quality
+                ]
+                .iter()
+                .map(|arg| arg.to_string()),
+            );
+        }
+        // The client plays this video already: copying it keeps the artifact
+        // bit-identical to the source instead of adding a generation of loss.
+        FileConversion::VideoCopy => {
+            args.extend(["-c:v", "copy"].iter().map(|arg| arg.to_string()));
+        }
+    }
+    let audio_args: &[&str] = match (conversion, audio_codec) {
+        (FileConversion::Reencode, Some("aac") | Some("mp3")) => &["-c:a", "copy"],
         _ => &["-c:a", "aac", "-b:a", "160k", "-ac", "2"],
     };
-
-    let input_path = input.to_string_lossy().into_owned();
-    let mut args: Vec<String> = [
-        "-hwaccel",
-        "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
-        "-i",
-        &input_path,
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a:0?",
-        "-c:v",
-        "libx264", // Use H.264 encoder (more widely available than libopenh264)
-        "-preset",
-        "fast", // Encoding speed preset (fast is good for real-time transcoding)
-        "-crf",
-        "23", // Constant Rate Factor (18-28, lower = better quality)
-    ]
-    .iter()
-    .map(|arg| arg.to_string())
-    .collect();
     args.extend(audio_args.iter().map(|arg| arg.to_string()));
     args.extend(
         [
@@ -956,9 +981,10 @@ impl ProgressParser {
     }
 }
 
-async fn transcode_codec_to_h264_with_timeout_and_path(
+async fn convert_video_with_timeout_and_path(
     input_path: &Path,
     output_path: &Path,
+    conversion: FileConversion,
     audio_codec: Option<&str>,
     timeout_duration: Duration,
     ffmpeg_path: String,
@@ -1005,19 +1031,20 @@ async fn transcode_codec_to_h264_with_timeout_and_path(
             progress.signal_unknown();
         }
 
-        // Hardware-accelerated decoding is tried first, falling back to
-        // software when unavailable; `-progress pipe:1` (when someone consumes
-        // it) streams key=value progress lines to stdout, which we read
-        // incrementally to report percent.
+        // `build_conversion_args` decides how the video and audio tracks are
+        // handled; `-progress pipe:1` (when someone consumes it) streams
+        // key=value progress lines to stdout, which we read incrementally to
+        // report percent.
         let ffmpeg_path_for_err = ffmpeg_path.clone();
         let mut command = TokioCommand::new(ffmpeg_path);
         command
             .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .args(build_transcode_args(
+            .args(build_conversion_args(
                 input_path,
                 &temp_output_path,
+                conversion,
                 audio_codec,
                 with_progress,
             ));
@@ -1777,9 +1804,15 @@ pub(crate) mod tests {
                 .push(p);
         });
 
-        transcode_codec_to_h264_with_progress(&input, &output, Some("aac"), on_progress)
-            .await
-            .expect("transcode should succeed");
+        convert_video_with_progress(
+            &input,
+            &output,
+            FileConversion::Reencode,
+            Some("aac"),
+            on_progress,
+        )
+        .await
+        .expect("transcode should succeed");
 
         let reported = reported
             .lock()
@@ -1814,9 +1847,10 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_codec_to_h264_with_timeout_and_path(
+        let result = convert_video_with_timeout_and_path(
             &input,
             &output,
+            FileConversion::Reencode,
             None,
             Duration::from_secs(1),
             ffmpeg_script.to_str().unwrap().to_string(),
@@ -1860,9 +1894,10 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_codec_to_h264_with_timeout_and_path(
+        let result = convert_video_with_timeout_and_path(
             &input,
             &output,
+            FileConversion::Reencode,
             None,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
@@ -1900,9 +1935,10 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("nested/output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = transcode_codec_to_h264_with_timeout_and_path(
+        let result = convert_video_with_timeout_and_path(
             &input,
             &output,
+            FileConversion::Reencode,
             None,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
@@ -1938,18 +1974,24 @@ pub(crate) mod tests {
         );
     }
 
-    /// The whole-file conversion is the artifact every reopened video and
-    /// every escape-hatch request is served, so its audio must be playable:
-    /// AAC/MP3 survive bit-identical, anything else (AC-3, E-AC-3, DTS) becomes
-    /// AAC. Copying AC-3 into an MP4 leaves a file Chromium plays silently or
-    /// refuses outright — the exact failure this cache exists to prevent.
+    /// The whole-file artifact is what every reopened video and every
+    /// escape-hatch request is served, so neither mode may produce something
+    /// weaker than the stream it replaces: audio the client cannot decode is
+    /// converted (copying AC-3 into an MP4 leaves a file Chromium plays
+    /// silently or refuses outright), and video the client already decodes is
+    /// copied rather than re-encoded.
     #[test]
-    fn transcode_args_copy_playable_audio_and_convert_the_rest() {
+    fn conversion_args_follow_the_conversion_mode() {
         let input = Path::new("/photos/source.mkv");
         let output = Path::new("/cache/out.mp4.tmp");
+        let args = |conversion, audio_codec, with_progress| {
+            build_conversion_args(input, output, conversion, audio_codec, with_progress).join(" ")
+        };
 
-        let aac = build_transcode_args(input, output, Some("aac"), false).join(" ");
+        let aac = args(FileConversion::Reencode, Some("aac"), false);
+        assert!(aac.contains("-c:v libx264 -preset fast -crf 23"), "{aac}");
         assert!(aac.contains("-c:a copy"), "AAC must be copied: {aac}");
+        assert!(aac.contains("-hwaccel auto"), "{aac}");
         assert!(
             aac.contains("-map 0:v:0 -map 0:a:0?"),
             "only the first video and audio track are mapped: {aac}"
@@ -1963,13 +2005,13 @@ pub(crate) mod tests {
             "no progress pipe is opened when nobody consumes it: {aac}"
         );
 
-        let mp3 = build_transcode_args(input, output, Some("mp3"), false).join(" ");
+        let mp3 = args(FileConversion::Reencode, Some("mp3"), false);
         assert!(
             mp3.contains("-c:a copy"),
             "MP3 is legal MP4 audio and must be copied: {mp3}"
         );
 
-        let ac3 = build_transcode_args(input, output, Some("ac3"), true).join(" ");
+        let ac3 = args(FileConversion::Reencode, Some("ac3"), true);
         assert!(
             ac3.contains("-c:a aac -b:a 160k -ac 2"),
             "AC-3 must be converted to AAC: {ac3}"
@@ -1983,10 +2025,32 @@ pub(crate) mod tests {
             "progress is reported when the caller asks for it: {ac3}"
         );
 
-        let unknown = build_transcode_args(input, output, None, false).join(" ");
+        let unknown = args(FileConversion::Reencode, None, false);
         assert!(
             unknown.contains("-c:a aac"),
             "an unknown source audio codec must be converted, never copied: {unknown}"
+        );
+
+        // A source whose video the client already plays keeps its video track
+        // bit-for-bit — re-encoding it would add a generation of loss to every
+        // later open — and only pays for its undecodable audio.
+        let copy = args(FileConversion::VideoCopy, Some("ac3"), false);
+        assert!(copy.contains("-c:v copy"), "video must be copied: {copy}");
+        assert!(
+            !copy.contains("libx264"),
+            "video must not be re-encoded: {copy}"
+        );
+        assert!(
+            copy.contains("-c:a aac -b:a 160k -ac 2"),
+            "the undecodable audio still becomes AAC: {copy}"
+        );
+        assert!(
+            copy.contains("-map 0:v:0 -map 0:a:0?"),
+            "the copied video still needs mapping: {copy}"
+        );
+        assert!(
+            !copy.contains("-hwaccel"),
+            "a copy decodes nothing, so no hardware acceleration is requested: {copy}"
         );
     }
 

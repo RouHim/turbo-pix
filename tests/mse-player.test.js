@@ -8,6 +8,7 @@ const realCreateObjectURL = URL.createObjectURL;
 const realRevokeObjectURL = URL.revokeObjectURL;
 
 afterEach(() => {
+  createdSources.length = 0;
   globalThis.fetch = realFetch;
   globalThis.MediaSource = realMediaSource;
   URL.createObjectURL = realCreateObjectURL;
@@ -35,12 +36,16 @@ class FakeSourceBuffer {
   }
 }
 
+/** Every MediaSource the player created, oldest first. */
+const createdSources = [];
+
 class FakeMediaSource {
   static isTypeSupported() {
     return true;
   }
 
   constructor() {
+    createdSources.push(this);
     this.readyState = 'closed';
     this.duration = NaN;
     this.sourceBuffers = [];
@@ -185,6 +190,12 @@ test('a user seek outside the buffered range restarts the stream at the target',
 
   assert.equal(calls.length, 2, 'the seek starts a second stream run');
   assert.match(calls[1], /start=15\.000/);
+
+  // The restart run maps its zero-based segments back onto the real timeline:
+  // its own SourceBuffer carries the seek target as the timestamp offset.
+  const restartBuffer = createdSources.at(-1).sourceBuffers[0];
+  assert.equal(restartBuffer.timestampOffset, 15);
+  assert.equal(createdSources[0].sourceBuffers[0].timestampOffset, 0);
 
   // The restart positions the element itself; that seek must not loop either.
   await settle();

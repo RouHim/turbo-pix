@@ -96,6 +96,10 @@ test.describe('Native-first video playback', () => {
   test('server-driven decision endpoint picks direct vs stream', async ({ page }) => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    // The probe below asserts the *first-play* answer: a full playthrough in an
+    // earlier spec fills the conversion cache, and the same probe then answers
+    // `direct` + `cached` (which is the point of the cache).
+    await TestHelpers.clearCachedConversions(hevc.hash_sha256);
 
     // GIVEN a client that can play 8-bit h264 + aac, the ?decision probe MUST
     // report direct for h264 and a streamed conversion for hevc (the server

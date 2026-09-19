@@ -788,6 +788,7 @@ pub async fn transcode_codec_to_h264(input_path: &Path, output_path: &Path) -> C
     transcode_codec_to_h264_with_timeout(
         input_path,
         output_path,
+        None,
         Duration::from_secs(transcode_timeout_secs()),
         None,
     )
@@ -799,14 +800,20 @@ pub async fn transcode_codec_to_h264(input_path: &Path, output_path: &Path) -> C
 /// called with `Some(percent)` (0..=100) whenever a progress line arrives and
 /// the input duration is known, and never with a decreasing value. When the
 /// duration is unknown, `on_progress(None)` signals "working, no percent".
+///
+/// `audio_codec` is the source's audio codec when known (the capability record
+/// or a probe): it decides whether the audio track is copied or converted, see
+/// [`build_transcode_args`].
 pub async fn transcode_codec_to_h264_with_progress(
     input_path: &Path,
     output_path: &Path,
+    audio_codec: Option<&str>,
     on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>,
 ) -> CacheResult<()> {
     transcode_codec_to_h264_with_timeout(
         input_path,
         output_path,
+        audio_codec,
         Duration::from_secs(transcode_timeout_secs()),
         Some(on_progress),
     )
@@ -816,6 +823,7 @@ pub async fn transcode_codec_to_h264_with_progress(
 async fn transcode_codec_to_h264_with_timeout(
     input_path: &Path,
     output_path: &Path,
+    audio_codec: Option<&str>,
     timeout_duration: Duration,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
 ) -> CacheResult<()> {
@@ -823,11 +831,82 @@ async fn transcode_codec_to_h264_with_timeout(
     transcode_codec_to_h264_with_timeout_and_path(
         input_path,
         output_path,
+        audio_codec,
         timeout_duration,
         ffmpeg_path,
         on_progress,
     )
     .await
+}
+
+/// ffmpeg arguments for the whole-file H.264 conversion.
+///
+/// `-map 0:v:0` takes the first video track and nothing else: without an
+/// explicit map ffmpeg muxes everything it can into the MP4 (a second audio
+/// track, an attached cover image, a subtitle track) and aborts the whole run
+/// on the first stream the muxer cannot carry. `-map 0:a:0?` keeps the first
+/// audio track; the trailing `?` is what makes a silent source convert instead
+/// of failing with "Stream map '0:a:0' matches no streams".
+///
+/// Audio is copied only when the source already carries a codec every browser
+/// decodes (AAC, MP3). Anything else — AC-3, E-AC-3, DTS, PCM — is converted
+/// to AAC: an output file whose audio track the client cannot decode is not
+/// playable at all, which defeats the purpose of every cache artifact and of
+/// the whole-file escape hatch alike.
+pub fn build_transcode_args(
+    input: &Path,
+    output: &Path,
+    audio_codec: Option<&str>,
+    with_progress: bool,
+) -> Vec<String> {
+    let audio_args: &[&str] = match audio_codec {
+        Some("aac") | Some("mp3") => &["-c:a", "copy"],
+        _ => &["-c:a", "aac", "-b:a", "160k", "-ac", "2"],
+    };
+
+    let input_path = input.to_string_lossy().into_owned();
+    let mut args: Vec<String> = [
+        "-hwaccel",
+        "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
+        "-i",
+        &input_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libx264", // Use H.264 encoder (more widely available than libopenh264)
+        "-preset",
+        "fast", // Encoding speed preset (fast is good for real-time transcoding)
+        "-crf",
+        "23", // Constant Rate Factor (18-28, lower = better quality)
+    ]
+    .iter()
+    .map(|arg| arg.to_string())
+    .collect();
+    args.extend(audio_args.iter().map(|arg| arg.to_string()));
+    args.extend(
+        [
+            "-movflags",
+            "+faststart", // Enable streaming-friendly format
+            "-y",         // Overwrite output file
+            // Force the muxer explicitly: the temp output path ends in
+            // `.mp4.tmp`, so ffmpeg cannot infer the format from the
+            // extension and otherwise fails with "Error initializing
+            // the muxer: Invalid argument".
+            "-f",
+            "mp4",
+        ]
+        .iter()
+        .map(|arg| arg.to_string()),
+    );
+    if with_progress {
+        // Stream progress to stdout for percent reporting; only requested when
+        // somebody consumes it.
+        args.extend(["-progress", "pipe:1"].iter().map(|arg| arg.to_string()));
+    }
+    args.push(output.to_string_lossy().into_owned());
+    args
 }
 
 /// Progress state shared between the stdout-reading task and the error path.
@@ -880,6 +959,7 @@ impl ProgressParser {
 async fn transcode_codec_to_h264_with_timeout_and_path(
     input_path: &Path,
     output_path: &Path,
+    audio_codec: Option<&str>,
     timeout_duration: Duration,
     ffmpeg_path: String,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
@@ -907,7 +987,8 @@ async fn transcode_codec_to_h264_with_timeout_and_path(
         // Probe the input duration once so progress can be expressed as a
         // percentage. A best-effort probe: if it fails, percent is unknown and
         // the client is told "working" with no number.
-        let duration = if on_progress.is_some() {
+        let with_progress = on_progress.is_some();
+        let duration = if with_progress {
             extract_video_metadata(input_path)
                 .await
                 .ok()
@@ -924,41 +1005,22 @@ async fn transcode_codec_to_h264_with_timeout_and_path(
             progress.signal_unknown();
         }
 
-        // Try hardware-accelerated decoding first, fall back to software if
-        // unavailable. `-progress pipe:1` streams key=value progress lines to
-        // stdout, which we read incrementally to report percent.
+        // Hardware-accelerated decoding is tried first, falling back to
+        // software when unavailable; `-progress pipe:1` (when someone consumes
+        // it) streams key=value progress lines to stdout, which we read
+        // incrementally to report percent.
         let ffmpeg_path_for_err = ffmpeg_path.clone();
         let mut command = TokioCommand::new(ffmpeg_path);
         command
             .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .args([
-                "-hwaccel",
-                "auto", // Auto-detect hardware acceleration (VAAPI, NVDEC, etc.)
-                "-i",
-                input_path.to_string_lossy().as_ref(),
-                "-c:v",
-                "libx264", // Use H.264 encoder (more widely available than libopenh264)
-                "-preset",
-                "fast", // Encoding speed preset (fast is good for real-time transcoding)
-                "-crf",
-                "23", // Constant Rate Factor (18-28, lower = better quality)
-                "-c:a",
-                "copy", // Copy audio stream without re-encoding (faster)
-                "-movflags",
-                "+faststart", // Enable streaming-friendly format
-                "-y",         // Overwrite output file
-                "-progress",
-                "pipe:1", // Stream progress to stdout for percent reporting
-                // Force the muxer explicitly: the temp output path ends in
-                // `.mp4.tmp`, so ffmpeg cannot infer the format from the
-                // extension and otherwise fails with "Error initializing the
-                // muxer: Invalid argument".
-                "-f",
-                "mp4",
-                temp_output_path.to_string_lossy().as_ref(),
-            ]);
+            .args(build_transcode_args(
+                input_path,
+                &temp_output_path,
+                audio_codec,
+                with_progress,
+            ));
 
         let mut child = command.spawn().map_err(|e| {
             CacheError::VideoProcessingError(format_binary_error(
@@ -1715,7 +1777,7 @@ pub(crate) mod tests {
                 .push(p);
         });
 
-        transcode_codec_to_h264_with_progress(&input, &output, on_progress)
+        transcode_codec_to_h264_with_progress(&input, &output, Some("aac"), on_progress)
             .await
             .expect("transcode should succeed");
 
@@ -1755,6 +1817,7 @@ pub(crate) mod tests {
         let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
+            None,
             Duration::from_secs(1),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -1800,6 +1863,7 @@ pub(crate) mod tests {
         let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
+            None,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -1839,6 +1903,7 @@ pub(crate) mod tests {
         let result = transcode_codec_to_h264_with_timeout_and_path(
             &input,
             &output,
+            None,
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -1870,6 +1935,58 @@ pub(crate) mod tests {
             args.get(f_index + 1).copied(),
             Some("mp4"),
             "ffmpeg must be told the mp4 muxer explicitly"
+        );
+    }
+
+    /// The whole-file conversion is the artifact every reopened video and
+    /// every escape-hatch request is served, so its audio must be playable:
+    /// AAC/MP3 survive bit-identical, anything else (AC-3, E-AC-3, DTS) becomes
+    /// AAC. Copying AC-3 into an MP4 leaves a file Chromium plays silently or
+    /// refuses outright — the exact failure this cache exists to prevent.
+    #[test]
+    fn transcode_args_copy_playable_audio_and_convert_the_rest() {
+        let input = Path::new("/photos/source.mkv");
+        let output = Path::new("/cache/out.mp4.tmp");
+
+        let aac = build_transcode_args(input, output, Some("aac"), false).join(" ");
+        assert!(aac.contains("-c:a copy"), "AAC must be copied: {aac}");
+        assert!(
+            aac.contains("-map 0:v:0 -map 0:a:0?"),
+            "only the first video and audio track are mapped: {aac}"
+        );
+        assert!(
+            aac.contains("-movflags +faststart") && aac.contains("-f mp4"),
+            "the artifact stays a faststart MP4: {aac}"
+        );
+        assert!(
+            !aac.contains("-progress"),
+            "no progress pipe is opened when nobody consumes it: {aac}"
+        );
+
+        let mp3 = build_transcode_args(input, output, Some("mp3"), false).join(" ");
+        assert!(
+            mp3.contains("-c:a copy"),
+            "MP3 is legal MP4 audio and must be copied: {mp3}"
+        );
+
+        let ac3 = build_transcode_args(input, output, Some("ac3"), true).join(" ");
+        assert!(
+            ac3.contains("-c:a aac -b:a 160k -ac 2"),
+            "AC-3 must be converted to AAC: {ac3}"
+        );
+        assert!(
+            ac3.contains("-map 0:a:0?"),
+            "the converted audio still needs mapping: {ac3}"
+        );
+        assert!(
+            ac3.contains("-progress pipe:1"),
+            "progress is reported when the caller asks for it: {ac3}"
+        );
+
+        let unknown = build_transcode_args(input, output, None, false).join(" ");
+        assert!(
+            unknown.contains("-c:a aac"),
+            "an unknown source audio codec must be converted, never copied: {unknown}"
         );
     }
 

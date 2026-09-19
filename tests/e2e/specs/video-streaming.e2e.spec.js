@@ -38,6 +38,9 @@ test.describe('On-the-fly streaming playback', () => {
 
   test('HEVC plays while converting: first frame within 5s, true duration', async ({ page }) => {
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    // This test is about the *streaming* path, so it starts from a cold cache:
+    // a playthrough earlier in the run would otherwise make it a direct play.
+    await TestHelpers.clearCachedConversions(hevc.hash_sha256);
     await openVideo(page, hevc);
 
     const video = videoHandle(page);
@@ -93,6 +96,9 @@ test.describe('On-the-fly streaming playback', () => {
 
   test('AC-3 audio converts without re-encoding video', async ({ page }) => {
     const ac3 = await findVideoByFilename(page, 'test_video_ac3.mp4');
+    // A cold cache: a playthrough fills the whole-file cache, and the second
+    // open is then (by design) a direct play instead of an audio conversion.
+    await TestHelpers.clearCachedConversions(ac3.hash_sha256);
     await openVideo(page, ac3);
 
     const response = await page.request.get(
@@ -125,6 +131,9 @@ test.describe('On-the-fly streaming playback', () => {
   test('saturated conversions wait visibly and then start', async ({ page }) => {
     test.setTimeout(60_000);
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    // Saturation is only observable while the decisions say "stream": a
+    // playthrough earlier in the run may have cached the conversion.
+    await TestHelpers.clearCachedConversions(hevc.hash_sha256);
 
     // Answer the first two stream requests with 503 + Retry-After, then let the
     // real request through: this is exactly what a full worker pool looks like.
@@ -163,5 +172,66 @@ test.describe('On-the-fly streaming playback', () => {
     );
     expect(refusals).toBe(2);
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
+
+  test('a previously converted video starts without a blocking conversion', async ({ page }) => {
+    test.setTimeout(120_000);
+    const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    // The first open must stream, so nothing may be cached for it yet.
+    await TestHelpers.clearCachedConversions(hevc.hash_sha256);
+    await openVideo(page, hevc);
+
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+
+    // A full playthrough fills the whole-file cache in the background (the
+    // fixture is 2 s of video, so the conversion is quick); the same probe then
+    // reports the conversion as a cached artifact.
+    const decisionUrl = `/api/photos/${hevc.hash_sha256}/video?decision&client=h264-8,aac`;
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(decisionUrl);
+          return (await response.json()).cached;
+        },
+        { timeout: 30_000, message: 'the playthrough must fill the conversion cache' }
+      )
+      .toBe(true);
+
+    const decision = await (await page.request.get(decisionUrl)).json();
+    expect(decision.action).toBe('direct');
+    expect(decision.cached).toBe(true);
+
+    // Reopen: playback starts natively from the cache, without a byte of
+    // streaming and without a conversion notice.
+    const requests = [];
+    page.on('request', (request) => requests.push(request.url()));
+    await TestHelpers.closeViewer(page);
+    const started = Date.now();
+    await page.locator(TestHelpers.selectors.photoCard(hevc.hash_sha256)).click();
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 2000 }
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+    expect(requests.filter((url) => url.includes('/video/stream'))).toEqual([]);
+    expect(
+      requests.some(
+        (url) =>
+          url.includes(`/api/photos/${hevc.hash_sha256}/video?`) && url.includes('transcode=true')
+      ),
+      'the cached conversion must be served as a file'
+    ).toBe(true);
   });
 });

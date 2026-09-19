@@ -1,7 +1,12 @@
 import { execSync } from 'child_process';
+import { readdir, rm } from 'node:fs/promises';
+import path from 'node:path';
 
 /** The E2E server's SQLite file, relative to the runner's cwd (repo root). */
 const TEST_DB_PATH = 'test-e2e-data/database/turbo-pix.db';
+
+// Per-run test data directory; must match `tests/e2e/setup/global-setup.js`.
+const TEST_DATA_DIR = 'test-e2e-data';
 
 export class TestHelpers {
   /**
@@ -355,6 +360,26 @@ export class TestHelpers {
           setTimeout(nextStep, delay);
         }),
       { sx: startX, sy: startY, ex: endX, ey: endY, delay: stepDelay }
+    );
+  }
+
+  /**
+   * Delete the conversion artifacts produced for `hash` earlier in this run.
+   *
+   * The transcode cache lasts for the whole run (global-setup wipes it once)
+   * and a full playthrough fills it, so a fixture an earlier test played
+   * through is legitimately served as `direct`/`cached` from then on. Tests
+   * asserting the *cold* first-play behaviour (a `stream`/`remux` decision, a
+   * visible conversion notice) clear it first.
+   */
+  static async clearCachedConversions(hash) {
+    // Same per-run cache global-setup hands the server via TRANSCODE_CACHE_DIR.
+    const cacheDir = path.join(TEST_DATA_DIR, 'transcode-cache');
+    const entries = await readdir(cacheDir).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((name) => name.startsWith(`${hash}_`))
+        .map((name) => rm(path.join(cacheDir, name), { force: true }))
     );
   }
 }

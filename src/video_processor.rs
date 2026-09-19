@@ -321,6 +321,20 @@ pub fn verify_ffmpeg_available() -> Result<(), String> {
     verify_binary_available("ffprobe", &ffprobe_path)
 }
 
+/// True when both ffmpeg and ffprobe are runnable. Test helper — production
+/// startup already fails fast via `verify_ffmpeg_available`.
+#[cfg(test)]
+pub(crate) fn ffmpeg_available() -> bool {
+    ["ffmpeg", "ffprobe"].iter().all(|bin| {
+        std::process::Command::new(bin)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
 pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetadata> {
     let video_path = video_path.to_path_buf();
     let ffprobe_path = get_ffprobe_path();
@@ -1184,14 +1198,6 @@ pub(crate) mod tests {
             .join(filename)
     }
 
-    fn has_command(cmd: &str) -> bool {
-        std::process::Command::new(cmd)
-            .arg("-version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
     fn should_run_video_tests(filename: &str) -> bool {
         let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
         if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
@@ -1208,13 +1214,8 @@ pub(crate) mod tests {
             return false;
         }
 
-        if !has_command("ffprobe") {
-            eprintln!("ffprobe not found in PATH; skipping video tests");
-            return false;
-        }
-
-        if !has_command("ffmpeg") {
-            eprintln!("ffmpeg not found in PATH; skipping video tests");
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg or ffprobe not found in PATH; skipping video tests");
             return false;
         }
 

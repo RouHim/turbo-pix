@@ -3,7 +3,9 @@ use warp::http::StatusCode;
 use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::DbPool;
-use crate::saved_searches::{self, CreateError, SavedSearch, VALID_SORTS, VALID_VIEWS};
+use crate::saved_searches::{
+    self, CreateError, SavedSearch, SavedSearchFilter, VALID_SORTS, VALID_VIEWS,
+};
 use crate::warp_helpers::{with_db, DatabaseError, ValidationError};
 
 /// Cap on JSON request bodies; the one in handlers_photo.rs is private.
@@ -22,6 +24,8 @@ pub struct CreateSavedSearchRequest {
     pub sort: String,
     pub year: Option<i64>,
     pub month: Option<i64>,
+    pub to_year: Option<i64>,
+    pub to_month: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,14 +33,7 @@ pub struct RenameSavedSearchRequest {
     pub name: String,
 }
 
-type CreateFields = (
-    String,
-    Option<String>,
-    String,
-    String,
-    Option<i64>,
-    Option<i64>,
-);
+type CreateFields = (String, Option<String>, String, String, SavedSearchFilter);
 
 /// Generic 404 reply matching `handle_rejection`'s not-found shape.
 ///
@@ -105,15 +102,40 @@ fn validate_create(req: &CreateSavedSearchRequest) -> Result<CreateFields, Valid
             message: "Invalid month".to_string(),
         });
     }
+    if req.to_year.is_some_and(|y| y < 1) {
+        return Err(ValidationError {
+            message: "Invalid end year".to_string(),
+        });
+    }
+    if req.to_month.is_some_and(|m| !(1..=12).contains(&m))
+        || (req.to_month.is_some() && req.to_year.is_none())
+    {
+        return Err(ValidationError {
+            message: "Invalid end month".to_string(),
+        });
+    }
 
-    Ok((
-        name,
-        query,
-        req.view.clone(),
-        req.sort.clone(),
-        req.year,
-        req.month,
-    ))
+    let mut filter = SavedSearchFilter {
+        year: req.year,
+        month: req.month,
+        to_year: req.to_year,
+        to_month: req.to_month,
+    };
+    // Mirrors router normalizeState: reversed bounds become ascending ones.
+    if let (Some(year), Some(to_year)) = (filter.year, filter.to_year) {
+        let start = year * 12 + filter.month.unwrap_or(1) - 1;
+        let end = to_year * 12 + filter.to_month.unwrap_or(12) - 1;
+        if end < start {
+            filter = SavedSearchFilter {
+                year: Some(to_year),
+                month: filter.to_month,
+                to_year: Some(year),
+                to_month: filter.month,
+            };
+        }
+    }
+
+    Ok((name, query, req.view.clone(), req.sort.clone(), filter))
 }
 
 pub async fn list_saved_searches(db_pool: DbPool) -> Result<impl Reply, Rejection> {
@@ -132,10 +154,9 @@ pub async fn create_saved_search(
     req: CreateSavedSearchRequest,
     db_pool: DbPool,
 ) -> Result<impl Reply, Rejection> {
-    let (name, query, view, sort, year, month) = validate_create(&req)?;
+    let (name, query, view, sort, filter) = validate_create(&req)?;
 
-    match saved_searches::create(&db_pool, &name, query.as_deref(), &view, &sort, year, month).await
-    {
+    match saved_searches::create(&db_pool, &name, query.as_deref(), &view, &sort, &filter).await {
         Ok(created) => Ok(warp::reply::with_status(
             warp::reply::json(&created),
             StatusCode::CREATED,
@@ -264,6 +285,8 @@ mod tests {
         assert_eq!(body["sort"], "date_desc");
         assert_eq!(body["year"], 2023);
         assert_eq!(body["month"], serde_json::Value::Null);
+        assert_eq!(body["to_year"], serde_json::Value::Null);
+        assert_eq!(body["to_month"], serde_json::Value::Null);
         assert!(body["id"].as_i64().is_some());
     }
 
@@ -373,6 +396,136 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_range_bounds() {
+        for (to_year, to_month) in [
+            (Some(2012), Some(13)),
+            (Some(2012), Some(0)),
+            (None, Some(3)),
+        ] {
+            let request = CreateSavedSearchRequest {
+                name: "Range".to_string(),
+                query: None,
+                view: "all".to_string(),
+                sort: "date_desc".to_string(),
+                year: Some(2015),
+                month: Some(8),
+                to_year,
+                to_month,
+            };
+            let result = validate_create(&request);
+            assert!(
+                result.is_err(),
+                "({to_year:?}, {to_month:?}) must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_stores_range_bounds() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let row = saved_searches::create(
+            &pool,
+            "Summer",
+            None,
+            "all",
+            "date_desc",
+            &saved_searches::SavedSearchFilter {
+                year: Some(2012),
+                month: Some(3),
+                to_year: Some(2015),
+                to_month: Some(8),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(row.year, Some(2012));
+        assert_eq!(row.month, Some(3));
+        assert_eq!(row.to_year, Some(2015));
+        assert_eq!(row.to_month, Some(8));
+
+        // A different range is a different saved search, not a duplicate.
+        let other = saved_searches::create(
+            &pool,
+            "Autumn",
+            None,
+            "all",
+            "date_desc",
+            &saved_searches::SavedSearchFilter {
+                year: Some(2012),
+                month: Some(3),
+                to_year: Some(2015),
+                to_month: Some(9),
+            },
+        )
+        .await;
+        assert!(
+            other.is_ok(),
+            "distinct ranges must not collide on the unique index"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_and_list_return_range_bounds() {
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let routes = build_test_routes(db_pool);
+
+        let mut body = create_body("Summer range");
+        body["year"] = serde_json::json!(2012);
+        body["month"] = serde_json::json!(3);
+        body["to_year"] = serde_json::json!(2015);
+        body["to_month"] = serde_json::json!(8);
+
+        let created = warp::test::request()
+            .method("POST")
+            .path("/api/saved-searches")
+            .json(&body)
+            .reply(&routes)
+            .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created: serde_json::Value = serde_json::from_slice(created.body()).unwrap();
+        assert_eq!(created["year"], 2012);
+        assert_eq!(created["month"], 3);
+        assert_eq!(created["to_year"], 2015);
+        assert_eq!(created["to_month"], 8);
+
+        // The GET path is what a client restores a range from.
+        let listed = warp::test::request()
+            .method("GET")
+            .path("/api/saved-searches")
+            .reply(&routes)
+            .await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed: serde_json::Value = serde_json::from_slice(listed.body()).unwrap();
+        assert_eq!(listed["saved_searches"][0]["to_year"], 2015);
+        assert_eq!(listed["saved_searches"][0]["to_month"], 8);
+    }
+
+    #[tokio::test]
+    async fn test_create_swaps_reversed_range_bounds() {
+        let request = CreateSavedSearchRequest {
+            name: "Reversed".to_string(),
+            query: None,
+            view: "all".to_string(),
+            sort: "date_desc".to_string(),
+            year: Some(2015),
+            month: Some(8),
+            to_year: Some(2012),
+            to_month: Some(3),
+        };
+        let (_, _, _, _, filter) = validate_create(&request).unwrap();
+        assert_eq!(
+            filter,
+            SavedSearchFilter {
+                year: Some(2012),
+                month: Some(3),
+                to_year: Some(2015),
+                to_month: Some(8),
+            }
+        );
     }
 
     #[tokio::test]

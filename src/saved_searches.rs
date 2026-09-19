@@ -12,7 +12,19 @@ pub struct SavedSearch {
     pub sort: String,
     pub year: Option<i64>,
     pub month: Option<i64>,
+    pub to_year: Option<i64>,
+    pub to_month: Option<i64>,
     pub created_at: String,
+}
+
+/// Date-filter bounds of a saved search: start (`year`/`month`) and inclusive
+/// end (`to_year`/`to_month`). A `None` end bound means "single period".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavedSearchFilter {
+    pub year: Option<i64>,
+    pub month: Option<i64>,
+    pub to_year: Option<i64>,
+    pub to_month: Option<i64>,
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for SavedSearch {
@@ -25,6 +37,8 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for SavedSearch {
             sort: row.try_get("sort")?,
             year: row.try_get("year")?,
             month: row.try_get("month")?,
+            to_year: row.try_get("to_year")?,
+            to_month: row.try_get("to_month")?,
             created_at: row.try_get("created_at")?,
         })
     }
@@ -46,7 +60,8 @@ pub enum CreateError {
     Db(Box<dyn std::error::Error>),
 }
 
-const SELECT_COLUMNS: &str = "id, name, query, view, sort, year, month, created_at";
+const SELECT_COLUMNS: &str =
+    "id, name, query, view, sort, year, month, to_year, to_month, created_at";
 
 /// List saved searches newest-first (created_at second resolution, id tiebreak).
 pub async fn list(pool: &DbPool) -> Result<Vec<SavedSearch>, Box<dyn std::error::Error>> {
@@ -67,12 +82,11 @@ pub async fn create(
     query: Option<&str>,
     view: &str,
     sort: &str,
-    year: Option<i64>,
-    month: Option<i64>,
+    filter: &SavedSearchFilter,
 ) -> Result<SavedSearch, CreateError> {
     let inserted: Option<(i64,)> = sqlx::query_as(
-        "INSERT INTO saved_searches (name, query, view, sort, year, month)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO saved_searches (name, query, view, sort, year, month, to_year, to_month)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT DO NOTHING
          RETURNING id",
     )
@@ -80,8 +94,10 @@ pub async fn create(
     .bind(query)
     .bind(view)
     .bind(sort)
-    .bind(year)
-    .bind(month)
+    .bind(filter.year)
+    .bind(filter.month)
+    .bind(filter.to_year)
+    .bind(filter.to_month)
     .fetch_optional(pool)
     .await
     .map_err(|e| CreateError::Db(Box::new(e)))?;
@@ -93,13 +109,16 @@ pub async fn create(
             // equality for the optional columns.
             let existing = sqlx::query_as::<_, SavedSearch>(sqlx::AssertSqlSafe(format!(
                 "SELECT {SELECT_COLUMNS} FROM saved_searches
-                 WHERE query IS ? AND view = ? AND sort = ? AND year IS ? AND month IS ?"
+                 WHERE query IS ? AND view = ? AND sort = ? AND year IS ? AND month IS ?
+                   AND to_year IS ? AND to_month IS ?"
             )))
             .bind(query)
             .bind(view)
             .bind(sort)
-            .bind(year)
-            .bind(month)
+            .bind(filter.year)
+            .bind(filter.month)
+            .bind(filter.to_year)
+            .bind(filter.to_month)
             .fetch_optional(pool)
             .await
             .map_err(|e| CreateError::Db(Box::new(e)))?;
@@ -155,6 +174,14 @@ mod tests {
     use super::*;
     use crate::db::create_test_db_pool;
 
+    /// Unfiltered identity: the state most tests exercise.
+    const NO_FILTER: SavedSearchFilter = SavedSearchFilter {
+        year: None,
+        month: None,
+        to_year: None,
+        to_month: None,
+    };
+
     #[tokio::test]
     async fn test_create_and_list_newest_first() {
         let pool = create_test_db_pool().await.unwrap();
@@ -164,8 +191,10 @@ mod tests {
             Some("beach"),
             "all",
             "date_desc",
-            Some(2023),
-            None,
+            &SavedSearchFilter {
+                year: Some(2023),
+                ..NO_FILTER
+            },
         )
         .await
         .unwrap();
@@ -175,8 +204,7 @@ mod tests {
             Some("sunset"),
             "favorites",
             "date_asc",
-            None,
-            None,
+            &NO_FILTER,
         )
         .await
         .unwrap();
@@ -199,8 +227,10 @@ mod tests {
             Some("beach"),
             "all",
             "date_desc",
-            Some(2023),
-            None,
+            &SavedSearchFilter {
+                year: Some(2023),
+                ..NO_FILTER
+            },
         )
         .await
         .unwrap();
@@ -211,8 +241,10 @@ mod tests {
             Some("beach"),
             "all",
             "date_desc",
-            Some(2023),
-            None,
+            &SavedSearchFilter {
+                year: Some(2023),
+                ..NO_FILTER
+            },
         )
         .await;
         match second {
@@ -226,7 +258,7 @@ mod tests {
         assert_eq!(list(&pool).await.unwrap().len(), 1);
 
         // NULL identity path: query/year/month all NULL.
-        create(&pool, "Null state", None, "videos", "date_desc", None, None)
+        create(&pool, "Null state", None, "videos", "date_desc", &NO_FILTER)
             .await
             .unwrap();
         let dup = create(
@@ -235,8 +267,7 @@ mod tests {
             None,
             "videos",
             "date_desc",
-            None,
-            None,
+            &NO_FILTER,
         )
         .await;
         match dup {
@@ -249,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn test_null_and_explicit_year_are_distinct() {
         let pool = create_test_db_pool().await.unwrap();
-        create(&pool, "Cat", Some("cat"), "all", "date_desc", None, None)
+        create(&pool, "Cat", Some("cat"), "all", "date_desc", &NO_FILTER)
             .await
             .unwrap();
         create(
@@ -258,8 +289,10 @@ mod tests {
             Some("cat"),
             "all",
             "date_desc",
-            Some(2023),
-            None,
+            &SavedSearchFilter {
+                year: Some(2023),
+                ..NO_FILTER
+            },
         )
         .await
         .unwrap();
@@ -269,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn test_rename_updates_name() {
         let pool = create_test_db_pool().await.unwrap();
-        let created = create(&pool, "Old", Some("beach"), "all", "date_desc", None, None)
+        let created = create(&pool, "Old", Some("beach"), "all", "date_desc", &NO_FILTER)
             .await
             .unwrap();
         let renamed = rename(&pool, created.id, "New").await.unwrap().unwrap();
@@ -288,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_removes_row() {
         let pool = create_test_db_pool().await.unwrap();
-        let created = create(&pool, "Temp", Some("beach"), "all", "date_desc", None, None)
+        let created = create(&pool, "Temp", Some("beach"), "all", "date_desc", &NO_FILTER)
             .await
             .unwrap();
         assert!(delete(&pool, created.id).await.unwrap());

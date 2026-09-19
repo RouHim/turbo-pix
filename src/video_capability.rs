@@ -1,8 +1,10 @@
-/// Shared video-playback capability helpers.
-///
-/// Task 2 lands the serve-time decision engine (Direct Play / faststart remux /
-/// transcode) in this same module.
-///
+//! Shared video-playback capability helpers: the container families, the
+//! client's declared codec set (video *and* audio), and the single playback
+//! decision that maps resolved capabilities + a client declaration onto a
+//! delivery mode.
+
+use crate::video_probe::ResolvedCapabilities;
+
 /// Maps a ffprobe pixel format string to its bit depth.
 ///
 /// 8-bit formats are listed explicitly; higher-depth formats follow the
@@ -74,13 +76,108 @@ impl ContainerFamily {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum DirectPlay {
-    Yes,
-    NeedsRemux,
-    No,
+/// How one request should be delivered. The server owns this decision; the
+/// client may only consume it (and escalate to conversion when the delivered
+/// bytes turn out to be undecodable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// Hand the original file to the media element as-is.
+    Direct,
+    /// Stream a fragmented-MP4 remux (container/layout only, no re-encode).
+    StreamRemux,
+    /// Stream the video track copied and only the audio converted.
+    StreamAudio,
+    /// Stream a full transcode (video and audio re-encoded).
+    StreamTranscode,
 }
 
+/// Containers a media element may be handed as-is.
+fn direct_container_ok(family: ContainerFamily) -> bool {
+    matches!(family, ContainerFamily::Mp4 | ContainerFamily::Webm)
+}
+
+/// Video codecs that can be copied (never re-encoded) into an MP4 output.
+fn copyable_into_mp4(codec: &str) -> bool {
+    matches!(codec, "h264" | "hevc" | "av1" | "vp9")
+}
+
+fn video_supported(codec: &str, bit_depth: Option<u32>, client: &ClientCodecs) -> bool {
+    match codec {
+        "h264" => {
+            if bit_depth.unwrap_or(8) <= 8 {
+                client.h264_8
+            } else {
+                client.h264_10
+            }
+        }
+        "hevc" => client.hevc,
+        "av1" => client.av1,
+        "vp9" => client.vp9,
+        "vp8" => client.vp8,
+        _ => false,
+    }
+}
+
+fn audio_supported(codec: Option<&str>, client: &ClientCodecs) -> bool {
+    match codec {
+        None | Some("") => true,
+        Some("aac") => client.audio.aac,
+        Some("opus") => client.audio.opus,
+        Some("mp3") => client.audio.mp3,
+        Some("flac") => client.audio.flac,
+        Some("ac3") => client.audio.ac3,
+        Some("eac3") => client.audio.eac3,
+        Some("dts") => client.audio.dts,
+        Some("vorbis") => client.audio.vorbis,
+        Some(_) => false,
+    }
+}
+
+/// The single playback decision (spec FR-001..FR-004, FR-007).
+pub fn plan(caps: &ResolvedCapabilities, client: &ClientCodecs) -> Delivery {
+    let video_ok = video_supported(&caps.codec, caps.bit_depth, client);
+    let audio_ok = audio_supported(caps.audio_codec.as_deref(), client);
+
+    if video_ok && audio_ok {
+        // Same container class the browser understands, and — for MP4-family —
+        // a progressive layout.
+        let layout_ok = !caps.family.has_moov_layout() || caps.moov_at_start;
+        if direct_container_ok(caps.family) && layout_ok {
+            return Delivery::Direct;
+        }
+        if copyable_into_mp4(&caps.codec) {
+            return Delivery::StreamRemux;
+        }
+    }
+    if video_ok && copyable_into_mp4(&caps.codec) {
+        // Video is fine; the container or the audio track is not.
+        return if audio_ok {
+            Delivery::StreamRemux
+        } else {
+            Delivery::StreamAudio
+        };
+    }
+    Delivery::StreamTranscode
+}
+
+/// Audio codecs a client can decode. Mirrors the tokens `ClientCodecs::parse`
+/// accepts. Audio is a separate decision dimension: browsers disagree on AC-3
+/// and DTS support, so "the video plays" says nothing about the audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AudioCodecs {
+    pub aac: bool,
+    pub opus: bool,
+    pub mp3: bool,
+    pub flac: bool,
+    pub ac3: bool,
+    pub eac3: bool,
+    pub dts: bool,
+    pub vorbis: bool,
+}
+
+/// The client's declared decoding capabilities, parsed from the
+/// `X-TurboPix-Codecs` header or the `?client=` query param.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientCodecs {
     pub h264_8: bool,
     pub h264_10: bool,
@@ -88,16 +185,11 @@ pub struct ClientCodecs {
     pub av1: bool,
     pub vp9: bool,
     pub vp8: bool,
+    pub audio: AudioCodecs,
 }
 
 impl ClientCodecs {
-    pub fn conservative() -> Self {
-        Self {
-            h264_8: true,
-            ..Self::none()
-        }
-    }
-    fn none() -> Self {
+    pub fn none() -> Self {
         Self {
             h264_8: false,
             h264_10: false,
@@ -105,14 +197,27 @@ impl ClientCodecs {
             av1: false,
             vp9: false,
             vp8: false,
+            audio: AudioCodecs::default(),
         }
     }
+
+    pub fn conservative() -> Self {
+        Self {
+            h264_8: true,
+            ..Self::none()
+        }
+    }
+
+    /// Unknown tokens are ignored. A missing OR blank declaration yields the
+    /// conservative baseline; a declaration that parses to nothing at all
+    /// yields an empty capability set (the client explicitly claimed nothing).
     pub fn parse(header: Option<&str>) -> Self {
-        // A client that sends no capability header gets the conservative
-        // baseline (h264-8 only), matching the test contract.
         let Some(raw) = header else {
             return Self::conservative();
         };
+        if raw.trim().is_empty() {
+            return Self::conservative();
+        }
         let mut c = Self::none();
         for tok in raw.split(',').map(str::trim) {
             match tok {
@@ -122,6 +227,14 @@ impl ClientCodecs {
                 "av1" => c.av1 = true,
                 "vp9" => c.vp9 = true,
                 "vp8" => c.vp8 = true,
+                "aac" => c.audio.aac = true,
+                "opus" => c.audio.opus = true,
+                "mp3" => c.audio.mp3 = true,
+                "flac" => c.audio.flac = true,
+                "ac3" => c.audio.ac3 = true,
+                "eac3" => c.audio.eac3 = true,
+                "dts" => c.audio.dts = true,
+                "vorbis" => c.audio.vorbis = true,
                 _ => {}
             }
         }
@@ -129,175 +242,142 @@ impl ClientCodecs {
     }
 }
 
-pub fn decide(
-    codec: &str,
-    container: &str,
-    bit_depth: Option<u32>,
-    moov_at_start: bool,
-    file_size: i64,
-    client: &ClientCodecs,
-) -> DirectPlay {
-    if file_size <= 0 {
-        return DirectPlay::No;
-    }
-    match codec {
-        "h264" => {
-            if container != "mp4" && container != "mov" && container != "m4v" {
-                return DirectPlay::No;
-            }
-            let supported = if bit_depth.unwrap_or(8) <= 8 {
-                client.h264_8
-            } else {
-                client.h264_10
-            };
-            if !supported {
-                return DirectPlay::No;
-            }
-            if moov_at_start {
-                DirectPlay::Yes
-            } else {
-                DirectPlay::NeedsRemux
-            }
-        }
-        "av1" | "vp8" | "vp9" => {
-            let client_support = if codec == "av1" {
-                client.av1
-            } else if codec == "vp9" {
-                client.vp9
-            } else {
-                client.vp8
-            };
-            if (container == "webm" || container == "mp4") && client_support {
-                if moov_at_start {
-                    DirectPlay::Yes
-                } else {
-                    DirectPlay::NeedsRemux
-                }
-            } else {
-                DirectPlay::No
-            }
-        }
-        _ => DirectPlay::No, // hevc, mpeg4, fraps, indeo5, msmpeg4*, mjpeg, ...
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video_probe::ResolvedCapabilities;
+
+    fn caps(
+        codec: &str,
+        container: &str,
+        bit_depth: Option<u32>,
+        audio: Option<&str>,
+        moov: bool,
+    ) -> ResolvedCapabilities {
+        ResolvedCapabilities {
+            codec: codec.to_string(),
+            container: Some(container.to_string()),
+            family: ContainerFamily::from_record(Some(container), "video.mp4"),
+            bit_depth,
+            audio_codec: audio.map(str::to_string),
+            moov_at_start: moov,
+            duration_secs: Some(10.0),
+            probed: true,
+        }
+    }
 
     fn client_all() -> ClientCodecs {
-        ClientCodecs {
-            h264_8: true,
-            h264_10: true,
-            hevc: true,
-            av1: true,
-            vp9: true,
-            vp8: true,
-        }
+        ClientCodecs::parse(Some(
+            "h264-8,h264-10,hevc,av1,vp9,vp8,aac,opus,mp3,flac,ac3,eac3,dts,vorbis",
+        ))
     }
-    fn client_h264_8() -> ClientCodecs {
-        ClientCodecs::conservative()
+
+    /// What a plain Chrome/Firefox desktop really declares.
+    fn web_client() -> ClientCodecs {
+        ClientCodecs::parse(Some("h264-8,aac,opus,mp3,vorbis"))
     }
 
     #[test]
-    fn h264_8_mp4_moov_at_start_direct_plays() {
-        let c = client_all();
+    fn h264_mp4_with_audio_plays_directly() {
         assert_eq!(
-            decide("h264", "mp4", Some(8), true, 1000, &c),
-            DirectPlay::Yes
+            plan(
+                &caps("h264", "mov", Some(8), Some("aac"), true),
+                &web_client()
+            ),
+            Delivery::Direct
         );
         assert_eq!(
-            decide("h264", "mov", Some(8), true, 1000, &c),
-            DirectPlay::Yes
-        );
-        // missing bit_depth defaults to 8-bit (safe default for nearly all library h264)
-        assert_eq!(decide("h264", "mp4", None, true, 1000, &c), DirectPlay::Yes);
-    }
-
-    #[test]
-    fn h264_8_with_moov_at_end_needs_remux() {
-        let c = client_all();
-        assert_eq!(
-            decide("h264", "mp4", Some(8), false, 1000, &c),
-            DirectPlay::NeedsRemux
+            plan(&caps("h264", "mp4", None, None, true), &web_client()),
+            Delivery::Direct
         );
     }
 
     #[test]
-    fn h264_10bit_requires_client_h264_10() {
-        let all = client_all();
+    fn moov_at_end_remuxes_losslessly() {
         assert_eq!(
-            decide("h264", "mp4", Some(10), true, 1000, &all),
-            DirectPlay::Yes
-        );
-        let c8 = client_h264_8();
-        assert_eq!(
-            decide("h264", "mp4", Some(10), true, 1000, &c8),
-            DirectPlay::No
+            plan(
+                &caps("h264", "mov", Some(8), Some("aac"), false),
+                &web_client()
+            ),
+            Delivery::StreamRemux
         );
     }
 
     #[test]
-    fn conservative_client_h264_10_needs_transcode() {
-        let c = client_h264_8();
+    fn h264_in_matroska_remuxes_to_mp4() {
         assert_eq!(
-            decide("h264", "mp4", Some(10), true, 1000, &c),
-            DirectPlay::No
+            plan(
+                &caps("h264", "matroska", Some(8), Some("aac"), true),
+                &web_client()
+            ),
+            Delivery::StreamRemux
         );
     }
 
     #[test]
-    fn hevc_and_empty_never_direct_playable() {
-        let c = client_all();
-        assert_eq!(
-            decide("hevc", "mp4", Some(8), true, 1000, &c),
-            DirectPlay::No
-        );
-        assert_eq!(decide("h264", "mp4", Some(8), true, 0, &c), DirectPlay::No);
-        // empty file
+    fn webm_vp9_plays_directly_only_when_declared() {
+        let webm = ResolvedCapabilities {
+            family: ContainerFamily::Webm,
+            ..caps("vp9", "webm", Some(8), Some("opus"), true)
+        };
+        // "directly only when declared": with vp9 declared it plays as-is ...
+        assert_eq!(plan(&webm, &client_all()), Delivery::Direct);
+        // ... and without it the source is converted.
+        let no_vp9 = ClientCodecs::parse(Some("h264-8,aac"));
+        assert_eq!(plan(&webm, &no_vp9), Delivery::StreamTranscode);
     }
 
     #[test]
-    fn av1_and_vp_in_webm_direct_playable_when_client_supports() {
-        let c = client_all();
+    fn hevc_direct_plays_only_when_declared() {
+        let hevc = caps("hevc", "mov", Some(8), Some("aac"), true);
+        assert_eq!(plan(&hevc, &client_all()), Delivery::Direct);
+        assert_eq!(plan(&hevc, &web_client()), Delivery::StreamTranscode);
+    }
+
+    #[test]
+    fn undeclared_audio_converts_audio_only() {
+        let ac3 = caps("h264", "mov", Some(8), Some("ac3"), true);
+        assert_eq!(plan(&ac3, &web_client()), Delivery::StreamAudio);
+        assert_eq!(plan(&ac3, &client_all()), Delivery::Direct);
+    }
+
+    #[test]
+    fn ten_bit_h264_needs_declared_support() {
+        let ten_bit = caps("h264", "mov", Some(10), Some("aac"), true);
+        assert_eq!(plan(&ten_bit, &web_client()), Delivery::StreamTranscode);
+        assert_eq!(plan(&ten_bit, &client_all()), Delivery::Direct);
+    }
+
+    #[test]
+    fn legacy_and_unknown_sources_convert() {
         assert_eq!(
-            decide("av1", "webm", Some(8), true, 1000, &c),
-            DirectPlay::Yes
+            plan(
+                &caps("mpeg4", "avi", Some(8), Some("mp3"), true),
+                &client_all()
+            ),
+            Delivery::StreamTranscode
         );
         assert_eq!(
-            decide("vp9", "webm", Some(8), true, 1000, &c),
-            DirectPlay::Yes
+            plan(&caps("", "", None, None, true), &client_all()),
+            Delivery::StreamTranscode
         );
-        let c8 = client_h264_8();
         assert_eq!(
-            decide("av1", "webm", Some(8), true, 1000, &c8),
-            DirectPlay::No
+            plan(
+                &caps("hevc", "matroska", Some(8), Some("aac"), true),
+                &web_client()
+            ),
+            Delivery::StreamTranscode
         );
     }
 
     #[test]
-    fn legacy_codecs_never_direct_playable() {
-        let c = client_all();
-        for codec in [
-            "mpeg4",
-            "fraps",
-            "indeo5",
-            "msmpeg4v2",
-            "msmpeg4v1",
-            "mjpeg",
-        ] {
-            assert_eq!(
-                decide(codec, "avi", Some(8), true, 1000, &c),
-                DirectPlay::No
-            );
-        }
-    }
-
-    #[test]
-    fn parse_client_header() {
-        let c = ClientCodecs::parse(Some("h264-8,hevc,av1"));
-        assert!(c.h264_8 && c.hevc && c.av1 && !c.h264_10);
-        let d = ClientCodecs::parse(None);
-        assert!(d.h264_8 && !d.hevc);
+    fn empty_or_missing_declaration_falls_back_to_conservative() {
+        assert_eq!(ClientCodecs::parse(Some("")), ClientCodecs::conservative());
+        assert_eq!(ClientCodecs::parse(None), ClientCodecs::conservative());
+        assert_eq!(
+            ClientCodecs::parse(Some("bogus-token")),
+            ClientCodecs::none(),
+            "a declaration with no recognized token is an empty capability set, not h264-8"
+        );
     }
 }

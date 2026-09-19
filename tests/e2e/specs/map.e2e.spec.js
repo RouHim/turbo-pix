@@ -19,6 +19,10 @@ test.describe('Map view', () => {
     const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
     try {
       const page = await context.newPage();
+      // This page navigates on its own, so the per-test beforeEach stub does
+      // not cover it: without the stub the seeding pass issues real
+      // tile.openstreetmap.org requests.
+      await TestHelpers.stubMapTiles(page);
       await TestHelpers.goto(page, '/map');
       const pair = await page.evaluate(async () => {
         const response = await fetch('/api/photos/map');

@@ -1168,6 +1168,32 @@ pub fn get_transcoded_path_versioned(
     ))
 }
 
+/// Video-copy cache path: the same version key as
+/// [`get_transcoded_path_versioned`], in its own `copied/` namespace.
+///
+/// The two artifacts are not interchangeable: a copy keeps the SOURCE video
+/// codec, so it is playable only by a client that declared that codec, while
+/// the `transcoded/` H.264 + AAC re-encode plays everywhere. Sharing one
+/// slot would let a capable client's audio-mode playthrough fill a copy whose
+/// codec the next client just declared it cannot decode — and the artifact
+/// would then keep answering `cached` for it.
+pub fn get_copied_path_versioned(
+    cache_dir: &Path,
+    original_hash: &str,
+    file_size: i64,
+    modified_millis: i64,
+) -> PathBuf {
+    let base = if cache_dir.file_name().is_some_and(|n| n == "copied") {
+        cache_dir.to_path_buf()
+    } else {
+        cache_dir.join("copied")
+    };
+    base.join(format!(
+        "{}_{}_{}.mp4",
+        original_hash, file_size, modified_millis
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

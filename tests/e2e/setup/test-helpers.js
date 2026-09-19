@@ -372,14 +372,15 @@ export class TestHelpers {
    * asserting the *cold* first-play behaviour (a `stream`/`remux` decision, a
    * visible conversion notice) clear it first.
    *
-   * Both halves of the cache matter: whole-file conversions live in
-   * `transcoded/`, the lossless faststart sidecars of remux playthroughs in
+   * Every cache namespace matters: the universal H.264 re-encodes live in
+   * `transcoded/`, video copies (source video codec, converted audio) in
+   * `copied/` and the lossless faststart sidecars of remux playthroughs in
    * `remux/`. A missing subdirectory is not an error (nothing was cached yet).
    */
   static async clearCachedConversions(hash) {
     // Same per-run cache global-setup hands the server via TRANSCODE_CACHE_DIR.
     const cacheDir = path.join(TEST_DATA_DIR, 'transcode-cache');
-    for (const kind of ['transcoded', 'remux']) {
+    for (const kind of ['transcoded', 'copied', 'remux']) {
       const dir = path.join(cacheDir, kind);
       const entries = await readdir(dir).catch(() => []);
       await Promise.all(

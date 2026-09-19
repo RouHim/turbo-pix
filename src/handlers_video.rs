@@ -67,6 +67,9 @@ use crate::video_processor::{
     set_transcode_status, transcode_codec_to_h264_with_progress, TranscodeClaim, TranscodeState,
     TranscodeStatus,
 };
+use crate::video_stream::{
+    output_mime, start_stream, supervise, StreamHandle, StreamMode, StreamStartError,
+};
 use crate::warp_helpers::{DatabaseError, NotFoundError};
 
 #[derive(Debug, Deserialize)]
@@ -726,6 +729,135 @@ pub async fn get_video_status(photo_hash: String) -> Result<impl Reply, Rejectio
     }
 
     Ok(warp::reply::json(&body))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StreamQuery {
+    /// Seconds into the source; the client restarts the stream here on seek.
+    pub start: Option<f64>,
+    /// Requested mode. Task 3 derives it from the decision; Task 6 lets the
+    /// client escalate only.
+    pub mode: Option<String>,
+    /// Client codec declaration, same tokens as `?client=` on the decision.
+    pub client: Option<String>,
+}
+
+/// Upper bound for `?start=` so a hostile client cannot ask for an absurd
+/// offset; sources longer than a day are out of scope.
+const MAX_STREAM_START_SECS: f64 = 86_400.0;
+
+/// Stream a video as fragmented MP4 straight out of ffmpeg.
+///
+/// `mode` is an explicit, validated query param here; Task 6 derives it from
+/// the playback decision instead, which is why mode selection stays confined
+/// to [`StreamMode::from_query`] and the `mode` binding below.
+pub async fn stream_video(
+    photo_hash: String,
+    query: StreamQuery,
+    _headers: HeaderMap,
+    db_pool: DbPool,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {e}"),
+            }))
+        }
+    };
+
+    let source = Path::new(&photo.file_path);
+    let source_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+    if source_size == 0 {
+        let response = warp::reply::with_status(Vec::<u8>::new(), StatusCode::OK);
+        let response = warp::reply::with_header(response, "content-length", "0");
+        let response = warp::reply::with_header(response, "x-transcode-warning", "empty");
+        return Ok(Box::new(response));
+    }
+
+    let requested = query.mode.as_deref().unwrap_or("transcode");
+    let Some(mode) = StreamMode::from_query(requested) else {
+        return Err(reject::custom(NotFoundError));
+    };
+    let start = query.start.unwrap_or(0.0).clamp(0.0, MAX_STREAM_START_SECS);
+
+    let handle = match start_stream(mode, source, start).await {
+        Ok(handle) => handle,
+        Err(StreamStartError::Busy) => {
+            let response = warp::reply::with_status(
+                warp::reply::json(&json!({ "error": "no conversion slot available" })),
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+            return Ok(Box::new(warp::reply::with_header(
+                response,
+                "retry-after",
+                "2",
+            )));
+        }
+        Err(StreamStartError::Disabled) => {
+            let response = warp::reply::with_status(
+                warp::reply::json(&json!({ "error": "conversion disabled" })),
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+            return Ok(Box::new(warp::reply::with_header(
+                response,
+                "retry-after",
+                "5",
+            )));
+        }
+        Err(StreamStartError::Spawn(message)) => {
+            log::error!("Stream spawn failed: {message}");
+            return Ok(Box::new(warp::reply::with_status(
+                warp::reply::json(&json!({ "error": message })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )));
+        }
+    };
+
+    let mode = handle.mode;
+    let video_codec = photo.video_codec().unwrap_or("").to_string();
+    let audio_codec = photo.audio_codec().map(str::to_string);
+    let duration = crate::video_probe::resolve(&db_pool, &photo)
+        .await
+        .duration_secs;
+
+    let StreamHandle {
+        stdout,
+        stderr,
+        child,
+        permit,
+        ..
+    } = handle;
+    let hash = photo.hash_sha256.clone();
+    tokio::spawn(async move {
+        match supervise(child, stderr).await {
+            Ok(()) => log::debug!("Stream finished for {hash}"),
+            Err(reason) => log::warn!("Stream failed for {hash} ({}): {reason}", mode.as_str()),
+        }
+        drop(permit);
+    });
+
+    let body = tokio_util::io::ReaderStream::new(stdout);
+    let response = warp::reply::stream(body);
+    let response = warp::reply::with_status(response, StatusCode::OK);
+    let response = warp::reply::with_header(response, "content-type", "video/mp4");
+    let response = warp::reply::with_header(response, "cache-control", "no-store");
+    let response = warp::reply::with_header(response, "x-turbopix-mode", mode.as_str());
+    let response = warp::reply::with_header(
+        response,
+        "x-turbopix-mime",
+        output_mime(mode, &video_codec, audio_codec.as_deref()),
+    );
+    let response: Box<dyn Reply> = match duration {
+        Some(secs) => Box::new(warp::reply::with_header(
+            response,
+            "x-turbopix-duration",
+            format!("{secs:.3}"),
+        )),
+        None => Box::new(response),
+    };
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -1941,5 +2073,96 @@ mod tests {
         );
 
         clear_transcode_status(&hash);
+    }
+
+    /// Take every conversion permit and keep holding them, so the transcode pool
+    /// stays saturated for as long as the returned guards live. Drain, pause,
+    /// drain again: another test's ffmpeg can still be running inside the
+    /// process-wide semaphore and release a permit after the first drain, which
+    /// would leave the requests under test with a slot to grab.
+    async fn saturate_transcode_pool() -> Vec<tokio::sync::SemaphorePermit<'static>> {
+        let semaphore = crate::video_processor::transcode_semaphore();
+        for _ in 0..40 {
+            let mut held = Vec::new();
+            while let Ok(permit) = semaphore.try_acquire() {
+                held.push(permit);
+            }
+            assert!(!held.is_empty(), "at least one permit must be acquirable");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if semaphore.available_permits() == 0 {
+                return held;
+            }
+        }
+        panic!("the transcode pool never settled into a saturated state");
+    }
+
+    #[tokio::test]
+    async fn stream_endpoint_serves_fragmented_bytes_with_mode_header() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nprintf '\\000\\000\\000\\030ftypiso5'\nprintf '\\000\\000\\000\\010moov'\n",
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: Some("remux".to_string()),
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("stream should reply");
+        let response = response.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-turbopix-mode"], "remux");
+        assert_eq!(response.headers()["content-type"], "video/mp4");
+
+        let body = collect_response_body(response).await;
+        assert!(body.windows(4).any(|w| w == b"ftyp"));
+    }
+
+    #[tokio::test]
+    async fn stream_endpoint_returns_503_when_pool_is_saturated() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        let _wait_guard = EnvVarGuard::set("TURBO_PIX_STREAM_QUEUE_WAIT_SECS", "0");
+
+        // Hold every permit so the request cannot be served. This must not rely
+        // on TURBO_PIX_MAX_TRANSCODES: the semaphore is a OnceLock sized by the
+        // first caller in the process.
+        let held = saturate_transcode_pool().await;
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: Some("transcode".to_string()),
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("busy reply");
+        let response = response.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "2");
+
+        drop(held);
     }
 }

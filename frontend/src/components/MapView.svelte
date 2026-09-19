@@ -1,6 +1,6 @@
 <script>
   import { get } from 'svelte/store';
-  import { mount, onMount, unmount, untrack } from 'svelte';
+  import { flushSync, mount, onMount, unmount, untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import L from 'leaflet';
   import Supercluster from 'supercluster';
@@ -50,6 +50,9 @@
   // for while it was open (see renderClusters).
   let openPopupKey = null;
   let renderPending = false;
+  // Set when the popup is dismissed from inside itself, so focus returns to the
+  // marker without guessing from the browser's focus teardown.
+  let restoreFocusOnClose = false;
   // Marker → mounted MapPopup component, so a popup's DOM is torn down with it.
   // (SvelteMap: the linter rejects a plain Map in component scope; this one is
   // only ever read imperatively.)
@@ -186,29 +189,16 @@
     popupNode.className = 'map-popup-host';
     marker.bindPopup(popupNode, { maxWidth: 320, minWidth: 260, autoPan: true, closeButton: true });
 
-    // Leaflet detaches the popup's DOM before it fires `popupclose`, which drops
-    // focus to <body> — so "was focus inside the popup?" has to be tracked while
-    // the popup is still alive.
-    let focusWasInside = false;
-    popupNode.addEventListener('focusin', () => {
-      focusWasInside = true;
-    });
-    popupNode.addEventListener('focusout', (event) => {
-      // A focusout that names no new target is the popup's own teardown (its DOM
-      // is detached before `popupclose`); a user moving on always names one.
-      if (!event.relatedTarget) return;
-      if (!popupNode.contains(event.relatedTarget)) focusWasInside = false;
-    });
-    // Leaflet's Escape-to-close lives in its map keyboard handler, which unhooks
-    // itself while focus is inside the popup — so the popup closes itself.
-    popupNode.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      marker.closePopup();
+    // Leaflet detaches the popup's DOM before it fires `popupclose`, so focus
+    // lands on <body> and the element that had it is no longer connected: that
+    // signature is what "the popup had focus when it closed" looks like.
+    let lastFocused = null;
+    popupNode.addEventListener('focusin', (event) => {
+      lastFocused = event.target;
     });
 
     marker.on('popupopen', () => {
-      focusWasInside = false;
+      lastFocused = null;
       openPopupKey = location.key;
       popupHandles.set(
         marker,
@@ -219,13 +209,24 @@
       );
       // Popup panes come after the marker pane in DOM order, but with many
       // markers Tab would walk through every marker first — move focus into the
-      // popup so keyboard users land on the thumbnails (FR-018).
-      requestAnimationFrame(() => popupNode.querySelector('button')?.focus());
+      // popup so keyboard users land on the thumbnails (FR-018). flushSync makes
+      // the freshly mounted markup available right here, so every (re)open lands
+      // on a thumbnail; the frame fallback only covers an empty popup.
+      flushSync();
+      const firstThumbnail = popupNode.querySelector('button');
+      if (firstThumbnail) firstThumbnail.focus();
+      else requestAnimationFrame(() => popupNode.querySelector('button')?.focus());
     });
 
     marker.on('popupclose', () => {
-      const restoreFocus = focusWasInside;
-      focusWasInside = false;
+      // Keyboard dismissal sets the flag; otherwise the browser's own focus
+      // teardown tells the story: the element that had focus is gone and focus
+      // fell back to <body>.
+      const focusDropped =
+        restoreFocusOnClose ||
+        (!lastFocused?.isConnected && document.activeElement === document.body);
+      restoreFocusOnClose = false;
+      lastFocused = null;
       const handle = popupHandles.get(marker);
       if (handle) {
         popupHandles.delete(marker);
@@ -239,10 +240,10 @@
         renderPending = false;
         renderClusters();
       }
-      // Only take focus back if the popup had it: a mouse user closing the popup
-      // must not have focus yanked onto a marker.
+      // Only take focus back if the popup dropped it: a mouse user closing the
+      // popup left focus on the map container and must not have it yanked away.
       const icon = (locationMarkers.get(location.key) ?? marker).getElement();
-      if (restoreFocus && icon?.isConnected) icon.focus();
+      if (focusDropped && icon?.isConnected) icon.focus();
     });
   }
 
@@ -253,16 +254,42 @@
     map.setView(latlng, Math.min(zoom, MAX_ZOOM), { animate: !prefersReducedMotion });
   }
 
-  function renderClusters() {
+  /** Pan/zoom redraws are the ones that must wait for an open popup to close. */
+  function handleViewChange() {
+    renderClusters({ fromViewChange: true });
+  }
+
+  /**
+   * Escape dismisses the open popup while it is the focused surface. Leaflet's
+   * own Escape handling only runs while the map container itself has focus; with
+   * focus inside the popup it is unhooked, so the popup would be undismissable.
+   */
+  function handleMapKeydown(event) {
+    if (event.key !== 'Escape' || !openPopupKey) return;
+    if (!map?.getPane('popupPane')?.contains(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    restoreFocusOnClose = true;
+    map.closePopup();
+  }
+
+  /**
+   * Redraws the markers. `fromViewChange` marks the pan/zoom path: removing a
+   * marker closes the popup bound to it (Leaflet's `bindPopup` registers
+   * `remove: closePopup`), and opening a popup pans the map — so rendering on
+   * that pan's `moveend` would close the popup the pan was for. Only that path
+   * waits for the popup to close; a data change drops the popup and redraws
+   * immediately, so the markers never lag the active filters (FR-004/SC-003).
+   */
+  function renderClusters({ fromViewChange = false } = {}) {
     if (!map || !clusterLayer || !clusterIndex) return;
 
     if (openPopupKey) {
-      // Removing a marker closes the popup bound to it (Leaflet's bindPopup
-      // registers `remove: closePopup`), and opening a popup pans the map when
-      // it would not fit — so rendering on that moveend would close the popup
-      // the pan was for. Render once the popup is closed instead.
-      renderPending = true;
-      return;
+      if (fromViewChange) {
+        renderPending = true;
+        return;
+      }
+      map.closePopup();
     }
 
     const bounds = map.getBounds();
@@ -288,6 +315,8 @@
           icon: clusterIcon(count),
           keyboard: true,
         });
+        const expand = () => expandCluster(feature.properties.cluster_id, [latitude, longitude]);
+        marker.on('click', expand);
         marker.addTo(clusterLayer);
         const element = marker.getElement();
         if (element) {
@@ -299,9 +328,7 @@
               default: '{count} photos, activate to zoom in',
             })
           );
-          activateOnKeyboard(element, () =>
-            expandCluster(feature.properties.cluster_id, [latitude, longitude])
-          );
+          activateOnKeyboard(element, expand);
         }
         continue;
       }
@@ -338,6 +365,9 @@
   }
 
   function openViewer(photo) {
+    // The viewer is a modal overlay: leaving the popup open behind it would keep
+    // its thumbnails tabbable and let the map claim Escape from the viewer.
+    map?.closePopup();
     // FR-011: the viewer gets the map's complete filtered, sorted set — the
     // same array the grid would page through — so next/previous stay in scope.
     window.dispatchEvent(new CustomEvent('openViewer', { detail: { photo, photos } }));
@@ -378,7 +408,9 @@
     // Markers live in their own group so a re-render can replace them without
     // touching tiles or the map itself.
     clusterLayer = L.layerGroup().addTo(map);
-    map.on('moveend zoomend', renderClusters);
+    map.on('moveend zoomend', handleViewChange);
+    const container = map.getContainer();
+    container.addEventListener('keydown', handleMapKeydown);
 
     // The shell resizes (sidebar toggle, window resize) without remounting the
     // view, so Leaflet must be told to re-measure its container.
@@ -392,7 +424,8 @@
       resizeObserver?.disconnect();
       resizeObserver = null;
       abortController?.abort();
-      map?.off('moveend zoomend', renderClusters);
+      map?.off('moveend zoomend', handleViewChange);
+      container.removeEventListener('keydown', handleMapKeydown);
       // Leaflet does not remove layers on map.remove(), so a popup left open by
       // a view change would keep its component instance alive.
       for (const handle of popupHandles.values()) {

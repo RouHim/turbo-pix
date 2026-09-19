@@ -41,11 +41,14 @@ async function settle(turns = 5) {
  *    the window in which the app's own `updating` check is already stale.
  */
 class FakeSourceBuffer {
-  constructor(mime) {
+  constructor(mime, mediaSource = null) {
     this.mime = mime;
+    this.mediaSource = mediaSource;
     this.updating = false;
     this.buffered = { length: 0 };
+    this._end = 0;
     this.appended = [];
+    this.removals = [];
     this.offsetAssignments = [];
     this.listeners = new Map();
     this._offset = 0;
@@ -75,7 +78,36 @@ class FakeSourceBuffer {
       );
     }
     this.appended.push(chunk);
-    this.buffered = { length: 1, start: () => 0, end: () => this.appended.length };
+    this._end = this.appended.length;
+    this.buffered = { length: 1, start: () => 0, end: () => this._end };
+    // Chromium grows the media source's duration to the end of the media it is
+    // handed: appending a fragment that runs past the declared duration is how
+    // a 20.02 s source starts reporting 21 s.
+    if (typeof this.mediaSource?.duration === 'number') {
+      this.mediaSource.duration = Math.max(
+        this.mediaSource.duration,
+        this.buffered.end(this.buffered.length - 1)
+      );
+    }
+    this.updating = true;
+    setImmediate(() => this._completeUpdate());
+  }
+
+  /**
+   * Chromium's removal contract: dropping a range takes the buffer offline and
+   * refuses to start while an update is already running (which is also why the
+   * duration cannot shrink below the buffered end until the tail is gone).
+   */
+  remove(start, end) {
+    if (this.updating) {
+      throw new DOMException(
+        'The SourceBuffer is updating and cannot be removed from.',
+        'InvalidStateError'
+      );
+    }
+    this.removals.push([start, end]);
+    this._end = Math.min(this._end, start);
+    this.buffered = { length: 1, start: () => 0, end: () => this._end };
     this.updating = true;
     setImmediate(() => this._completeUpdate());
   }
@@ -131,7 +163,7 @@ class FakeMediaSource {
   }
 
   addSourceBuffer(mime) {
-    const buffer = new FakeSourceBuffer(mime);
+    const buffer = new FakeSourceBuffer(mime, this);
     this.sourceBuffers.push(buffer);
     return buffer;
   }
@@ -415,6 +447,89 @@ test('a refused run carries its start offset so the retry resumes the seek', asy
   // silently throw the user's seek away.
   assert.equal(errors[0].startAt, 15, 'the retry can resume at the seek target');
   assert.equal(errors[0].retryAfterMs, 2000);
+
+  player.destroy();
+});
+test('appended media cannot inflate the declared duration', async () => {
+  const video = fakeVideo();
+  globalThis.fetch = fakeFetch().fetchImpl;
+  const player = createPlayer(video);
+
+  await player.start(0);
+  await settle();
+
+  // The declared duration is what the server measured on the source, so the
+  // timeline starts out exact — the element's seek bar must not be 0:00 → ∞.
+  assert.equal(createdSources.at(-1).duration, 2, 'the initial duration is the declared one');
+
+  await settle(10);
+
+  // The run's fragments end past the declared duration (the fetch yields three
+  // 1 s chunks for a 2 s source, which is what a stream-copied seek restart
+  // looks like): the media source adopts 3 s as its duration and would report
+  // it from the element, so the player drops the phantom tail and re-asserts
+  // the declared value.
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  assert.equal(buffer.appended.length, 3, 'the scenario is exercised');
+  assert.deepEqual(buffer.removals, [[2, 3]], 'media past the declared end is dropped');
+  assert.equal(buffer.buffered.end(0), 2, 'the buffer no longer runs past the source');
+  assert.equal(createdSources.at(-1).duration, 2, 'buffered excess must not grow the timeline');
+
+  player.destroy();
+});
+
+test('undecodable delivered bytes reach the viewer exactly once', async () => {
+  const video = fakeVideo();
+  globalThis.fetch = fakeFetch().fetchImpl;
+  const errors = [];
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  // Chromium reports a failed parse on the SourceBuffer and then on the
+  // element. The viewer escalates one ladder step per report, so both must
+  // collapse into a single failure.
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  buffer.fire('error');
+  video.dispatch('error');
+  await settle();
+
+  assert.equal(errors.length, 1, 'one failure per run');
+  assert.ok(errors[0] instanceof Error, 'the viewer gets a plain playback failure');
+  assert.equal(errors[0].status, undefined, 'a decode failure is not a saturation refusal');
+
+  player.destroy();
+  assert.equal(video.listenerCount('error'), 0, 'destroy detaches the media-error listener');
+});
+
+test("a superseded run's late error does not escalate the run that replaced it", async () => {
+  const video = fakeVideo();
+  const { fetchImpl, calls } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const errors = [];
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle(10);
+  const firstRun = createdSources.at(-1).sourceBuffers[0];
+
+  // A user seek restarts the stream: the old run is superseded, its media is
+  // gone, and an error it reports late belongs to a mode the viewer left.
+  video._currentTime = 15;
+  video.dispatch('seeking');
+  await settle();
+
+  firstRun.fire('error');
+  await settle();
+
+  assert.equal(errors.length, 0, 'a superseded run must not fail the current one');
+  assert.equal(calls.length, 2, 'the seek restart is still the current run');
+
+  // The run now attached still reports its own failure.
+  createdSources.at(-1).sourceBuffers[0].fire('error');
+  await settle();
+  assert.equal(errors.length, 1, 'the current run reports once');
 
   player.destroy();
 });

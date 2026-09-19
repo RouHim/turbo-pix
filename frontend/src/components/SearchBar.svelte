@@ -5,7 +5,7 @@
   import { api } from '../lib/api.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { appState, addToast, photoGridState, savedSearches } from '../lib/state.svelte.js';
-  import { isPrefixQuery } from '../lib/utils.js';
+  import { isPrefixQuery } from '../lib/query.js';
   import Icon from './Icon.svelte';
 
   let query = $state('');

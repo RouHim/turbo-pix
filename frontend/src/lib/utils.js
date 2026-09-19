@@ -8,17 +8,6 @@ import { get } from 'svelte/store';
 // ── Format helpers ──────────────────────────────────────────────────────────
 
 /**
- * True for backend filter-prefix queries (type:, location:, is_favorite:),
- * which the search pipeline routes through the regular (non-semantic) path.
- * Keep in sync with SearchBar.performSearch.
- * @param {string} q
- * @returns {boolean}
- */
-export function isPrefixQuery(q) {
-  return q.startsWith('type:') || q.startsWith('location:') || q.startsWith('is_favorite:');
-}
-
-/**
  * True for filenames whose extension is a supported video container.
  * @param {string} filename
  * @returns {boolean}

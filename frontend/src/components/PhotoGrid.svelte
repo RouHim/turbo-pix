@@ -16,7 +16,7 @@
   import { t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
   import { APP_CONSTANTS } from '../lib/constants.js';
-  import { isPrefixQuery } from '../lib/utils.js';
+  import { isPrefixQuery } from '../lib/query.js';
   import PhotoCard from './PhotoCard.svelte';
 
   const DEFAULT_BATCH_SIZE = APP_CONSTANTS.DEFAULT_BATCH_SIZE;

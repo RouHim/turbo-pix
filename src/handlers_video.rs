@@ -236,21 +236,16 @@ pub async fn get_video_file(
         get_transcoded_path_versioned(Path::new(&cache_dir), hash, file_size, modified_millis);
     let copied_artifact =
         get_copied_path_versioned(Path::new(&cache_dir), hash, file_size, modified_millis);
-    // A file left behind by a failed/timed-out attempt is not a usable
-    // artifact: the serve path deletes it and falls back to the original, so
-    // the decision must not advertise it as cached either.
-    let artifact_is_usable = |path: &Path| {
-        path.exists()
-            && !matches!(
-                get_transcode_status(hash).map(|status| status.state),
-                Some(TranscodeState::Failed | TranscodeState::Timeout)
-            )
-    };
+    // Existence is the whole test: an artifact only ever appears through an
+    // atomic temp + rename, so a file at one of these paths is complete. The
+    // per-hash conversion status tracks claim/cooldown state and must not gate
+    // serving: it is shared by every artifact namespace, so a failed conversion
+    // in one namespace would otherwise hide a perfectly good artifact in
+    // another (and the reverse).
     // The faststart sidecar is the remux cache: a lossless `-c copy` of the
     // source, so a remux delivery prefers it over any whole-file artifact.
     let remux_sidecar = remux_sidecar_path(&cache_dir, hash, file_size, modified_millis);
-    let cached_remux =
-        matches!(delivery, Delivery::StreamRemux) && artifact_is_usable(&remux_sidecar);
+    let cached_remux = matches!(delivery, Delivery::StreamRemux) && remux_sidecar.exists();
     // Which whole-file artifact this delivery may be served. The copy keeps the
     // SOURCE video codec, so only the delivery that implies the client declared
     // that codec (an audio-only conversion) may be handed it; every other
@@ -258,10 +253,8 @@ pub async fn get_video_file(
     // reaches for it only when its own sidecar is missing.
     let cached_whole_file = !cached_remux
         && match delivery {
-            Delivery::StreamAudio => artifact_is_usable(&copied_artifact),
-            Delivery::StreamTranscode | Delivery::StreamRemux => {
-                artifact_is_usable(&transcoded_artifact)
-            }
+            Delivery::StreamAudio => copied_artifact.exists(),
+            Delivery::StreamTranscode | Delivery::StreamRemux => transcoded_artifact.exists(),
             Delivery::Direct => false,
         };
 
@@ -609,9 +602,12 @@ async fn serve_whole_file_transcode(
         // response without starting a second transcode).
         match claim_transcode(&photo.hash_sha256) {
             TranscodeClaim::PreviouslyFailedOrTimedOut => {
-                // A transcode writes to a temp file and renames it into place only on success, so a
-                // failure/timeout leaves no file at `transcoded_path`. Remove any leftover temp
-                // sibling and serve the original; the warning header tells the client why.
+                // This branch is only reachable when NO artifact exists, and it is a
+                // spawn decision, not an artifact rule: a conversion writes to a temp
+                // file and renames it into place only on success, so a failure/timeout
+                // leaves no file at the artifact path. Remove any leftover temp sibling
+                // and serve the original; the warning header tells the client why. A
+                // finished artifact is never deleted on the strength of this status.
                 let temp_output_path = transcoded_path.with_extension("mp4.tmp");
                 if temp_output_path.exists() {
                     log::warn!(
@@ -685,32 +681,16 @@ async fn serve_whole_file_transcode(
             }
         }
     } else {
-        match get_transcode_status(&photo.hash_sha256).map(|s| s.state) {
-            Some(TranscodeState::Failed | TranscodeState::Timeout) => {
-                // A previous transcode attempt failed or timed out mid-write, leaving a
-                // corrupt/partial file at the cache path. Remove it and serve the original instead.
-                log::warn!(
-                    "Removing stale transcoded file left by a failed/timeout transcode: {}",
-                    transcoded_path.display()
-                );
-                let _ = std::fs::remove_file(&transcoded_path);
-                serve_video_file(
-                    photo,
-                    video_path,
-                    video_path.to_path_buf(),
-                    Some(TRANSCODE_FAILED_WARNING),
-                    headers,
-                )
-                .await
-            }
-            _ => {
-                log::info!(
-                    "Using cached transcoded version: {}",
-                    transcoded_path.display()
-                );
-                serve_video_file(photo, video_path, transcoded_path, None, headers).await
-            }
-        }
+        // The artifact exists, and it only ever got here through an atomic
+        // temp + rename, so it is complete — the per-hash conversion status is
+        // claim/cooldown bookkeeping shared by every artifact namespace and
+        // must not delete a finished file (a failed conversion in `copied/`
+        // used to wipe a valid `transcoded/` artifact and vice versa).
+        log::info!(
+            "Using cached transcoded version: {}",
+            transcoded_path.display()
+        );
+        serve_video_file(photo, video_path, transcoded_path, None, headers).await
     }
 }
 
@@ -1598,22 +1578,9 @@ mod tests {
             format!("/api/photos/{hash}/video?client=h264-8&transcode=true")
         );
 
-        // A file left behind by a failed/timed-out attempt is not an artifact:
-        // the serve path deletes it and falls back to the original, so the
-        // decision must not advertise it as cached either.
-        set_transcode_status(
-            hash,
-            TranscodeStatus {
-                state: TranscodeState::Failed,
-                hash: hash.to_string(),
-                started_at: Some(Utc::now()),
-                error: Some("boom".to_string()),
-                percent: None,
-            },
-        );
-        let decision = decision_for(&db_pool, hash, "h264-8").await;
-        assert_eq!(decision["action"], "stream");
-        assert_eq!(decision["cached"], false);
+        // The shared conversion status neither adds nor removes anything here:
+        // `failed_status_does_not_hide_a_completed_transcode` pins that a stale
+        // failure still serves the finished artifact.
         clear_transcode_status(hash);
     }
 
@@ -2436,12 +2403,32 @@ mod tests {
                 decision: None,
             },
             HeaderMap::new(),
-            db_pool,
+            db_pool.clone(),
         )
         .await
         .expect("byte request should be served")
         .into_response();
         assert_eq!(collect_response_body(response).await, b"hevc-video-copy");
+
+        // Both namespaces coexist under one shared status, so a failure recorded
+        // by either conversion must not hide the other's finished artifact.
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::Failed,
+                hash: hash.to_string(),
+                started_at: Some(Utc::now()),
+                error: Some("conversion failed".to_string()),
+                percent: None,
+            },
+        );
+        let audio_client = decision_for(&db_pool, hash, "hevc,aac").await;
+        assert_eq!(audio_client["action"], "direct");
+        assert_eq!(audio_client["cached"], true);
+        let plain_client = decision_for(&db_pool, hash, "h264-8").await;
+        assert_eq!(plain_client["action"], "direct");
+        assert_eq!(plain_client["cached"], true);
+        clear_transcode_status(hash);
     }
 
     #[tokio::test]
@@ -2787,22 +2774,31 @@ mod tests {
         assert!(response.headers().get("x-transcode-warning").is_none());
     }
 
+    /// A complete artifact is served whatever the shared conversion status
+    /// says: the status is claim/cooldown bookkeeping, and one failed
+    /// conversion (in either namespace) must not hide a finished file — the
+    /// artifact only ever appears through an atomic temp + rename.
     #[tokio::test]
-    async fn test_video_stale_transcoded_file_serves_original() {
+    async fn failed_status_does_not_hide_a_completed_transcode() {
         let db_pool = create_in_memory_pool().await.expect("failed to create db");
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let hash = "e8".repeat(32);
+        clear_transcode_status(&hash);
 
-        let video_path = setup_test_video(&db_pool, &temp_dir, &hash).await;
+        let _video_path = setup_test_video(&db_pool, &temp_dir, &hash).await;
+        set_video_record(
+            &db_pool,
+            &hash,
+            json!({
+                "codec": "mpeg4", "container": "avi", "bit_depth": 8,
+                "audio_codec": "mp3", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
 
-        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
-        create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\n'\n");
-        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
             EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
 
-        // A previous transcode attempt failed, leaving a corrupt file behind
-        // (under the VERSIONED name the handler looks up).
         let photo = Photo::find_by_hash(&db_pool, &hash)
             .await
             .expect("find failed")
@@ -2815,8 +2811,8 @@ mod tests {
         );
         std::fs::create_dir_all(transcoded_path.parent().unwrap())
             .expect("failed to create cache dir");
-        std::fs::write(&transcoded_path, b"partial-corrupt-output")
-            .expect("failed to write stale transcoded video");
+        std::fs::write(&transcoded_path, b"completed-transcode")
+            .expect("failed to write the completed artifact");
         set_transcode_status(
             &hash,
             TranscodeStatus {
@@ -2828,27 +2824,25 @@ mod tests {
             },
         );
 
+        let decision = decision_for(&db_pool, &hash, "h264-8").await;
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["cached"], true);
+
         let response = get_video_file(
             hash.clone(),
             VideoQuery {
                 metadata: None,
                 transcode: Some("true".to_string()),
-                client_codecs: None,
+                client_codecs: Some("h264-8".to_string()),
                 decision: None,
             },
             HeaderMap::new(),
             db_pool,
         )
         .await
-        .expect("handler should serve the original video")
+        .expect("handler should serve the artifact")
         .into_response();
 
-        // The stale transcoded file is removed and the original is served with
-        // the original MIME type plus a warning header.
-        assert!(
-            !transcoded_path.exists(),
-            "stale transcoded file must be removed"
-        );
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
@@ -2858,16 +2852,94 @@ mod tests {
             Some("video/mp4")
         );
         assert_eq!(
-            response
-                .headers()
-                .get("x-transcode-warning")
-                .and_then(|v| v.to_str().ok()),
-            Some("HEVC transcoding not available - serving original video")
+            response.headers().get("x-transcode-warning"),
+            None,
+            "a served artifact carries no failure warning"
         );
         assert_eq!(
-            std::fs::read(&video_path).expect("original video should still exist"),
-            b"fake-video-data"
+            collect_response_body(response).await,
+            b"completed-transcode"
         );
+        assert!(
+            transcoded_path.exists(),
+            "the completed artifact must survive the failed-status bookkeeping"
+        );
+        // The status stays what it is: it is the claim/cooldown record.
+        assert_eq!(
+            get_transcode_status(&hash).map(|status| status.state),
+            Some(TranscodeState::Failed)
+        );
+        clear_transcode_status(&hash);
+    }
+
+    /// The same rule for the remux sidecar, which is written by the remux path
+    /// and never touches the conversion status at all.
+    #[tokio::test]
+    async fn failed_status_does_not_hide_a_remux_sidecar() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "e9".repeat(32);
+        clear_transcode_status(&hash);
+
+        setup_test_video_with_content(&db_pool, &temp_dir, &hash, b"original-bytes").await;
+        set_video_record(
+            &db_pool,
+            &hash,
+            json!({
+                "codec": "h264", "container": "mp4", "bit_depth": 8,
+                "audio_codec": "aac", "moov_at_start": false, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let photo = Photo::find_by_hash(&db_pool, &hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let sidecar = remux_sidecar_path(
+            temp_dir.path().to_str().unwrap(),
+            &hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        std::fs::create_dir_all(sidecar.parent().unwrap()).expect("failed to create cache dir");
+        std::fs::write(&sidecar, b"faststart-sidecar").expect("failed to write the sidecar");
+        set_transcode_status(
+            &hash,
+            TranscodeStatus {
+                state: TranscodeState::Timeout,
+                hash: hash.clone(),
+                started_at: Some(Utc::now()),
+                error: Some("Transcoding timed out after 300s".to_string()),
+                percent: None,
+            },
+        );
+
+        let decision = decision_for(&db_pool, &hash, "h264-8,aac").await;
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["cached"], true);
+
+        let response = get_video_file(
+            hash.clone(),
+            VideoQuery {
+                metadata: None,
+                transcode: None,
+                client_codecs: Some("h264-8,aac".to_string()),
+                decision: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("handler should serve the sidecar")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(collect_response_body(response).await, b"faststart-sidecar");
+        assert!(sidecar.exists(), "the sidecar must survive the status");
         clear_transcode_status(&hash);
     }
 

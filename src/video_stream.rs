@@ -138,20 +138,31 @@ pub fn build_args(mode: StreamMode, input: &Path, start_secs: f64) -> Vec<String
     args
 }
 
-/// Output MIME for the SourceBuffer the client must create. Transcode/Audio
-/// modes always emit H.264 + AAC; Remux copies the source video codec, so the
-/// string follows it.
-pub fn output_mime(
-    mode: StreamMode,
-    video_codec: &str,
-    _audio_codec: Option<&str>,
-) -> &'static str {
-    match (mode, video_codec) {
-        (StreamMode::Remux, "hevc") => "video/mp4; codecs=\"hvc1.1.6.L93.B0,mp4a.40.2\"",
-        (StreamMode::Remux, "av1") => "video/mp4; codecs=\"av01.0.15M.08,mp4a.40.2\"",
-        (StreamMode::Remux, "vp9") => "video/mp4; codecs=\"vp09.00.10.08,mp4a.40.2\"",
-        _ => "video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\"",
-    }
+/// Output MIME for the SourceBuffer the client must create, derived from the
+/// codecs the run actually emits. Transcode always emits H.264 + AAC; Audio and
+/// Remux copy the source video codec and (Remux) the source audio codec, so
+/// declaring a hard-coded `avc1,mp4a.40.2` there would make the client's
+/// SourceBuffer drop exactly the track it declared support for.
+pub fn output_mime(mode: StreamMode, video_codec: &str, audio_codec: Option<&str>) -> String {
+    let video = match (mode, video_codec) {
+        (StreamMode::Transcode, _) => "avc1.42E01E",
+        (_, "hevc") => "hvc1.1.6.L93.B0",
+        (_, "av1") => "av01.0.15M.08",
+        (_, "vp9") => "vp09.00.10.08",
+        (_, "vp8") => "vp08.00.10.08",
+        _ => "avc1.42E01E",
+    };
+    let audio = match (mode, audio_codec) {
+        (StreamMode::Transcode | StreamMode::Audio, _) | (_, None | Some("aac")) => "mp4a.40.2",
+        (_, Some("opus")) => "opus",
+        (_, Some("mp3")) => "mp4a.6B",
+        (_, Some("ac3")) => "ac-3",
+        (_, Some("eac3")) => "ec-3",
+        (_, Some("dts")) => "dts",
+        (_, Some("flac")) => "flac",
+        (_, Some(_)) => "mp4a.40.2",
+    };
+    format!("video/mp4; codecs=\"{video},{audio}\"")
 }
 
 #[derive(Debug)]
@@ -194,6 +205,10 @@ pub async fn start_stream(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // A client that hangs up mid-seek cancels the handler future before
+        // `supervise` takes ownership of the child; without this the transient
+        // ffmpeg would keep a conversion slot while streaming to nobody.
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| StreamStartError::Spawn(format_binary_error("ffmpeg", &ffmpeg, &e)))?;
 
@@ -338,6 +353,14 @@ mod tests {
         assert_eq!(
             output_mime(StreamMode::Remux, "hevc", Some("aac")),
             "video/mp4; codecs=\"hvc1.1.6.L93.B0,mp4a.40.2\""
+        );
+        assert_eq!(
+            output_mime(StreamMode::Audio, "hevc", Some("ac3")),
+            "video/mp4; codecs=\"hvc1.1.6.L93.B0,mp4a.40.2\""
+        );
+        assert_eq!(
+            output_mime(StreamMode::Remux, "h264", Some("ac3")),
+            "video/mp4; codecs=\"avc1.42E01E,ac-3\""
         );
     }
 

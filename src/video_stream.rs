@@ -447,4 +447,48 @@ mod tests {
         drop(handle.stdout);
         let _ = supervise(handle.child, handle.stderr).await;
     }
+
+    #[tokio::test]
+    async fn repeated_refused_requests_spawn_no_processes() {
+        // The queue wait is what turns a saturated pool into a bounded answer:
+        // with every permit held and a zero wait, N attempts must all come back
+        // Busy — no encoder spawned, no permit consumed, pool unchanged.
+        let _wait = crate::video_processor::tests::TestEnvGuard::set(
+            "TURBO_PIX_STREAM_QUEUE_WAIT_SECS",
+            "0",
+        );
+        // Keep the pool out of the "transcoding disabled" path (a different,
+        // equally bounded answer) whatever the ambient environment holds.
+        let _pool =
+            crate::video_processor::tests::TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "2");
+
+        let semaphore = crate::video_processor::transcode_semaphore();
+        let capacity = semaphore.available_permits();
+        let mut held = Vec::new();
+        while let Ok(permit) = semaphore.try_acquire() {
+            held.push(permit);
+        }
+
+        for _ in 0..5 {
+            let err = start_stream(StreamMode::Transcode, Path::new("/nonexistent.mp4"), 0.0)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, StreamStartError::Busy),
+                "a saturated pool must answer Busy, got {err:?}"
+            );
+        }
+
+        assert_eq!(
+            semaphore.available_permits(),
+            0,
+            "refused requests must neither consume nor create permits"
+        );
+        drop(held);
+        assert_eq!(
+            semaphore.available_permits(),
+            capacity,
+            "the permits handed back must be exactly the pool that was held"
+        );
+    }
 }

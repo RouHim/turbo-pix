@@ -211,6 +211,15 @@
     if (zone !== 'pan' && dragged !== null) onchange(dragged, { commit: true });
   };
 
+  // A gesture that ends over a column retargets the compatibility click to the
+  // captured lane, so the column's own handler never consumes `suppressClick`
+  // and a following keyboard activation would be discarded once. The lane's
+  // click runs after a column's own handler, so this cannot unmask a column
+  // click either.
+  const clearSuppressClick = () => {
+    suppressClick = false;
+  };
+
   const activateColumn = (column) => {
     if (suppressClick) {
       suppressClick = false;
@@ -341,8 +350,14 @@
 
   // Roving tabindex: one column is tabbable so the lane can be entered from the
   // keyboard, without pretending a column is "focused" (the status row only
-  // names a column once it really is hovered or focused).
-  const tabbableStart = $derived(focusedColumnStart ?? columns[0]?.gridStart ?? null);
+  // names a column once it really is hovered or focused). A remembered start
+  // that the current grid no longer contains (arrow to a month, then fit-all)
+  // must fall back to the first column, or every column stays tabindex="-1".
+  const tabbableStart = $derived(
+    columns.some((column) => column.gridStart === focusedColumnStart)
+      ? focusedColumnStart
+      : (columns[0]?.gridStart ?? null)
+  );
 
   // Escape abandons the gesture and puts the pre-drag view/selection back.
   $effect(() => {
@@ -399,6 +414,7 @@
     onpointerup={endGesture}
     onpointercancel={endGesture}
     onwheel={handleWheel}
+    onclick={clearSuppressClick}
   >
     {#each placedColumns as column (column.gridStart)}
       <button

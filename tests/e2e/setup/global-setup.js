@@ -54,7 +54,8 @@ async function reapStaleServers() {
   const mine = [];
   for (const pid of stdout.split(/\s+/).filter(Boolean)) {
     try {
-      const exe = await readlink(`/proc/${pid}/exe`);
+      // A binary rebuilt since the process started reads `.../turbo-pix (deleted)`.
+      const exe = (await readlink(`/proc/${pid}/exe`)).replace(/ \(deleted\)$/, '');
       if (exe.startsWith(SERVER_TARGET_PREFIX) && exe.endsWith(`${path.sep}turbo-pix`)) {
         mine.push(pid);
       }

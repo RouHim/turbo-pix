@@ -35,7 +35,8 @@ function killServerBinary() {
 
   const mine = pids.filter((pid) => {
     try {
-      const exe = readlinkSync(`/proc/${pid}/exe`);
+      // A binary rebuilt since the process started reads `.../turbo-pix (deleted)`.
+      const exe = readlinkSync(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, '');
       return exe.startsWith(SERVER_TARGET_PREFIX) && exe.endsWith(`${path.sep}turbo-pix`);
     } catch {
       return false;

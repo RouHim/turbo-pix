@@ -126,11 +126,16 @@ test.describe('Timeline', () => {
     await expect(page).not.toHaveURL(/year=/);
   });
 
-  test('should keep the selection visible when the window is resized across the breakpoint', async ({
+  test('should keep the zoom and the selection when the window is resized across the breakpoint', async ({
     page,
   }) => {
     await page.goto('/?year=2012&month=3&to_year=2012&to_month=8');
     await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toBeVisible();
+
+    // GIVEN: a zoomed-in view (fit-all would be decade-granular here)
+    await page.locator('.timeline-zoom-in').click();
+    const zoomedUnit = await page.locator('.timeline-column').first().getAttribute('data-unit');
 
     // WHEN: the viewport narrows below the desktop breakpoint and back
     await TestHelpers.setMobileViewport(page);
@@ -141,7 +146,9 @@ test.describe('Timeline', () => {
     await expect(page.locator('.timeline-selector')).toBeVisible();
     await expect(page.locator('#timeline-year-select')).toBeHidden();
 
-    // THEN: the selector returns with the selection inside its viewport
+    // THEN: the selector returns with the zoom intact (a collapsed view snaps
+    // back to fit-all granularity) and the selection inside its viewport
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', zoomedUnit);
     await expect(page.locator('.timeline-selection')).toBeVisible();
     const selection = await page.locator('.timeline-selection').boundingBox();
     const lane = await page.locator('.timeline-lane').boundingBox();
@@ -149,29 +156,67 @@ test.describe('Timeline', () => {
     expect(selection.x + selection.width).toBeLessThanOrEqual(lane.x + lane.width + 1);
   });
 
-  test('should keep the visible span inside the data when panning the ruler', async ({ page }) => {
-    const span = await page.evaluate(() =>
-      fetch('/api/photos/timeline')
-        .then((r) => r.json())
-        .then((d) => (d.density || []).length)
+  test('should pin panning at the library start and end', async ({ page }) => {
+    const timeline = await page.evaluate(() => fetch('/api/photos/timeline').then((r) => r.json()));
+    test.skip(!timeline?.min_date || !timeline?.max_date, 'Timeline needs a dated library');
+
+    const monthIndex = (iso) => {
+      const date = new Date(iso);
+      return date.getUTCFullYear() * 12 + date.getUTCMonth();
+    };
+    const libraryStart = monthIndex(timeline.min_date);
+    const libraryEnd = monthIndex(timeline.max_date);
+
+    // GIVEN: a zoomed-in view, so panning has room to move before it clamps
+    await page.locator('.timeline-zoom-in').click();
+    const unit = Number(await page.locator('.timeline-column').first().getAttribute('data-unit'));
+
+    const dragRuler = async (fromRatio, toRatio) => {
+      const ruler = await page.locator('.timeline-ruler').boundingBox();
+      await page.mouse.move(ruler.x + ruler.width * fromRatio, ruler.y + ruler.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(ruler.x + ruler.width * toRatio, ruler.y + ruler.height / 2, {
+        steps: 10,
+      });
+      await page.mouse.up();
+    };
+
+    // WHEN: dragging the ruler past the library start (content moves right),
+    // twice — the second drag must be a no-op at the clamp
+    await dragRuler(0.2, 0.9);
+    await dragRuler(0.2, 0.9);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute(
+      'data-period-start',
+      String(Math.floor(libraryStart / unit) * unit)
     );
-    test.skip(span < 2, 'Panning needs at least two buckets');
 
-    const firstColumn = page.locator('.timeline-column').first();
-    const firstStartBefore = await firstColumn.getAttribute('data-period-start');
+    // AND: past the library end (content moves left)
+    await dragRuler(0.9, 0.2);
+    await dragRuler(0.9, 0.2);
+    await expect(page.locator('.timeline-column').last()).toHaveAttribute(
+      'data-period-start',
+      String(Math.floor(libraryEnd / unit) * unit)
+    );
+  });
 
-    const ruler = await page.locator('.timeline-ruler').boundingBox();
-    await page.mouse.move(ruler.x + ruler.width * 0.6, ruler.y + ruler.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(ruler.x + ruler.width * 0.2, ruler.y + ruler.height / 2, { steps: 10 });
-    await page.mouse.up();
+  test('should clear the filter and fit the view from the reset control', async ({ page }) => {
+    // GIVEN: a filtered, zoomed selector
+    const fitAllUnit = await page.locator('.timeline-column').first().getAttribute('data-unit');
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=8');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator('.timeline-zoom-in').click();
+    await expect(page.locator('.timeline-column').first()).not.toHaveAttribute(
+      'data-unit',
+      fitAllUnit
+    );
+    await expect(page.locator('.timeline-selection')).toBeVisible();
 
-    // Panning is clamped to the data span, so the first column can only move
-    // forward in time, never before the library start.
-    const firstStartAfter = await page
-      .locator('.timeline-column')
-      .first()
-      .getAttribute('data-period-start');
-    expect(Number(firstStartAfter)).toBeGreaterThanOrEqual(Number(firstStartBefore));
+    // WHEN: the user clears the timeline filter
+    await page.locator('.timeline-header .timeline-reset').click();
+
+    // THEN: the URL is clean, the selection is gone and the view is fit-all
+    await expect(page).not.toHaveURL(/year=/);
+    await expect(page.locator('.timeline-selection')).toHaveCount(0);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', fitAllUnit);
   });
 });

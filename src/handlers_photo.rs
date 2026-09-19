@@ -7,7 +7,9 @@ use warp::{reject, Filter, Rejection, Reply};
 
 use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo, SearchQuery};
-use crate::handlers_video::{get_video_file, get_video_status, VideoQuery};
+use crate::handlers_video::{
+    get_video_file, get_video_status, stream_video, StreamQuery, VideoQuery,
+};
 use crate::image_editor::{self, RotationAngle};
 use crate::metadata_writer;
 use crate::mimetype_detector;
@@ -1292,6 +1294,18 @@ pub fn build_photo_routes(
         .and(warp::get())
         .and_then(get_video_status);
 
+    let api_photo_video_stream = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path::param::<String>())
+        .and(warp::path("video"))
+        .and(warp::path("stream"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<StreamQuery>())
+        .and(warp::header::headers_cloned())
+        .and(with_db(db_pool.clone()))
+        .and_then(stream_video);
+
     let api_photo_favorite = warp::path("api")
         .and(warp::path("photos"))
         .and(warp::path::param::<String>())
@@ -1357,6 +1371,7 @@ pub fn build_photo_routes(
         .or(api_photo_video)
         .or(api_photo_video_head)
         .or(api_photo_video_status)
+        .or(api_photo_video_stream)
         .or(api_photo_favorite)
         .or(api_photo_exif)
         .or(api_photo_metadata_update)
@@ -1987,6 +2002,32 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_video_stream_route_reaches_handler_from_an_empty_source() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        fs::write(&temp_image, b"").expect("Failed to truncate test image");
+        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
+
+        let response = warp::test::request()
+            .method("GET")
+            .path(&format!(
+                "/api/photos/{}/video/stream?mode=remux&start=0",
+                photo_hash
+            ))
+            .reply(&routes)
+            .await;
+
+        // Unregistered, this path falls through to the 404 rejection; only the
+        // stream handler answers an empty source with this warning.
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["x-transcode-warning"], "empty");
+        assert_eq!(response.headers()["content-length"], "0");
     }
 
     #[tokio::test]

@@ -37,4 +37,5 @@ pub mod thumbnail_types;
 pub mod video_capability;
 pub mod video_probe;
 pub mod video_processor;
+pub mod video_stream;
 pub mod warp_helpers;

@@ -39,6 +39,8 @@ Here are some key differences:
 - **Photo / Video Browsing**: View your photo and video collection
 - **Semantic Search**: Search photos by describing their content
 - **Timeline View**: See photo density over time
+- **Map View**: Plot every geo-located photo on an OpenStreetMap tile layer, clustered by location, and open
+  photos straight from a place
 - **Metadata Display**: View camera settings, date taken, and GPS coordinates
 - **Dark Mode**: Switch between light and dark themes
 - **Favorites**: Mark photos to find them later

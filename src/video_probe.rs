@@ -313,6 +313,10 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_derives_and_persists_legacy_records_once() {
+        // Hold the shared test env lock: this test shells out to real ffprobe
+        // via `probe_file`/`has_moov_at_start`, while other test modules point
+        // `FFPROBE_PATH` at fake scripts while holding the same lock.
+        let _env_lock = crate::video_processor::tests::acquire_test_env_lock();
         let fixture = Path::new("test-data/test_video.mp4");
         if !fixture.exists() || !crate::video_processor::ffmpeg_available() {
             eprintln!("skipping: fixture or ffmpeg unavailable");

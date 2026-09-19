@@ -170,12 +170,16 @@ export class TestHelpers {
     const pathname = url.pathname.replace(/^\//, '') || 'all';
     const yearRaw = url.searchParams.get('year');
     const monthRaw = url.searchParams.get('month');
+    const toYearRaw = url.searchParams.get('to_year');
+    const toMonthRaw = url.searchParams.get('to_month');
     return {
       view: pathname,
       query: url.searchParams.get('q') || null,
       sort: url.searchParams.get('sort') || null,
       year: yearRaw !== null ? parseInt(yearRaw, 10) : null,
       month: monthRaw !== null ? parseInt(monthRaw, 10) : null,
+      toYear: toYearRaw !== null ? parseInt(toYearRaw, 10) : null,
+      toMonth: toMonthRaw !== null ? parseInt(toMonthRaw, 10) : null,
       photo: url.searchParams.get('photo') || null,
     };
   }

@@ -95,13 +95,13 @@ class TurboPixAPI {
     if (params.query) searchParams.set('q', params.query);
     if (params.sort) searchParams.set('sort', params.sort);
     if (params.order) searchParams.set('order', params.order);
-    if (params.dateFrom) searchParams.set('date_from', params.dateFrom);
-    if (params.dateTo) searchParams.set('date_to', params.dateTo);
     if (params.cameraMake) searchParams.set('camera_make', params.cameraMake);
     if (params.cameraModel) searchParams.set('camera_model', params.cameraModel);
     if (params.hasGps !== undefined) searchParams.set('has_gps', params.hasGps);
     if (params.year !== undefined) searchParams.set('year', params.year);
     if (params.month !== undefined) searchParams.set('month', params.month);
+    if (params.toYear !== undefined) searchParams.set('to_year', params.toYear);
+    if (params.toMonth !== undefined) searchParams.set('to_month', params.toMonth);
 
     const queryString = searchParams.toString();
     const endpoint = `/api/photos${queryString ? `?${queryString}` : ''}`;

@@ -217,6 +217,48 @@ test.describe('URL Routing', () => {
       expect(state.year).toBeNull();
       expect(state.month).toBeNull();
     });
+
+    test('should filter the grid by an inclusive month range deep link', async ({ page }) => {
+      // GIVEN: the two oldest/newest populated months of the fixture library
+      await TestHelpers.goto(page);
+      const density = await page.evaluate(() =>
+        fetch('/api/photos/timeline')
+          .then((r) => r.json())
+          .then((d) => d.density || [])
+      );
+      test.skip(density.length < 2, 'Timeline needs at least two month buckets');
+      const first = density[0];
+      const last = density[density.length - 1];
+
+      // WHEN: opening a deep link covering both ends of the library
+      await TestHelpers.goto(
+        page,
+        `/?year=${first.year}&month=${first.month}&to_year=${last.year}&to_month=${last.month}`
+      );
+      await TestHelpers.waitForPhotosToLoad(page);
+
+      // THEN: the range survives the round-trip
+      const state = TestHelpers.getUrlState(page);
+      expect(state.toYear).toBe(last.year);
+      expect(state.toMonth).toBe(last.month);
+
+      // AND: the grid shows exactly what the same range returns over the API
+      const expectedTotal = await page.evaluate(
+        async (params) => {
+          const response = await fetch(`/api/photos?limit=1&${params}`);
+          return (await response.json()).total;
+        },
+        new URLSearchParams({
+          year: state.year,
+          ...(state.month === null ? {} : { month: state.month }),
+          to_year: state.toYear,
+          ...(state.toMonth === null ? {} : { to_month: state.toMonth }),
+        }).toString()
+      );
+      const cards = await page.locator('.photo-card').count();
+      expect(cards).toBe(Math.min(expectedTotal, 50));
+      expect(expectedTotal).toBeGreaterThan(0);
+    });
   });
 
   test.describe('Back/Forward', () => {

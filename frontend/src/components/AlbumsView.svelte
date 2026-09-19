@@ -102,7 +102,15 @@
   function openAlbum(item) {
     appState.mobileSearchOpen = false;
     if (route.album === item.id) return;
-    pushState({ album: item.id, view: 'all', query: null, year: null, month: null });
+    pushState({
+      album: item.id,
+      view: 'all',
+      query: null,
+      year: null,
+      month: null,
+      to_year: null,
+      to_month: null,
+    });
   }
 
   function handleRowClick(e, item) {

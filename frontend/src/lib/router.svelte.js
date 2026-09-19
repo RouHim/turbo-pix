@@ -1,3 +1,5 @@
+import { normalizeDateFilter } from './timelineRoute.js';
+
 const validViews = ['all', 'favorites', 'videos', 'albums', 'collages', 'housekeeping'];
 const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
 
@@ -8,6 +10,8 @@ const defaultState = {
   sort: 'date_desc',
   year: null,
   month: null,
+  to_year: null,
+  to_month: null,
   album: null,
 };
 
@@ -26,6 +30,8 @@ function parseUrl(url) {
     sort: url.searchParams.get('sort'),
     year: parsePositiveInteger(url.searchParams.get('year')),
     month: parsePositiveInteger(url.searchParams.get('month')),
+    to_year: parsePositiveInteger(url.searchParams.get('to_year')),
+    to_month: parsePositiveInteger(url.searchParams.get('to_month')),
     album: parsePositiveInteger(url.searchParams.get('album')),
   });
 }
@@ -33,18 +39,17 @@ function parseUrl(url) {
 function normalizeState(state) {
   const view = validViews.includes(state.view) ? state.view : defaultState.view;
   const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
-  const year = parsePositiveInteger(state.year);
-  const rawMonth = parsePositiveInteger(state.month);
-  const month =
-    year === null ? null : rawMonth !== null && rawMonth >= 1 && rawMonth <= 12 ? rawMonth : null;
+  const dateFilter = normalizeDateFilter(state);
 
   return {
     view,
     photo: normalizeString(state.photo),
     query: normalizeString(state.query),
     sort,
-    year,
-    month,
+    year: dateFilter.year,
+    month: dateFilter.month,
+    to_year: dateFilter.to_year,
+    to_month: dateFilter.to_month,
     album: parsePositiveInteger(state.album),
   };
 }
@@ -98,6 +103,14 @@ function buildUrl(state = {}) {
 
     if (normalizedState.month !== null) {
       url.searchParams.set('month', String(normalizedState.month));
+    }
+  }
+
+  if (normalizedState.to_year !== null) {
+    url.searchParams.set('to_year', String(normalizedState.to_year));
+
+    if (normalizedState.to_month !== null) {
+      url.searchParams.set('to_month', String(normalizedState.to_month));
     }
   }
 

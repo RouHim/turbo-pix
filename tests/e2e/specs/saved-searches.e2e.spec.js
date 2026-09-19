@@ -119,4 +119,39 @@ test.describe('Saved Searches', () => {
     const { saved_searches = [] } = await res.json();
     expect(saved_searches.length).toBe(0);
   });
+
+  test('should save and restore a month range', async ({ page }) => {
+    // GIVEN: a range filter deep link over two populated months
+    await TestHelpers.goto(page);
+    const density = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((r) => r.json())
+        .then((d) => d.density || [])
+    );
+    test.skip(density.length < 2, 'Timeline needs at least two month buckets');
+    const first = density[0];
+    const last = density[density.length - 1];
+    await TestHelpers.goto(
+      page,
+      `/?year=${first.year}&month=${first.month}&to_year=${last.year}&to_month=${last.month}`
+    );
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // WHEN: the search is saved
+    await page.click('[data-testid="save-search-btn"]');
+    await expect(page.locator('[data-testid="saved-search-row"]')).toHaveCount(1);
+
+    // AND: the user navigates away and reopens it
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator('[data-testid="saved-search-row"]').first().click();
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // THEN: both bounds come back
+    const state = TestHelpers.getUrlState(page);
+    expect(state.year).toBe(first.year);
+    expect(state.month).toBe(first.month === 1 ? null : first.month);
+    expect(state.toYear).toBe(last.year);
+    expect(state.toMonth).toBe(last.month === 12 ? null : last.month);
+  });
 });

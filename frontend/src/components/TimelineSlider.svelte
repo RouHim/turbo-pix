@@ -79,7 +79,7 @@
   const pushFilter = () => {
     const year = currentFilter?.year ?? null;
     const month = currentFilter?.month ?? null;
-    pushState({ year, month: year ? month : null });
+    pushState({ year, month: year ? month : null, to_year: null, to_month: null });
   };
 
   const selectYear = (year) => {

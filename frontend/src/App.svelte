@@ -63,7 +63,7 @@
 
   // FR-013: selection never leaks across surfaces. A different view OR a
   // different query is a different surface (semantic search results are one);
-  // sort/year/month changes keep the same result set, so they do not clear.
+  // sort/date-range changes keep the same result set, so they do not clear.
   $effect(() => {
     route.view;
     route.query;

@@ -27,7 +27,9 @@
         !route.query &&
         route.sort === 'date_desc' &&
         !route.year &&
-        !route.month
+        !route.month &&
+        !route.to_year &&
+        !route.to_month
       )
   );
 
@@ -35,8 +37,11 @@
     const yearPart = route.year
       ? ` ${route.year}${route.month ? '-' + String(route.month).padStart(2, '0') : ''}`
       : '';
+    const endPart = route.to_year
+      ? `..${route.to_year}${route.to_month ? '-' + String(route.to_month).padStart(2, '0') : ''}`
+      : '';
     return (
-      ((route.query ?? '') + yearPart).trim() ||
+      ((route.query ?? '') + yearPart + endPart).trim() ||
       get(t)('savedSearches.defaultName', { default: 'Saved search' })
     );
   }
@@ -51,6 +56,8 @@
         sort: route.sort,
         year: route.year,
         month: route.month,
+        to_year: route.to_year,
+        to_month: route.to_month,
       });
       savedSearches.unshift(created); // newest-first: fresh row has the max id
       addToast(

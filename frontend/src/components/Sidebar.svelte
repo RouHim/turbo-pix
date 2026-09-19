@@ -60,7 +60,9 @@
       route.query === item.query &&
       route.sort === item.sort &&
       route.year === item.year &&
-      route.month === item.month
+      route.month === item.month &&
+      route.to_year === item.to_year &&
+      route.to_month === item.to_month
     );
   }
 
@@ -77,6 +79,8 @@
       sort: item.sort,
       year: item.year,
       month: item.month,
+      to_year: item.to_year,
+      to_month: item.to_month,
       album: null,
     });
     appState.sidebarOpen = false;

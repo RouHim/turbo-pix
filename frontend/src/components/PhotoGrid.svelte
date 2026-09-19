@@ -61,6 +61,8 @@
     }
     if (route.year) filters.year = route.year;
     if (route.month) filters.month = route.month;
+    if (route.to_year) filters.toYear = route.to_year;
+    if (route.to_month) filters.toMonth = route.to_month;
     return filters;
   }
 
@@ -215,7 +217,7 @@
     // Dedupe identical concurrent loads (effect + onMount can both fire);
     // reloadToken is bumped by handleIndexingCompleted so a completion
     // reload is never swallowed by the dedupe.
-    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.album}|${photoGridState.currentPage}|${reloadToken}`;
+    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.to_year}|${route.to_month}|${route.album}|${photoGridState.currentPage}|${reloadToken}`;
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
 
@@ -400,6 +402,8 @@
     route.sort;
     route.year;
     route.month;
+    route.to_year;
+    route.to_month;
     route.album;
     untrack(() => loadPhotos(true));
   });

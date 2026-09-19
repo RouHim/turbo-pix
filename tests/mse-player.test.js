@@ -1,6 +1,15 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStreamPlayer } from '../frontend/src/lib/video/msePlayer.js';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// The module under test is overridable so the same cases can be run against a
+// different revision, e.g.
+//   MSE_PLAYER_MODULE=/tmp/mse-prefix.mjs node --test tests/mse-player.test.js
+const modulePath = process.env.MSE_PLAYER_MODULE
+  ? path.resolve(process.env.MSE_PLAYER_MODULE)
+  : fileURLToPath(new URL('../frontend/src/lib/video/msePlayer.js', import.meta.url));
+const { createStreamPlayer } = await import(pathToFileURL(modulePath).href);
 
 const realFetch = globalThis.fetch;
 const realMediaSource = globalThis.MediaSource;
@@ -22,17 +31,81 @@ async function settle(turns = 5) {
   }
 }
 
+/**
+ * SourceBuffer stand-in with Chromium's `updating` contract:
+ *  - `timestampOffset` and `appendBuffer` throw `InvalidStateError` while an
+ *    update is in flight (Chromium: "The timestamp offset may not be set while
+ *    the SourceBuffer is updating.");
+ *  - an append completes asynchronously, fires `updateend`, and the element's
+ *    own seek/play can start a follow-up internal update in that same task —
+ *    the window in which the app's own `updating` check is already stale.
+ */
 class FakeSourceBuffer {
   constructor(mime) {
     this.mime = mime;
     this.updating = false;
-    this.timestampOffset = 0;
     this.buffered = { length: 0 };
     this.appended = [];
+    this.offsetAssignments = [];
+    this.listeners = new Map();
+    this._offset = 0;
+    this._followUpStarted = false;
+  }
+
+  get timestampOffset() {
+    return this._offset;
+  }
+
+  set timestampOffset(value) {
+    if (this.updating) {
+      throw new DOMException(
+        'The timestamp offset may not be set while the SourceBuffer is updating.',
+        'InvalidStateError'
+      );
+    }
+    this._offset = value;
+    this.offsetAssignments.push(value);
   }
 
   appendBuffer(chunk) {
+    if (this.updating) {
+      throw new DOMException(
+        'The SourceBuffer is updating and cannot be appended to.',
+        'InvalidStateError'
+      );
+    }
     this.appended.push(chunk);
+    this.buffered = { length: 1, start: () => 0, end: () => this.appended.length };
+    this.updating = true;
+    setImmediate(() => this._completeUpdate());
+  }
+
+  addEventListener(type, handler) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(handler);
+  }
+
+  removeEventListener(type, handler) {
+    this.listeners.get(type)?.delete(handler);
+  }
+
+  fire(type) {
+    for (const handler of [...(this.listeners.get(type) ?? [])]) handler();
+  }
+
+  /** Append finished; fire `updateend` and start one follow-up update. */
+  _completeUpdate() {
+    this.updating = false;
+    this.fire('updateend');
+    if (this._followUpStarted) return;
+    this._followUpStarted = true;
+    // Same task: the element's seek/play re-initialises the demuxer, so the
+    // buffer is busy again before the awaiting caller resumes.
+    this.updating = true;
+    setImmediate(() => {
+      this.updating = false;
+      this.fire('updateend');
+    });
   }
 }
 
@@ -202,6 +275,29 @@ test('a user seek outside the buffered range restarts the stream at the target',
   video.dispatch('seeking');
   await settle();
   assert.equal(calls.length, 2, 'the restart seek must not start another run');
+
+  player.destroy();
+});
+
+test('chunks survive the internal update the element starts right after an append', async () => {
+  const video = fakeVideo();
+  const { fetchImpl, calls } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const errors = [];
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle(10);
+
+  // Chromium's `updating` guard is not a race the app can check away: the
+  // element's own seek/play starts an internal update between the check and
+  // the call. Before the fix the pump set `timestampOffset` per chunk, threw
+  // InvalidStateError, reported a stream error and tore the run down.
+  assert.deepEqual(errors, [], 'the timestampOffset/append race must not fail the stream');
+  assert.equal(calls.length, 1, 'no stream restart');
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  assert.deepEqual(buffer.offsetAssignments, [0], 'the offset is set once, at buffer creation');
+  assert.equal(buffer.appended.length, 3, 'every chunk of the run reached the buffer');
 
   player.destroy();
 });

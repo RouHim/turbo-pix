@@ -244,6 +244,26 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     let reader;
     let buffer;
     try {
+      // Fetch before the MediaSource exists: the MIME this run's bytes are in
+      // is only known once the server answers, and a refused (503) run must not
+      // leave a half-built source behind for the viewer's retry to trip over.
+      const response = await fetch(urlFor(seconds), { signal });
+      if (!response.ok || !response.body) {
+        throw new StreamHttpError(response.status, {
+          startAt: seconds,
+          retryAfterMs: retryAfterMs(response),
+        });
+      }
+
+      // Each run's SourceBuffer is typed from the MIME the server advertises
+      // FOR THAT RUN, never from the decision's: an escalated rung emits
+      // different codecs (remux copies the source tokens, audio/transcode
+      // re-encode audio to AAC), and Chromium rejects an append whose init
+      // segment does not match the buffer's declared type — which would burn
+      // the remaining rungs on a delivery that was perfectly playable.
+      const advertisedMime = response.headers.get('x-turbopix-mime');
+      const runMime = advertisedMime && mseSupported(advertisedMime) ? advertisedMime : mime;
+
       mediaSource = new MediaSource();
       videoEl.src = URL.createObjectURL(mediaSource);
       await once(mediaSource, 'sourceopen');
@@ -252,7 +272,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       if (declaredDuration !== null) {
         mediaSource.duration = declaredDuration;
       }
-      buffer = mediaSource.addSourceBuffer(mime);
+      buffer = mediaSource.addSourceBuffer(runMime);
       buffer.timestampOffset = seconds;
       // The run's own buffer: `isBuffered` (and therefore the seek restart)
       // asks about the media source that is actually attached to the element.
@@ -273,13 +293,6 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
         videoEl.removeEventListener('error', onMediaError);
       };
 
-      const response = await fetch(urlFor(seconds), { signal });
-      if (!response.ok || !response.body) {
-        throw new StreamHttpError(response.status, {
-          startAt: seconds,
-          retryAfterMs: retryAfterMs(response),
-        });
-      }
       // Show "waiting for a free conversion slot" when the server holds the
       // request open because every worker is busy.
       restartTimer = setTimeout(() => state('waiting'), 1500);

@@ -236,7 +236,12 @@ function fakeFetch() {
         return Promise.resolve({ done: true });
       },
     };
-    return Promise.resolve({ ok: true, status: 200, body: { getReader: () => reader } });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: { getReader: () => reader },
+    });
   };
   return { fetchImpl, calls };
 }
@@ -247,7 +252,7 @@ function createPlayer(video, options = {}) {
   URL.revokeObjectURL = () => {};
   return createStreamPlayer(video, {
     streamUrl: '/api/photos/abc/video/stream?client=h264-8%2Caac&mode=transcode',
-    mime: 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+    mime: options.mime ?? 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
     duration: 2,
     onState: options.onState ?? (() => {}),
     onError: options.onError ?? (() => {}),
@@ -530,6 +535,54 @@ test("a superseded run's late error does not escalate the run that replaced it",
   createdSources.at(-1).sourceBuffers[0].fire('error');
   await settle();
   assert.equal(errors.length, 1, 'the current run reports once');
+
+  player.destroy();
+});
+test("a run's buffer is typed from the MIME the server advertises for that run", async () => {
+  const video = fakeVideo();
+  const errors = [];
+  // The decision advertised an AC-3 remux (what the client asked for), but the
+  // rung that actually ran is an audio conversion that emits AAC: Chromium
+  // rejects an append whose init segment does not match the buffer's declared
+  // type, so the run's own MIME has to win or the ladder burns its remaining
+  // rungs on bytes that were perfectly playable.
+  const decisionMime = 'video/mp4; codecs="avc1.42E01E,ac-3"';
+  const runMime = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-turbopix-mime': runMime }),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const player = createPlayer(video, {
+    mime: decisionMime,
+    onError: (error) => errors.push(error),
+  });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(createdSources.at(-1).sourceBuffers[0].mime, runMime);
+  assert.deepEqual(errors, [], 'a delivered run is not a failure');
+
+  player.destroy();
+});
+
+test('a run without an advertised MIME keeps the decision MIME', async () => {
+  const video = fakeVideo();
+  const { fetchImpl } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video);
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(
+    createdSources.at(-1).sourceBuffers[0].mime,
+    'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+    'the decision MIME is the fallback when the server advertises none'
+  );
 
   player.destroy();
 });

@@ -41,6 +41,10 @@
   let isLoading = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
+  // A stream run is waiting for a free conversion slot (503): not an error, but
+  // the user must keep the "play original anyway" escape hatch. Rendered, so a
+  // reactive state.
+  let streamWaiting = $state(false);
   // Set when the user selected "Play original anyway" after a transcode
   // failure; suppresses the onerror transcode-retry so a failing original
   // cannot loop back into the transcode decision. Logic-only (never rendered).
@@ -695,8 +699,10 @@
   async function displayVideo(photo, forceTranscode = false) {
     if (!videoEl) return;
     // A different video may be on screen: its stream (and any pending
-    // SourceBuffer) belongs to the old photo.
+    // SourceBuffer, or an armed saturation retry) belongs to the old photo —
+    // and so does the notice it put up. This photo owns the toast now.
     destroyStreamPlayer();
+    hideTranscodeToast();
 
     if (forceTranscode) {
       // Explicit retry (e.g. HEVC playback failure): jump straight to the
@@ -763,10 +769,13 @@
   }
 
   /**
-   * How long a refused (503) stream run waits before retrying. The server
-   * answers immediately when the pool is full, so the viewer owns the pacing.
+   * How long a refused (503) stream run waits before retrying when the server
+   * sent no `Retry-After`. The server answers immediately when the pool is
+   * full, so the viewer owns the pacing; the server's own hint wins inside
+   * [STREAM_RETRY_DELAY_MS, STREAM_RETRY_DELAY_MAX_MS].
    */
   const STREAM_RETRY_DELAY_MS = 1500;
+  const STREAM_RETRY_DELAY_MAX_MS = 10_000;
 
   /**
    * Play a server-streamed conversion through MSE: the server pipes fragmented
@@ -775,9 +784,15 @@
    *
    * `keepWaitingNotice` is set by the saturation retry: the "waiting for a
    * free conversion slot" notice must stay up instead of flashing back to the
-   * generic "preparing" one on every attempt.
+   * generic "preparing" one on every attempt. `startAt` is the offset this run
+   * plays from — a retry after a refused seek resumes the seek, never 0:00.
    */
-  function playStream(photo, decision, modeOverride = null, { keepWaitingNotice = false } = {}) {
+  function playStream(
+    photo,
+    decision,
+    modeOverride = null,
+    { keepWaitingNotice = false, startAt = 0 } = {}
+  ) {
     if (!videoEl) return;
     destroyStreamPlayer();
     hasUserChosenOriginal = false;
@@ -799,11 +814,17 @@
       onState: (state) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
         if (state === 'waiting') {
+          // The server is holding the request open for a slot: the same wait,
+          // so the same escape hatch applies.
+          streamWaiting = true;
           showTranscodeToast(
             get(t)('video.stream.waiting', {
               default: 'Waiting for a free conversion slot…',
             })
           );
+        } else if (state === 'buffering') {
+          // Bytes are flowing: the slot wait is over.
+          streamWaiting = false;
         } else if (state === 'playing' || state === 'ended') {
           hideTranscodeToast();
         }
@@ -820,15 +841,16 @@
     // next playStream/destroyStreamPlayer tears this run down. Setup failures
     // arrive on `onError`; the rejection path covers everything past setup.
     streamPlayer
-      .start(0)
+      .start(startAt)
       .catch((error) => handleStreamFailure(photo, decision, modeOverride, error));
   }
 
   /**
-   * A refused conversion slot is not a playback failure. The pool is simply
-   * full, so keep the waiting notice visible and retry the same mode until the
-   * viewer moves on — retries cannot stack (single-flight timer) and they stop
-   * with the viewer. Every other error is a real one.
+   * A refused conversion slot is not a playback failure: the pool is simply
+   * full, so keep the waiting notice (with "play original anyway" still
+   * reachable, in case the wait is a permanent pool of 0) and retry the same
+   * run until the viewer moves on — retries cannot stack (single-flight timer)
+   * and they stop with the viewer. Every other error is a real one.
    */
   function handleStreamFailure(photo, decision, modeOverride, error) {
     if (error?.status !== 503) {
@@ -836,14 +858,28 @@
       return;
     }
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    streamWaiting = true;
     showTranscodeToast(
       get(t)('video.stream.waiting', { default: 'Waiting for a free conversion slot…' })
     );
     const photoHash = photo.hash_sha256;
+    const startAt = Number.isFinite(error.startAt) ? error.startAt : 0;
     scheduleStreamRetry(() => {
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
-      playStream(photo, decision, modeOverride, { keepWaitingNotice: true });
-    }, STREAM_RETRY_DELAY_MS);
+      playStream(photo, decision, modeOverride, { keepWaitingNotice: true, startAt });
+    }, streamRetryDelayMs(error));
+  }
+
+  /**
+   * When the refused run may be tried again: the server's `Retry-After` hint
+   * when it sent one, the local default otherwise. Clamped so neither a missing
+   * hint nor a hostile one can hammer the pool or stall playback.
+   */
+  function streamRetryDelayMs(error) {
+    const hinted = Number.isFinite(error?.retryAfterMs)
+      ? error.retryAfterMs
+      : STREAM_RETRY_DELAY_MS;
+    return Math.min(Math.max(hinted, STREAM_RETRY_DELAY_MS), STREAM_RETRY_DELAY_MAX_MS);
   }
 
   /**
@@ -869,14 +905,16 @@
   }
 
   /**
-   * A streamed conversion failed (spawn error, refused slot, undecodable
-   * bytes). Surfaces the failure and leaves "play original anyway" available —
-   * Task 6 escalates through the mode ladder before giving up.
+   * A streamed conversion failed (spawn error, undecodable bytes). Surfaces the
+   * failure and leaves "play original anyway" available — Task 6 escalates
+   * through the mode ladder before giving up.
    */
   function onStreamError(photo, decision, error) {
     logger?.warn('stream playback failed', error, { component: 'PhotoViewer', decision });
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
     destroyStreamPlayer();
+    // The error toast owns the notice (and its own escape hatch) from here on.
+    streamWaiting = false;
     showTranscodeToast(
       get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
       true
@@ -895,6 +933,7 @@
   function hideTranscodeToast() {
     transcodeMessage = '';
     transcodeError = false;
+    streamWaiting = false;
   }
 
   async function pollTranscodeStatus(pollUrl, photo) {
@@ -1014,6 +1053,10 @@
     if (!videoEl) return;
     if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
     hasUserChosenOriginal = true;
+    // The user has decided: stop the stream run and any armed saturation
+    // retry, otherwise the next attempt would put the waiting notice back up
+    // and fight the choice they just made.
+    destroyStreamPlayer();
     hideTranscodeToast();
     setVideoSource(
       photo,
@@ -1745,7 +1788,7 @@
   >
     <Icon name={transcodeError ? 'alert-triangle' : 'loader'} width={18} height={18} />
     <span class="transcode-toast-message">{transcodeMessage}</span>
-    {#if transcodeError}
+    {#if transcodeError || streamWaiting}
       <button
         type="button"
         class="transcode-toast-action"

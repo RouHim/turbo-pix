@@ -360,6 +360,61 @@ test('a refused run reports the HTTP status so saturation is distinguishable', a
   assert.equal(errors.length, 1, 'the refusal reaches the viewer');
   assert.ok(errors[0] instanceof StreamHttpError, 'the failure is typed');
   assert.equal(errors[0].status, 503, 'the status survives to the viewer');
+  assert.equal(errors[0].startAt, 0, 'the run reports the offset it asked for');
+  assert.equal(errors[0].retryAfterMs, 2000, "the server's pacing hint is translated");
+
+  player.destroy();
+});
+
+test('a refusal without Retry-After leaves the pacing to the viewer', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  globalThis.fetch = () => Promise.resolve({ ok: false, status: 503, body: null });
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].retryAfterMs, null, 'no hint must not become a bogus delay');
+
+  player.destroy();
+});
+
+test('a refused run carries its start offset so the retry resumes the seek', async () => {
+  const video = fakeVideo();
+  const { fetchImpl } = fakeFetch();
+  const requested = [];
+  globalThis.fetch = (url) => {
+    requested.push(url);
+    return url.includes('start=15.000')
+      ? Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'retry-after': '2' }),
+          body: null,
+        })
+      : fetchImpl(url);
+  };
+  const errors = [];
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle(10);
+
+  // A user seek starts its own run at the target; the pool refuses that run.
+  video._currentTime = 15;
+  video.dispatch('seeking');
+  await settle();
+
+  assert.equal(requested.length, 2, 'the seek started a second run');
+  assert.match(requested[1], /start=15\.000/);
+  assert.equal(errors.length, 1, 'the refusal reached the viewer');
+  assert.equal(errors[0].status, 503);
+  // Without the offset the viewer's retry would restart the video at 0:00 and
+  // silently throw the user's seek away.
+  assert.equal(errors[0].startAt, 15, 'the retry can resume at the seek target');
+  assert.equal(errors[0].retryAfterMs, 2000);
 
   player.destroy();
 });

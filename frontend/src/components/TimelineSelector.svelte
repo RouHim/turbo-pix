@@ -81,6 +81,22 @@
   const columnMax = $derived(columns.reduce((max, column) => Math.max(max, column.count), 0) || 1);
   const effectiveSelection = $derived(drag?.selection ?? selection);
 
+  // FR-009 gives draggable bounds and translation to an active *range* only. A
+  // single period — one month, or one whole year, the two shapes the route
+  // collapses into a bare `year`/`month` — is not a range, so a press on its
+  // overlay starts a new brush instead of a translation. Without that, a
+  // whole-year selection (which paints every month the year view can show)
+  // would swallow every brush and the year filter could never be narrowed by
+  // dragging. The handles keep their own gesture either way.
+  const isRange = $derived.by(() => {
+    const range = effectiveSelection;
+    if (range === null || range.endIndex <= range.startIndex) return false;
+    const wholeYear =
+      range.endIndex - range.startIndex === MONTHS_PER_YEAR - 1 &&
+      range.startIndex % MONTHS_PER_YEAR === 0;
+    return !wholeYear;
+  });
+
   // `selectionFromFilter` keeps a bare whole-year period's own lower boundary,
   // so a `?year=2012` deep link can start left of the first column. Paint the
   // overlay clamped into the lane: the start handle must stay visible and
@@ -116,8 +132,9 @@
       return normalizeSelection(drag.anchorIndex, clampIndexToModel(model, indexFromX(x, view)));
     }
     if (drag.zone === 'body') {
-      const anchor = clampIndexToModel(model, indexFromX(drag.startX, view));
-      return translateSelection(base, indexFromX(x, view) - anchor, model);
+      // The span never changes: the selection follows the pointer in whole
+      // months, not in the fractional months a raw pixel ratio would give.
+      return translateSelection(base, Math.round((x - drag.startX) / view.scale), model);
     }
     const bound = clampBound(indexFromX(x, view), base, drag.zone, model);
     return drag.zone === 'start'
@@ -159,7 +176,17 @@
     if (laneEl === null || view === null || model.length === 0) return;
     const x = pointerX(event, laneEl);
     const zone = selectionZoneAtX(x, { selection: effectiveSelection, view, width }) ?? 'brush';
-    beginDrag(zone, event);
+    beginDrag(isRange ? zone : 'brush', event);
+  };
+
+  // A handle drags its own bound instead of relying on the lane's
+  // ±HANDLE_HIT_PX zone, so the grab is exact, and a press that starts on a
+  // handle is never also read as a brush.
+  const startHandleGesture = (event, bound) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    suppressClick = false;
+    beginDrag(bound, event);
   };
 
   const handlePointerMove = (event) => {
@@ -318,19 +345,34 @@
 
   // Re-clamp on model/width/view changes, but assign only when something moved:
   // clampView returns a fresh object, so an unconditional assign re-triggers
-  // this effect forever.
+  // this effect forever. The first view a restored selection builds is framed
+  // on that selection instead of the whole span (SC-002: a `?year=2012` deep
+  // link opens on that year's months, so the month it names is one activation
+  // away), which is why `selection` is read before the guard.
   $effect(() => {
+    const restored = selection;
     if (width <= 0 || model.length === 0) return;
-    const next = view === null ? createView(width, model) : clampView(view, width, model);
+    let next;
+    if (view === null) {
+      next = restored === null ? createView(width, model) : zoomToRange(restored, width, model);
+    } else {
+      next = clampView(view, width, model);
+    }
     if (view === null || view.scale !== next.scale || view.origin !== next.origin) {
       view = next;
     }
   });
 
   // Reset only when the container bumps the nonce: width and model are pulled
-  // untracked, otherwise every resize would reset the zoom.
+  // untracked, otherwise every resize would reset the zoom. Mount is not a
+  // reset — the view built above is already the right one for a deep link, and
+  // re-creating it here from a not-yet-measured width would throw the restored
+  // selection's framing away.
+  let resetHandled = resetNonce;
   $effect(() => {
-    resetNonce;
+    const nonce = resetNonce;
+    if (nonce === resetHandled) return;
+    resetHandled = nonce;
     untrack(() => {
       drag = null;
       view = createView(width, model);
@@ -362,7 +404,9 @@
       : (columns[0]?.gridStart ?? null)
   );
 
-  // Escape abandons the gesture and puts the pre-drag view/selection back.
+  // Escape abandons the gesture and puts the pre-drag view/selection back —
+  // as a committed action, so the aborted gesture leaves one history entry
+  // rather than the replaced one the live scrub wrote.
   $effect(() => {
     if (drag === null) return;
     const onKeyDown = (event) => {
@@ -371,7 +415,7 @@
       const { zone, previousSelection, baseView } = drag;
       endDrag();
       if (zone === 'pan') view = baseView;
-      else onchange(previousSelection, { commit: false });
+      else onchange(previousSelection, { commit: true });
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -456,10 +500,6 @@
 
     {#if overlay !== null}
       <div class="timeline-selection" style="left: {overlay.left}px; width: {overlay.width}px">
-        <!-- The handle drag attributes (`onpointerdown`) are added in Task 8 and
-             the keyboard attribute (`onkeydown`) in Task 9; this task renders
-             them as inert but fully announced elements so the ARIA contract and
-             `.timeline-handle.start` / `.timeline-handle.end` selectors exist. -->
         <div
           class="timeline-handle start"
           role="slider"
@@ -469,6 +509,7 @@
           aria-valuemax={model.maxIndex}
           aria-valuenow={effectiveSelection.startIndex}
           aria-valuetext={periodName(effectiveSelection.startIndex)}
+          onpointerdown={(event) => startHandleGesture(event, 'start')}
         ></div>
         <div
           class="timeline-handle end"
@@ -479,6 +520,7 @@
           aria-valuemax={model.maxIndex}
           aria-valuenow={effectiveSelection.endIndex}
           aria-valuetext={periodName(effectiveSelection.endIndex)}
+          onpointerdown={(event) => startHandleGesture(event, 'end')}
         ></div>
       </div>
     {/if}
@@ -547,8 +589,13 @@
     touch-action: none;
   }
 
+  /* Full lane height, so a period with no photos is still a pointer target:
+     FR-007 lets a user *attempt* the activation of an empty period, which a
+     zero-height button (bar height 0) could not do. The bar stays the visible
+     density profile. */
   .timeline-column {
     position: absolute;
+    top: 0;
     bottom: 0;
     border: 0;
     background: transparent;
@@ -569,8 +616,13 @@
     background: var(--background-secondary);
   }
 
-  .timeline-column.active .timeline-column-bar,
+  /* Hover/focus reveals the period (FR-006) with a lighter tint than the
+     active state, which stays the strongest signal on the lane. */
   .timeline-column.hovered .timeline-column-bar {
+    background: color-mix(in oklch, var(--primary-color) 30%, transparent);
+  }
+
+  .timeline-column.active .timeline-column-bar {
     background: color-mix(in oklch, var(--primary-color) 45%, transparent);
   }
 

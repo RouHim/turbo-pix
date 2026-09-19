@@ -227,4 +227,115 @@ test.describe('Timeline', () => {
     await expect(page.locator('.timeline-selection')).toHaveCount(0);
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', fitAllUnit);
   });
+
+  test('should select any month in three interactions from the full span', async ({ page }) => {
+    // GIVEN: the decade-spanning fixture, starting from a cleared filter
+    await expect(page.locator('.timeline-column').first()).toBeVisible();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+
+    // The calendar mapping is asserted through the labels: the full span shows
+    // decade labels, and March 1962 is 1962 * 12 + 2 = 23546.
+    await expect(page.locator('.timeline-ruler-label', { hasText: '1960s' })).toHaveCount(1);
+
+    // WHEN: drilling into the 1960s by activating the decade column
+    await page.locator('.timeline-column[data-period-start="23520"]').click();
+
+    // THEN: years appear and nothing is filtered yet
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    expect(TestHelpers.getUrlState(page).year).toBeNull();
+
+    // WHEN: activating 1962 (23544 === 1962 * 12)
+    await page.locator('.timeline-column[data-period-start="23544"]').click();
+    await TestHelpers.waitForUrlParam(page, 'year', '1962');
+
+    // THEN: months appear and the year filter is active
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    // WHEN: activating March (23546 === 1962 * 12 + 2)
+    await page.locator('.timeline-column[data-period-start="23546"]').click();
+    await TestHelpers.waitForUrlParam(page, 'month', '3');
+
+    // THEN: the grid shows exactly the one seeded March 1962 photo
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
+
+  test('should set an inclusive month-granular range with one drag', async ({ page }) => {
+    // GIVEN: the 2012 year view (legacy_05 seeded in March 2012)
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    // WHEN: dragging from February to March (24145 → 24146; January would be
+    // canonicalised into the whole-year form and blur the assertion)
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const february = await page
+      .locator('.timeline-column[data-period-start="24145"]')
+      .boundingBox();
+    const march = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+    await page.mouse.move(february.x + february.width / 2, lane.y + lane.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(march.x + march.width / 2, lane.y + lane.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    // THEN: both bounds are written, inclusive, and no drill-in click fired
+    const state = TestHelpers.getUrlState(page);
+    expect(state.year).toBe(2012);
+    expect(state.month).toBe(2);
+    expect(state.toYear).toBe(2012);
+    expect(state.toMonth).toBe(3);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
+
+  test('should adjust a range bound by dragging its handle', async ({ page }) => {
+    await page.goto('/?year=2012&month=2&to_year=2012&to_month=3');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // WHEN: dragging the start handle one month further right (Feb → Mar would
+    // cross the end, so clampBound holds it at March)
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const startHandle = await page.locator('.timeline-handle.start').boundingBox();
+    const march = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+    await page.mouse.move(startHandle.x + startHandle.width / 2, lane.y + lane.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(march.x + march.width / 2, lane.y + lane.height / 2, { steps: 6 });
+    await page.mouse.up();
+
+    // THEN: the start moved and the end stayed, and the range never inverted:
+    // the start clamped at the end bound, and March–March is canonically the
+    // single period `?year=2012&month=3` (a range of one period *is* that
+    // period), so the end appears as the absent `to_year`/`to_month` the
+    // canonical form drops — never as a bound before the start.
+    const state = TestHelpers.getUrlState(page);
+    expect(state.month).toBe(3);
+    expect(state.toYear).toBeNull();
+    expect(state.toMonth).toBeNull();
+  });
+
+  test('should ignore activation of an empty period and clear back to the full span', async ({
+    page,
+  }) => {
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // April 2012 (24147) has no photos: activating it must not filter. It
+    // carries `aria-disabled="true"` (an empty period announces itself as
+    // unavailable, but is never given the DOM `disabled` attribute, so it
+    // stays focusable and its activation still reaches the handler) — a state
+    // Playwright's actionability gate treats as not-enabled, hence `force`.
+    await page.locator('.timeline-column[data-period-start="24147"]').click({ force: true });
+    const state = TestHelpers.getUrlState(page);
+    expect(state.month).toBeNull();
+    expect(state.toMonth).toBeNull();
+
+    // WHEN: clearing from a zoomed, filtered state
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=3');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.click('.timeline-reset');
+
+    // THEN: unfiltered and back to the full span in one action
+    await expect(page).not.toHaveURL(/year=/);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+  });
 });

@@ -16,14 +16,39 @@ export function mseSupported(mime) {
  * The stream endpoint refused a run with an HTTP status. `503` means "no
  * conversion slot right now" — a saturated worker pool the viewer answers by
  * waiting and retrying — while anything else is a real playback failure.
+ *
+ * The refusal carries everything the retry needs: the offset this run asked for
+ * (resuming the same position, not 0:00) and the server's `Retry-After` pacing
+ * hint when it sent one.
  */
 export class StreamHttpError extends Error {
-  /** @param {number} status */
-  constructor(status) {
+  /**
+   * @param {number} status
+   * @param {{startAt?: number, retryAfterMs?: number|null}} [details]
+   */
+  constructor(status, { startAt = 0, retryAfterMs = null } = {}) {
     super(`stream HTTP ${status}`);
     this.name = 'StreamHttpError';
     this.status = status;
+    this.startAt = startAt;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+/**
+ * `Retry-After` as milliseconds, or `null` when the server sent no usable hint.
+ * The endpoint answers whole seconds; the spec's other form (an HTTP-date) is
+ * left to the caller's default rather than mis-read as a delay.
+ *
+ * @param {Response} response
+ * @returns {number|null}
+ */
+function retryAfterMs(response) {
+  const raw = response.headers?.get?.('retry-after');
+  if (raw === null || raw === undefined) return null;
+  const seconds = Number(String(raw).trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return seconds * 1000;
 }
 
 function once(target, event) {
@@ -143,7 +168,10 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       signal = controller.signal;
       const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok || !response.body) {
-        throw new StreamHttpError(response.status);
+        throw new StreamHttpError(response.status, {
+          startAt: seconds,
+          retryAfterMs: retryAfterMs(response),
+        });
       }
       // Show "waiting for a free conversion slot" when the server holds the
       // request open because every worker is busy.

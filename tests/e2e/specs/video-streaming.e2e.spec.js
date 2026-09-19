@@ -149,6 +149,9 @@ test.describe('On-the-fly streaming playback', () => {
         timeout: 10_000,
       }
     );
+    // Waiting is not a dead end: the escape hatch stays reachable while the
+    // pool is full (a permanently disabled pool would otherwise trap the user).
+    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
 
     await page.waitForFunction(
       () => {

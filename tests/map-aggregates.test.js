@@ -8,6 +8,7 @@ import {
   getPhotoCoordinates,
   groupPhotosByLocation,
   isSemanticQuery,
+  wrapLongitudeForView,
 } from '../frontend/src/lib/map.js';
 
 const photo = (hash, latitude, longitude, extra = {}) => ({
@@ -63,6 +64,37 @@ test('formatCoordinates prints six decimals like the metadata panel', () => {
     formatCoordinates({ latitude: 48.1372, longitude: 11.5755 }),
     '48.137200, 11.575500'
   );
+});
+
+test('wrapLongitudeForView leaves a longitude already inside the window untouched', () => {
+  assert.equal(wrapLongitudeForView(13.4, -155.35, 182.15), 13.4);
+  assert.equal(wrapLongitudeForView(-74, -155.35, 182.15), -74);
+  assert.equal(wrapLongitudeForView(0, 0, 10), 0);
+  assert.equal(wrapLongitudeForView(10, 0, 10), 10);
+});
+
+test('wrapLongitudeForView moves a longitude onto its visible ±360 copy', () => {
+  // A window panned east across the seam shows the +360 copy.
+  assert.equal(wrapLongitudeForView(-175, 170, 200), 185);
+  assert.equal(wrapLongitudeForView(-170, 21.25, 358.75), 190);
+  // The mirror: a window panned west across the seam shows the -360 copy.
+  assert.equal(wrapLongitudeForView(175, -198.75, 138.75), -185);
+});
+
+test('wrapLongitudeForView keeps a longitude with no visible copy as-is', () => {
+  assert.equal(wrapLongitudeForView(-100, 10, 20), -100);
+  assert.equal(wrapLongitudeForView(100, 10, 20), 100);
+});
+
+test('wrapLongitudeForView never pushes an on-screen longitude out of view', () => {
+  // 1920px at zoom 3 centred on Berlin (13.4°): window [-155.35, 182.15].
+  // The old edge-only check shifted every negative longitude by +360 and drew
+  // this photo at 286°, 104° beyond the right edge.
+  assert.equal(wrapLongitudeForView(-74, -155.35, 182.15), -74);
+  // Mirror window centred on -30° (west -198.75, east 138.75): a positive
+  // longitude inside it must not become L - 360.
+  assert.equal(wrapLongitudeForView(120, -198.75, 138.75), 120);
+  assert.equal(wrapLongitudeForView(13.4, -198.75, 138.75), 13.4);
 });
 
 test('buildMapFilters mirrors the grid filter construction', () => {

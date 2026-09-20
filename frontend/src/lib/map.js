@@ -72,6 +72,27 @@ export function formatCoordinates({ latitude, longitude }) {
 }
 
 /**
+ * Moves a longitude into the copy of the viewport Leaflet actually shows.
+ * Markers are placed via `latLngToLayerPoint`/`project`, which never wrap
+ * longitude — only the tile URL wraps — so `bounds` is the raw visible
+ * window, e.g. [-155.35, 182.15] for a 1920px window at zoom 3 centred on
+ * Berlin. A longitude already inside the window stays put; otherwise the
+ * ±360° copy is used when (and only when) that copy is inside the window, so
+ * a photo can never be pushed off-screen by a seam. Returns `lng` unchanged
+ * when no copy is visible.
+ * @param {number} lng - photo longitude, between -180 and 180
+ * @param {number} west - bounds.getWest()
+ * @param {number} east - bounds.getEast()
+ * @returns {number}
+ */
+export function wrapLongitudeForView(lng, west, east) {
+  if (lng >= west && lng <= east) return lng;
+  if (lng + 360 >= west && lng + 360 <= east) return lng + 360;
+  if (lng - 360 >= west && lng - 360 <= east) return lng - 360;
+  return lng;
+}
+
+/**
  * Route state → /api/photos/map params, mirroring PhotoGrid.buildFilters:
  * favorites/videos view tokens never apply (the map is its own view), the
  * route query travels verbatim, sort/order split like the grid.

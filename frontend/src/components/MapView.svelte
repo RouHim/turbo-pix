@@ -18,6 +18,7 @@
     getLocationLabel,
     groupPhotosByLocation,
     isSemanticQuery,
+    wrapLongitudeForView,
   } from '../lib/map.js';
   import MapPopup from './MapPopup.svelte';
 
@@ -142,13 +143,6 @@
   }
 
   // ── Marker rendering ──────────────────────────────────────────────────────
-
-  /** Shifts a longitude into the wrapped copy of the viewport (SC: antimeridian). */
-  function wrapLongitudeForView(longitude, bounds) {
-    if (bounds.getEast() > 180 && longitude < 0) return longitude + 360;
-    if (bounds.getWest() < -180 && longitude > 0) return longitude - 360;
-    return longitude;
-  }
 
   /** Count bubble; grows with the number it carries so 3+ digits stay readable. */
   function clusterIcon(count) {
@@ -307,7 +301,7 @@
 
     for (const feature of features) {
       const [rawLongitude, latitude] = feature.geometry.coordinates;
-      const longitude = wrapLongitudeForView(rawLongitude, bounds);
+      const longitude = wrapLongitudeForView(rawLongitude, bounds.getWest(), bounds.getEast());
 
       if (feature.properties.cluster) {
         const count = feature.properties.point_count;

@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::SemaphorePermit;
+use tokio::task::JoinHandle;
 
 use crate::video_processor::{
     acquire_transcode_permit, format_binary_error, get_ffmpeg_path, transcode_timeout_secs,
@@ -44,6 +45,13 @@ pub const FULL_RUN_MAX_START_SECS: f64 = 0.5;
 /// the configured timeout, cheap enough to keep watching for the hours a long
 /// conversion legitimately runs.
 const STALL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Longest a killed run's stderr drain may hold up the watchdog's answer. The
+/// drain only feeds the error message; a descendant that outlives the killed
+/// child (possible when a run was started through a shell) can keep the pipe
+/// open long past the kill, and that must not read as "the run is still
+/// running" — the stalled encoder is already dead.
+const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamMode {
@@ -350,6 +358,16 @@ pub async fn start_stream(
     })
 }
 
+/// Join the stderr drain, but never let it delay the outcome: the drained text
+/// only feeds the error message (or the cached `ffmpeg exited with status …`
+/// tail), so a pipe that outlives the child is not a reason to keep waiting.
+async fn drain_stderr(task: JoinHandle<String>) -> Option<String> {
+    match tokio::time::timeout(STDERR_DRAIN_TIMEOUT, task).await {
+        Ok(Ok(text)) => Some(text),
+        _ => None,
+    }
+}
+
 /// Watch one ffmpeg child to completion.
 ///
 /// The watchdog is progress-based, not deadline-based: `progress` is stamped by
@@ -389,14 +407,14 @@ pub async fn supervise(
             Ok(Ok(status)) => break status,
             Ok(Err(e)) => {
                 let _ = child.kill().await;
-                let _ = stderr_task.await;
+                let _ = drain_stderr(stderr_task).await;
                 return Err(format!("ffmpeg wait failed: {e}"));
             }
             Err(_) => {
                 let idle = progress.idle_for();
                 if idle >= stall {
                     let _ = child.kill().await;
-                    let _ = stderr_task.await;
+                    let _ = drain_stderr(stderr_task).await;
                     return Err(format!(
                         "stream stalled: no output for {}s (timeout {}s)",
                         idle.as_secs(),
@@ -406,7 +424,7 @@ pub async fn supervise(
             }
         }
     };
-    let stderr_text = stderr_task.await.unwrap_or_default();
+    let stderr_text = drain_stderr(stderr_task).await.unwrap_or_default();
     if status.success() {
         return Ok(());
     }
@@ -836,7 +854,10 @@ mod tests {
         );
         // Nothing on stdout and nobody reading it: a stuck encoder (or a client
         // that stopped reading) must still be bounded by the configured timeout.
-        let mut child = fake_stream("sleep 30");
+        // `exec` so the sleep IS the child: through a shell that forks, the
+        // orphan would keep the stderr pipe open and the kill would only be
+        // observably complete once it exited on its own.
+        let mut child = fake_stream("exec sleep 30");
         let _stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let progress = ProgressStamp::new();
@@ -852,6 +873,33 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(10),
             "the kill must land near the 1s cap, took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_killed_run_returns_even_when_its_pipe_outlives_it() {
+        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
+            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
+            "1",
+        );
+        // The shell stays alive (`wait`) while a forked descendant holds the
+        // stderr write end: killing the child closes nothing, so a run whose
+        // answer waited for the pipe's EOF would report the stall only once the
+        // orphan exited on its own — the watchdog has to answer anyway.
+        let mut child = fake_stream("sleep 30 & wait");
+        let _stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let progress = ProgressStamp::new();
+
+        let started = Instant::now();
+        let outcome = supervise(child, stderr, progress).await;
+        let elapsed = started.elapsed();
+
+        assert!(outcome.is_err(), "a silent run must be killed");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "an outliving pipe must not delay the kill's answer, took {elapsed:?}"
         );
     }
 

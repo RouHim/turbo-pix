@@ -437,18 +437,21 @@
     }
 
     // FR-007: one activation applies a single period — a year, or a year plus a
-    // month. The year branch commits the *grid-aligned* year, not the column's
+    // month. A *year* column commits the grid-aligned year, not the column's
     // clipped bounds: `buildColumns` clips a column to the model, so at the
     // library's first and last year the clip removes whole months
     // (1962-03…1962-12), which is not a single period — and the mobile year
-    // dropdown writes the bare year for that same choice.
-    onchange(
-      {
-        startIndex: column.gridStart,
-        endIndex: column.gridStart + MONTHS_PER_YEAR - 1,
-      },
-      { commit: true }
-    );
+    // dropdown writes the bare year for that same choice. A *month* column
+    // (`unit === 1`, which a year drill-in or any zoom past the
+    // one-month-per-column floor produces) commits its own single month: the
+    // grid-aligned shape there would be a twelve-month range starting at that
+    // month, which is neither the period the column shows nor what the mobile
+    // month dropdown writes.
+    const period =
+      unit === MONTHS_PER_YEAR
+        ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_YEAR - 1 }
+        : { startIndex: column.startIndex, endIndex: column.endIndex };
+    onchange(period, { commit: true });
     if (unit === MONTHS_PER_YEAR) {
       // Drill in so months become reachable in three interactions. The view
       // frames the months that exist, so it keeps the clipped bounds.

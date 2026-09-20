@@ -479,9 +479,38 @@ test.describe('Timeline', () => {
     await page.locator('.timeline-column[data-period-start="23546"]').click();
     await TestHelpers.waitForUrlParam(page, 'month', '3');
 
+    // THEN: one activation applies the single period `?year=1962&month=3` — a
+    // month is the smallest single period (FR-007), so no end bound appears and
+    // the label names that month instead of a twelve-month range
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 1962,
+      month: 3,
+      toYear: null,
+      toMonth: null,
+    });
+    await expect(page).toHaveURL(/[?&]year=1962&month=3(&|$)/);
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('March 1962');
+
     // THEN: the grid shows exactly the one seeded March 1962 photo
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(page.locator('.photo-card')).toHaveCount(1);
+
+    // AND: the mobile month dropdown writes the same single-period filter for
+    // the same choice (year first, then month)
+    await TestHelpers.setMobileViewport(page);
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.selectOption('#timeline-year-select', '2012');
+    await expect(page.locator('#timeline-month-select')).toBeEnabled();
+    await page.selectOption('#timeline-month-select', '3');
+    await TestHelpers.waitForUrlParam(page, 'month', '3');
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: 3,
+      toYear: null,
+      toMonth: null,
+    });
+    await expect(page).toHaveURL(/[?&]year=2012&month=3(&|$)/);
   });
 
   test('should commit a year column as the whole year, as the mobile dropdown does', async ({
@@ -776,11 +805,15 @@ test.describe('Timeline', () => {
     const focused = page.locator('.timeline-column:focus');
     await expect(focused).toHaveCount(1);
 
-    // Enter applies exactly what a pointer click would
+    // Enter applies exactly what a pointer click would — the single period, so
+    // no end bound is written (a month is not a twelve-month range)
     const start = await focused.getAttribute('data-period-start');
     await page.keyboard.press('Enter');
     await TestHelpers.waitForPhotosToLoad(page);
-    expect(TestHelpers.getUrlState(page).month).toBe((Number(start) % 12) + 1);
+    const entered = TestHelpers.getUrlState(page);
+    expect(entered.month).toBe((Number(start) % 12) + 1);
+    expect(entered.toYear).toBeNull();
+    expect(entered.toMonth).toBeNull();
 
     // AND: Shift+Enter on the column the arrow moved to extends the selection
     // into a range — the next populated period, not always its neighbour

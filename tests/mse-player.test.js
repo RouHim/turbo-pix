@@ -246,6 +246,24 @@ function fakeFetch() {
   return { fetchImpl, calls };
 }
 
+/**
+ * `fakeFetch` whose response is held back until `release()` is called: the
+ * window in which a run is still setting up — no MediaSource attached, no
+ * position on the element — and the user is free to move the scrubber.
+ */
+function gatedFetch() {
+  const { fetchImpl, calls } = fakeFetch();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    calls,
+    release: () => release(),
+    fetchImpl: (url) => gate.then(() => fetchImpl(url)),
+  };
+}
+
 function createPlayer(video, options = {}) {
   globalThis.MediaSource = FakeMediaSource;
   URL.createObjectURL = () => 'blob:fake-media-source';
@@ -647,6 +665,45 @@ test('a stream that delivers no media reports a failure', async () => {
 
   assert.equal(errors.length, 1, 'the empty run reaches the viewer');
   assert.match(errors[0].message, /no media/);
+
+  player.destroy();
+});
+
+test('a seek during a starting run is not dropped: the newest target wins', async () => {
+  const video = fakeVideo();
+  const { fetchImpl, calls, release } = gatedFetch();
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video);
+
+  // The run for 10 s is still waiting on the server, so this player has not
+  // positioned the element yet: `starting` spans the whole round trip.
+  const run = player.start(10);
+  await settle(2);
+
+  // The user drag-scrubs to 20 s and then to 25 s: the element moves itself and
+  // fires `seeking` for both assignments, while the 10 s run is still in setup.
+  video._currentTime = 20;
+  video.dispatch('seeking');
+  video._currentTime = 25;
+  video.dispatch('seeking');
+  await settle();
+
+  release();
+  await run;
+  await settle(10);
+
+  // Both seeks used to be dropped (`starting` returns early) and the run then
+  // assigned the element ITS own 10 s, so the scrubber snapped back to a
+  // position the user had already left.
+  assert.equal(calls.length, 2, 'the seek that landed during setup starts its own run');
+  assert.match(calls[1], /start=25\.000/, 'the newest target wins');
+  const seekBuffer = createdSources.at(-1).sourceBuffers[0];
+  assert.equal(
+    seekBuffer.timestampOffset,
+    25,
+    "the new run's segments map onto the user's position"
+  );
+  assert.equal(video.currentTime, 25, 'the element ends on the position the user picked');
 
   player.destroy();
 });

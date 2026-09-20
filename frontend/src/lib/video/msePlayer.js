@@ -65,9 +65,16 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
   let controller = null;
   let destroyed = false;
   let restartTimer = null;
-  // A start() run is in flight (fetch/MediaSource setup not yet finished):
-  // a `seeking` event during that window is noise, never a user seek.
+  // A start() run is in flight (fetch/MediaSource setup not yet finished). The
+  // run has not positioned the element yet, so a `seeking` event now cannot be
+  // acted on immediately — it is kept as `pendingSeek` until setup is done.
   let starting = false;
+  // The user seek that landed during that window. The run in flight positions
+  // the element on ITS OWN offset when it attaches, so dropping the target
+  // would snap the scrubber back to the offset the run asked for and lose the
+  // position the user picked. The newest target wins; it is consumed once the
+  // run that stored it has finished setting up.
+  let pendingSeek = null;
   // The position this player assigned itself. The element fires `seeking` for
   // that assignment too; treating it as user intent would restart the stream
   // in a loop and leave the element paused at 0.
@@ -237,6 +244,18 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
     }
   }
 
+  /**
+   * The position a user picked while the run in flight was still setting up,
+   * when it is not the offset that run attached. Consumed either way: a stored
+   * target belongs to the run that saw it, never to a later run.
+   */
+  function takePendingSeek(attached) {
+    if (pendingSeek === null) return null;
+    const target = pendingSeek;
+    pendingSeek = null;
+    return Math.abs(target - attached) > 0.25 ? target : null;
+  }
+
   async function start(seconds) {
     if (destroyed || starting) return;
     starting = true;
@@ -343,6 +362,15 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       // Setup finished (or bailed): `seeking` events are user intent again.
       starting = false;
     }
+    // A seek that landed while this run was setting up is newer than the offset
+    // the run asked for — and the run has just moved the element back to that
+    // older offset. Honour the stored target instead, so the position the user
+    // picked wins.
+    const pending = takePendingSeek(seconds);
+    if (pending !== null) {
+      start(pending).catch((error) => reportError(controller?.signal, error));
+      return;
+    }
     // Reaching this point means the stream is live: every bail-out above
     // returned. The pump then feeds the rest of the chunks in the background,
     // bailing out as soon as this run is superseded.
@@ -363,9 +391,17 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
 
   // Seeking outside the buffered range restarts the stream at the target.
   const onSeeking = () => {
-    if (destroyed || starting) return;
+    if (destroyed) return;
     const target = videoEl.currentTime;
+    // The player's own `currentTime` assignment is not user intent.
     if (expectedSeek !== null && Math.abs(target - expectedSeek) <= 0.25) return;
+    if (starting) {
+      // The run in flight will position the element on its own offset, so this
+      // target is remembered rather than dropped: it is honoured as soon as
+      // that run has attached.
+      pendingSeek = target;
+      return;
+    }
     if (isBuffered(target)) return;
     start(target).catch((error) => reportError(controller?.signal, error));
   };
@@ -375,6 +411,7 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
 
   function destroy() {
     destroyed = true;
+    pendingSeek = null;
     clearTimeout(restartTimer);
     controller?.abort();
     detachRunErrors?.();

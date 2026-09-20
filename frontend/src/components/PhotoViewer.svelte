@@ -558,6 +558,17 @@
   }
 
   async function displayPhoto(photo) {
+    // Every photo change invalidates the previous photo's stream state. The
+    // MSE player's pump would otherwise keep pulling conversion bytes — the
+    // server keeps an ffmpeg process holding a conversion permit for a video
+    // no longer on screen — and its waiting notice would hover over an
+    // unrelated photo, whose "play original" button would then play the
+    // image's URL in the <video> element. displayVideo's own teardown cannot
+    // run for the OLD video: its staleness guard bails. Both calls are
+    // idempotent, so the video paths (which also tear down) stay safe.
+    destroyStreamPlayer();
+    hideTranscodeToast();
+
     resetZoom();
     isLoading = true;
 

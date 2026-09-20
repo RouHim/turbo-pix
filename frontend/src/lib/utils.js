@@ -304,16 +304,18 @@ export const storage = {
  * Browser video codec support detection.
  *
  * The capability set is serialized into a comma-joined string
- * (`h264-8,h264-10,hevc,av1,vp9,vp8`) sent to the server as the
- * `X-TurboPix-Codecs` header so the serve-time decision (Direct Play / remux /
- * transcode) is authoritative on the backend rather than guessed client-side.
+ * (`h264-8,h264-10,hevc,av1,vp9,vp8`) and travels to the server as the `client`
+ * query parameter (`getVideoUrl`, `api.getVideoDecision`) so the serve-time
+ * decision (Direct Play / remux / transcode) is authoritative on the backend
+ * rather than guessed client-side. The server still honours an
+ * `X-TurboPix-Codecs` request header for clients that can set one — a media
+ * element's own request cannot, which is why this app uses the query param.
  *
  * Probing follows Jellyfin's convention: `canPlayType` results of `probably`
  * OR `maybe` count as supported (accepting only `probably` under-reports —
  * Firefox routinely answers `maybe` for codecs it can actually decode).
  */
 export const videoCodecSupport = {
-  _cache: {},
   _clientString: null,
 
   /**
@@ -351,7 +353,8 @@ export const videoCodecSupport = {
 
   /**
    * Sync HEVC capability hint. Firefox has no HEVC decoder, so it always
-   * reports false regardless of `canPlayType` (matches `supportsHEVC`).
+   * reports false regardless of `canPlayType` (matches Jellyfin's
+   * `supportsHEVC`).
    * @returns {boolean}
    */
   canPlayHEVC() {
@@ -409,8 +412,8 @@ export const videoCodecSupport = {
   },
 
   /**
-   * The client's supported codec set as a comma-joined capability string for
-   * the `X-TurboPix-Codecs` header and the `?client=` query param (server's
+   * The client's supported codec set as a comma-joined capability string,
+   * handed to the server as the `client` query parameter (server's
    * ClientCodecs::parse format: `h264-8,h264-10,hevc,av1,vp9,vp8,aac,…`;
    * only supported tokens are emitted). Memoized; call `clearCache()` to
    * recompute.
@@ -431,102 +434,9 @@ export const videoCodecSupport = {
   },
 
   /**
-   * The value to send as the `X-TurboPix-Codecs` request header.
-   * @returns {string}
-   */
-  get clientCodecsHeader() {
-    return this.getClientCodecsString();
-  },
-
-  /**
-   * Check if browser supports a specific video codec via Media Capabilities.
-   * @param {string} codec - Codec string (e.g., 'hvc1.1.6.L93.B0' for HEVC)
-   * @param {number} width - Video width
-   * @param {number} height - Video height
-   * @returns {Promise<boolean>}
-   */
-  async canPlayCodec(codec, width = 1920, height = 1080) {
-    const cacheKey = `${codec}-${width}x${height}`;
-
-    if (this._cache[cacheKey] !== undefined) {
-      return this._cache[cacheKey];
-    }
-
-    // Fallback: basic video element support check
-    if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.decodingInfo) {
-      const supported = this.canPlayType(`video/mp4; codecs="${codec}"`);
-      this._cache[cacheKey] = supported;
-
-      if (logger) {
-        logger.info('Codec support fallback check', {
-          component: 'VideoCodecSupport',
-          codec,
-          supported,
-        });
-      }
-
-      return supported;
-    }
-
-    try {
-      const config = {
-        type: 'file',
-        video: {
-          contentType: `video/mp4; codecs="${codec}"`,
-          width,
-          height,
-          bitrate: 10000000,
-          framerate: 30,
-        },
-      };
-
-      const result = await navigator.mediaCapabilities.decodingInfo(config);
-      const supported = result.supported && result.smooth;
-      this._cache[cacheKey] = supported;
-
-      if (logger) {
-        logger.info('Codec support check', {
-          component: 'VideoCodecSupport',
-          codec,
-          width,
-          height,
-          supported,
-          smooth: result.smooth,
-          powerEfficient: result.powerEfficient,
-        });
-      }
-
-      return supported;
-    } catch (error) {
-      if (logger) {
-        logger.warn('Failed to check codec support', error, {
-          component: 'VideoCodecSupport',
-          codec,
-        });
-      }
-      this._cache[cacheKey] = false;
-      return false;
-    }
-  },
-
-  /**
-   * Check if browser supports HEVC (H.265) codec.
-   * Firefox always returns false — HEVC support is unreliable there.
-   * @param {number} width - Video width
-   * @param {number} height - Video height
-   * @returns {Promise<boolean>}
-   */
-  async supportsHEVC(width = 1920, height = 1080) {
-    // A synchronous answer is available without a DOM/mediaCapabilities
-    // round-trip; defer to it so the async API and the header stay consistent.
-    return this.canPlayHEVC() || (await this.canPlayCodec('hvc1.1.6.L93.B0', width, height));
-  },
-
-  /**
-   * Clear the codec support cache.
+   * Clear the memoized capability string, forcing the next call to re-probe.
    */
   clearCache() {
-    this._cache = {};
     this._clientString = null;
   },
 };

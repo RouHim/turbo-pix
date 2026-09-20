@@ -3265,7 +3265,11 @@ mod tests {
         let _cache_guard =
             EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
 
-        for hint in [Some("remux".to_string()), Some("nonsense".to_string()), None] {
+        for hint in [
+            Some("remux".to_string()),
+            Some("nonsense".to_string()),
+            None,
+        ] {
             let response = stream_video(
                 hash.to_string(),
                 StreamQuery {

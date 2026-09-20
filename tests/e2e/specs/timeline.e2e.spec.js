@@ -98,8 +98,10 @@ test.describe('Timeline', () => {
         const starts = columns.map((column) => Number(column.dataset.periodStart));
         return Math.max(...starts) - Math.min(...starts) + Number(columns[0].dataset.unit);
       });
+    // The lane paints one render after the timeline fetch lands, so wait for a
+    // measurable span before capturing it (a not-yet-painted lane reads 0).
+    await expect.poll(visibleSpan).toBeGreaterThan(0);
     const fitAllSpan = await visibleSpan();
-    expect(fitAllSpan).toBeGreaterThan(0);
 
     const client = await page.context().newCDPSession(page);
     await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
@@ -107,6 +109,29 @@ test.describe('Timeline', () => {
     const lane = await page.locator('.timeline-lane').boundingBox();
     const cx = lane.x + lane.width / 2;
     const cy = lane.y + lane.height / 2;
+
+    // The pinch's own invariant, and the thing a column activation cannot
+    // fake: the period under the pinch midpoint stays under it. A release that
+    // drilled into the decade column instead would jump the view to that
+    // decade's left edge — 1960s, where the midpoint reads the late 1990s —
+    // which is why span/URL/selection alone are not enough here. (`data-unit`
+    // cannot serve: a real pinch at fit-all shrinks the span 720 → ~216 months,
+    // and `chooseUnit` must refine the columns 120 → 12 for that, exactly as a
+    // decade drill-in does.)
+    const decadeAtMidpoint = () =>
+      page
+        .evaluate((midpoint) => {
+          const under = [...document.querySelectorAll('.timeline-column')].find((column) => {
+            const rect = column.getBoundingClientRect();
+            return rect.left <= midpoint && midpoint <= rect.right;
+          });
+          return under ? Math.floor(Number(under.dataset.periodStart) / 120) : null;
+        }, cx)
+        .then((decade) => {
+          expect(decade).not.toBeNull();
+          return decade;
+        });
+    const decadeBefore = await decadeAtMidpoint();
 
     // WHEN: two fingers spread symmetrically over the lane
     await client.send('Input.dispatchTouchEvent', {
@@ -123,12 +148,47 @@ test.describe('Timeline', () => {
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
 
-    // THEN: the view zooms in and the release commits no filter — the pinch is
-    // a view gesture, so neither the brush it interrupted nor the lifted finger
-    // may reach a column.
+    // THEN: the view zooms in about the fingers, and the release commits no
+    // filter — the pinch is a view gesture, so neither the brush it interrupted
+    // nor the lifted finger may reach a column.
     await expect.poll(visibleSpan).toBeLessThan(fitAllSpan);
     await expect(page).not.toHaveURL(/year=/);
     await expect(page.locator('.timeline-selection')).toHaveCount(0);
+    expect(await decadeAtMidpoint()).toBe(decadeBefore);
+  });
+
+  test('should announce a column at the granularity the ruler shows', async ({ page }) => {
+    // The announced name is the only thing a screen reader has: a decade column
+    // must not introduce itself by its first month. Asserted at all three units,
+    // on the column label and on the status row that repeats it.
+    const status = page.locator('.timeline-status');
+    const columnAt = (periodStart) =>
+      page.locator(`.timeline-column[data-period-start="${periodStart}"]`);
+
+    // GIVEN: the full span, where the columns are decades
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+    const decade = columnAt(23520); // 1960 * 12
+    await expect(decade).toHaveAttribute('aria-label', /^1960s, \d+ photos$/);
+
+    // AND: hovering announces the same name in the status row
+    await decade.hover();
+    await expect(status).toHaveText(/^1960s, \d+ photos$/);
+
+    // WHEN: drilling into the 1960s — the columns become years
+    await decade.click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    const year = columnAt(23544); // 1962 * 12
+    await expect(year).toHaveAttribute('aria-label', /^1962, \d+ photos$/);
+    await year.hover();
+    await expect(status).toHaveText(/^1962, \d+ photos$/);
+
+    // WHEN: filtering to 1962 — the columns become months
+    await year.click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+    const month = columnAt(23546); // 1962 * 12 + 2 === March 1962
+    await expect(month).toHaveAttribute('aria-label', /^March 1962, \d+ photos$/);
+    await month.hover();
+    await expect(status).toHaveText(/^March 1962, \d+ photos$/);
   });
 
   test('should keep the selector off the page when the timeline fails to load', async ({

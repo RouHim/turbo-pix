@@ -365,7 +365,8 @@
   // the pointer first: while two still remain the pinch continues, re-anchored
   // on the survivors, and the release that takes it below two leaves pinch mode
   // and suppresses the release's click so it cannot activate the column under
-  // the last finger.
+  // the last finger. It runs for the lane's own releases and for the window
+  // catch-all below, where the second call is a no-op.
   const endPointer = (event) => {
     if (laneEl !== null && laneEl.hasPointerCapture(event.pointerId)) {
       laneEl.releasePointerCapture(event.pointerId);
@@ -382,6 +383,23 @@
     suppressClick = true;
     endDrag();
   };
+
+  // A press that leaves the lane before the 4 px drag threshold never captures,
+  // so its release is hit-tested to whatever is under the pointer and the lane's
+  // own handler never sees it — the id would stay in the map, and the next touch
+  // press would then read as a second pointer and pinch about a dead id. Track
+  // releases at the window for as long as any pointer is down (the Escape
+  // listener's pattern); the lane's handler has already cleared what it owns.
+  $effect(() => {
+    if (lanePointers.size === 0) return;
+    const onRelease = (event) => endPointer(event);
+    window.addEventListener('pointerup', onRelease);
+    window.addEventListener('pointercancel', onRelease);
+    return () => {
+      window.removeEventListener('pointerup', onRelease);
+      window.removeEventListener('pointercancel', onRelease);
+    };
+  });
 
   // A gesture that ends over a column retargets the compatibility click to the
   // captured lane, so the column's own handler never consumes `suppressClick`

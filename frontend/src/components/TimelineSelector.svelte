@@ -63,9 +63,13 @@
   let focusedColumnStart = $state(null);
   let suppressClick = false;
   let measureContext = null;
-  // Set while a keyboard focus move owns the view change it makes: the
-  // selection-following effect further down must not undo that pan (see
-  // `focusColumn`).
+  // Set while a *user gesture* owns the view change it makes — a keyboard focus
+  // move (`focusColumn`), a zoom control, a wheel, the release of a ruler pan or
+  // a column drill-in. The selection-following effect further down must not undo
+  // that change (see `focusColumn`): without it the FR-010 reframe reverts every
+  // user-initiated view change that takes the selection off screen, and a
+  // zoom-in press lands on the fixed point `width / span` and changes nothing.
+  // One-shot: the effect reads it and clears it.
   let reframeSuppressed = false;
 
   const monthName = (month) => {
@@ -349,6 +353,11 @@
   const endGesture = (event) => {
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const { moved, zone, selection: dragged, aborted } = drag;
+    // A ruler pan is the user's own view change. The drag guard covers the
+    // moves; this release — which drops the guard — is what re-triggers the
+    // selection-following effect, so an unowned release would pan the view
+    // straight back to the selection.
+    if (moved && zone === 'pan') reframeSuppressed = true;
     endDrag();
     if (!moved) return;
     // Review Focus 1: a drag that ends over a column must not also activate it.
@@ -418,6 +427,7 @@
     if (column.count === 0 || view === null || model.length === 0) return;
 
     if (unit === MONTHS_PER_DECADE) {
+      reframeSuppressed = true;
       view = zoomToRange(
         { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_DECADE - 1 },
         width,
@@ -426,9 +436,23 @@
       return;
     }
 
-    onchange({ startIndex: column.startIndex, endIndex: column.endIndex }, { commit: true });
+    // FR-007: one activation applies a single period — a year, or a year plus a
+    // month. The year branch commits the *grid-aligned* year, not the column's
+    // clipped bounds: `buildColumns` clips a column to the model, so at the
+    // library's first and last year the clip removes whole months
+    // (1962-03…1962-12), which is not a single period — and the mobile year
+    // dropdown writes the bare year for that same choice.
+    onchange(
+      {
+        startIndex: column.gridStart,
+        endIndex: column.gridStart + MONTHS_PER_YEAR - 1,
+      },
+      { commit: true }
+    );
     if (unit === MONTHS_PER_YEAR) {
-      // Drill in so months become reachable in three interactions.
+      // Drill in so months become reachable in three interactions. The view
+      // frames the months that exist, so it keeps the clipped bounds.
+      reframeSuppressed = true;
       view = zoomToRange(
         { startIndex: column.startIndex, endIndex: column.endIndex },
         width,
@@ -456,13 +480,20 @@
   // and it cannot be selected either, so navigation lands on periods with
   // photos instead of parking on one that swallows Enter. `null` means the
   // direction holds none.
+  //
+  // The scan advances by the column *unit*, not by one month: a month-granular
+  // scan finds an off-grid window (with 1963-1973 empty, the first populated
+  // 12-month window from 1962 starts in October 1973), and no column carries
+  // that `data-period-start` — `focusColumn` would find no element, so the
+  // arrow would silently do nothing while `focusedColumnStart` named a period
+  // the grid does not contain.
   const seekFocusedStart = (from, step) => {
     const last = step > 0 ? gridStartMax : gridStartMin;
     if (from === null || last === null) return null;
     for (
-      let candidate = from;
+      let candidate = alignedStart(from);
       step > 0 ? candidate <= last : candidate >= last;
-      candidate += step
+      candidate += step * unit
     ) {
       if (columnPhotoCount(candidate) > 0) return candidate;
     }
@@ -573,6 +604,8 @@
     const element = laneEl ?? rulerEl;
     if (element === null) return;
 
+    // A wheel is the user's own view change, in both of its forms.
+    reframeSuppressed = true;
     if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       view = panView({
         view,
@@ -594,11 +627,13 @@
 
   const zoomIn = () => {
     if (view === null || model.length === 0) return;
+    reframeSuppressed = true;
     view = zoomView({ view, factor: ZOOM_STEP, anchorPx: width / 2, width, model });
   };
 
   const zoomOut = () => {
     if (view === null || model.length === 0) return;
+    reframeSuppressed = true;
     view = zoomView({ view, factor: 1 / ZOOM_STEP, anchorPx: width / 2, width, model });
   };
 
@@ -656,21 +691,25 @@
     });
   });
 
-  // FR-010: keep the selection on screen — never fight a drag in progress or a
-  // keyboard focus move, and leave an already visible selection's view
-  // untouched. (`reframeSuppressed` is read before the guards, and is one-shot:
-  // it belongs to the single view change `focusColumn` just made.)
+  // FR-010: keep the selection on screen — never fight a gesture in progress
+  // (a drag, or a pinch, which drops the drag as it takes over) or a user view
+  // change of its own (`reframeSuppressed`), and leave an already visible
+  // selection's view untouched. (`reframeSuppressed` is read before the guards,
+  // and is one-shot: it belongs to the single view change the gesture just
+  // made.)
   $effect(() => {
     const dragged = drag;
+    const pinching = pinch;
     const current = view;
     const visible = selection;
-    const ownedByFocusMove = reframeSuppressed;
+    const ownedByGesture = reframeSuppressed;
     reframeSuppressed = false;
     const next =
       visible === null || current === null
         ? current
         : ensureSelectionVisible(visible, current, width, model);
-    if (dragged !== null || ownedByFocusMove || current === null || next === current) return;
+    if (dragged !== null || pinching !== null || ownedByGesture || current === null) return;
+    if (next === current) return;
     if (next.scale !== current.scale || next.origin !== current.origin) view = next;
   });
 
@@ -803,8 +842,8 @@
           role="slider"
           tabindex="0"
           aria-label={$t('ui.timeline_range_start', { default: 'Range start' })}
-          aria-valuemin={model.minIndex}
-          aria-valuemax={model.maxIndex}
+          aria-valuemin={Math.min(model.minIndex, effectiveSelection.startIndex)}
+          aria-valuemax={Math.max(model.maxIndex, effectiveSelection.endIndex)}
           aria-valuenow={effectiveSelection.startIndex}
           aria-valuetext={periodAnnouncement(effectiveSelection.startIndex)}
           onpointerdown={(event) => startHandleGesture(event, 'start')}
@@ -815,8 +854,8 @@
           role="slider"
           tabindex="0"
           aria-label={$t('ui.timeline_range_end', { default: 'Range end' })}
-          aria-valuemin={model.minIndex}
-          aria-valuemax={model.maxIndex}
+          aria-valuemin={Math.min(model.minIndex, effectiveSelection.startIndex)}
+          aria-valuemax={Math.max(model.maxIndex, effectiveSelection.endIndex)}
           aria-valuenow={effectiveSelection.endIndex}
           aria-valuetext={periodAnnouncement(effectiveSelection.endIndex)}
           onpointerdown={(event) => startHandleGesture(event, 'end')}

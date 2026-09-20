@@ -85,6 +85,62 @@ test.describe('Timeline', () => {
     await expect.poll(visibleSpan).toBe(fitAllSpan);
   });
 
+  test('should keep a zoom control press instead of re-framing the selection back', async ({
+    page,
+  }) => {
+    // GIVEN: an active range, which the FR-010 effect re-frames on every view
+    // change unless the gesture owns the view change it makes
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=8');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toBeVisible();
+
+    // How much of the library is on screen. Column *count* cannot be used here:
+    // zooming in also refines the column unit (decade -> year -> month), so the
+    // count grows even though the visible span shrinks.
+    const visibleSpan = () =>
+      page.evaluate(() => {
+        const columns = [...document.querySelectorAll('.timeline-column')];
+        if (columns.length === 0) return 0;
+        const starts = columns.map((column) => Number(column.dataset.periodStart));
+        return Math.max(...starts) - Math.min(...starts) + Number(columns[0].dataset.unit);
+      });
+
+    // WHEN: zooming in with the control, twice. The first press zoomed the
+    // selection in (from 1.2 spans to exactly one span): a press the effect
+    // takes back lands on `width / span`, which is a fixed point, so the second
+    // press is what proves the view really moved and stayed moved.
+    const fitSpan = await visibleSpan();
+    await page.click('.timeline-zoom-in');
+    const firstZoomSpan = await visibleSpan();
+    expect(firstZoomSpan).toBeLessThan(fitSpan);
+    await page.click('.timeline-zoom-in');
+    await expect.poll(visibleSpan, { timeout: 2000 }).toBeLessThan(firstZoomSpan);
+  });
+
+  test('should keep a ruler pan instead of snapping back to the selection', async ({ page }) => {
+    // GIVEN: an active range, and therefore a view the FR-010 effect will
+    // re-frame as soon as a gesture stops owning it
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=8');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toBeVisible();
+    const firstColumnStart = () =>
+      page.locator('.timeline-column').first().getAttribute('data-period-start').then(Number);
+
+    // WHEN: panning the ruler left, which moves the view later into the library
+    // and takes the 2012 selection off screen. The drag guard covers the moves;
+    // the release drops it, and that is what re-triggers the effect.
+    const before = await firstColumnStart();
+    const ruler = await page.locator('.timeline-ruler').boundingBox();
+    await page.mouse.move(ruler.x + ruler.width * 0.9, ruler.y + ruler.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(ruler.x + ruler.width * 0.1, ruler.y + ruler.height / 2, { steps: 10 });
+    await page.mouse.up();
+
+    // THEN: the pan stays — the view is ~0.8 viewport widths (≈5.8 months here)
+    // later instead of snapping back to the selection's start (one month on)
+    await expect.poll(firstColumnStart, { timeout: 2000 }).toBeGreaterThanOrEqual(before + 4);
+  });
+
   test('should zoom with a two-finger pinch on the lane without touching the filter', async ({
     page,
   }) => {
@@ -104,11 +160,29 @@ test.describe('Timeline', () => {
     const fitAllSpan = await visibleSpan();
 
     const client = await page.context().newCDPSession(page);
-    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     const touchPoint = (x, y) => ({ x, y, radiusX: 5, radiusY: 5, force: 1 });
+    // Two fingers 80px apart, spread symmetrically to 272px (≈3.4×).
+    const pinch = async () => {
+      const lane = await page.locator('.timeline-lane').boundingBox();
+      const cx = lane.x + lane.width / 2;
+      const cy = lane.y + lane.height / 2;
+      await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [touchPoint(cx - 40, cy), touchPoint(cx + 40, cy)],
+      });
+      for (let i = 1; i <= 12; i += 1) {
+        await client.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [touchPoint(cx - 40 - i * 8, cy), touchPoint(cx + 40 + i * 8, cy)],
+        });
+        await page.waitForTimeout(25);
+      }
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    };
     const lane = await page.locator('.timeline-lane').boundingBox();
     const cx = lane.x + lane.width / 2;
-    const cy = lane.y + lane.height / 2;
 
     // The pinch's own invariant, and the thing a column activation cannot
     // fake: the period under the pinch midpoint stays under it. A release that
@@ -134,19 +208,7 @@ test.describe('Timeline', () => {
     const decadeBefore = await decadeAtMidpoint();
 
     // WHEN: two fingers spread symmetrically over the lane
-    await client.send('Input.dispatchTouchEvent', {
-      type: 'touchStart',
-      touchPoints: [touchPoint(cx - 40, cy), touchPoint(cx + 40, cy)],
-    });
-    for (let i = 1; i <= 12; i += 1) {
-      await client.send('Input.dispatchTouchEvent', {
-        type: 'touchMove',
-        touchPoints: [touchPoint(cx - 40 - i * 8, cy), touchPoint(cx + 40 + i * 8, cy)],
-      });
-      await page.waitForTimeout(25);
-    }
-    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await pinch();
 
     // THEN: the view zooms in about the fingers, and the release commits no
     // filter — the pinch is a view gesture, so neither the brush it interrupted
@@ -155,6 +217,23 @@ test.describe('Timeline', () => {
     await expect(page).not.toHaveURL(/year=/);
     await expect(page.locator('.timeline-selection')).toHaveCount(0);
     expect(await decadeAtMidpoint()).toBe(decadeBefore);
+
+    // AND: with an active range the pinch keeps zooming — the selection is not
+    // a cap. A pinch drops the drag that carries the in-progress guard, so with
+    // only that guard the FR-010 reframe would pull the view back to
+    // `width / span` on every pinch move: here the range is February–September
+    // 2012, so the visible span could never pass below its own 8 months.
+    await page.goto('/?year=2012&month=2&to_year=2012&to_month=9');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect.poll(visibleSpan).toBeGreaterThan(0);
+    await pinch();
+    await expect.poll(visibleSpan, { timeout: 2000 }).toBeLessThan(6);
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: 2,
+      toYear: 2012,
+      toMonth: 9,
+    });
   });
 
   test('should announce a column at the granularity the ruler shows', async ({ page }) => {
@@ -189,6 +268,45 @@ test.describe('Timeline', () => {
     await expect(month).toHaveAttribute('aria-label', /^March 1962, \d+ photos$/);
     await month.hover();
     await expect(status).toHaveText(/^March 1962, \d+ photos$/);
+  });
+
+  test('should keep a bound outside the model span inside the announced slider range', async ({
+    page,
+  }) => {
+    const sliderRange = (selector) =>
+      page.locator(selector).evaluate((element) => ({
+        min: Number(element.getAttribute('aria-valuemin')),
+        max: Number(element.getAttribute('aria-valuemax')),
+        now: Number(element.getAttribute('aria-valuenow')),
+      }));
+    const assertInsideRange = async (selector, label) => {
+      const { min, max, now } = await sliderRange(selector);
+      expect(now, `${label} value vs min`).toBeGreaterThanOrEqual(min);
+      expect(now, `${label} value vs max`).toBeLessThanOrEqual(max);
+    };
+
+    // GIVEN: a bare-year deep link for the library's first year, which starts in
+    // March — the period keeps its own January, so its start bound sits *below*
+    // `model.minIndex`
+    await page.goto('/?year=1962');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-handle.start')).toBeVisible();
+    await assertInsideRange('.timeline-handle.start', 'start handle');
+    await assertInsideRange('.timeline-handle.end', 'end handle');
+
+    // AND: the newest year, whose December end sits *above* `model.maxIndex`
+    const density = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) => data.density || [])
+    );
+    test.skip(density.length === 0, 'Timeline needs at least one month bucket');
+    const newest = density[density.length - 1];
+    await page.goto(`/?year=${newest.year}`);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-handle.end')).toBeVisible();
+    await assertInsideRange('.timeline-handle.start', 'start handle');
+    await assertInsideRange('.timeline-handle.end', 'end handle');
   });
 
   test('should keep the selector off the page when the timeline fails to load', async ({
@@ -364,6 +482,45 @@ test.describe('Timeline', () => {
     // THEN: the grid shows exactly the one seeded March 1962 photo
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
+
+  test('should commit a year column as the whole year, as the mobile dropdown does', async ({
+    page,
+  }) => {
+    // GIVEN: the decade view, drilling into the library's *first* year — which
+    // starts in March, so `buildColumns` clips the 1962 column to March–December
+    await page.locator('.timeline-column[data-period-start="23520"]').click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    await page.locator('.timeline-column[data-period-start="23544"]').click();
+    await TestHelpers.waitForUrlParam(page, 'year', '1962');
+
+    // THEN: one activation applied the single period `?year=1962` — the clipped
+    // bounds are not a single period (FR-007), and they would also disagree with
+    // the same year chosen in the mobile dropdown
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 1962,
+      month: null,
+      toYear: null,
+      toMonth: null,
+    });
+    await expect(page).toHaveURL(/[?&]year=1962(&|$)/);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    // AND: the mobile dropdown writes the very same filter for that year
+    await TestHelpers.setMobileViewport(page);
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('#timeline-year-select')).toHaveCount(1);
+    await expect(page.locator('#timeline-year-select option[value="1962"]')).toHaveCount(1);
+    await page.selectOption('#timeline-year-select', '1962');
+    await TestHelpers.waitForUrlParam(page, 'year', '1962');
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 1962,
+      month: null,
+      toYear: null,
+      toMonth: null,
+    });
+    await expect(page).toHaveURL(/[?&]year=1962(&|$)/);
   });
 
   test('should set an inclusive month-granular range with one drag', async ({ page }) => {
@@ -642,6 +799,47 @@ test.describe('Timeline', () => {
     expect(
       await page.evaluate(() => document.activeElement?.closest('.timeline-column') !== null)
     ).toBe(true);
+  });
+
+  test('should step a year-granular column to the next populated period, not an off-grid month', async ({
+    page,
+  }) => {
+    // GIVEN: the fixture library's empty 1990s — 1985 is its last populated year
+    // before the gap and 2004 the first after it
+    const density = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) => data.density || [])
+    );
+    test.skip(density.length === 0, 'Timeline needs at least one month bucket');
+    const populated = new Set(density.map((bucket) => bucket.year));
+    expect(populated.has(1985), 'legacy_03 seeds 1985').toBe(true);
+    expect(populated.has(2004), 'legacy_04 seeds 2004').toBe(true);
+    for (let year = 1986; year <= 2003; year += 1) {
+      expect(populated.has(year), `${year} must stay empty`).toBe(false);
+    }
+
+    // AND: the 1980s decade view, where the columns are years
+    await page.locator('.timeline-column[data-period-start="23760"]').click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+
+    // WHEN: arrowing right from the 1985 column. A scan that advances one month
+    // at a time finds the first populated 12-month window starting in November
+    // 2003 — a period the year grid does not contain — and `focusColumn` then
+    // finds no `data-period-start` to focus, so the arrow silently does nothing.
+    const focusedStart = () =>
+      page.evaluate(() => document.activeElement?.dataset?.periodStart ?? null);
+    await page.locator('.timeline-column[data-period-start="23820"]').focus();
+    await expect.poll(focusedStart).toBe('23820');
+    await page.keyboard.press('ArrowRight');
+
+    // THEN: the roving focus lands on the next populated *year column*, and the
+    // reveal pan brings it into the lane
+    await expect.poll(focusedStart, { timeout: 2000 }).toBe('24048');
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const column = await page.locator('.timeline-column:focus').boundingBox();
+    expect(column.x).toBeGreaterThanOrEqual(lane.x - 1);
+    expect(column.x + column.width).toBeLessThanOrEqual(lane.x + lane.width + 1);
   });
 
   test('should adjust both range bounds by keyboard, one month per activation', async ({

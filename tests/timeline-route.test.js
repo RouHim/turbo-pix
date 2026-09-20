@@ -157,6 +157,38 @@ test('selection to filter is canonical and round-trips', () => {
   );
 });
 
+test('a bare period keeps its end bound even past the model, so the newest year round-trips', () => {
+  // The model's newest month is January 2026, so a whole-year period reaches
+  // past it. Clamping the end to `model.maxIndex` gave
+  // `filterFromSelection` a clipped selection back — `{year: 2026, month: 1}` —
+  // which the clamp effect then wrote to the URL: the label read
+  // "January 2026 – September 2026", the selection was no longer a single
+  // period, and a saved `year = 2026` stopped matching.
+  const filter = normalizeDateFilter({ year: 2026, month: null });
+  assert.deepEqual(filter, { year: 2026, month: null, to_year: null, to_month: null });
+  assert.ok(toMonthIndex(2026, 12) > model.maxIndex, 'the period ends past the model');
+
+  const selection = selectionFromFilter(filter, model);
+  assert.deepEqual(selection, {
+    startIndex: toMonthIndex(2026, 1),
+    endIndex: toMonthIndex(2026, 12),
+  });
+  assert.deepEqual(filterFromSelection(selection), filter, 'the round-trip is the identity');
+
+  // A period the library has nothing in still clears the filter
+  assert.equal(selectionFromFilter(normalizeDateFilter({ year: 2030, month: null }), model), null);
+});
+
+test('selectionFromFilter answers null for missing input', () => {
+  // The density may not have loaded yet and a filter may arrive without a year;
+  // neither may throw or invent a selection.
+  assert.equal(selectionFromFilter(undefined, model), null);
+  assert.equal(selectionFromFilter(null, model), null);
+  const filter = normalizeDateFilter({ year: 2012, month: 3 });
+  assert.equal(selectionFromFilter(filter, undefined), null);
+  assert.equal(selectionFromFilter(filter, buildTimelineModel([])), null);
+});
+
 test('filterEquality is structural', () => {
   assert.ok(
     filterEquals(EMPTY_DATE_FILTER, { year: null, month: null, to_year: null, to_month: null })

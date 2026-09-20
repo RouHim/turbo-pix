@@ -57,9 +57,13 @@ export const normalizeDateFilter = (raw) => {
  * without overlap.
  *
  * A range (an explicit end bound) narrows to the overlap. A bare period keeps
- * its own lower boundary — `?year=2012` must select January–December 2012 even
- * when the library starts that March — so `filterFromSelection` hands the same
- * canonical filter back and the clamp effect does not rewrite the URL.
+ * both of its own boundaries — `?year=2012` must select January–December 2012
+ * even when the library starts that March or ends before December — so the
+ * round trip through `filterFromSelection` is stable and the clamp effect does
+ * not rewrite the URL. Nothing here needs those bounds inside the span: the
+ * overlay clamps both painted edges into the lane, `countInRange`,
+ * `clampBound` and `translateSelection` clamp on their own, and the no-overlap
+ * test below still clears a period that misses the library entirely.
  */
 export const selectionFromFilter = (filter, model) => {
   if (!filter?.year || !model || model.length === 0) return null;
@@ -72,10 +76,10 @@ export const selectionFromFilter = (filter, model) => {
 
   if (toYear !== null) return clampSelectionToModel({ startIndex, endIndex }, model);
 
-  // A bare period keeps its own lower boundary, so only its end is clamped.
-  return endIndex < model.minIndex || startIndex > model.maxIndex
-    ? null
-    : { startIndex, endIndex: Math.min(endIndex, model.maxIndex) };
+  // A bare period keeps both of its own boundaries, so `filterFromSelection`
+  // gives the same filter back; only a period the library has nothing in at
+  // all clears the filter.
+  return endIndex < model.minIndex || startIndex > model.maxIndex ? null : { startIndex, endIndex };
 };
 
 export const filterFromSelection = (selection) => {

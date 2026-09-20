@@ -1,17 +1,23 @@
 //! Fragmented-MP4 streaming out of a live ffmpeg process.
 //!
 //! `ffmpeg -ss <start> -i <in> … -movflags frag_keyframe+empty_moov+default_base_moof
-//! -frag_duration 1000000 -f mp4 pipe:1` writes `ftyp`+`moov` immediately and
-//! never rewinds, so the client can hand the chunks straight to a
-//! `SourceBuffer` (`timestampOffset = start`) instead of waiting for a complete
-//! file. ffmpeg rebases output timestamps to zero, which is exactly why the
-//! seek mapping lives in the client's `timestampOffset` and not in ffmpeg
-//! timestamp flags.
+//! +omit_tfhd_offset+delay_moov -frag_duration 1000000 -f mp4 pipe:1` writes
+//! `ftyp`+`moov` before the first fragment and never rewinds, so the client can
+//! hand the chunks straight to a `SourceBuffer` (`timestampOffset = start`)
+//! instead of waiting for a complete file. ffmpeg rebases output timestamps to
+//! zero, which is exactly why the seek mapping lives in the client's
+//! `timestampOffset` and not in ffmpeg timestamp flags.
 
+use std::io;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::SemaphorePermit;
 
@@ -32,6 +38,12 @@ pub const STREAM_QUEUE_WAIT_SECS_DEFAULT: u64 = 20;
 /// finished run may fill the whole-file cache; it never gates playback, because
 /// the cache is only ever a fast path (FR-010).
 pub const FULL_RUN_MAX_START_SECS: f64 = 0.5;
+
+/// How often [`supervise`]'s watchdog looks at the progress stamp. Small enough
+/// that a run which has gone quiet is killed within a fraction of a second of
+/// the configured timeout, cheap enough to keep watching for the hours a long
+/// conversion legitimately runs.
+const STALL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamMode {
@@ -80,8 +92,15 @@ pub fn stream_queue_wait_secs() -> u64 {
 /// Fragmented output flushes `ftyp`+`moov` before the first frame, so the
 /// client can create its SourceBuffer immediately; `-frag_duration 1000000`
 /// keeps fragments at ≤1 s even for stream copies whose keyframes are far
-/// apart. `-map 0:a:0?` tolerates sources with no audio track.
-pub fn build_args(mode: StreamMode, input: &Path, start_secs: f64) -> Vec<String> {
+/// apart. `-map 0:a:0?` tolerates sources with no audio track. `video_codec` is
+/// the source's first video track as the capability record resolved it, and only
+/// matters for the copy modes — see the `-tag:v` note below.
+pub fn build_args(
+    mode: StreamMode,
+    input: &Path,
+    start_secs: f64,
+    video_codec: &str,
+) -> Vec<String> {
     let mut args: Vec<String> = vec!["-v".into(), "error".into(), "-nostdin".into()];
     if mode == StreamMode::Transcode {
         args.extend(["-hwaccel".into(), "auto".into()]);
@@ -132,10 +151,24 @@ pub fn build_args(mode: StreamMode, input: &Path, start_secs: f64) -> Vec<String
         ),
         StreamMode::Remux => args.extend(["-c", "copy"].iter().map(|s| s.to_string())),
     }
+    // A copied HEVC track is tagged `hev1` by the MP4 muxer (unless the source
+    // happened to carry `hvc1` already), while `output_mime` advertises
+    // `hvc1.*` to the client: Chromium rejects an append whose init segment
+    // contradicts the buffer's declared codec string, so the copy has to carry
+    // the tag the client was promised. Only a copy can be HEVC — a Transcode run
+    // emits H.264, for which the muxer rejects `hvc1` outright.
+    if mode != StreamMode::Transcode && video_codec == "hevc" {
+        args.extend(["-tag:v", "hvc1"].iter().map(|s| s.to_string()));
+    }
     args.extend(
         [
+            // `delay_moov` is what makes an AC-3/E-AC-3 audio copy muxable at
+            // all: the MP4 muxer otherwise refuses to write the header
+            // ("Cannot write moov atom before AC3 packets") and the run ends
+            // before any init segment exists. It still writes the moov ahead of
+            // every fragment, so the client can create its SourceBuffer up front.
             "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset",
+            "frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+delay_moov",
             "-frag_duration",
             "1000000",
             "-f",
@@ -182,6 +215,66 @@ pub fn output_mime(mode: StreamMode, video_codec: &str, audio_codec: Option<&str
     }
 }
 
+/// Process-wide monotonic epoch for [`ProgressStamp`]: an [`Instant`] cannot be
+/// stored in an atomic, "milliseconds since this epoch" can.
+static MONOTONIC_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+fn monotonic_millis() -> u64 {
+    MONOTONIC_EPOCH.elapsed().as_millis() as u64
+}
+
+/// "This run is still producing output" marker, shared between the response
+/// body and [`supervise`]'s watchdog: [`ProgressReader`] touches it on every
+/// chunk it hands to the client, the watchdog polls it.
+///
+/// A fixed wall-clock deadline cannot tell a stuck encoder from a healthy
+/// conversion that is simply long — an hour-long 1080p HEVC source outlives any
+/// sane configured cap, and killing it mid-playback is what the client reports
+/// as a stream that ended early. Only a run that goes quiet is stuck.
+#[derive(Debug, Clone)]
+pub struct ProgressStamp(Arc<AtomicU64>);
+
+impl ProgressStamp {
+    /// A stamp that counts as "just produced output", so a slow ffmpeg
+    /// start-up is not mistaken for a stall.
+    fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(monotonic_millis())))
+    }
+
+    fn touch(&self) {
+        self.0.store(monotonic_millis(), Ordering::Relaxed);
+    }
+
+    /// How long the run has been quiet.
+    fn idle_for(&self) -> Duration {
+        Duration::from_millis(monotonic_millis().saturating_sub(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+/// The child's stdout, stamping the shared [`ProgressStamp`] with every chunk
+/// the response body reads. The body is the only place that sees bytes actually
+/// flow, so it is the only honest witness of "still making progress".
+#[derive(Debug)]
+pub struct ProgressReader {
+    inner: ChildStdout,
+    stamp: ProgressStamp,
+}
+
+impl AsyncRead for ProgressReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let polled = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if matches!(polled, Poll::Ready(Ok(()))) {
+            this.stamp.touch();
+        }
+        polled
+    }
+}
+
 #[derive(Debug)]
 pub enum StreamStartError {
     /// No conversion slot within the queue wait.
@@ -194,16 +287,21 @@ pub enum StreamStartError {
 #[derive(Debug)]
 pub struct StreamHandle {
     pub mode: StreamMode,
-    pub stdout: ChildStdout,
+    pub stdout: ProgressReader,
     pub stderr: ChildStderr,
     pub child: Child,
     pub permit: SemaphorePermit<'static>,
+    /// The watchdog's view of this run's progress; hand it to [`supervise`].
+    pub progress: ProgressStamp,
 }
 
+/// Start one stream run. `video_codec` is the source's first video track as the
+/// capability record resolved it (see [`build_args`]).
 pub async fn start_stream(
     mode: StreamMode,
     input: &Path,
     start_secs: f64,
+    video_codec: &str,
 ) -> Result<StreamHandle, StreamStartError> {
     let permit = match tokio::time::timeout(
         Duration::from_secs(stream_queue_wait_secs()),
@@ -218,7 +316,7 @@ pub async fn start_stream(
 
     let ffmpeg = get_ffmpeg_path();
     let mut child = Command::new(&ffmpeg)
-        .args(build_args(mode, input, start_secs))
+        .args(build_args(mode, input, start_secs, video_codec))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -238,20 +336,38 @@ pub async fn start_stream(
         .take()
         .ok_or_else(|| StreamStartError::Spawn("ffmpeg stderr pipe unavailable".to_string()))?;
 
+    let progress = ProgressStamp::new();
     Ok(StreamHandle {
         mode,
-        stdout,
+        stdout: ProgressReader {
+            inner: stdout,
+            stamp: progress.clone(),
+        },
         stderr,
         child,
         permit,
+        progress,
     })
 }
 
-/// Watch one ffmpeg child to completion. Killing at the deadline keeps a stuck
-/// encoder from pinning a slot forever. Dropping the response body closes
-/// stdout, which makes ffmpeg exit on EPIPE — that is what bounds client
-/// disconnects.
-pub async fn supervise(mut child: Child, stderr: ChildStderr) -> Result<(), String> {
+/// Watch one ffmpeg child to completion.
+///
+/// The watchdog is progress-based, not deadline-based: `progress` is stamped by
+/// the response body as it reads the child's stdout, and a run that keeps
+/// producing output is never killed — a healthy conversion of a long source
+/// legitimately runs far past the configured timeout, and ending it there
+/// truncated every such video mid-playback (the client reports "the delivered
+/// stream ended early", and re-opening re-converts from scratch every time). A
+/// run that produces no output for `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` — a stuck
+/// encoder, a source ffmpeg cannot get past, or a client that stopped reading so
+/// the pipe backs up — is killed, which is what keeps it from pinning a
+/// conversion slot forever. Dropping the response body closes stdout, which
+/// makes ffmpeg exit on EPIPE: that is what bounds client disconnects.
+pub async fn supervise(
+    mut child: Child,
+    stderr: ChildStderr,
+    progress: ProgressStamp,
+) -> Result<(), String> {
     use tokio::io::AsyncReadExt;
 
     let stderr_task = tokio::spawn(async move {
@@ -261,18 +377,33 @@ pub async fn supervise(mut child: Child, stderr: ChildStderr) -> Result<(), Stri
         buf
     });
 
-    let deadline = Duration::from_secs(transcode_timeout_secs());
-    let status = match tokio::time::timeout(deadline, child.wait()).await {
-        Ok(Ok(status)) => status,
-        Ok(Err(e)) => {
-            let _ = child.kill().await;
-            let _ = stderr_task.await;
-            return Err(format!("ffmpeg wait failed: {e}"));
-        }
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = stderr_task.await;
-            return Err(format!("stream timed out after {}s", deadline.as_secs()));
+    let stall = Duration::from_secs(transcode_timeout_secs());
+    let status = loop {
+        // Re-arming the wait every poll is safe: `Child::wait` keeps the
+        // process's exit future inside the handle, so a cancelled wait resumes
+        // where it left off instead of losing the child's exit status. The
+        // temporary is dropped at the end of this statement, which is what lets
+        // the arms below kill the child.
+        let polled = tokio::time::timeout(STALL_POLL_INTERVAL, child.wait()).await;
+        match polled {
+            Ok(Ok(status)) => break status,
+            Ok(Err(e)) => {
+                let _ = child.kill().await;
+                let _ = stderr_task.await;
+                return Err(format!("ffmpeg wait failed: {e}"));
+            }
+            Err(_) => {
+                let idle = progress.idle_for();
+                if idle >= stall {
+                    let _ = child.kill().await;
+                    let _ = stderr_task.await;
+                    return Err(format!(
+                        "stream stalled: no output for {}s (timeout {}s)",
+                        idle.as_secs(),
+                        stall.as_secs()
+                    ));
+                }
+            }
         }
     };
     let stderr_text = stderr_task.await.unwrap_or_default();
@@ -301,7 +432,7 @@ mod tests {
     /// Read until `needle` shows up, the head fills, or the stream ends. A
     /// single `read` races ffmpeg's writes: `ftyp` and `moov` are separate
     /// `write()` calls, so the first poll can legitimately return `ftyp` alone.
-    async fn read_head(stdout: &mut ChildStdout, needle: &[u8]) -> Vec<u8> {
+    async fn read_head(stdout: &mut ProgressReader, needle: &[u8]) -> Vec<u8> {
         use tokio::io::AsyncReadExt;
 
         let mut head = Vec::new();
@@ -319,23 +450,39 @@ mod tests {
         head
     }
 
+    /// Read a whole stream body like the client does (touching the progress
+    /// stamp on the way), for fixtures small enough to hold in memory.
+    async fn drain_stream(stdout: &mut ProgressReader) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+
+        let mut bytes = Vec::new();
+        stdout
+            .read_to_end(&mut bytes)
+            .await
+            .expect("read stream body");
+        bytes
+    }
+
     #[test]
     fn transcode_args_reencode_into_fragmented_mp4() {
-        let joined = build_args(StreamMode::Transcode, Path::new("/in.mp4"), 0.0).join(" ");
+        let args = build_args(StreamMode::Transcode, Path::new("/in.mp4"), 0.0, "hevc");
+        let joined = args.join(" ");
         assert!(joined.contains("-c:v libx264"));
         assert!(joined.contains("-preset veryfast"));
         assert!(joined.contains("-g 48"));
         assert!(joined.contains("-c:a aac"));
         assert!(joined.contains("-map 0:v:0 -map 0:a:0?"));
-        assert!(joined.contains("-movflags frag_keyframe+empty_moov+default_base_moof"));
         assert!(joined.contains("-frag_duration 1000000"));
         assert!(joined.ends_with("-f mp4 pipe:1"));
         assert!(!joined.contains("-ss"), "start 0 must not emit a seek flag");
+        // The output is re-encoded H.264: an `hvc1` tag on it is rejected by the
+        // muxer, so a re-encode must never carry the copy-mode tag.
+        assert!(!joined.contains("-tag:v"), "{joined}");
     }
 
     #[test]
     fn audio_mode_copies_video_and_reencodes_audio() {
-        let joined = build_args(StreamMode::Audio, Path::new("/in.mp4"), 12.5).join(" ");
+        let joined = build_args(StreamMode::Audio, Path::new("/in.mp4"), 12.5, "h264").join(" ");
         assert!(joined.contains("-ss 12.500 -i /in.mp4"));
         assert!(joined.contains("-c:v copy"));
         assert!(joined.contains("-c:a aac"));
@@ -344,9 +491,103 @@ mod tests {
 
     #[test]
     fn remux_mode_copies_everything() {
-        let joined = build_args(StreamMode::Remux, Path::new("/in.mkv"), 3.0).join(" ");
+        let joined = build_args(StreamMode::Remux, Path::new("/in.mkv"), 3.0, "h264").join(" ");
         assert!(joined.contains("-c copy"));
         assert!(!joined.contains("libx264"));
+    }
+
+    #[test]
+    fn copied_hevc_tracks_are_tagged_hvc1_and_other_codecs_are_left_alone() {
+        // The muxer's default tag for a copied HEVC track is `hev1`, but the
+        // client was promised `hvc1.*` in the MIME: the init segment has to
+        // carry the tag the SourceBuffer was created for.
+        for mode in [StreamMode::Remux, StreamMode::Audio] {
+            let args = build_args(mode, Path::new("/in.mkv"), 0.0, "hevc");
+            assert!(
+                args.iter().any(|arg| arg == "-tag:v") && args.iter().any(|arg| arg == "hvc1"),
+                "{mode:?} must tag a copied HEVC track hvc1: {}",
+                args.join(" ")
+            );
+        }
+        for codec in ["h264", "av1", "vp9", "vp8", ""] {
+            let args = build_args(StreamMode::Remux, Path::new("/in.mkv"), 0.0, codec);
+            assert!(
+                !args.iter().any(|arg| arg == "-tag:v"),
+                "a {codec} copy must not carry hvc1: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn copy_modes_delay_the_moov_so_ac3_audio_can_be_muxed() {
+        // ffmpeg's MP4 muxer refuses to write a fragmented header that copies
+        // AC-3/E-AC-3 audio ("Cannot write moov atom before AC3 packets. Set the
+        // delay_moov flag to fix this.") and exits before the init segment
+        // exists; with `delay_moov` it writes the moov once the first packets
+        // have been parsed, still ahead of every fragment.
+        for mode in [StreamMode::Remux, StreamMode::Audio, StreamMode::Transcode] {
+            let joined = build_args(mode, Path::new("/in.mp4"), 0.0, "h264").join(" ");
+            assert!(
+                joined.contains(
+                    "-movflags frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+delay_moov"
+                ),
+                "{mode:?} must request delay_moov: {joined}"
+            );
+        }
+    }
+
+    /// Top-level box header walk over the bytes ffmpeg managed to write: the
+    /// size of the first box of `kind`, or 0 when it is absent or malformed.
+    /// A refused header (`Cannot write moov atom before AC3 packets`) leaves the
+    /// `moov` fourcc behind with a zeroed size, so an assertion on the fourcc
+    /// alone would pass for a run that produced no usable init segment.
+    fn box_size(head: &[u8], kind: &[u8; 4]) -> usize {
+        let mut offset = 0;
+        while offset + 8 <= head.len() {
+            let size = u32::from_be_bytes(head[offset..offset + 4].try_into().unwrap()) as usize;
+            if &head[offset + 4..offset + 8] == kind {
+                return size;
+            }
+            if size < 8 {
+                break;
+            }
+            offset += size;
+        }
+        0
+    }
+
+    #[tokio::test]
+    async fn remux_of_an_ac3_source_writes_a_complete_init_segment() {
+        let _env_lock = crate::video_processor::tests::acquire_test_env_lock();
+        let fixture = Path::new("test-data/test_video_ac3.mp4");
+        if !fixture.exists() || !crate::video_processor::ffmpeg_available() {
+            eprintln!("skipping: fixture or ffmpeg unavailable");
+            return;
+        }
+
+        let mut handle = start_stream(StreamMode::Remux, fixture, 0.0, "h264")
+            .await
+            .expect("remux stream must start");
+        // Read the whole body like the client does: the run must reach a clean
+        // exit, not just write a header and die (which is what the muxer's
+        // refusal produced — exit 234 and a zeroed `moov`).
+        let bytes = drain_stream(&mut handle.stdout).await;
+        assert!(
+            box_size(&bytes, b"ftyp") >= 8,
+            "the stream must start with a complete ftyp box"
+        );
+        assert!(
+            box_size(&bytes, b"moov") >= 8,
+            "an AC-3 remux must still emit a real init segment, got {:?}",
+            String::from_utf8_lossy(&bytes[..bytes.len().min(64)])
+        );
+        assert!(
+            supervise(handle.child, handle.stderr, handle.progress)
+                .await
+                .is_ok(),
+            "the AC-3 remux must run to completion"
+        );
     }
 
     #[test]
@@ -400,7 +641,7 @@ mod tests {
             return;
         }
 
-        let mut handle = start_stream(StreamMode::Transcode, fixture, 0.0)
+        let mut handle = start_stream(StreamMode::Transcode, fixture, 0.0, "hevc")
             .await
             .expect("stream must start");
         let head = read_head(&mut handle.stdout, b"moov").await;
@@ -417,7 +658,75 @@ mod tests {
         // 20 s source never fits in the pipe buffer, so leaving stdout open
         // would block ffmpeg until the transcode deadline.
         drop(handle.stdout);
-        let _ = supervise(handle.child, handle.stderr).await;
+        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
+    }
+
+    #[tokio::test]
+    async fn remux_of_a_hev1_source_carries_the_hvc1_sample_entry() {
+        let _env_lock = crate::video_processor::tests::acquire_test_env_lock();
+        let fixture = Path::new("test-data/test_video_hevc.mp4");
+        if !fixture.exists() || !crate::video_processor::ffmpeg_available() {
+            eprintln!("skipping: fixture or ffmpeg unavailable");
+            return;
+        }
+
+        // Matroska carries no sample-entry tags, so copying the fixture's HEVC
+        // into an MP4 tags the track `hev1` — the exact shape a library source
+        // with an untagged HEVC track has. Without `-tag:v hvc1` the remux
+        // reproduces that `hev1`, contradicting the `hvc1.*` MIME the client was
+        // handed when it created its SourceBuffer.
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let source = temp_dir.path().join("hev1_source.mkv");
+        let status = std::process::Command::new(crate::video_processor::get_ffmpeg_path())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(fixture)
+            .args(["-map", "0:v:0", "-c", "copy", "-f", "matroska"])
+            .arg(&source)
+            .status()
+            .expect("ffmpeg must run for the test source");
+        assert!(status.success(), "building the test source must succeed");
+        // Sanity: the muxer's default for this source really is `hev1`.
+        let tagged = temp_dir.path().join("default_tag.mp4");
+        let status = std::process::Command::new(crate::video_processor::get_ffmpeg_path())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&source)
+            .args(["-map", "0:v:0", "-c", "copy", "-f", "mp4"])
+            .arg(&tagged)
+            .status()
+            .expect("ffmpeg must run for the default tag");
+        assert!(status.success());
+        let probe = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_tag_string",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&tagged)
+            .output()
+            .expect("ffprobe must run");
+        assert!(
+            String::from_utf8_lossy(&probe.stdout).contains("hev1"),
+            "fixture source must default to hev1, got {}",
+            String::from_utf8_lossy(&probe.stdout)
+        );
+
+        let mut handle = start_stream(StreamMode::Remux, &source, 0.0, "hevc")
+            .await
+            .expect("remux stream must start");
+        let head = read_head(&mut handle.stdout, b"moov").await;
+        assert!(
+            head.windows(4).any(|w| w == b"hvc1"),
+            "a copied HEVC track must carry the advertised hvc1 sample entry"
+        );
+        assert!(
+            !head.windows(4).any(|w| w == b"hev1"),
+            "the hev1 default must not survive into the init segment"
+        );
+        drop(handle.stdout);
+        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
     }
 
     #[tokio::test]
@@ -428,7 +737,7 @@ mod tests {
             return;
         }
 
-        let mut handle = start_stream(StreamMode::Transcode, fixture, 0.2)
+        let mut handle = start_stream(StreamMode::Transcode, fixture, 0.2, "h264")
             .await
             .expect("a seek near the end must still start");
         let head = read_head(&mut handle.stdout, b"ftyp").await;
@@ -437,7 +746,7 @@ mod tests {
             "boundary seeks must produce a valid stream head"
         );
         drop(handle.stdout);
-        let _ = supervise(handle.child, handle.stderr).await;
+        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
     }
 
     #[tokio::test]
@@ -448,14 +757,102 @@ mod tests {
             return;
         }
 
-        let mut handle = start_stream(StreamMode::Remux, fixture, 5.0)
+        let mut handle = start_stream(StreamMode::Remux, fixture, 5.0, "h264")
             .await
             .expect("remux stream must start");
         let head = read_head(&mut handle.stdout, b"moov").await;
         assert!(head.windows(4).any(|w| w == b"ftyp"));
         assert!(head.windows(4).any(|w| w == b"moov"));
+        // An H.264 copy keeps its own sample entry: the HEVC tag must not leak
+        // into every copy.
+        assert!(head.windows(4).any(|w| w == b"avc1"));
+        assert!(!head.windows(4).any(|w| w == b"hvc1"));
         drop(handle.stdout);
-        let _ = supervise(handle.child, handle.stderr).await;
+        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
+    }
+
+    /// A stand-in stream process: the watchdog only cares about bytes on stdout
+    /// and the exit status, so `sh` is a faithful (and instant) fake.
+    #[cfg(unix)]
+    fn fake_stream(body: &str) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(body)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("fake stream process must spawn")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stream_that_keeps_producing_output_survives_the_timeout() {
+        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
+            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
+            "1",
+        );
+        // ~3 s of output at 4 chunks/s: three times the configured cap, which a
+        // wall-clock deadline would kill mid-stream.
+        let mut child = fake_stream(
+            "i=0; while [ $i -lt 12 ]; do printf 'chunk'; sleep 0.25; i=$((i+1)); done",
+        );
+        let stderr = child.stderr.take().unwrap();
+        let progress = ProgressStamp::new();
+        let mut reader = ProgressReader {
+            inner: child.stdout.take().unwrap(),
+            stamp: progress.clone(),
+        };
+        // The body is what stamps progress, exactly like the real response.
+        let drain = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut sink = Vec::new();
+            reader.read_to_end(&mut sink).await.expect("drain stdout");
+            sink.len()
+        });
+
+        let started = Instant::now();
+        let outcome = supervise(child, stderr, progress).await;
+        let elapsed = started.elapsed();
+        let drained = drain.await.unwrap();
+
+        assert!(
+            outcome.is_ok(),
+            "a run that keeps producing output must never be killed: {outcome:?} after {elapsed:?}"
+        );
+        assert!(
+            drained > 0 && elapsed > Duration::from_secs(1),
+            "the run must really have outlived the 1s cap (drained {drained} bytes in {elapsed:?})"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stream_that_goes_silent_past_the_timeout_is_killed() {
+        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
+            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
+            "1",
+        );
+        // Nothing on stdout and nobody reading it: a stuck encoder (or a client
+        // that stopped reading) must still be bounded by the configured timeout.
+        let mut child = fake_stream("sleep 30");
+        let _stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let progress = ProgressStamp::new();
+
+        let started = Instant::now();
+        let outcome = supervise(child, stderr, progress).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            outcome.is_err(),
+            "a silent run must be killed, not waited out"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the kill must land near the 1s cap, took {elapsed:?}"
+        );
     }
 
     #[tokio::test]
@@ -480,9 +877,14 @@ mod tests {
         }
 
         for _ in 0..5 {
-            let err = start_stream(StreamMode::Transcode, Path::new("/nonexistent.mp4"), 0.0)
-                .await
-                .unwrap_err();
+            let err = start_stream(
+                StreamMode::Transcode,
+                Path::new("/nonexistent.mp4"),
+                0.0,
+                "h264",
+            )
+            .await
+            .unwrap_err();
             assert!(
                 matches!(err, StreamStartError::Busy),
                 "a saturated pool must answer Busy, got {err:?}"

@@ -809,6 +809,19 @@ pub enum FileConversion {
     VideoCopy,
 }
 
+/// The source's codecs as the capability record resolved them.
+///
+/// They travel together because they answer one question — what may be copied
+/// instead of converted — and both must be `None` when unknown: an unknown
+/// codec never selects a copy, and never picks a sample-entry tag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SourceCodecs<'a> {
+    /// First video track of the source (`"hevc"`, `"h264"`, …).
+    pub video: Option<&'a str>,
+    /// First audio track of the source.
+    pub audio: Option<&'a str>,
+}
+
 /// Write a whole-file conversion of `input` to `output`, reporting progress
 /// percentage to `on_progress` as ffmpeg emits `-progress pipe:1` lines.
 /// `on_progress` is called with `Some(percent)` (0..=100) whenever a progress
@@ -816,21 +829,23 @@ pub enum FileConversion {
 /// value. When the duration is unknown, `on_progress(None)` signals "working,
 /// no percent".
 ///
-/// `conversion` picks the video handling and `audio_codec` (the source's audio
+/// `conversion` picks the video handling and `codecs.audio` (the source's audio
 /// codec when known, from the capability record or a probe) decides whether the
 /// audio track is copied or converted — see [`build_conversion_args`].
+/// `codecs.video` only matters for [`FileConversion::VideoCopy`], where it picks
+/// the sample-entry tag.
 pub async fn convert_video_with_progress(
     input_path: &Path,
     output_path: &Path,
     conversion: FileConversion,
-    audio_codec: Option<&str>,
+    codecs: SourceCodecs<'_>,
     on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>,
 ) -> CacheResult<()> {
     convert_video_with_timeout(
         input_path,
         output_path,
         conversion,
-        audio_codec,
+        codecs,
         Duration::from_secs(transcode_timeout_secs()),
         Some(on_progress),
     )
@@ -841,7 +856,7 @@ async fn convert_video_with_timeout(
     input_path: &Path,
     output_path: &Path,
     conversion: FileConversion,
-    audio_codec: Option<&str>,
+    codecs: SourceCodecs<'_>,
     timeout_duration: Duration,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
 ) -> CacheResult<()> {
@@ -850,7 +865,7 @@ async fn convert_video_with_timeout(
         input_path,
         output_path,
         conversion,
-        audio_codec,
+        codecs,
         timeout_duration,
         ffmpeg_path,
         on_progress,
@@ -872,11 +887,16 @@ async fn convert_video_with_timeout(
 /// AC-3, E-AC-3, DTS, PCM — becomes AAC, because an output file whose audio
 /// track the client cannot decode is not playable at all, which defeats the
 /// purpose of every cache artifact and of the whole-file escape hatch alike.
+///
+/// `codecs.video` is the source's first video track. A
+/// [`FileConversion::VideoCopy`] of HEVC is tagged `hvc1` so the artifact's
+/// sample entry matches the codec string the client declared and was told
+/// about; every other case ignores it.
 pub fn build_conversion_args(
     input: &Path,
     output: &Path,
     conversion: FileConversion,
-    audio_codec: Option<&str>,
+    codecs: SourceCodecs<'_>,
     with_progress: bool,
 ) -> Vec<String> {
     let input_path = input.to_string_lossy().into_owned();
@@ -903,9 +923,18 @@ pub fn build_conversion_args(
         // bit-identical to the source instead of adding a generation of loss.
         FileConversion::VideoCopy => {
             args.extend(["-c:v", "copy"].iter().map(|arg| arg.to_string()));
+            // The MP4 muxer tags a copied HEVC track `hev1` unless the source
+            // already carried `hvc1`, but a client that declared HEVC support
+            // was promised `hvc1.*`: a persistent sample entry named `hev1`
+            // contradicts the declared codec string, so the decoder is never
+            // set up. Only a copy can be HEVC — a re-encoded track is H.264,
+            // for which the muxer rejects the tag outright.
+            if codecs.video == Some("hevc") {
+                args.extend(["-tag:v", "hvc1"].iter().map(|arg| arg.to_string()));
+            }
         }
     }
-    let audio_args: &[&str] = match (conversion, audio_codec) {
+    let audio_args: &[&str] = match (conversion, codecs.audio) {
         (FileConversion::Reencode, Some("aac") | Some("mp3")) => &["-c:a", "copy"],
         _ => &["-c:a", "aac", "-b:a", "160k", "-ac", "2"],
     };
@@ -985,7 +1014,7 @@ async fn convert_video_with_timeout_and_path(
     input_path: &Path,
     output_path: &Path,
     conversion: FileConversion,
-    audio_codec: Option<&str>,
+    codecs: SourceCodecs<'_>,
     timeout_duration: Duration,
     ffmpeg_path: String,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
@@ -1045,7 +1074,7 @@ async fn convert_video_with_timeout_and_path(
                 input_path,
                 &temp_output_path,
                 conversion,
-                audio_codec,
+                codecs,
                 with_progress,
             ));
 
@@ -1556,6 +1585,100 @@ pub(crate) mod tests {
         ensure_progressive_mp4(&out, &out).await.unwrap();
     }
 
+    /// The first video stream's MP4 sample-entry tag, as the decoder sees it.
+    fn video_codec_tag(path: &Path) -> String {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_tag_string",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path)
+            .output()
+            .expect("ffprobe must run");
+        assert!(
+            output.status.success(),
+            "ffprobe failed on {}",
+            path.display()
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The whole-file copy is what a client that declared the source's video
+    /// codec is served, so its video track must carry the sample entry that
+    /// codec string names. ffmpeg's muxer would otherwise tag a copied HEVC
+    /// track `hev1`, which contradicts the `hvc1.*` the client was promised.
+    #[tokio::test]
+    async fn video_copy_tags_a_hevc_track_hvc1_and_leaves_h264_alone() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let hevc_fixture = Path::new("test-data/test_video_hevc.mp4");
+        let h264_fixture = Path::new("test-data/test_video_ac3.mp4");
+        if !hevc_fixture.exists() || !h264_fixture.exists() || !ffmpeg_available() {
+            eprintln!("skipping: fixtures or ffmpeg unavailable");
+            return;
+        }
+
+        // Matroska carries no sample-entry tags, so copying this source into an
+        // MP4 tags the track `hev1` by default — the shape a real untagged HEVC
+        // library file has.
+        let hevc_source = temp.path().join("hevc_source.mkv");
+        let status = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-i"])
+            .arg(hevc_fixture)
+            .args(["-map", "0:v:0", "-c", "copy", "-f", "matroska"])
+            .arg(&hevc_source)
+            .status()
+            .expect("ffmpeg must run for the test source");
+        assert!(status.success(), "building the HEVC source must succeed");
+
+        let noop: Arc<dyn Fn(Option<u8>) + Send + Sync> = Arc::new(|_| {});
+        let hevc_copy = temp.path().join("hevc_copy.mp4");
+        convert_video_with_progress(
+            &hevc_source,
+            &hevc_copy,
+            FileConversion::VideoCopy,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            noop.clone(),
+        )
+        .await
+        .expect("an HEVC video copy must convert");
+        // The H.264 side also proves the tag is conditional: ffmpeg rejects
+        // `-tag:v hvc1` for an H.264 track, so a blanket tag would fail here.
+        let h264_copy = temp.path().join("h264_copy.mp4");
+        convert_video_with_progress(
+            h264_fixture,
+            &h264_copy,
+            FileConversion::VideoCopy,
+            SourceCodecs {
+                video: Some("h264"),
+                audio: Some("ac3"),
+            },
+            noop,
+        )
+        .await
+        .expect("an H.264 video copy must convert");
+
+        assert_eq!(
+            video_codec_tag(&hevc_copy),
+            "hvc1",
+            "a copied HEVC track must carry the advertised hvc1 sample entry"
+        );
+        assert_eq!(
+            video_codec_tag(&h264_copy),
+            "avc1",
+            "an H.264 copy keeps its own sample entry"
+        );
+    }
+
     fn create_test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
@@ -1834,7 +1957,10 @@ pub(crate) mod tests {
             &input,
             &output,
             FileConversion::Reencode,
-            Some("aac"),
+            SourceCodecs {
+                video: None,
+                audio: Some("aac"),
+            },
             on_progress,
         )
         .await
@@ -1877,7 +2003,7 @@ pub(crate) mod tests {
             &input,
             &output,
             FileConversion::Reencode,
-            None,
+            SourceCodecs::default(),
             Duration::from_secs(1),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -1924,7 +2050,7 @@ pub(crate) mod tests {
             &input,
             &output,
             FileConversion::Reencode,
-            None,
+            SourceCodecs::default(),
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -1965,7 +2091,7 @@ pub(crate) mod tests {
             &input,
             &output,
             FileConversion::Reencode,
-            None,
+            SourceCodecs::default(),
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
             None,
@@ -2010,11 +2136,18 @@ pub(crate) mod tests {
     fn conversion_args_follow_the_conversion_mode() {
         let input = Path::new("/photos/source.mkv");
         let output = Path::new("/cache/out.mp4.tmp");
-        let args = |conversion, audio_codec, with_progress| {
-            build_conversion_args(input, output, conversion, audio_codec, with_progress).join(" ")
+        let args = |conversion, video: Option<&str>, audio: Option<&str>, with_progress| {
+            build_conversion_args(
+                input,
+                output,
+                conversion,
+                SourceCodecs { video, audio },
+                with_progress,
+            )
+            .join(" ")
         };
 
-        let aac = args(FileConversion::Reencode, Some("aac"), false);
+        let aac = args(FileConversion::Reencode, Some("hevc"), Some("aac"), false);
         assert!(aac.contains("-c:v libx264 -preset fast -crf 23"), "{aac}");
         assert!(aac.contains("-c:a copy"), "AAC must be copied: {aac}");
         assert!(aac.contains("-hwaccel auto"), "{aac}");
@@ -2031,13 +2164,13 @@ pub(crate) mod tests {
             "no progress pipe is opened when nobody consumes it: {aac}"
         );
 
-        let mp3 = args(FileConversion::Reencode, Some("mp3"), false);
+        let mp3 = args(FileConversion::Reencode, Some("h264"), Some("mp3"), false);
         assert!(
             mp3.contains("-c:a copy"),
             "MP3 is legal MP4 audio and must be copied: {mp3}"
         );
 
-        let ac3 = args(FileConversion::Reencode, Some("ac3"), true);
+        let ac3 = args(FileConversion::Reencode, Some("h264"), Some("ac3"), true);
         assert!(
             ac3.contains("-c:a aac -b:a 160k -ac 2"),
             "AC-3 must be converted to AAC: {ac3}"
@@ -2051,7 +2184,7 @@ pub(crate) mod tests {
             "progress is reported when the caller asks for it: {ac3}"
         );
 
-        let unknown = args(FileConversion::Reencode, None, false);
+        let unknown = args(FileConversion::Reencode, None, None, false);
         assert!(
             unknown.contains("-c:a aac"),
             "an unknown source audio codec must be converted, never copied: {unknown}"
@@ -2060,7 +2193,7 @@ pub(crate) mod tests {
         // A source whose video the client already plays keeps its video track
         // bit-for-bit — re-encoding it would add a generation of loss to every
         // later open — and only pays for its undecodable audio.
-        let copy = args(FileConversion::VideoCopy, Some("ac3"), false);
+        let copy = args(FileConversion::VideoCopy, Some("h264"), Some("ac3"), false);
         assert!(copy.contains("-c:v copy"), "video must be copied: {copy}");
         assert!(
             !copy.contains("libx264"),
@@ -2077,6 +2210,26 @@ pub(crate) mod tests {
         assert!(
             !copy.contains("-hwaccel"),
             "a copy decodes nothing, so no hardware acceleration is requested: {copy}"
+        );
+        assert!(
+            !copy.contains("-tag:v"),
+            "an H.264 copy keeps its avc1 sample entry: {copy}"
+        );
+
+        // A copied HEVC track must carry the `hvc1` sample entry the client was
+        // promised: the muxer's `hev1` default contradicts the declared codec
+        // string and the decoder is never set up.
+        let hevc_copy = args(FileConversion::VideoCopy, Some("hevc"), Some("aac"), false);
+        assert!(
+            hevc_copy.contains("-c:v copy -tag:v hvc1"),
+            "a copied HEVC track must be tagged hvc1: {hevc_copy}"
+        );
+        // …while a re-encode to H.264 must not: the muxer rejects the tag for
+        // anything but HEVC and fails the whole conversion.
+        let hevc_reencode = args(FileConversion::Reencode, Some("hevc"), Some("aac"), false);
+        assert!(
+            !hevc_reencode.contains("-tag:v"),
+            "a re-encode emits H.264 and must stay avc1: {hevc_reencode}"
         );
     }
 

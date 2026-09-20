@@ -62,10 +62,11 @@ use std::sync::Arc;
 use crate::db::{DbPool, Photo};
 use crate::mimetype_detector;
 use crate::video_capability::{plan, ClientCodecs, Delivery};
+use crate::video_probe::ResolvedCapabilities;
 use crate::video_processor::{
     claim_transcode, convert_video_with_progress, get_copied_path_versioned, get_transcode_status,
     get_transcoded_path_versioned, remux_to_faststart_mp4, set_transcode_status, FileConversion,
-    TranscodeClaim, TranscodeState, TranscodeStatus,
+    SourceCodecs, TranscodeClaim, TranscodeState, TranscodeStatus,
 };
 use crate::video_stream::{
     output_mime, start_stream, supervise, StreamHandle, StreamMode, StreamStartError,
@@ -341,8 +342,13 @@ pub async fn get_video_file(
             if cached_remux {
                 (remux_sidecar, None)
             } else if client_wants_transcode {
-                return serve_whole_file_transcode(&photo, &headers, FileConversion::Reencode)
-                    .await;
+                return serve_whole_file_transcode(
+                    &photo,
+                    &headers,
+                    FileConversion::Reencode,
+                    source_codecs(&caps),
+                )
+                .await;
             } else {
                 (video_path.to_path_buf(), None)
             }
@@ -353,8 +359,13 @@ pub async fn get_video_file(
                 // (no MSE for the delivered codec) and for explicit retries: it
                 // serves this delivery's artifact, the only whole-file one whose
                 // codecs the client declared.
-                return serve_whole_file_transcode(&photo, &headers, whole_file_kind(delivery))
-                    .await;
+                return serve_whole_file_transcode(
+                    &photo,
+                    &headers,
+                    whole_file_kind(delivery),
+                    source_codecs(&caps),
+                )
+                .await;
             }
             // A byte request that is not the stream endpoint means the client
             // wants a file; serve the original and let it decide.
@@ -533,6 +544,18 @@ fn urlencoding(value: &str) -> String {
     value.replace(',', "%2C").replace(' ', "")
 }
 
+/// The source codecs as resolved for this request (probed facts included), in
+/// the shape the conversion argv builders expect. Reading them from the `photo`
+/// snapshot instead would miss the facts `video_probe::resolve` just persisted,
+/// so a copy of an HEVC track would drop the `hvc1` tag on exactly the request
+/// that had to probe the file.
+fn source_codecs(caps: &ResolvedCapabilities) -> SourceCodecs<'_> {
+    SourceCodecs {
+        video: (!caps.codec.is_empty()).then_some(caps.codec.as_str()),
+        audio: caps.audio_codec.as_deref(),
+    }
+}
+
 /// Whole-file conversion escape hatch: the legacy `?transcode=true` flow
 /// (claim a conversion slot, spawn the H.264 conversion, answer 202 + poll URL,
 /// or serve the completed cache artifact). The streaming path
@@ -542,6 +565,7 @@ async fn serve_whole_file_transcode(
     photo: &Photo,
     headers: &HeaderMap,
     conversion: FileConversion,
+    codecs: SourceCodecs<'_>,
 ) -> Result<Box<dyn Reply>, Rejection> {
     let video_path = Path::new(&photo.file_path);
     let record_codec = photo.video_codec().unwrap_or("");
@@ -663,12 +687,7 @@ async fn serve_whole_file_transcode(
                 // transcode.
                 // Spawn the kind this delivery computed: its artifact slot is
                 // the one the client's decision (and the next one) checks.
-                spawn_whole_file_transcode(
-                    photo,
-                    transcoded_path.clone(),
-                    conversion,
-                    photo.audio_codec(),
-                );
+                spawn_whole_file_transcode(photo, transcoded_path.clone(), conversion, codecs);
 
                 let response = warp::reply::with_status(
                     warp::reply::json(&json!({
@@ -699,20 +718,20 @@ async fn serve_whole_file_transcode(
 /// date while it runs. The caller owns the claim (see [`claim_transcode`]), so
 /// two encoders for one hash can never overlap.
 ///
-/// `conversion` picks the video handling and `audio_codec` (the source's audio
-/// codec as best known: the resolved capabilities where they are at hand, the
-/// stored record otherwise) decides whether the audio track is copied or
-/// converted — see [`crate::video_processor::build_conversion_args`].
+/// `conversion` picks the video handling and `codecs` (the source's codecs as
+/// resolved) decides how the tracks are tagged and whether the audio is copied
+/// or converted — see [`crate::video_processor::build_conversion_args`].
 fn spawn_whole_file_transcode(
     photo: &Photo,
     output_path: PathBuf,
     conversion: FileConversion,
-    audio_codec: Option<&str>,
+    codecs: SourceCodecs<'_>,
 ) {
     let hash = photo.hash_sha256.clone();
     let hash_short = hash.get(..12).unwrap_or(&hash).to_string();
     let input_path = PathBuf::from(&photo.file_path);
-    let audio_codec = audio_codec.map(str::to_string);
+    let video_codec = codecs.video.map(str::to_string);
+    let audio_codec = codecs.audio.map(str::to_string);
     log::info!(
         "Converting video ({}): {} (hash: {})",
         if conversion == FileConversion::VideoCopy {
@@ -746,7 +765,10 @@ fn spawn_whole_file_transcode(
             &input_path,
             &output_path,
             conversion,
-            audio_codec.as_deref(),
+            SourceCodecs {
+                video: video_codec.as_deref(),
+                audio: audio_codec.as_deref(),
+            },
             on_progress,
         )
         .await
@@ -833,7 +855,11 @@ fn spawn_whole_file_transcode(
 /// remux semaphore for the sidecar) as every other conversion, so a hash that
 /// is already converting (or whose attempt failed within the retry cooldown) is
 /// left alone instead of queueing a second job.
-fn spawn_cache_fill(photo: &Photo, mode: StreamMode, audio_codec: Option<&str>) {
+///
+/// `codecs` are the codecs the run that just finished copied, as the resolver
+/// reported them: they pick the copy's codec tags and whether the audio is
+/// copied or converted (see `build_conversion_args`).
+fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
     let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
         .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
 
@@ -898,7 +924,7 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, audio_codec: Option<&str>) 
     if claim_transcode(&photo.hash_sha256) != TranscodeClaim::Started {
         return;
     }
-    spawn_whole_file_transcode(photo, output, conversion, audio_codec);
+    spawn_whole_file_transcode(photo, output, conversion, codecs);
 }
 
 /// Faststart remux sidecar path under `{TRANSCODE_CACHE_DIR}/remux/`, versioned
@@ -1063,7 +1089,7 @@ pub async fn stream_video(
     );
     let start = query.start.unwrap_or(0.0).clamp(0.0, MAX_STREAM_START_SECS);
 
-    let handle = match start_stream(mode, source, start).await {
+    let handle = match start_stream(mode, source, start, &caps.codec).await {
         Ok(handle) => handle,
         Err(StreamStartError::Busy) => {
             let response = warp::reply::with_status(
@@ -1108,6 +1134,7 @@ pub async fn stream_video(
         stderr,
         child,
         permit,
+        progress,
         ..
     } = handle;
     let hash = photo.hash_sha256.clone();
@@ -1116,10 +1143,10 @@ pub async fn stream_video(
     // be filled; a seek run (`start > 0`) converts only the tail and says
     // nothing about the rest. Either way this happens after the stream the
     // client is already playing, so it can never gate first playback (FR-010).
-    let fill_source =
-        (start <= FULL_RUN_MAX_START_SECS).then(|| (photo.clone(), caps.audio_codec.clone()));
+    let fill_source = (start <= FULL_RUN_MAX_START_SECS)
+        .then(|| (photo.clone(), caps.codec.clone(), caps.audio_codec.clone()));
     tokio::spawn(async move {
-        let outcome = supervise(child, stderr).await;
+        let outcome = supervise(child, stderr, progress).await;
         match &outcome {
             Ok(()) => log::debug!("Stream finished for {hash}"),
             Err(reason) => log::warn!("Stream failed for {hash} ({}): {reason}", mode.as_str()),
@@ -1129,8 +1156,18 @@ pub async fn stream_video(
         // halve the pool for every other conversion.
         drop(permit);
         if outcome.is_ok() {
-            if let Some((photo, audio_codec)) = fill_source {
-                spawn_cache_fill(&photo, mode, audio_codec.as_deref());
+            if let Some((photo, video_codec, audio_codec)) = fill_source {
+                // The resolved record is the authoritative codec source here:
+                // the cache fill copies the same tracks this run did, so it
+                // needs the same sample-entry tag (see `build_conversion_args`).
+                spawn_cache_fill(
+                    &photo,
+                    mode,
+                    SourceCodecs {
+                        video: (!video_codec.is_empty()).then_some(video_codec.as_str()),
+                        audio: audio_codec.as_deref(),
+                    },
+                );
             }
         }
     });
@@ -2021,7 +2058,14 @@ mod tests {
         );
         assert!(!cached.exists(), "nothing is cached before the fill");
 
-        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
+        spawn_cache_fill(
+            &photo,
+            StreamMode::Transcode,
+            SourceCodecs {
+                video: None,
+                audio: Some("mp3"),
+            },
+        );
         wait_for_completed_transcode(hash).await;
 
         assert_eq!(
@@ -2063,14 +2107,28 @@ mod tests {
 
         // Already converted: the artifact is the whole point, so a second
         // playthrough must not re-encode it.
-        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
+        spawn_cache_fill(
+            &photo,
+            StreamMode::Transcode,
+            SourceCodecs {
+                video: None,
+                audio: Some("mp3"),
+            },
+        );
 
         // Already converting (another request owns the claim): the pool bound
         // admits one encoder per hash, so this playthrough must not queue a
         // second one either.
         std::fs::remove_file(&cached).expect("failed to clear the artifact");
         assert_eq!(claim_transcode(hash), TranscodeClaim::Started);
-        spawn_cache_fill(&photo, StreamMode::Transcode, Some("mp3"));
+        spawn_cache_fill(
+            &photo,
+            StreamMode::Transcode,
+            SourceCodecs {
+                video: None,
+                audio: Some("mp3"),
+            },
+        );
 
         // Neither call may have started an encoder.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

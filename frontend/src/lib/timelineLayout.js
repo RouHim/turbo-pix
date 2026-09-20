@@ -9,8 +9,19 @@ export const MIN_COLUMN_PX = 28;
 const MIN_LABEL_GAP_PX = 8;
 /** Measured text is a hair narrower than rendered text; reserve a margin. */
 const LABEL_SAFETY_PX = 4;
-/** Pointer grab zone around a selection edge. */
+/**
+ * Pointer grab zone around a selection edge: the *lane's* hit test, deliberately
+ * narrower than the DOM handle. `.timeline-handle` is anchored inside its
+ * selection edge and is 24px wide (the axe `target-size` floor, WCAG 2.5.8), so
+ * a press that lands on the handle moves that bound even where this zone would
+ * not claim it. The zone still decides everything else, and at the finest
+ * granularity the arithmetic is tight: a 28px month column leaves a 2-month
+ * range only an 8px translate band between its two handles (56px − 2 × 24px).
+ * A single period is not a range (FR-009), so its lane body brushes rather
+ * than translates.
+ */
 export const HANDLE_HIT_PX = 12;
+
 /** Multiplicative step of the zoom controls. */
 export const ZOOM_STEP = 1.6;
 /** Candidate column units, finest first: month, year, decade. */

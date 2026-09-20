@@ -153,6 +153,21 @@
       : { startIndex: base.startIndex, endIndex: bound };
   };
 
+  // FR-007: a period without photos is never selectable, so no gesture may
+  // write a selection that is exactly one zero-photo month — neither the live
+  // scrub nor the committed value. A range of two months or more stays legal
+  // (it may merely contain empty months), and a route that already names such
+  // a period is left to the route.
+  const isSelectableSelection = (next) =>
+    next === null ||
+    next.endIndex > next.startIndex ||
+    countInRange(model, next.startIndex, next.startIndex) > 0;
+
+  const writeSelection = (next, commit) => {
+    if (!isSelectableSelection(next)) return;
+    onchange(next, { commit });
+  };
+
   const beginDrag = (zone, event) => {
     const element = zone === 'pan' ? rulerEl : laneEl;
     if (element === null || view === null || model.length === 0) return;
@@ -230,7 +245,7 @@
 
     const next = nextSelectionFor(x);
     drag.selection = next;
-    onchange(next, { commit: false });
+    writeSelection(next, false);
   };
 
   const endDrag = () => {
@@ -255,7 +270,7 @@
     if (zone !== 'pan') suppressClick = true;
     // An Escape-cancelled gesture has already committed the pre-drag selection;
     // committing the last dragged value now would overwrite it.
-    if (zone !== 'pan' && dragged !== null && !aborted) onchange(dragged, { commit: true });
+    if (zone !== 'pan' && dragged !== null && !aborted) writeSelection(dragged, true);
   };
 
   // A gesture that ends over a column retargets the compatibility click to the
@@ -309,9 +324,10 @@
     );
 
   // Arrow/Home/End walk the periods a user can *act* on: a period without
-  // photos announces itself and ignores activation (FR-007, `aria-disabled`),
-  // so the roving focus steps over those instead of parking on a period that
-  // swallows Enter. `null` means the direction holds none.
+  // photos announces itself but ignores activation (FR-007, `aria-disabled`),
+  // and it cannot be selected either, so navigation lands on periods with
+  // photos instead of parking on one that swallows Enter. `null` means the
+  // direction holds none.
   const seekFocusedStart = (from, step) => {
     const last = step > 0 ? gridStartMax : gridStartMin;
     if (from === null || last === null) return null;
@@ -351,17 +367,36 @@
     if (element instanceof HTMLElement) element.focus();
   };
 
+  // A committed keyboard change re-renders the grid — a drill changes the
+  // column unit and an extended range can reframe the view — so the column that
+  // held the focus is unmounted with it and the focus drops to `<body>`. Put it
+  // back on the period the change landed on, snapped to the grid that now
+  // exists and stepped to one with photos (the arrows' own rule).
+  const restoreColumnFocus = async (index) => {
+    await tick();
+    if (document.activeElement?.closest?.('.timeline-column')) return;
+    const aligned = alignedStart(index);
+    await focusColumn(seekFocusedStart(aligned, 1) ?? aligned);
+  };
+
   const handleColumnKeydown = (event, column) => {
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
-      // A plain activation is left to the button's own click — literally the
-      // pointer path, drill-in included. Shift extends the selection to this
-      // period instead (the keyboard twin of a brush drag), and preventDefault
-      // is what keeps the click from also selecting the single period.
-      if (!event.shiftKey) return;
+      // Both forms prevent the button's own click: the plain one because it
+      // runs the activation itself (the same function the click runs, drill-in
+      // included), the shifted one because it must not also select the single
+      // period underneath the range it just extended to.
       event.preventDefault();
-      onchange(normalizeSelection(selection?.startIndex ?? column.startIndex, column.endIndex), {
-        commit: true,
-      });
+      if (event.shiftKey) {
+        // Shift extends the selection to this period: the keyboard twin of a
+        // brush drag.
+        writeSelection(
+          normalizeSelection(selection?.startIndex ?? column.startIndex, column.endIndex),
+          true
+        );
+      } else {
+        activateColumn(column);
+      }
+      restoreColumnFocus(column.gridStart);
       return;
     }
 

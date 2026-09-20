@@ -506,7 +506,9 @@ test.describe('Timeline', () => {
     expect(name).toMatch(/\d{4}/);
     expect(name).toMatch(/photos|No photos/);
 
-    // Arrow keys move focus one month at a time
+    // Arrow keys move focus to the next period the library has photos in: a
+    // zero-photo month announces itself but cannot be activated or selected,
+    // so it is stepped over
     await page.keyboard.press('ArrowRight');
     const focused = page.locator('.timeline-column:focus');
     await expect(focused).toHaveCount(1);
@@ -517,7 +519,8 @@ test.describe('Timeline', () => {
     await TestHelpers.waitForPhotosToLoad(page);
     expect(TestHelpers.getUrlState(page).month).toBe((Number(start) % 12) + 1);
 
-    // AND: Shift+Enter on a neighbouring column extends the selection into a range
+    // AND: Shift+Enter on the column the arrow moved to extends the selection
+    // into a range — the next populated period, not always its neighbour
     await page.keyboard.press('ArrowRight');
     const extendTo = await page.locator('.timeline-column:focus').getAttribute('data-period-start');
     await page.keyboard.press('Shift+Enter');
@@ -525,6 +528,14 @@ test.describe('Timeline', () => {
     const extended = TestHelpers.getUrlState(page);
     expect(extended.month).toBe((Number(start) % 12) + 1);
     expect(extended.toMonth).toBe((Number(extendTo) % 12) + 1);
+
+    // AND: the commit re-rendered the grid without dropping the roving focus
+    // out of the lane (the range reframes the view, which unmounts the column
+    // the focus was on)
+    await expect(page.locator('.timeline-column:focus')).toHaveCount(1);
+    expect(
+      await page.evaluate(() => document.activeElement?.closest('.timeline-column') !== null)
+    ).toBe(true);
   });
 
   test('should adjust both range bounds by keyboard, one month per activation', async ({
@@ -565,5 +576,47 @@ test.describe('Timeline', () => {
       const shadow = await control.evaluate((el) => getComputedStyle(el).boxShadow);
       expect(shadow).not.toBe('none');
     }
+  });
+
+  test('should refuse to select a zero-photo single period by keyboard or brush', async ({
+    page,
+  }) => {
+    // GIVEN: the 2012 year view, whose roving column is January 2012 — a month
+    // with no photos (April 2012, 24147, is the empty month the click test uses)
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    const roving = page.locator('.timeline-column[tabindex="0"]');
+    await expect(roving).toHaveAttribute('data-period-start', '24144');
+
+    // WHEN: Shift+Enter extends the whole-year selection onto that same empty
+    // month, which is exactly one zero-photo period
+    await roving.focus();
+    await page.keyboard.press('Shift+Enter');
+
+    // THEN: nothing is committed — the filter still reads as the whole year
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: null,
+      toYear: null,
+      toMonth: null,
+    });
+
+    // AND: the same holds for a brush confined to one empty month, live scrub
+    // included (the pending scrub write would land 100 ms later, so the wait is
+    // what makes "nothing happened" an assertion rather than a race)
+    const april = await page.locator('.timeline-column[data-period-start="24147"]').boundingBox();
+    const midY = april.y + april.height / 2;
+    await page.mouse.move(april.x + april.width / 2, midY);
+    await page.mouse.down();
+    await page.mouse.move(april.x + april.width / 2 + 6, midY, { steps: 3 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: null,
+      toYear: null,
+      toMonth: null,
+    });
+    await expect(page.locator('.photo-card').first()).toBeAttached();
   });
 });

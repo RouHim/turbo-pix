@@ -1753,19 +1753,15 @@ Replace the `renderClusters` stub (and add the popup/lifecycle helpers):
 ```js
   import { mount, onMount, unmount, untrack } from 'svelte';
   import { formatDate } from '../lib/utils.js';
-  import { formatCoordinates, getLocationLabel } from '../lib/map.js';
+  import { formatCoordinates, getLocationLabel, wrapLongitudeForView } from '../lib/map.js';
   import MapPopup from './MapPopup.svelte';
 
   const popupHandles = new Map();
 
-  function wrapLongitudeForView(lng, bounds) {
-    // Leaflet does not repeat markers across the antimeridian; shift the
-    // displayed copy into the wrapped viewport (SC edge case: photos
-    // spanning the antimeridian keep rendering).
-    if (bounds.getEast() > 180 && lng < 0) return lng + 360;
-    if (bounds.getWest() < -180 && lng > 0) return lng - 360;
-    return lng;
-  }
+  // `wrapLongitudeForView` lives in lib/map.js: Leaflet projects markers with
+  // latLngToLayerPoint and never wraps longitude (only tile URLs wrap), so
+  // `map.getBounds()` is the raw visible window — the shift must be rejected
+  // when the ±360° copy is not inside it (SC: antimeridian photos render).
 
   function clusterIcon(count) {
     const size = count < 10 ? 34 : count < 100 ? 42 : 48;
@@ -1847,7 +1843,7 @@ Replace the `renderClusters` stub (and add the popup/lifecycle helpers):
 
     for (const feature of features) {
       const [rawLng, latitude] = feature.geometry.coordinates;
-      const longitude = wrapLongitudeForView(rawLng, bounds);
+      const longitude = wrapLongitudeForView(rawLng, bounds.getWest(), bounds.getEast());
 
       if (feature.properties.cluster) {
         const count = feature.properties.point_count;

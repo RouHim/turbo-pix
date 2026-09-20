@@ -47,7 +47,7 @@ jobs:
       - name: Run i18n integrity check
         run: npm run test:i18n
 
-      - name: Run frontend unit tests
+      - name: Run unit tests
         run: npm run test:unit
 
   rust-tests:

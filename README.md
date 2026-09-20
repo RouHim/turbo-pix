@@ -129,6 +129,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_ALLOWED_HOSTS` | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | *(loopback names)* | No       |
 | `TURBO_PIX_LOCALE`        | Default UI locale (`en`, `de`)                    | `en`                                  | No       |
 | `TURBO_PIX_NOMINATIM_URL` | Base URL for the Nominatim geocoding service      | `https://nominatim.openstreetmap.org` | No       |
+| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After` | `20` | No |
 | `TURBO_PIX_TILE_URL`      | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
 | `RUST_LOG`                | Log level (trace, debug, info, warn, error)       | `info`                                | No       |
 
@@ -166,6 +167,21 @@ docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 ### Videos
 
 - MP4, MOV, AVI, MKV, WebM, M4V
+
+Playback is native-first and decided server-side per request: the server compares
+each file's capabilities (codec, container, bit depth, layout) with the codecs the
+browser declares and picks direct play, a lossless remux (container/layout only,
+e.g. moving the `moov` atom so playback can start immediately), or a conversion.
+Videos the browser cannot decode are streamed as fragmented MP4 straight out of
+ffmpeg while they convert, so playback starts long before the conversion
+finishes; seeking works through Media Source Extensions, which needs no secure
+context (WebCodecs does, and TurboPix is usually served over plain HTTP on the
+LAN). Conversions run in a bounded worker pool (`TURBO_PIX_MAX_TRANSCODES`): a
+stream request that finds the pool full waits up to
+`TURBO_PIX_STREAM_QUEUE_WAIT_SECS` for a slot and otherwise answers `503` with
+`Retry-After` while the viewer keeps its waiting notice on screen. Converted and
+remuxed artifacts are cached and reused on the next open, and the viewer offers
+the original file as an escape hatch if a conversion keeps failing.
 
 ## Limitations
 

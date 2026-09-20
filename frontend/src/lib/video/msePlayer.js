@@ -209,6 +209,20 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       const { done, value } = await reader.read();
       if (destroyed || signal.aborted) return;
       if (done) {
+        // The chunked body ends cleanly even when the run did not: the server
+        // kills the conversion at its deadline and ffmpeg can die mid-stream,
+        // and both simply close the response. Telling that apart from a
+        // finished run needs the declared duration — a body that ends with the
+        // buffer still short of it stopped part-way, and the viewer must see
+        // the failure (the ladder and "play original anyway") instead of the
+        // silent stop a bogus `ended` produces. The slack absorbs the last
+        // fragment's rounding.
+        const bufferedEnd =
+          buffer.buffered.length > 0 ? buffer.buffered.end(buffer.buffered.length - 1) : 0;
+        if (declaredDuration !== null && !signal.aborted && bufferedEnd < declaredDuration - 2) {
+          reportError(signal, new Error('the delivered stream ended early'));
+          return;
+        }
         try {
           if (source.readyState === 'open') source.endOfStream();
         } catch {
@@ -300,7 +314,16 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       // First bytes arrived: we are buffering, not waiting.
       const first = await reader.read();
       clearTimeout(restartTimer);
-      if (destroyed || first.done) return;
+      if (destroyed) return;
+      if (first.done) {
+        // A zero-byte source answers 200 with an empty body, and ffmpeg dying
+        // before the init segment looks identical: no bytes ever arrived, so
+        // there is nothing to play. The viewer must get the failure — and with
+        // it the "play original anyway" escape hatch — rather than the
+        // non-error buffering notice a silent return leaves up.
+        reportError(signal, new Error('the stream delivered no media'));
+        return;
+      }
       state('buffering');
       await appendWhenReady(buffer, first.value);
       // Position the element on the real timeline (each run starts at 0) and

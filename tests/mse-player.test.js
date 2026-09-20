@@ -253,7 +253,7 @@ function createPlayer(video, options = {}) {
   return createStreamPlayer(video, {
     streamUrl: '/api/photos/abc/video/stream?client=h264-8%2Caac&mode=transcode',
     mime: options.mime ?? 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
-    duration: 2,
+    duration: options.duration ?? 2,
     onState: options.onState ?? (() => {}),
     onError: options.onError ?? (() => {}),
   });
@@ -548,13 +548,24 @@ test("a run's buffer is typed from the MIME the server advertises for that run",
   // rungs on bytes that were perfectly playable.
   const decisionMime = 'video/mp4; codecs="avc1.42E01E,ac-3"';
   const runMime = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
-  globalThis.fetch = () =>
-    Promise.resolve({
+  globalThis.fetch = () => {
+    let reads = 0;
+    return Promise.resolve({
       ok: true,
       status: 200,
       headers: new Headers({ 'x-turbopix-mime': runMime }),
-      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+      body: {
+        getReader: () => ({
+          read() {
+            reads += 1;
+            return reads === 1
+              ? Promise.resolve({ done: false, value: new Uint8Array([0, 0, 0, 24]) })
+              : Promise.resolve({ done: true });
+          },
+        }),
+      },
     });
+  };
   const player = createPlayer(video, {
     mime: decisionMime,
     onError: (error) => errors.push(error),
@@ -583,6 +594,59 @@ test('a run without an advertised MIME keeps the decision MIME', async () => {
     'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
     'the decision MIME is the fallback when the server advertises none'
   );
+
+  player.destroy();
+});
+
+test('a stream that ends before the declared duration reports a failure, not `ended`', async () => {
+  const video = fakeVideo();
+  const { fetchImpl } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const states = [];
+  const errors = [];
+  // The body here yields three 1 s chunks and then ends, but the source is
+  // 20 s: the run stopped part-way. The server kills a conversion at its
+  // deadline and ffmpeg can die mid-stream, and both merely close the chunked
+  // response — the declared duration is the only signal that the last frames
+  // never arrived.
+  const player = createPlayer(video, {
+    duration: 20,
+    onState: (value) => states.push(value),
+    onError: (error) => errors.push(error),
+  });
+
+  await player.start(0);
+  await settle(10);
+
+  assert.equal(errors.length, 1, 'the truncated run reaches the viewer');
+  assert.match(errors[0].message, /ended early/);
+  // Reporting a clean end is what hid the notice and left the user stranded
+  // with no ladder step and no "play original anyway".
+  assert.ok(!states.includes('ended'), 'a truncated stream must not report a clean end');
+
+  player.destroy();
+});
+
+test('a stream that delivers no media reports a failure', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  // A zero-byte source answers 200 with an empty body, and ffmpeg dying before
+  // the init segment looks identical. Before the fix the player returned
+  // silently and the viewer sat on its non-error buffering notice.
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-transcode-warning': 'empty' }),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(errors.length, 1, 'the empty run reaches the viewer');
+  assert.match(errors[0].message, /no media/);
 
   player.destroy();
 });

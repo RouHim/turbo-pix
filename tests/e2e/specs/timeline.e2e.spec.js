@@ -394,7 +394,12 @@ test.describe('Timeline', () => {
     test.skip(density.length === 0, 'Timeline needs at least one month bucket');
     const lastBucket = density[density.length - 1];
     const endIndex = lastBucket.year * 12 + lastBucket.month - 1;
-    const firstIndex = endIndex - 11;
+    // 13 months, deliberately never 12: a window that starts in January and ends
+    // in December is canonicalised into a bare whole year, which is a period and
+    // not a range — the body press would brush instead of translate. The newest
+    // bucket is the cluster seed at `now - 7 days`, so a 12-month window reaches
+    // that shape every late December.
+    const firstIndex = endIndex - 12;
     const firstBucket = {
       year: Math.floor(firstIndex / 12),
       month: (firstIndex % 12) + 1,
@@ -405,11 +410,13 @@ test.describe('Timeline', () => {
     );
     await TestHelpers.waitForPhotosToLoad(page);
     await dragBody(3);
+    // THEN: the range is clamped where it was, in the canonical form the writer
+    // produces — a January start and a December end are written as absent months
     expect(await bounds()).toEqual([
       firstBucket.year,
-      firstBucket.month,
+      firstBucket.month === 1 ? null : firstBucket.month,
       lastBucket.year,
-      lastBucket.month,
+      lastBucket.month === 12 ? null : lastBucket.month,
     ]);
   });
 

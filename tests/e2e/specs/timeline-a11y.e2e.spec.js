@@ -27,6 +27,11 @@ test('timeline should have no axe violations on desktop', async ({ page }) => {
 
   await expect(page.locator('.timeline-column').first()).toBeVisible();
 
+  // With an active range, so the slider handles are part of the scanned tree
+  await page.goto('/?year=2012&month=3&to_year=2012&to_month=8');
+  await TestHelpers.waitForPhotosToLoad(page);
+  await expect(page.locator('.timeline-handle.start')).toBeVisible();
+
   const results = await new AxeBuilder({ page })
     .include('.timeline-container')
     .withRules(AXE_RULES)

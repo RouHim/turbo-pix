@@ -1,5 +1,5 @@
 <script>
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
@@ -48,6 +48,10 @@
   let focusedColumnStart = $state(null);
   let suppressClick = false;
   let measureContext = null;
+  // Set while a keyboard focus move owns the view change it makes: the
+  // selection-following effect further down must not undo that pan (see
+  // `focusColumn`).
+  let reframeSuppressed = false;
 
   const monthName = (month) => {
     const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
@@ -108,10 +112,17 @@
     return { left, width: right - left };
   });
 
-  const rowCount = (column) =>
-    column.count === 0
+  const photoCountLabel = (count) =>
+    count === 0
       ? $t('ui.timeline_no_photos_month', { default: 'No photos' })
-      : $t('ui.photos_count', { values: { count: column.count }, default: '{count} photos' });
+      : $t('ui.photos_count', { values: { count }, default: '{count} photos' });
+
+  const rowCount = (column) => photoCountLabel(column.count);
+
+  // Every period announcement names the period *and* what it holds (FR-014,
+  // SC-005): columns say it in `aria-label`, handles in `aria-valuetext`.
+  const periodAnnouncement = (index) =>
+    `${periodName(index)}, ${photoCountLabel(countInRange(model, index, index))}`;
 
   const statusText = $derived.by(() => {
     const column = hoveredColumn ?? columns.find((c) => c.gridStart === focusedColumnStart);
@@ -283,17 +294,112 @@
     }
   };
 
-  const handleColumnKeydown = (event, column) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    const index = columns.findIndex((candidate) => candidate.gridStart === column.gridStart);
-    const next = columns[index + (event.key === 'ArrowRight' ? 1 : -1)];
-    if (next === undefined) return;
-    focusedColumnStart = next.gridStart;
-    const element = laneEl?.querySelector(
-      `.timeline-column[data-period-start="${next.gridStart}"]`
+  // The `unit`-aligned grid the roving focus moves along. A period is addressed
+  // by its grid start, which for the first column can sit before the model
+  // begins (a decade that only partly exists).
+  const alignedStart = (index) => Math.floor(index / unit) * unit;
+  const gridStartMin = $derived(model.length === 0 ? null : alignedStart(model.minIndex));
+  const gridStartMax = $derived(model.length === 0 ? null : alignedStart(model.maxIndex));
+
+  const columnPhotoCount = (gridStart) =>
+    countInRange(
+      model,
+      Math.max(gridStart, model.minIndex),
+      Math.min(gridStart + unit - 1, model.maxIndex)
     );
+
+  // Arrow/Home/End walk the periods a user can *act* on: a period without
+  // photos announces itself and ignores activation (FR-007, `aria-disabled`),
+  // so the roving focus steps over those instead of parking on a period that
+  // swallows Enter. `null` means the direction holds none.
+  const seekFocusedStart = (from, step) => {
+    const last = step > 0 ? gridStartMax : gridStartMin;
+    if (from === null || last === null) return null;
+    for (
+      let candidate = from;
+      step > 0 ? candidate <= last : candidate >= last;
+      candidate += step
+    ) {
+      if (columnPhotoCount(candidate) > 0) return candidate;
+    }
+    return null;
+  };
+
+  // Move the roving focus to `gridStart` and hold that period on screen. The
+  // reveal pan is this interaction's own view change, so the selection-
+  // following effect must leave it alone: undoing it would drop the column out
+  // of the grid and take the focus with it.
+  const focusColumn = async (gridStart) => {
+    focusedColumnStart = gridStart;
+    if (view !== null && width > 0 && model.length > 0) {
+      const framed = ensureSelectionVisible(
+        {
+          startIndex: Math.max(gridStart, model.minIndex),
+          endIndex: Math.min(gridStart + unit - 1, model.maxIndex),
+        },
+        view,
+        width,
+        model
+      );
+      if (framed.scale !== view.scale || framed.origin !== view.origin) {
+        reframeSuppressed = true;
+        view = framed;
+      }
+    }
+    await tick();
+    const element = laneEl?.querySelector(`.timeline-column[data-period-start="${gridStart}"]`);
     if (element instanceof HTMLElement) element.focus();
+  };
+
+  const handleColumnKeydown = (event, column) => {
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+      // A plain activation is left to the button's own click — literally the
+      // pointer path, drill-in included. Shift extends the selection to this
+      // period instead (the keyboard twin of a brush drag), and preventDefault
+      // is what keeps the click from also selecting the single period.
+      if (!event.shiftKey) return;
+      event.preventDefault();
+      onchange(normalizeSelection(selection?.startIndex ?? column.startIndex, column.endIndex), {
+        commit: true,
+      });
+      return;
+    }
+
+    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+    let target;
+    if (step !== 0) target = seekFocusedStart(column.gridStart + step * unit, step);
+    else if (event.key === 'Home') target = seekFocusedStart(gridStartMin, 1);
+    else if (event.key === 'End') target = seekFocusedStart(gridStartMax, -1);
+    else return;
+
+    event.preventDefault();
+    if (target === null || target === column.gridStart) return;
+    focusColumn(target);
+  };
+
+  // Handles are sliders: arrows move the bound one month at a time through
+  // `clampBound` (a bound never crosses the other, so the range never
+  // inverts), Home/End go to the model ends, and every move commits so the grid
+  // follows (SC-003).
+  const handleBoundKeydown = (event, bound) => {
+    const base = effectiveSelection;
+    if (base === null || model.length === 0) return;
+
+    let index;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const current = bound === 'start' ? base.startIndex : base.endIndex;
+      index = current + (event.key === 'ArrowRight' ? 1 : -1);
+    } else if (event.key === 'Home') index = model.minIndex;
+    else if (event.key === 'End') index = model.maxIndex;
+    else return;
+
+    event.preventDefault();
+    const moved =
+      bound === 'start'
+        ? { startIndex: clampBound(index, base, 'start', model), endIndex: base.endIndex }
+        : { startIndex: base.startIndex, endIndex: clampBound(index, base, 'end', model) };
+    if (moved.startIndex === base.startIndex && moved.endIndex === base.endIndex) return;
+    onchange(moved, { commit: true });
   };
 
   const handleWheel = (event) => {
@@ -385,30 +491,39 @@
     });
   });
 
-  // FR-010: keep the selection on screen — never fight a drag in progress, and
-  // leave an already visible selection's view untouched.
+  // FR-010: keep the selection on screen — never fight a drag in progress or a
+  // keyboard focus move, and leave an already visible selection's view
+  // untouched. (`reframeSuppressed` is read before the guards, and is one-shot:
+  // it belongs to the single view change `focusColumn` just made.)
   $effect(() => {
     const dragged = drag;
     const current = view;
     const visible = selection;
+    const ownedByFocusMove = reframeSuppressed;
+    reframeSuppressed = false;
     const next =
       visible === null || current === null
         ? current
         : ensureSelectionVisible(visible, current, width, model);
-    if (dragged !== null || current === null || next === current) return;
+    if (dragged !== null || ownedByFocusMove || current === null || next === current) return;
     if (next.scale !== current.scale || next.origin !== current.origin) view = next;
   });
 
-  // Roving tabindex: one column is tabbable so the lane can be entered from the
-  // keyboard, without pretending a column is "focused" (the status row only
-  // names a column once it really is hovered or focused). A remembered start
-  // that the current grid no longer contains (arrow to a month, then fit-all)
-  // must fall back to the first column, or every column stays tabindex="-1".
-  const tabbableStart = $derived(
-    columns.some((column) => column.gridStart === focusedColumnStart)
-      ? focusedColumnStart
-      : (columns[0]?.gridStart ?? null)
-  );
+  // Roving tabindex: exactly one column is tabbable, so the lane can be entered
+  // from the keyboard, without pretending a column is "focused" (the status row
+  // only names a column once it really is hovered or focused). The remembered
+  // column wins; one the current grid no longer holds (arrow to a month, then
+  // fit-all) falls back to the column of the current selection, and finally to
+  // the first visible one. Either of those may be a period without photos —
+  // those stay focusable on purpose (`aria-disabled`, never `disabled`).
+  const tabbableStart = $derived.by(() => {
+    if (columns.length === 0) return null;
+    const preferred = [focusedColumnStart, alignedStart(selection?.startIndex ?? model.minIndex)];
+    return (
+      preferred.find((start) => columns.some((column) => column.gridStart === start)) ??
+      columns[0].gridStart
+    );
+  });
 
   // Escape abandons the gesture and puts the pre-drag view/selection back — as
   // a committed action, so the aborted gesture leaves one history entry rather
@@ -498,7 +613,10 @@
         onkeydown={(event) => handleColumnKeydown(event, column)}
         onmouseenter={() => (hoveredColumn = column)}
         onmouseleave={() => (hoveredColumn = null)}
-        onfocus={() => (hoveredColumn = column)}
+        onfocus={() => {
+          hoveredColumn = column;
+          focusedColumnStart = column.gridStart;
+        }}
         onblur={() => (hoveredColumn = null)}
       >
         <span
@@ -512,10 +630,9 @@
 
     {#if overlay !== null}
       <div class="timeline-selection" style="left: {overlay.left}px; width: {overlay.width}px">
-        <!-- Pointer-operable bounds. Keyboard operation for these sliders
-             (roving focus, arrow/Home/End, the announced value text) is Task 9's
-             scope: until then they are reachable by Tab but move by pointer
-             only. -->
+        <!-- Pointer- and keyboard-operable bounds: drag to move a bound, or
+             focus it and use arrows/Home/End, which announce the bound's period
+             and photo count through the slider's value text. -->
         <div
           class="timeline-handle start"
           role="slider"
@@ -524,8 +641,9 @@
           aria-valuemin={model.minIndex}
           aria-valuemax={model.maxIndex}
           aria-valuenow={effectiveSelection.startIndex}
-          aria-valuetext={periodName(effectiveSelection.startIndex)}
+          aria-valuetext={periodAnnouncement(effectiveSelection.startIndex)}
           onpointerdown={(event) => startHandleGesture(event, 'start')}
+          onkeydown={(event) => handleBoundKeydown(event, 'start')}
         ></div>
         <div
           class="timeline-handle end"
@@ -535,8 +653,9 @@
           aria-valuemin={model.minIndex}
           aria-valuemax={model.maxIndex}
           aria-valuenow={effectiveSelection.endIndex}
-          aria-valuetext={periodName(effectiveSelection.endIndex)}
+          aria-valuetext={periodAnnouncement(effectiveSelection.endIndex)}
           onpointerdown={(event) => startHandleGesture(event, 'end')}
+          onkeydown={(event) => handleBoundKeydown(event, 'end')}
         ></div>
       </div>
     {/if}
@@ -659,11 +778,16 @@
     pointer-events: none;
   }
 
+  /* The grab zone has to clear the axe `target-size` floor (WCAG 2.5.8, 24px:
+     a 12px slider is a violation once the handles are in the scanned tree).
+     The handle paints nothing of its own — the selection's border is the
+     visible edge — so widening the hit area costs no visual change and the
+     drag stays exact (a press on it moves its own bound, never brushes). */
   .timeline-handle {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 12px;
+    width: 24px;
     pointer-events: auto;
     cursor: ew-resize;
   }
@@ -674,6 +798,14 @@
 
   .timeline-handle.end {
     right: 0;
+  }
+
+  /* The ring is what makes a focused bound visible (SC-004/FR-014). */
+  .timeline-handle:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
   }
 
   .timeline-footer {

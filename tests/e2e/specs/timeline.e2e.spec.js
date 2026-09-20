@@ -493,4 +493,77 @@ test.describe('Timeline', () => {
     await expect(page).not.toHaveURL(/year=/);
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
   });
+
+  test('should select a year, a month and a range with the keyboard only', async ({ page }) => {
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    // Focus the roving column and read its announcement
+    const column = page.locator('.timeline-column[tabindex="0"]');
+    await column.focus();
+    const name = await column.getAttribute('aria-label');
+    expect(name).toMatch(/\d{4}/);
+    expect(name).toMatch(/photos|No photos/);
+
+    // Arrow keys move focus one month at a time
+    await page.keyboard.press('ArrowRight');
+    const focused = page.locator('.timeline-column:focus');
+    await expect(focused).toHaveCount(1);
+
+    // Enter applies exactly what a pointer click would
+    const start = await focused.getAttribute('data-period-start');
+    await page.keyboard.press('Enter');
+    await TestHelpers.waitForPhotosToLoad(page);
+    expect(TestHelpers.getUrlState(page).month).toBe((Number(start) % 12) + 1);
+
+    // AND: Shift+Enter on a neighbouring column extends the selection into a range
+    await page.keyboard.press('ArrowRight');
+    const extendTo = await page.locator('.timeline-column:focus').getAttribute('data-period-start');
+    await page.keyboard.press('Shift+Enter');
+    await TestHelpers.waitForPhotosToLoad(page);
+    const extended = TestHelpers.getUrlState(page);
+    expect(extended.month).toBe((Number(start) % 12) + 1);
+    expect(extended.toMonth).toBe((Number(extendTo) % 12) + 1);
+  });
+
+  test('should adjust both range bounds by keyboard, one month per activation', async ({
+    page,
+  }) => {
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=5');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // The start handle is a keyboard-reachable slider announcing its period
+    const startHandle = page.locator('.timeline-handle.start');
+    await startHandle.focus();
+    expect(await startHandle.getAttribute('aria-label')).toContain('Range start');
+
+    await page.keyboard.press('ArrowLeft');
+    await TestHelpers.waitForPhotosToLoad(page);
+    expect(TestHelpers.getUrlState(page).month).toBe(2);
+
+    const endHandle = page.locator('.timeline-handle.end');
+    await endHandle.focus();
+    await page.keyboard.press('ArrowRight');
+    await TestHelpers.waitForPhotosToLoad(page);
+    expect(TestHelpers.getUrlState(page).toMonth).toBe(6);
+  });
+
+  test('should announce zoom, fit-all and clear with a visible focus ring', async ({ page }) => {
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    for (const selector of [
+      '.timeline-zoom-in',
+      '.timeline-zoom-out',
+      '.timeline-fit-all',
+      '.timeline-reset',
+    ]) {
+      const control = page.locator(selector).first();
+      await expect(control).toHaveAttribute('aria-label', /.+/);
+      await control.focus();
+      const shadow = await control.evaluate((el) => getComputedStyle(el).boxShadow);
+      expect(shadow).not.toBe('none');
+    }
+  });
 });

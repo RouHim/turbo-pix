@@ -312,10 +312,11 @@ test.describe('Timeline', () => {
     expect(state.toYear).toBeNull();
     expect(state.toMonth).toBeNull();
 
-    // WHEN: widening the collapsed period left again, down to January 2012
-    // (24144) — two zoom steps are enough to bring January into the lane
-    await page.locator('.timeline-zoom-out').click();
-    await page.locator('.timeline-zoom-out').click();
+    // AND: the same drag on a range whose start is not January leaves the end
+    // bound alone. February 2012 – April 2013 is framed wide enough (15 months
+    // with the range's 20% padding) to show January 2012 inside the lane.
+    await page.goto('/?year=2012&month=2&to_year=2013&to_month=4');
+    await TestHelpers.waitForPhotosToLoad(page);
     const widenedHandle = await page.locator('.timeline-handle.start').boundingBox();
     const january = await page.locator('.timeline-column[data-period-start="24144"]').boundingBox();
     await page.mouse.move(widenedHandle.x + widenedHandle.width / 2, lane.y + lane.height / 2);
@@ -323,14 +324,14 @@ test.describe('Timeline', () => {
     await page.mouse.move(january.x + january.width / 2, lane.y + lane.height / 2, { steps: 6 });
     await page.mouse.up();
 
-    // THEN: the end bound is still March — the drag moved only the start, so the
-    // range reads January–March 2012 (January is the implicit start of the
-    // whole-year form, hence the absent month and the explicit to_month)
+    // THEN: only the start moved, so the range reads January 2012 – April 2013
+    // (January is the implicit start of the whole-year form, hence the absent
+    // month and the end still carrying its own bound)
     const widened = TestHelpers.getUrlState(page);
     expect(widened.year).toBe(2012);
     expect(widened.month).toBeNull();
-    expect(widened.toYear).toBe(2012);
-    expect(widened.toMonth).toBe(3);
+    expect(widened.toYear).toBe(2013);
+    expect(widened.toMonth).toBe(4);
   });
 
   test('should translate a range by dragging its body and clamp at the data ends', async ({
@@ -413,8 +414,8 @@ test.describe('Timeline', () => {
   });
 
   test('should cancel a gesture back to the pre-drag selection on Escape', async ({ page }) => {
-    // GIVEN: the 2012 year view, where the pointer will end over a populated
-    // column (March 2012 holds the seeded legacy_05)
+    // GIVEN: the 2012 year view, where the populated March column (the seeded
+    // legacy_05) is the period the pointer ends on
     await page.goto('/?year=2012');
     await TestHelpers.waitForPhotosToLoad(page);
 
@@ -423,25 +424,38 @@ test.describe('Timeline', () => {
       .locator('.timeline-column[data-period-start="24145"]')
       .boundingBox();
     const march = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+    const midY = lane.y + lane.height / 2;
+    const bounds = () => {
+      const state = TestHelpers.getUrlState(page);
+      return [state.year, state.month, state.toYear, state.toMonth];
+    };
 
-    // WHEN: a brush is started, Escape is pressed mid-gesture, *then* the
-    // pointer is released over the March column
-    await page.mouse.move(february.x + february.width / 2, lane.y + lane.height / 2);
+    // WHEN: a brush is started, Escape is pressed mid-gesture, and only then the
+    // pointer is released — over the March column, away from where it started
+    await page.mouse.move(february.x + february.width / 2, midY);
     await page.mouse.down();
-    await page.mouse.move(march.x + march.width / 2, lane.y + lane.height / 2, { steps: 8 });
+    await page.mouse.move(march.x + march.width / 2, midY, { steps: 8 });
     await page.keyboard.press('Escape');
     await page.mouse.up();
 
-    // THEN: the release does not activate the column it lands on — a filter
-    // there would overwrite the selection Escape restored — and no bound was
-    // committed by the aborted gesture
-    const state = TestHelpers.getUrlState(page);
-    expect([state.year, state.month, state.toYear, state.toMonth]).toEqual([
-      2012,
-      null,
-      null,
-      null,
-    ]);
+    // THEN: the release activated nothing — no filter overwrites the selection
+    // Escape restored — and the aborted gesture committed no bound
+    expect(await bounds()).toEqual([2012, null, null, null]);
+
+    // AND: the same holds when the release lands back on the very column the
+    // drag started on, where the release's click targets that column itself
+    // (this is the case a released capture cannot protect: without suppressing
+    // it, March 2012 gets activated and the URL ends up filtered to it)
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    const pressX = march.x + march.width / 2;
+    await page.mouse.move(pressX, midY);
+    await page.mouse.down();
+    await page.mouse.move(pressX + 20, midY, { steps: 4 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+
+    expect(await bounds()).toEqual([2012, null, null, null]);
   });
 
   test('should ignore activation of an empty period and clear back to the full span', async ({

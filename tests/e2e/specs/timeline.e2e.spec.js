@@ -618,5 +618,21 @@ test.describe('Timeline', () => {
       toMonth: null,
     });
     await expect(page.locator('.photo-card').first()).toBeAttached();
+
+    // AND: a bound cannot be walked onto an empty month either. March–April
+    // 2012 is a range (April is the empty month), so ArrowRight on the start
+    // handle would clamp onto the end bound and collapse the range into that
+    // one zero-photo month — which must not commit.
+    await page.goto('/?year=2012&month=3&to_year=2012&to_month=4');
+    await TestHelpers.waitForPhotosToLoad(page);
+    const startHandle = page.locator('.timeline-handle.start');
+    await startHandle.focus();
+    await page.keyboard.press('ArrowRight');
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: 3,
+      toYear: 2012,
+      toMonth: 4,
+    });
   });
 });

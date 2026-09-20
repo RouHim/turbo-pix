@@ -413,9 +413,9 @@
   };
 
   // Handles are sliders: arrows move the bound one month at a time through
-  // `clampBound` (a bound never crosses the other, so the range never
-  // inverts), Home/End go to the model ends, and every move commits so the grid
-  // follows (SC-003).
+  // `clampBound` (a bound never crosses the other, so the range never inverts
+  // and never leaves the model span), Home/End go to the model ends, and every
+  // move commits so the grid follows (SC-003).
   const handleBoundKeydown = (event, bound) => {
     const base = effectiveSelection;
     if (base === null || model.length === 0) return;
@@ -434,7 +434,9 @@
         ? { startIndex: clampBound(index, base, 'start', model), endIndex: base.endIndex }
         : { startIndex: base.startIndex, endIndex: clampBound(index, base, 'end', model) };
     if (moved.startIndex === base.startIndex && moved.endIndex === base.endIndex) return;
-    onchange(moved, { commit: true });
+    // The same refusal rule as every other write: a bound walked onto the
+    // opposite bound must not be the way to select one zero-photo month.
+    writeSelection(moved, true);
   };
 
   const handleWheel = (event) => {

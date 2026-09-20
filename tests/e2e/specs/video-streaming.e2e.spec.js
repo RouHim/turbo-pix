@@ -97,6 +97,21 @@ test.describe('On-the-fly streaming playback', () => {
   test('Matroska h264 remuxes losslessly and seeks within 3s', async ({ page }) => {
     test.setTimeout(60_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    // A cold cache: the playthrough below fills the `remux/` sidecar, after
+    // which the same probe legitimately answers `direct`/`cached` and the
+    // viewer plays a file instead of streaming (and a Playwright retry would
+    // hit exactly that artifact from the first attempt). Probe *before*
+    // playing, so the answer is the first-play one rather than a race against
+    // the background fill.
+    await TestHelpers.clearCachedConversions(mkv.hash_sha256);
+    const response = await page.request.get(
+      `/api/photos/${mkv.hash_sha256}/video?decision&client=h264-8,aac`
+    );
+    expect(response.ok()).toBeTruthy();
+    const decision = await response.json();
+    expect(decision.action).toBe('stream');
+    expect(decision.mode).toBe('remux');
+
     await openVideo(page, mkv);
 
     const video = videoHandle(page);
@@ -151,11 +166,33 @@ test.describe('On-the-fly streaming playback', () => {
 
   test('h264 video still plays directly without any conversion notice', async ({ page }) => {
     const h264 = await findVideoByFilename(page, 'test_video.mp4');
+    // A direct source only auto-plays when the viewer's autoPlay setting is on
+    // (the MSE path always self-plays), so enable it before opening; without it
+    // `currentTime > 0` below would only ever be reached by a user gesture.
+    await page.evaluate(() =>
+      localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+    );
     await openVideo(page, h264);
     const video = videoHandle(page);
     await expect(video).toBeVisible();
     const src = await video.getAttribute('src');
     expect(src).toContain(`/api/photos/${h264.hash_sha256}/video`);
+    // Containment alone is satisfied by `?transcode=true` as well, so the
+    // direct claim needs its own negative: a converted source is a different
+    // URL, and the point of this test is that this fixture never takes it.
+    expect(src, 'direct-play src must not request a transcode').not.toContain('transcode=true');
+
+    // The src only says which URL was asked for; the delivery itself is proven
+    // by decoded frames. A direct request that yields no frame at all (a 404,
+    // an undecodable body) must fail here instead of passing on the URL alone.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
@@ -391,6 +428,24 @@ test.describe('On-the-fly streaming playback', () => {
       },
       null,
       { timeout: 20_000 }
+    );
+
+    // Play the restarted run out to its end before reading the duration. The
+    // media source is created AT the declared duration (msePlayer sets
+    // `mediaSource.duration` before the first append) and only grows it when an
+    // appended fragment ends past it, so a read taken while the run is still
+    // arriving observes 20.02 s even when the padded tail is never clamped:
+    // `clampDuration` removed would still pass the bounds below. Waiting for
+    // the element to finish playback means every fragment of the run has been
+    // appended — an unclamped tail lands ~1 s past the source, so playback
+    // would run to ~21 s, which is exactly what the upper bound rejects.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.ended;
+      },
+      null,
+      { timeout: 30_000 }
     );
 
     // The element reports the source's own duration (20.02 s), not the end of

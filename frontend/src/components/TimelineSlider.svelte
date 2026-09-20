@@ -56,6 +56,9 @@
 
   // Live scrubbing must not spam history or the grid: the overlay follows the
   // pointer immediately, the route (and therefore the grid) trails by <=100 ms.
+  // A live write of `null` is a real instruction — the pinch hands an
+  // interrupted brush back to no selection — so the trailing write applies
+  // whatever was queued; the timer is only ever armed by such a write.
   const handleChange = (next, { commit = true } = {}) => {
     if (commit) {
       if (liveTimer !== null) {
@@ -71,7 +74,7 @@
       liveTimer = null;
       const pending = pendingLive;
       pendingLive = null;
-      if (pending) replaceState(filterFromSelection(pending));
+      replaceState(filterFromSelection(pending));
     }, LIVE_COMMIT_MS);
   };
 

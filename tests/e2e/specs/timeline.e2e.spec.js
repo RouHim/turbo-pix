@@ -85,6 +85,52 @@ test.describe('Timeline', () => {
     await expect.poll(visibleSpan).toBe(fitAllSpan);
   });
 
+  test('should zoom with a two-finger pinch on the lane without touching the filter', async ({
+    page,
+  }) => {
+    // Playwright's touch API cannot synthesise a two-point gesture, so the
+    // pinch goes through CDP — the same recipe the Task 11 probe used, and the
+    // only way FR-003's touch zoom is observable end to end.
+    const visibleSpan = () =>
+      page.evaluate(() => {
+        const columns = [...document.querySelectorAll('.timeline-column')];
+        if (columns.length === 0) return 0;
+        const starts = columns.map((column) => Number(column.dataset.periodStart));
+        return Math.max(...starts) - Math.min(...starts) + Number(columns[0].dataset.unit);
+      });
+    const fitAllSpan = await visibleSpan();
+    expect(fitAllSpan).toBeGreaterThan(0);
+
+    const client = await page.context().newCDPSession(page);
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    const touchPoint = (x, y) => ({ x, y, radiusX: 5, radiusY: 5, force: 1 });
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const cx = lane.x + lane.width / 2;
+    const cy = lane.y + lane.height / 2;
+
+    // WHEN: two fingers spread symmetrically over the lane
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [touchPoint(cx - 40, cy), touchPoint(cx + 40, cy)],
+    });
+    for (let i = 1; i <= 12; i += 1) {
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [touchPoint(cx - 40 - i * 8, cy), touchPoint(cx + 40 + i * 8, cy)],
+      });
+      await page.waitForTimeout(25);
+    }
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+
+    // THEN: the view zooms in and the release commits no filter — the pinch is
+    // a view gesture, so neither the brush it interrupted nor the lifted finger
+    // may reach a column.
+    await expect.poll(visibleSpan).toBeLessThan(fitAllSpan);
+    await expect(page).not.toHaveURL(/year=/);
+    await expect(page.locator('.timeline-selection')).toHaveCount(0);
+  });
+
   test('should keep the selector off the page when the timeline fails to load', async ({
     page,
   }) => {

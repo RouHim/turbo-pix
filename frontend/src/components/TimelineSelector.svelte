@@ -1,5 +1,6 @@
 <script>
   import { tick, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
@@ -44,6 +45,20 @@
   let width = $state(0);
   let view = $state(null);
   let drag = $state(null);
+  // The pointers currently down on the lane, by id, holding the client X of
+  // their last event. A single one drives brush/handle/translate, so the drag
+  // can no longer assume it owns the whole pointer stream: a second one turns
+  // the gesture into a pinch (FR-003: zoom by touch).
+  const lanePointers = new SvelteMap();
+  // Type of the last pointer that landed on the lane. Two simultaneous
+  // pointers only exist for touch, so this gates the pinch and keeps it from
+  // hijacking a mouse brush.
+  let pointerType = null;
+  // The live two-pointer pinch, or null. `aId`/`bId` are the two pointers that
+  // drive it, `distance` their previous separation and `laneLeft` the lane's
+  // viewport offset — measured once at entry, so the move handler runs no extra
+  // layout read (the single-pointer path already reads one rect per move).
+  let pinch = null;
   let hoveredColumn = $state(null);
   let focusedColumnStart = $state(null);
   let suppressClick = false;
@@ -120,13 +135,16 @@
   const rowCount = (column) => photoCountLabel(column.count);
 
   // Every period announcement names the period *and* what it holds (FR-014,
-  // SC-005): columns say it in `aria-label`, handles in `aria-valuetext`.
+  // SC-005): columns say it in `aria-label`, handles in `aria-valuetext`. The
+  // status row names the hovered/focused column, so it reuses the column's own
+  // label — the granularity the ruler shows — instead of formatting a second
+  // time from the period's first month.
   const periodAnnouncement = (index) =>
     `${periodName(index)}, ${photoCountLabel(countInRange(model, index, index))}`;
 
   const statusText = $derived.by(() => {
     const column = hoveredColumn ?? columns.find((c) => c.gridStart === focusedColumnStart);
-    if (column) return `${periodName(column.gridStart)}, ${rowCount(column)}`;
+    if (column) return `${column.label}, ${rowCount(column)}`;
     const label = formatSelectionLabel(effectiveSelection, format);
     if (effectiveSelection !== null) return label;
     return $t('ui.timeline_span_summary', {
@@ -191,6 +209,50 @@
     };
   };
 
+  // A pinch is a view gesture: the brush/handle/translate it interrupts must
+  // leave no selection behind, so put the pre-gesture value back as a *live*
+  // change (never a commit — a pinch must not enter history) and drop the drag.
+  // An Escape-aborted drag has already committed that value itself.
+  const cancelDrag = () => {
+    if (drag === null) return;
+    const { zone, moved, aborted, previousSelection } = drag;
+    endDrag();
+    if (zone !== 'pan' && moved && !aborted) onchange(previousSelection, { commit: false });
+  };
+
+  // Hand the gesture over to the two pointers. Every lane pointer is captured
+  // so a finger that drifts off the lane still reports its moves and its
+  // release here — an uncaptured release would strand its id in the map and a
+  // later single press would read as a second pointer.
+  const enterPinch = () => {
+    const ids = [...lanePointers.keys()];
+    const aId = ids[0];
+    const bId = ids[1];
+    cancelDrag();
+    pinch = {
+      aId,
+      bId,
+      distance: Math.abs(lanePointers.get(bId) - lanePointers.get(aId)),
+      laneLeft: laneEl === null ? 0 : laneEl.getBoundingClientRect().left,
+    };
+    if (laneEl !== null) {
+      for (const id of ids) {
+        if (!laneEl.hasPointerCapture(id)) laneEl.setPointerCapture(id);
+      }
+    }
+  };
+
+  // A pointer landing on the lane joins the gesture. A second touch pointer
+  // turns it into a pinch; returns true when pinch mode took the gesture over
+  // so the caller does not begin a drag on top of it.
+  const trackLanePointer = (event) => {
+    lanePointers.set(event.pointerId, event.clientX);
+    pointerType = event.pointerType;
+    if (pointerType !== 'touch' || lanePointers.size < 2) return false;
+    enterPinch();
+    return true;
+  };
+
   const startPan = (event) => {
     if (event.button !== 0) return;
     suppressClick = false;
@@ -201,6 +263,7 @@
     if (event.button !== 0) return;
     suppressClick = false;
     if (laneEl === null || view === null || model.length === 0) return;
+    if (trackLanePointer(event)) return;
     const x = pointerX(event, laneEl);
     const zone = selectionZoneAtX(x, { selection: effectiveSelection, view, width }) ?? 'brush';
     beginDrag(isRange ? zone : 'brush', event);
@@ -213,10 +276,35 @@
     if (event.button !== 0) return;
     event.stopPropagation();
     suppressClick = false;
+    if (trackLanePointer(event)) return;
     beginDrag(bound, event);
   };
 
   const handlePointerMove = (event) => {
+    // Keep the map's positions fresh even for a pointer the pinch ignores: a
+    // third finger joining re-anchors the pair on the live coordinates.
+    if (lanePointers.has(event.pointerId)) lanePointers.set(event.pointerId, event.clientX);
+
+    if (pinch !== null) {
+      if (event.pointerId !== pinch.aId && event.pointerId !== pinch.bId) return;
+      const left = lanePointers.get(pinch.aId);
+      const right = lanePointers.get(pinch.bId);
+      const distance = Math.abs(right - left);
+      // Fingers spreading apart (distance growing) is a zoom in: the factor is
+      // `current / previous`, which is exactly the unit-tested pinch step.
+      if (pinch.distance > 0 && distance > 0) {
+        view = zoomView({
+          view,
+          factor: distance / pinch.distance,
+          anchorPx: (left + right) / 2 - pinch.laneLeft,
+          width,
+          model,
+        });
+      }
+      pinch.distance = distance;
+      return;
+    }
+
     // An aborted gesture keeps its capture until the pointer is released so the
     // release cannot reach a column (see the Escape handler), but it must not
     // follow the pointer any more.
@@ -271,6 +359,28 @@
     // An Escape-cancelled gesture has already committed the pre-drag selection;
     // committing the last dragged value now would overwrite it.
     if (zone !== 'pan' && dragged !== null && !aborted) writeSelection(dragged, true);
+  };
+
+  // A release ends either a pinch or the single-pointer gesture. The map drops
+  // the pointer first: while two still remain the pinch continues, re-anchored
+  // on the survivors, and the release that takes it below two leaves pinch mode
+  // and suppresses the release's click so it cannot activate the column under
+  // the last finger.
+  const endPointer = (event) => {
+    if (laneEl !== null && laneEl.hasPointerCapture(event.pointerId)) {
+      laneEl.releasePointerCapture(event.pointerId);
+    }
+    if (!lanePointers.delete(event.pointerId) || pinch === null) {
+      endGesture(event);
+      return;
+    }
+    if (lanePointers.size >= 2) {
+      enterPinch();
+      return;
+    }
+    pinch = null;
+    suppressClick = true;
+    endDrag();
   };
 
   // A gesture that ends over a column retargets the compatibility click to the
@@ -623,8 +733,8 @@
     bind:this={laneEl}
     onpointerdown={startLaneGesture}
     onpointermove={handlePointerMove}
-    onpointerup={endGesture}
-    onpointercancel={endGesture}
+    onpointerup={endPointer}
+    onpointercancel={endPointer}
     onwheel={handleWheel}
     onclick={clearSuppressClick}
   >
@@ -640,7 +750,7 @@
         data-period-start={column.gridStart}
         data-unit={unit}
         style="left: {column.x}px; width: {column.width}px;"
-        aria-label={`${periodName(column.gridStart)}, ${rowCount(column)}`}
+        aria-label={`${column.label}, ${rowCount(column)}`}
         aria-pressed={effectiveSelection !== null &&
           column.startIndex <= effectiveSelection.endIndex &&
           column.endIndex >= effectiveSelection.startIndex}

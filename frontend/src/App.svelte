@@ -27,6 +27,7 @@
   import CollagesView from './components/CollagesView.svelte';
   import AlbumsView from './components/AlbumsView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
+  import MapView from './components/MapView.svelte';
   import PhotoViewer from './components/PhotoViewer.svelte';
   import IndexingOrbit from './components/IndexingOrbit.svelte';
   import TimelineSlider from './components/TimelineSlider.svelte';
@@ -38,6 +39,7 @@
     albums: 'albums.sectionTitle',
     collages: 'ui.collages',
     housekeeping: 'ui.housekeeping',
+    map: 'ui.map',
   };
 
   const titleFallbacks = {
@@ -47,6 +49,7 @@
     albums: 'Albums',
     collages: 'Collages',
     housekeeping: 'Housekeeping',
+    map: 'Map',
   };
 
   let ready = $state(false);
@@ -121,6 +124,7 @@
       try {
         const config = await api.getConfig();
         defaultLocale = config?.default_locale || 'en';
+        appState.tileUrl = config?.tile_url ?? null;
       } catch {
         // config endpoint may not be ready; fall through
       }
@@ -143,7 +147,7 @@
 {#if ready && !$isLoading}
   <Header />
   <Sidebar />
-  <main class="main-content">
+  <main class="main-content" class:map-mode={route.view === 'map'}>
     <div class="content-header">
       <h2 id="current-view-title">
         {#if route.query}
@@ -159,16 +163,18 @@
         {#if route.view !== 'collages' && route.view !== 'housekeeping' && (route.view !== 'albums' || route.query != null)}
           <SortControls />
         {/if}
-        <button
-          type="button"
-          class="select-mode-btn"
-          data-action="select-mode"
-          onclick={() => (selectionState.active ? exitSelectionMode() : enterSelectionMode())}
-          aria-pressed={selectionState.active}
-        >
-          <Icon name="check-square" width={16} height={16} />
-          {$t('ui.select', { default: 'Select' })}
-        </button>
+        {#if route.view !== 'map'}
+          <button
+            type="button"
+            class="select-mode-btn"
+            data-action="select-mode"
+            onclick={() => (selectionState.active ? exitSelectionMode() : enterSelectionMode())}
+            aria-pressed={selectionState.active}
+          >
+            <Icon name="check-square" width={16} height={16} />
+            {$t('ui.select', { default: 'Select' })}
+          </button>
+        {/if}
         {#if route.view === 'albums' && route.album == null && route.query == null}
           <button
             type="button"
@@ -203,6 +209,8 @@
         <CollagesView />
       {:else if route.view === 'housekeeping'}
         <HousekeepingView />
+      {:else if route.view === 'map'}
+        <MapView />
       {:else if route.view === 'albums' && route.album == null && route.query == null}
         <AlbumsView />
       {:else}
@@ -249,6 +257,14 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: var(--space-6);
+  }
+
+  /* The Map view fills the shell instead of scrolling: the map owns the
+     remaining height and pans internally. */
+  .main-content.map-mode {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .content-header h2 {

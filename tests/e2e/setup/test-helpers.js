@@ -1,4 +1,19 @@
+import { execSync } from 'child_process';
+
+/** The E2E server's SQLite file, relative to the runner's cwd (repo root). */
+const TEST_DB_PATH = 'test-e2e-data/database/turbo-pix.db';
+
 export class TestHelpers {
+  /**
+   * 1×1 PNG — a valid image response for stubbed tile requests. The committed
+   * bytes decode to a single opaque pixel, RGBA (19, 87, 138, 255): the map
+   * specs need a decodable image, never a transparent one.
+   */
+  static TINY_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mMQDu/6DwADaQH0rwEuVwAAAABJRU5ErkJggg==',
+    'base64'
+  );
+
   static selectors = {
     navItem: (view) => `button[data-view="${view}"]`,
     photoCard: (hash) => `[data-photo-id="${hash}"]`,
@@ -28,6 +43,59 @@ export class TestHelpers {
 
   static async goto(page, path = '/') {
     await page.goto(path, { waitUntil: 'domcontentloaded' });
+  }
+
+  /**
+   * Answers every slippy-map tile request with TINY_PNG so map specs run
+   * without network access. The pathname shape (`/{z}/{x}/{y}.png`) matches the
+   * default OSM endpoint and any custom TURBO_PIX_TILE_URL template.
+   */
+  static async stubMapTiles(page) {
+    await page.route(
+      (url) => /\/\d+\/\d+\/\d+\.png$/.test(url.pathname),
+      (route) =>
+        route.fulfill({ status: 200, contentType: 'image/png', body: TestHelpers.TINY_PNG })
+    );
+  }
+
+  /**
+   * Writes GPS coordinates through the metadata endpoint, so a spec can place a
+   * photo at a known point (the seeded EXIF coordinates are not per-test).
+   */
+  static async setPhotoCoordinates(page, hash, latitude, longitude) {
+    const response = await page.request.patch(`/api/photos/${hash}/metadata`, {
+      data: { latitude, longitude },
+    });
+    if (!response.ok()) {
+      throw new Error(`PATCH metadata for ${hash} failed: ${response.status()}`);
+    }
+  }
+
+  /**
+   * Writes coordinates straight into the indexed row — videos cannot take EXIF
+   * writes, and a direct UPDATE needs no re-index. Every spec shares one
+   * server and one database, so a spec that seeds a location must restore it
+   * with clearPhotoLocationInDb before it finishes.
+   */
+  static setPhotoLocationInDb(fileName, latitude, longitude) {
+    const metadata = JSON.stringify({ location: { latitude, longitude } });
+    execSync(
+      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', ${latitude}, '$.location.longitude', ${longitude}) WHERE filename = '${fileName}'"`,
+      { stdio: 'pipe' }
+    );
+    return metadata;
+  }
+
+  /**
+   * Reverts setPhotoLocationInDb: the row keeps a JSON null location, which the
+   * map's coordinate validation (lib/map.js) and every query that reads
+   * `metadata.location` treat as "no location".
+   */
+  static clearPhotoLocationInDb(fileName) {
+    execSync(
+      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', null, '$.location.longitude', null) WHERE filename = '${fileName}'"`,
+      { stdio: 'pipe' }
+    );
   }
 
   static async verifyActiveView(page, viewName) {

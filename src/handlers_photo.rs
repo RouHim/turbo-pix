@@ -48,6 +48,24 @@ pub struct PhotosResponse {
     pub has_prev: bool,
 }
 
+/// Query for the Map view listing: the entire filtered photo set, unpaginated
+/// (FR-005). `album` scopes to an album's members, mirroring the grid's album
+/// detail listing.
+#[derive(Debug, Deserialize)]
+pub struct MapPhotoQuery {
+    pub sort: Option<String>,
+    pub order: Option<String>,
+    pub q: Option<String>,
+    pub year: Option<i32>,
+    pub month: Option<i32>,
+    pub album: Option<i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MapPhotosResponse {
+    pub photos: Vec<Photo>,
+}
+
 async fn fetch_photos(
     db_pool: &DbPool,
     query: &PhotoQuery,
@@ -110,6 +128,35 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
                 has_prev,
             }))
         }
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
+pub async fn list_map_photos(
+    query: MapPhotoQuery,
+    db_pool: DbPool,
+) -> Result<impl Reply, Rejection> {
+    let search_query = SearchQuery {
+        q: query.q.clone(),
+        year: query.year,
+        month: query.month,
+    };
+
+    match Photo::list_all_filtered(
+        &db_pool,
+        &search_query,
+        query.sort.as_deref(),
+        query.order.as_deref(),
+        query.album,
+    )
+    .await
+    {
+        Ok(photos) => Ok(warp::reply::json(&MapPhotosResponse { photos })),
         Err(e) => {
             log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
@@ -1088,6 +1135,18 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(get_timeline);
 
+    // Literal sub-paths (`/map`, `/timeline`, `/batch/...`) must be registered
+    // BEFORE the parameterized `api_photo_get` route, otherwise `map` would be
+    // captured as a photo hash (same rule as the NOTE below).
+    let api_photos_map = warp::path("api")
+        .and(warp::path("photos"))
+        .and(warp::path("map"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<MapPhotoQuery>())
+        .and(with_db(db_pool.clone()))
+        .and_then(list_map_photos);
+
     // NOTE: the batch literal routes AND the `/timeline` literal route must
     // be registered BEFORE the parameterized `api_photo_get` route. `batch`
     // cannot be swallowed by the param route (`/api/photos/batch/delete` has
@@ -1250,6 +1309,7 @@ pub fn build_photo_routes(
         .and_then(delete_photo);
 
     api_photos_list
+        .or(api_photos_map)
         .or(api_photo_timeline)
         .or(api_photo_batch_delete)
         .or(api_photo_batch_favorite)
@@ -1344,6 +1404,119 @@ mod tests {
             .unwrap_or_else(|| cache_dir.join("data"));
         build_photo_routes(db_pool, CacheManager::new(cache_dir), data_path)
             .recover(handle_rejection)
+    }
+
+    #[tokio::test]
+    async fn test_map_photos_returns_all_matches_beyond_page_limit() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        for index in 0..120 {
+            let mut photo = crate::db::tests::create_test_photo(
+                format!("map_{index}.jpg"),
+                format!("map{index:03}"),
+            );
+            photo.metadata = json!({ "location": { "latitude": 48.1, "longitude": 11.5 } });
+            photo.create(&db_pool).await.unwrap();
+        }
+
+        let response = warp::test::request()
+            .path("/api/photos/map")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["photos"].as_array().unwrap().len(), 120);
+        // The map listing is not a page: coordinates travel with the payload.
+        assert_eq!(body["photos"][0]["metadata"]["location"]["latitude"], 48.1);
+    }
+
+    #[tokio::test]
+    async fn test_map_photos_applies_filters_and_sort() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        let mut older = crate::db::tests::create_test_photo_with_date(
+            &"a".repeat(64),
+            "older.jpg",
+            chrono::DateTime::parse_from_rfc3339("2020-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        older.metadata =
+            json!({ "location": { "city": "Berlin", "latitude": 52.5, "longitude": 13.4 } });
+        older.create(&db_pool).await.unwrap();
+
+        let mut newer = crate::db::tests::create_test_photo_with_date(
+            &"b".repeat(64),
+            "newer.jpg",
+            chrono::DateTime::parse_from_rfc3339("2024-05-25T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        newer.metadata =
+            json!({ "location": { "city": "Berlin", "latitude": 52.5, "longitude": 13.4 } });
+        newer.create(&db_pool).await.unwrap();
+
+        let response = warp::test::request()
+            .path("/api/photos/map?q=location%3ABerlin&sort=date&order=asc")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let photos = body["photos"].as_array().unwrap();
+        assert_eq!(photos.len(), 2);
+        assert_eq!(photos[0]["filename"], "older.jpg");
+        assert_eq!(photos[1]["filename"], "newer.jpg");
+    }
+
+    #[tokio::test]
+    async fn test_map_photos_scopes_to_album() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        let member =
+            crate::db::tests::create_test_photo("member.jpg".to_string(), "member".to_string());
+        member.create(&db_pool).await.unwrap();
+        let stranger =
+            crate::db::tests::create_test_photo("stranger.jpg".to_string(), "stranger".to_string());
+        stranger.create(&db_pool).await.unwrap();
+
+        let album = crate::albums::create_with_members(
+            &db_pool,
+            "Trip",
+            std::slice::from_ref(&member.hash_sha256),
+        )
+        .await
+        .unwrap();
+
+        let response = warp::test::request()
+            .path(&format!("/api/photos/map?album={}", album.id))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let photos = body["photos"].as_array().unwrap();
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0]["filename"], "member.jpg");
+    }
+
+    #[tokio::test]
+    async fn test_map_photos_returns_empty_array_for_empty_library() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let routes = build_test_routes(db_pool, PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        let response = warp::test::request()
+            .path("/api/photos/map")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["photos"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

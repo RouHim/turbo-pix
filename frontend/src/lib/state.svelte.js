@@ -3,6 +3,9 @@ import { api } from './api.js';
 export const appState = $state({
   sidebarOpen: false,
   mobileSearchOpen: false,
+  // Raster tile endpoint served by GET /api/config (TURBO_PIX_TILE_URL).
+  // null = not configured → the map renders without a tile layer.
+  tileUrl: null,
 });
 
 export const indexingState = $state({

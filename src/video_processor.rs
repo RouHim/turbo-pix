@@ -2023,7 +2023,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(unix)]
-    fn make_executable(path: &Path) {
+    pub(crate) fn make_executable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
 
         let mut permissions = std::fs::metadata(path).unwrap().permissions();

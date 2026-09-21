@@ -24,6 +24,7 @@ use turbo_pix::handlers_thumbnail::build_thumbnail_routes;
 use turbo_pix::scheduler::PhotoScheduler;
 use turbo_pix::semantic_search::{self, SemanticSearch, SemanticSearchEngine};
 use turbo_pix::thumbnail_generator::ThumbnailGenerator;
+use turbo_pix::video_encoder;
 use turbo_pix::video_processor;
 use turbo_pix::warp_helpers::{handle_rejection, require_same_origin};
 
@@ -95,6 +96,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
             config.transcode_timeout_secs.to_string(),
         );
+    }
+
+    // Decide the hardware H.264 encoder once, before any job runs. The probe is
+    // a real encode rather than ffmpeg's encoder listing, which is what keeps a
+    // listed-but-unusable encoder from burning a conversion attempt later.
+    // Skipped when transcoding is disabled: nothing would ever ask for it.
+    if video_processor::transcode_max_pool() > 0 {
+        video_encoder::init().await;
     }
 
     // Non-loopback binds with an empty allowlist have NO DNS-rebinding

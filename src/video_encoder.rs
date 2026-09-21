@@ -12,6 +12,22 @@
 //! the point of the sharing — the startup probe runs the very argument shape a
 //! real job runs, so a passing probe means the job's encoder command works.
 
+use std::process::Stdio;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use tokio::process::Command;
+use tokio::time::timeout;
+
+/// Longest a single ffmpeg probe (encoder listing or encode) may take. A
+/// working encode answers in milliseconds; a broken vendor runtime can hang,
+/// and a false "unusable" verdict is cheaper than a stalled boot.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Synthetic probe input: instant to encode, comfortably above every vendor's
+/// minimum frame size, and available without a file on disk.
+const PROBE_INPUT: &str = "color=c=black:s=320x240:r=30:d=0.1";
+
 /// Software fallback. Every hardware decision degrades to this, and it is the
 /// only encoder the CPU path uses.
 pub const SOFTWARE_ENCODER: &str = "libx264";
@@ -98,6 +114,12 @@ impl HwEncoder {
             Self::Qsv => "nv12",
             _ => SOFTWARE_PIX_FMT,
         }
+    }
+
+    /// Backends driven through a DRM render node. Linux-only: the same encoders
+    /// take their device implicitly on other platforms.
+    fn needs_render_node(self) -> bool {
+        cfg!(target_os = "linux") && matches!(self, Self::Vaapi | Self::Qsv | Self::Amf)
     }
 }
 
@@ -193,19 +215,164 @@ impl HwPlan {
 /// True when ffmpeg's encoder table contains exactly this encoder. The table is
 /// one encoder per line (` V....D h264_vaapi   H.264/AVC (VAAPI)`), so the name
 /// has to match a whole token: `hevc_vaapi` must never satisfy `h264_vaapi`.
-///
-/// Test-only for now: nothing in the crate queries a listing yet, and a helper
-/// that would otherwise be dead code stays out of the shipped binary.
-#[cfg(test)]
 fn lists_encoder(listing: &str, name: &str) -> bool {
     listing
         .lines()
         .any(|line| line.split_whitespace().any(|token| token == name))
 }
 
+/// The process's verdict, resolved once. `None` is a real verdict ("no usable
+/// hardware encoder"), which is why the cell holds an `Option<HwPlan>` rather
+/// than a plan only.
+static ACTIVE_PLAN: OnceLock<Option<HwPlan>> = OnceLock::new();
+
+/// Resolve the hardware encoder once per process and remember the verdict.
+///
+/// Called from `main` before the server binds, so the verdict is in the log
+/// before the first job and no job pays for the probe. Calling it again is
+/// cheap and never re-probes. Not for tests: the verdict is process-global, so
+/// tests inject a plan explicitly wherever one is needed.
+pub async fn init() -> Option<HwPlan> {
+    if ACTIVE_PLAN.get().is_none() {
+        let plan = detect(&crate::video_processor::get_ffmpeg_path(), &render_nodes()).await;
+        // A lost race changes nothing: detection is a pure function of this
+        // machine, so both callers computed the same verdict.
+        let _ = ACTIVE_PLAN.set(plan);
+        match active() {
+            Some(plan) => log::info!("Hardware video encoder: {}", plan.label()),
+            None => {
+                log::info!("No usable hardware video encoder; transcoding uses {SOFTWARE_ENCODER}")
+            }
+        }
+    }
+    active()
+}
+
+/// The verdict from [`init`], or `None` when it never ran or found nothing
+/// usable. Both transcoding paths fall back to the software encoder on `None`.
+pub fn active() -> Option<HwPlan> {
+    ACTIVE_PLAN.get().cloned().flatten()
+}
+
+/// Probe every candidate in preference order and return the first that encodes.
+///
+/// `nodes` is the render-node list to probe (injected so tests do not depend on
+/// the host's `/dev/dri`).
+pub async fn detect(ffmpeg: &str, nodes: &[String]) -> Option<HwPlan> {
+    let Some(listing) = encoder_listing(ffmpeg).await else {
+        log::debug!("Could not list ffmpeg encoders; using {SOFTWARE_ENCODER}");
+        return None;
+    };
+
+    for encoder in HwEncoder::ALL {
+        if !lists_encoder(&listing, encoder.name()) {
+            log::debug!("{} is not compiled into ffmpeg; skipping", encoder.name());
+            continue;
+        }
+        if encoder.needs_render_node() && nodes.is_empty() {
+            log::debug!("{} needs a DRM render node; none present", encoder.name());
+            continue;
+        }
+        let devices: Vec<Option<String>> = if encoder.needs_render_node() {
+            nodes.iter().cloned().map(Some).collect()
+        } else {
+            vec![None]
+        };
+        for device in devices {
+            let plan = HwPlan::new(encoder, device);
+            if probe(ffmpeg, &plan).await {
+                return Some(plan);
+            }
+        }
+    }
+    None
+}
+
+/// ffmpeg's encoder table, or `None` when ffmpeg cannot be run at all.
+async fn encoder_listing(ffmpeg: &str) -> Option<String> {
+    let output = timeout(
+        PROBE_TIMEOUT,
+        Command::new(ffmpeg)
+            .args(["-hide_banner", "-encoders"])
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    String::from_utf8(output.stdout).ok()
+}
+
+/// DRM render nodes, ascending. A machine can expose several (an Intel iGPU and
+/// a discrete card), the usable one is not necessarily the first, and a node
+/// that has no encode entrypoint must not disqualify the backend.
+fn render_nodes() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/dev/dri") else {
+        return Vec::new();
+    };
+    let mut nodes: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("renderD"))
+        .map(|name| format!("/dev/dri/{name}"))
+        .collect();
+    nodes.sort();
+    nodes
+}
+
+/// Run one throwaway encode through the exact argument shape a real job uses.
+async fn probe(ffmpeg: &str, plan: &HwPlan) -> bool {
+    let mut command = Command::new(ffmpeg);
+    command
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(plan.input_args())
+        .args(["-f", "lavfi", "-i", PROBE_INPUT]);
+    if let Some(filter) = plan.upload_filter_args() {
+        command.args(filter);
+    }
+    command
+        .args(plan.video_args())
+        .args(["-frames:v", "3", "-y", "-f", "null", "-"]);
+
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log::debug!("Could not run ffmpeg for the {} probe: {e}", plan.label());
+            return false;
+        }
+    };
+
+    match timeout(PROBE_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) if output.status.success() => true,
+        Ok(Ok(output)) => {
+            log::debug!(
+                "{} failed its encode probe: {}",
+                plan.label(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Ok(Err(e)) => {
+            log::debug!("{} probe could not be waited on: {e}", plan.label());
+            false
+        }
+        Err(_) => {
+            log::debug!("{} probe timed out after {PROBE_TIMEOUT:?}", plan.label());
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video_processor::tests::{make_executable, TestEnvGuard};
+    use std::path::Path;
+    use tempfile::TempDir;
 
     #[test]
     fn every_backend_declares_a_distinct_ffmpeg_encoder_name() {
@@ -383,5 +550,279 @@ mod tests {
             "h264_vaapi (/dev/dri/renderD129)"
         );
         assert_eq!(HwPlan::new(HwEncoder::Nvenc, None).label(), "h264_nvenc");
+    }
+
+    #[cfg(unix)]
+    fn write_fake_ffmpeg(dir: &Path, body: &str) -> String {
+        let path = dir.join("fake-ffmpeg.sh");
+        std::fs::write(&path, format!("#!/usr/bin/env sh\n{body}")).expect("fake ffmpeg written");
+        make_executable(&path);
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    fn args_log(lines: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(lines)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_finds_the_render_node_that_can_encode() {
+        // GIVEN an ffmpeg that lists h264_vaapi but can only encode on the
+        // second render node (the first belongs to a GPU without an encode
+        // entrypoint, which is what an AMD Mars + Intel iGPU host looks like)
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\n\
+                 case \"$*\" in\n\
+                 *-encoders*) printf '%s\\n' ' V....D h264_vaapi           H.264/AVC (VAAPI)'; exit 0 ;;\n\
+                 *renderD128*) exit 1 ;;\n\
+                 esac\n\
+                 exit 0\n",
+                log.display()
+            ),
+        );
+        let nodes = [
+            "/dev/dri/renderD128".to_string(),
+            "/dev/dri/renderD129".to_string(),
+        ];
+        let _guard = TestEnvGuard::set("FFMPEG_PATH", &ffmpeg);
+
+        // WHEN the candidates are probed
+        let plan = detect(&ffmpeg, &nodes).await;
+
+        // THEN the node that can encode is the one that is used
+        let plan = plan.expect("a usable encoder must be found");
+        assert_eq!(plan.encoder(), HwEncoder::Vaapi);
+        assert_eq!(
+            plan.device(),
+            Some("/dev/dri/renderD129"),
+            "log: {:?}",
+            args_log(&log)
+        );
+        // AND both nodes were actually tried, not just the first
+        assert_eq!(
+            args_log(&log)
+                .iter()
+                .filter(|line| line.contains("renderD128"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            args_log(&log)
+                .iter()
+                .filter(|line| line.contains("renderD129"))
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_rejects_a_listed_encoder_that_cannot_encode() {
+        // GIVEN an ffmpeg that lists h264_nvenc but has no working device
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            "case \"$*\" in\n\
+             *-encoders*) printf '%s\\n' ' V....D h264_nvenc           H.264/AVC (NVENC)'; exit 0 ;;\n\
+             esac\n\
+             exit 1\n",
+        );
+
+        // WHEN the candidates are probed
+        let plan = detect(&ffmpeg, &[]).await;
+
+        // THEN a listed encoder that cannot encode is not trusted
+        assert_eq!(plan, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_skips_encoders_that_are_not_listed() {
+        // GIVEN an ffmpeg that only lists h264_vaapi
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\n\
+                 printf '%s\\n' ' V....D h264_vaapi           H.264/AVC (VAAPI)'\n\
+                 exit 0\n",
+                log.display()
+            ),
+        );
+        let nodes = ["/dev/dri/renderD129".to_string()];
+
+        // WHEN the candidates are probed
+        let plan = detect(&ffmpeg, &nodes).await;
+
+        // THEN no other backend was ever launched
+        assert_eq!(plan.map(|p| p.encoder()), Some(HwEncoder::Vaapi));
+        for other in ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox"] {
+            assert_eq!(
+                args_log(&log)
+                    .iter()
+                    .filter(|line| line.contains(other))
+                    .count(),
+                0,
+                "{other} must not be probed when ffmpeg does not list it"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_times_out_on_a_hanging_encoder() {
+        // GIVEN an ffmpeg whose probe never returns
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            "case \"$*\" in\n\
+             *-encoders*) printf '%s\\n' ' V....D h264_vaapi           H.264/AVC (VAAPI)'; exit 0 ;;\n\
+             esac\n\
+             sleep 30\n",
+        );
+        let nodes = ["/dev/dri/renderD129".to_string()];
+
+        // WHEN the candidates are probed
+        let started = std::time::Instant::now();
+        let plan = detect(&ffmpeg, &nodes).await;
+
+        // THEN the probe is abandoned instead of hanging the caller
+        assert_eq!(plan, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a hanging probe must be cut off, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preference_order_picks_the_first_usable_encoder() {
+        // GIVEN an ffmpeg that lists NVENC and VAAPI, where only VAAPI encodes
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            "case \"$*\" in\n\
+             *-encoders*) printf '%s\\n' ' V....D h264_nvenc           H.264/AVC (NVENC)' ' V....D h264_vaapi           H.264/AVC (VAAPI)'; exit 0 ;;\n\
+             *h264_nvenc*) exit 1 ;;\n\
+             esac\n\
+             exit 0\n",
+        );
+        let nodes = ["/dev/dri/renderD129".to_string()];
+
+        // WHEN the candidates are probed
+        let plan = detect(&ffmpeg, &nodes).await;
+
+        // THEN the first *usable* backend is chosen, not the first listed one
+        assert_eq!(plan.map(|p| p.encoder()), Some(HwEncoder::Vaapi));
+    }
+
+    #[tokio::test]
+    async fn without_a_render_node_the_node_backends_are_never_probed() {
+        // GIVEN an ffmpeg that lists VAAPI and a machine with no render nodes
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\n\
+                 printf '%s\\n' ' V....D h264_vaapi           H.264/AVC (VAAPI)'\n\
+                 exit 0\n",
+                log.display()
+            ),
+        );
+
+        // WHEN the candidates are probed
+        let plan = detect(&ffmpeg, &[]).await;
+
+        // THEN the backend is skipped without launching a doomed probe
+        assert_eq!(plan, None);
+        assert!(
+            !args_log(&log)
+                .iter()
+                .any(|line| line.contains("h264_vaapi")),
+            "VAAPI must not be probed without a render node: {:?}",
+            args_log(&log)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_runs_the_same_argument_shape_a_job_uses() {
+        // GIVEN a working VAAPI host
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\n\
+                 printf '%s\\n' ' V....D h264_vaapi           H.264/AVC (VAAPI)'\n\
+                 exit 0\n",
+                log.display()
+            ),
+        );
+        let nodes = ["/dev/dri/renderD129".to_string()];
+
+        // WHEN the probe runs
+        assert!(detect(&ffmpeg, &nodes).await.is_some());
+
+        // THEN it carried the device, the upload filter and the encoder flags,
+        // i.e. the probe proves the shape the job will actually run
+        let probe_line = args_log(&log)
+            .into_iter()
+            .find(|line| line.contains("h264_vaapi"))
+            .expect("a probe must have run");
+        for expected in [
+            "-vaapi_device /dev/dri/renderD129",
+            "-vf format=nv12,hwupload",
+            "-c:v h264_vaapi",
+            "-f lavfi",
+            "color=c=black",
+            "-f null",
+        ] {
+            assert!(
+                probe_line.contains(expected),
+                "missing {expected}: {probe_line}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn initialisation_probes_at_most_once() {
+        // GIVEN an ffmpeg that lists nothing usable, so the verdict is None and
+        // the process-wide cache cannot leak a hardware plan into other tests
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\n\
+                 printf '%s\\n' ' V....D libx264              H.264 (libx264)'\n\
+                 exit 0\n",
+                log.display()
+            ),
+        );
+        let _guard = TestEnvGuard::set("FFMPEG_PATH", &ffmpeg);
+
+        // WHEN the process initialises twice
+        let first = init().await;
+        let second = init().await;
+
+        // THEN the verdict is stable and ffmpeg ran exactly once
+        assert_eq!(first, None);
+        assert_eq!(second, None);
+        assert_eq!(args_log(&log).len(), 1, "init must probe at most once");
+        assert_eq!(active(), None);
     }
 }

@@ -104,11 +104,20 @@ mod tests {
     }
 
     #[test]
-    fn quality_knob_keeps_the_software_crf_value_on_every_backend() {
-        // GIVEN every backend
-        // THEN each one passes the software path's CRF value (23) as its own
-        // quality target, so "parity by default" is not a per-backend accident
-        for encoder in HwEncoder::ALL {
+    fn quality_knob_keeps_the_software_crf_value_on_every_qp_scale_backend() {
+        // GIVEN the backends whose quality knob is a quantiser parameter on the
+        // same 0-51 scale as libx264's CRF
+        // THEN each one passes the software path's value (23) as its own target,
+        // so "parity by default" is not a per-backend accident
+        //
+        // VideoToolbox is excluded on purpose: its constant-quality scale is
+        // 1-100, so the number cannot be shared — its own test pins the scale.
+        for encoder in [
+            HwEncoder::Nvenc,
+            HwEncoder::Vaapi,
+            HwEncoder::Qsv,
+            HwEncoder::Amf,
+        ] {
             let plan = HwPlan::new(encoder, None);
             let args = plan.video_args();
             assert!(

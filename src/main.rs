@@ -72,6 +72,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("{}/cache/transcoded", config.data_path),
         );
     }
+    // Crash-debris sweep BEFORE services start: a SIGKILLed ffmpeg leaves
+    // `{hash}_*.mp4.tmp` / `{stem}.{pid}.{seq}.tmp` / `*.moovfix.*` files that
+    // the lazy per-request cleanup only removes on next access of the same hash
+    // (unique remux/moovfix names: never). Runs before the scheduler's startup
+    // rescan so debris is never indexed.
+    let cache_dir = PathBuf::from(
+        std::env::var("TRANSCODE_CACHE_DIR")
+            .unwrap_or_else(|_| format!("{}/cache/transcoded", config.data_path)),
+    );
+    let sweep_photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
+    video_processor::sweep_transcode_debris(&cache_dir, &sweep_photo_paths);
 
     // Transcode timeout (video_processor reads the env directly); default it
     // from config so a process-wide value is always visible to the status

@@ -794,6 +794,62 @@ fn remux_temp_path(output_path: &Path) -> PathBuf {
         .unwrap_or("remux");
     parent.join(format!("{stem}.{}.{}.tmp", std::process::id(), seq))
 }
+
+/// Removes crash-debris temp files left by a killed ffmpeg run. Returns the
+/// number of files removed.
+///
+/// Two temp shapes exist, and NEITHER is reachable by the lazy per-request
+/// cleanup after a restart: the deterministic whole-file temp
+/// (`{hash}_{size}_{mtime}.mp4.tmp`, only cleaned when the SAME hash is
+/// requested again) and the unique remux/moovfix temps
+/// (`{stem}.{pid}.{seq}.tmp`, `{stem}.moovfix.{pid}.{ext}` — cleaned never).
+/// Finished `*.mp4` artifacts are never touched: they only ever appear
+/// through an atomic temp + rename, so existence means complete.
+pub fn sweep_transcode_debris(cache_dir: &Path, photo_paths: &[PathBuf]) -> usize {
+    let mut removed = 0;
+    // The transcode tree only ever holds machine-generated cache files, so
+    // any `*.tmp` there is debris. `*.moovfix.*` can also sit here in theory;
+    // match it too for symmetry with the source dirs.
+    if cache_dir.exists() {
+        removed += sweep_tree(cache_dir, &|n| {
+            n.ends_with(".tmp") || n.contains(".moovfix.")
+        });
+    }
+    // Source dirs hold user files: only the unambiguous moovfix pattern is
+    // debris there, never a bare `*.tmp`.
+    for dir in photo_paths {
+        if dir.exists() {
+            removed += sweep_tree(dir, &|n| n.contains(".moovfix."));
+        }
+    }
+    if removed > 0 {
+        log::info!("Transcode sweep: removed {removed} leftover temp file(s)");
+    }
+    removed
+}
+
+fn sweep_tree(root: &Path, is_debris: &dyn Fn(&str) -> bool) -> usize {
+    let mut removed = 0;
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            removed += sweep_tree(&path, is_debris);
+            continue;
+        }
+        if entry.file_name().to_str().is_some_and(is_debris) {
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            } else {
+                log::warn!("Transcode sweep: could not remove {}", path.display());
+            }
+        }
+    }
+    removed
+}
+
 /// What a whole-file conversion does to the video track.
 ///
 /// The whole-file cache holds one artifact per source version, and the client
@@ -2592,5 +2648,48 @@ pub(crate) mod tests {
             map.contains_key(&format!("in-flight-{}", TRANSCODE_STATUS_STORE_CAP + 19)),
             "in-progress entries must survive eviction"
         );
+    }
+    #[test]
+    fn sweep_transcode_debris_removes_temps_and_keeps_finished_artifacts() {
+        // GIVEN a cache tree with crash leftovers, finished artifacts, and a photo dir with moovfix debris
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        for ns in ["transcoded", "copied", "remux"] {
+            std::fs::create_dir_all(root.join(ns)).unwrap();
+        }
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let other = "1111111111111111111111111111111111111111111111111111111111111111";
+        let finished = root.join("transcoded").join(format!("{hash}_100_200.mp4"));
+        std::fs::write(&finished, b"done").unwrap();
+        // deterministic whole-file temp from a killed transcode
+        let whole_tmp = root.join("copied").join(format!("{hash}_100_200.mp4.tmp"));
+        std::fs::write(&whole_tmp, b"partial").unwrap();
+        // unique remux temp from a killed remux
+        let remux_tmp = root
+            .join("remux")
+            .join(format!("{hash}_100_200.12345.0.tmp"));
+        std::fs::write(&remux_tmp, b"partial").unwrap();
+        // another hash's finished file must survive
+        let other_finished = root.join("transcoded").join(format!("{other}_100_200.mp4"));
+        std::fs::write(&other_finished, b"done").unwrap();
+        // moovfix debris next to a source file
+        let photos = root.join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        let moovfix = photos.join("clip.moovfix.12345.mp4");
+        std::fs::write(&moovfix, b"partial").unwrap();
+        let real = photos.join("clip.mp4");
+        std::fs::write(&real, b"video").unwrap();
+
+        // WHEN the sweep runs
+        let removed = sweep_transcode_debris(root, std::slice::from_ref(&photos));
+
+        // THEN exactly the three debris files are gone, everything else survives
+        assert_eq!(removed, 3);
+        assert!(!whole_tmp.exists());
+        assert!(!remux_tmp.exists());
+        assert!(!moovfix.exists());
+        assert!(finished.exists());
+        assert!(other_finished.exists());
+        assert!(real.exists());
     }
 }

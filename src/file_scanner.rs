@@ -159,6 +159,15 @@ impl FileScanner {
     }
 
     fn is_supported_file(path: &Path) -> bool {
+        // Crash debris from fix_moov_atom (`{stem}.moovfix.{pid}.{ext}`) must never
+        // be indexed as a photo, even if the startup sweep missed it.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".moovfix."))
+        {
+            return false;
+        }
         let supported_extensions = [
             // Standard image formats
             "jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", // Video formats
@@ -270,5 +279,25 @@ mod tests {
         }
         assert_eq!(result.0.len(), 1);
         assert!(!result.1);
+    }
+
+    #[test]
+    fn scan_skips_moovfix_crash_debris() {
+        // GIVEN a photo dir containing a real video plus moovfix crash debris
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_test_file(root, "clip.mp4");
+        write_test_file(root, "clip.moovfix.12345.mp4");
+
+        // WHEN the scan runs
+        let scanner = FileScanner::new(vec![root.to_path_buf()]);
+        let (photos, _) = scanner.scan();
+
+        // THEN the debris is never collected as a photo
+        let names: Vec<_> = photos
+            .iter()
+            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["clip.mp4"]);
     }
 }

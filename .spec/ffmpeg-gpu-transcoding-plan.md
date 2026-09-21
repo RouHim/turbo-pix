@@ -33,6 +33,7 @@ Ordered by how likely each is to bite a real user; the test that pins it is name
 3. **Progress going backwards when the software retry restarts the encode from frame zero** — the poller would show the bar jumping back to a low percent. Pinned by `progress_never_goes_backwards_across_a_fallback` (Task 3).
 4. **The first bytes of a hardware-planned stream being lost or duplicated by the gate** — the client would fail to build its SourceBuffer (`VP9`/`ftyp`/`moov` box missing from the front of the stream). Pinned by `first_bytes_are_preserved_for_the_body` (Task 4).
 5. **A probed-and-passing encoder that a *later* job cannot open, on the streaming path, in the middle of a response** — after bytes have been sent the run cannot be replaced, so the gate must trigger only before the first byte and must never swallow a genuine spawn error. Pinned by `planless_stream_returns_the_childs_bytes_verbatim` and `spawn_error_still_maps_to_start_error` (Task 4).
+6. **A hint that outlives the playback it describes** (viewer advances to the next video while open, viewer closes, or the run fell back to software after the response headers were sent) — the user would read a GPU claim about a video that is not running on the GPU, or no claim at all. Pinned by `a_respawned_stream_run_reports_the_software_encoder` (Task 4), the per-playback resets with the `onEncoder` staleness guard (Task 5), and the E2E "cleared after switching to a direct-play video" assertion (Task 5 Step 1).
 
 ## File Structure
 
@@ -961,7 +962,7 @@ git commit -m "feat(video): probe hardware encoders once at startup and cache th
 **Interfaces:**
 - Consumes: `video_encoder::{active, HwPlan, SOFTWARE_ENCODER}`, existing `transcode_timeout_secs`, `get_ffmpeg_path`, `acquire_transcode_permit`, `ProgressParser`.
 - Produces:
-  - `pub struct ConversionOutcome { pub encoder: String, pub fell_back: bool }`
+  - `pub struct ConversionOutcome { pub encoder: Option<String>, pub fell_back: bool }` — `encoder` is `None` when no video encoder was involved (a `VideoCopy`), which is what keeps the player hint hidden for copies
   - `pub async fn convert_video_with_progress(…, on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>) -> CacheResult<ConversionOutcome>` (return type changes)
   - `pub fn build_conversion_args(input, output, conversion, codecs, with_progress, plan: Option<&HwPlan>) -> Vec<String>`
   - `async fn convert_with_fallback(…, plan: Option<HwPlan>) -> CacheResult<ConversionOutcome>` (private; the tests' entry point)
@@ -1088,7 +1089,7 @@ Add to `src/video_processor.rs`'s `mod tests` (add `use crate::video_encoder::Hw
         // THEN the artifact exists, the outcome names the software encoder, and
         // both attempts were made against the same output
         assert!(output.exists(), "the fallback artifact must exist");
-        assert_eq!(outcome.encoder, "libx264");
+        assert_eq!(outcome.encoder.as_deref(), Some("libx264"));
         assert!(outcome.fell_back);
         let lines = std::fs::read_to_string(&log).unwrap();
         assert!(lines.lines().any(|line| line.contains("h264_vaapi")), "{lines}");
@@ -1127,7 +1128,42 @@ Add to `src/video_processor.rs`'s `mod tests` (add `use crate::video_encoder::Hw
         .expect("the hardware conversion must succeed");
 
         // THEN the outcome names it and reports no fallback
-        assert_eq!(outcome.encoder, "h264_vaapi");
+        assert_eq!(outcome.encoder.as_deref(), Some("h264_vaapi"));
+        assert!(!outcome.fell_back);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_video_copy_reports_no_encoder() {
+        // GIVEN a conversion that copies the video track (the `copied/`
+        // namespace, used for audio-only conversions)
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nfor last; do :; done\ntouch \"$last\"\nexit 0\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs
+        let outcome = convert_with_fallback(
+            Path::new("test-data/test_video_ac3.mp4"),
+            &output,
+            FileConversion::VideoCopy,
+            SourceCodecs { video: Some("h264"), audio: Some("ac3") },
+            Duration::from_secs(30),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            None,
+        )
+        .await
+        .expect("the copy must succeed");
+
+        // THEN there is no encoder to report: nothing encoded the video, so the
+        // player hint stays hidden instead of claiming a CPU conversion
+        assert_eq!(outcome.encoder, None);
         assert!(!outcome.fell_back);
     }
 
@@ -1271,8 +1307,11 @@ and add `encoder: None` to the two other `TranscodeStatus` literals in this file
 /// What a finished conversion actually did, so the caller can report it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionOutcome {
-    /// The ffmpeg encoder that produced the artifact.
-    pub encoder: String,
+    /// The ffmpeg encoder that produced the artifact, or `None` when the
+    /// conversion did not encode video at all (a `VideoCopy`). `None` is a
+    /// meaningful answer: the player hint stays hidden for a copy, because no
+    /// GPU/CPU claim applies to a track that was passed through.
+    pub encoder: Option<String>,
     /// True when a hardware attempt failed and the software encoder finished.
     pub fell_back: bool,
 }
@@ -1528,6 +1567,14 @@ async fn convert_with_fallback(
     plan: Option<HwPlan>,
 ) -> CacheResult<ConversionOutcome> {
     let progress = ProgressHighWater::default();
+    // A copy passes the video track through, so there is no encoder to report:
+    // `None` is what keeps the player hint hidden for it.
+    let encodes_video = conversion != FileConversion::VideoCopy;
+    let software_outcome = |fell_back: bool| ConversionOutcome {
+        encoder: encodes_video.then(|| SOFTWARE_ENCODER.to_string()),
+        fell_back,
+    };
+
     let Some(plan) = plan else {
         return match convert_attempt(
             input_path,
@@ -1541,10 +1588,7 @@ async fn convert_with_fallback(
         )
         .await
         {
-            Attempt::Done => Ok(ConversionOutcome {
-                encoder: SOFTWARE_ENCODER.to_string(),
-                fell_back: false,
-            }),
+            Attempt::Done => Ok(software_outcome(false)),
             Attempt::Failed(message) | Attempt::TimedOut(message) => {
                 Err(CacheError::VideoProcessingError(message))
             }
@@ -1565,7 +1609,7 @@ async fn convert_with_fallback(
 
     match first {
         Attempt::Done => Ok(ConversionOutcome {
-            encoder: plan.encoder().name().to_string(),
+            encoder: encodes_video.then(|| plan.encoder().name().to_string()),
             fell_back: false,
         }),
         Attempt::TimedOut(message) => Err(CacheError::VideoProcessingError(message)),
@@ -1588,10 +1632,7 @@ async fn convert_with_fallback(
             )
             .await
             {
-                Attempt::Done => Ok(ConversionOutcome {
-                    encoder: SOFTWARE_ENCODER.to_string(),
-                    fell_back: true,
-                }),
+                Attempt::Done => Ok(software_outcome(true)),
                 Attempt::Failed(message) | Attempt::TimedOut(message) => {
                     Err(CacheError::VideoProcessingError(message))
                 }
@@ -1647,7 +1688,7 @@ pub fn build_conversion_args(
         }
 ```
 
-In `src/handlers_video.rs`, the `Ok(_)` arm of the spawn becomes `Ok(outcome)` and the Completed status carries the encoder:
+In `src/handlers_video.rs`, the `Ok(_)` arm of the spawn becomes `Ok(outcome)` and the Completed status carries the encoder (already an `Option`, so it maps straight through — `None` for a video copy, which is what keeps the player hint hidden for one):
 
 ```rust
                     TranscodeStatus {
@@ -1656,7 +1697,7 @@ In `src/handlers_video.rs`, the `Ok(_)` arm of the spawn becomes `Ok(outcome)` a
                         started_at: Some(started_at),
                         error: None,
                         percent: Some(100),
-                        encoder: Some(outcome.encoder.clone()),
+                        encoder: outcome.encoder.clone(),
                     },
 ```
 
@@ -1665,7 +1706,7 @@ and the `InProgress` callback plus the `Err(e)` arm get `encoder: None`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --lib video_processor`
-Expected: all pass, including the 8 new tests and the updated existing ones. The fake-ffmpeg tests need no real ffmpeg; the `#[cfg(unix)]` ones skip nothing on Linux.
+Expected: all pass, including the 9 new tests and the updated existing ones. The fake-ffmpeg tests need no real ffmpeg; the `#[cfg(unix)]` ones skip nothing on Linux.
 
 - [ ] **Step 5: Run the whole library suite and the handler tests**
 
@@ -1691,12 +1732,14 @@ git commit -m "feat(video): run whole-file conversions on the probed encoder wit
 - Test: `src/video_stream.rs` (`mod tests`)
 
 **Interfaces:**
-- Consumes: `video_encoder::{active, HwPlan}`.
+- Consumes: `video_encoder::{active, HwPlan, SOFTWARE_ENCODER}`.
 - Produces:
   - `pub fn build_args(mode, input, start_secs, video_codec, plan: Option<&HwPlan>) -> Vec<String>`
   - `pub async fn start_stream(mode, input, start_secs, video_codec) -> Result<StreamHandle, StreamStartError>` (unchanged signature; resolves the plan itself for `StreamMode::Transcode`)
   - `async fn start_stream_with_plan(mode, input, start_secs, video_codec, plan: Option<HwPlan>) -> Result<StreamHandle, StreamStartError>` (the test seam)
   - `const FIRST_BYTES_TIMEOUT: Duration`
+  - `StreamHandle` (existing struct, ~`src/video_stream.rs:296`) gains `pub encoder: Option<String>` — the encoder that produced *these* bytes: the plan's encoder for a hardware run, `libx264` for a plan-less transcode run **and for one whose hardware attempt was respawned in software**, and `None` for the copy modes, which never encode video.
+  - `handlers_video::stream_video` sends `x-turbopix-encoder: <name>` on every response whose handle reports an encoder, beside the existing `x-turbopix-mode` / `x-turbopix-mime` headers. Absent header = "no video encoding happened", which is what the client's hint must treat as "show nothing".
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1804,6 +1847,62 @@ Add to `src/video_stream.rs`'s `mod tests` (add `use crate::video_encoder::{HwEn
         assert_eq!(lines.len(), 2, "expected a hardware attempt then a respawn: {lines:?}");
         assert!(lines[0].contains("h264_vaapi"), "{lines:?}");
         assert!(!lines[1].contains("h264_vaapi"), "{lines:?}");
+        // AND the run reports the encoder that actually produced these bytes
+        assert_eq!(handle.encoder.as_deref(), Some("libx264"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_hardware_stream_run_reports_the_hardware_encoder() {
+        // GIVEN an ffmpeg that streams fine on any encoder
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(&ffmpeg, "#!/usr/bin/env sh\nprintf 'ftypmoov'\nexit 0\n").unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN a transcode run starts with that plan
+        let handle = start_stream_with_plan(
+            StreamMode::Transcode,
+            Path::new("test-data/test_video_hevc.mp4"),
+            0.0,
+            "hevc",
+            Some(plan),
+        )
+        .await
+        .expect("stream must start");
+
+        // THEN the run names the hardware encoder for the bytes it will deliver
+        assert_eq!(handle.encoder.as_deref(), Some("h264_vaapi"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_modes_report_no_encoder() {
+        // GIVEN a plan the copy modes must not use
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(&ffmpeg, "#!/usr/bin/env sh\nprintf 'ftypmoov'\nexit 0\n").unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let plan = HwPlan::new(HwEncoder::Nvenc, None);
+
+        // WHEN each copy mode starts
+        // THEN none of them claims an encoder: no video was encoded, so the
+        // player shows no hint rather than a CPU badge
+        for mode in [StreamMode::Remux, StreamMode::Audio] {
+            let handle = start_stream_with_plan(
+                mode,
+                Path::new("test-data/test_video_hevc.mp4"),
+                0.0,
+                "hevc",
+                Some(plan.clone()),
+            )
+            .await
+            .expect("copy stream must start");
+            assert_eq!(handle.encoder, None, "{mode:?} must not report an encoder");
+        }
     }
 
     #[cfg(unix)]
@@ -2083,6 +2182,9 @@ pub async fn start_stream_with_plan(
         .ok_or_else(|| StreamStartError::Spawn("ffmpeg stderr pipe unavailable".to_string()))?;
 
     let mut prefix = Vec::new();
+    // Whether the run now holding the pipes is still running the plan: the
+    // respawn below drops it, and the reported encoder has to follow the bytes.
+    let mut used_plan = plan.is_some();
     if plan.is_some() {
         // A hardware encoder that passed its probe can still refuse the real
         // source. That shows up as "died before the init segment", and it has
@@ -2097,6 +2199,7 @@ pub async fn start_stream_with_plan(
                     input.display()
                 );
                 drop(child);
+                used_plan = false;
                 child = spawn_stream_child(&ffmpeg, mode, input, start_secs, video_codec, None)?;
                 stdout = child.stdout.take().ok_or_else(|| {
                     StreamStartError::Spawn("ffmpeg stdout pipe unavailable".to_string())
@@ -2107,6 +2210,16 @@ pub async fn start_stream_with_plan(
             }
         }
     }
+
+    // The encoder that produced the bytes this handle will deliver. The copy
+    // modes report nothing: they never encode video, and "no claim" has to stay
+    // distinguishable from "encoded on the CPU".
+    let encoder = (mode == StreamMode::Transcode).then(|| {
+        plan.as_ref()
+            .filter(|_| used_plan)
+            .map_or(SOFTWARE_ENCODER, |plan| plan.encoder().name())
+            .to_string()
+    });
 
     let progress = ProgressStamp::new();
     Ok(StreamHandle {
@@ -2121,6 +2234,7 @@ pub async fn start_stream_with_plan(
         child,
         permit,
         progress,
+        encoder,
     })
 }
 
@@ -2182,6 +2296,46 @@ async fn take_first_bytes(child: &mut Child, stdout: &mut ChildStdout) -> Result
 }
 ```
 
+6. Emit the per-run encoder header in `src/handlers_video.rs::stream_video`. Read the encoder off the handle before its remaining fields are destructured (they move into the watchdog task and the body), then wrap the response beside the existing headers:
+
+```rust
+    let encoder = handle.encoder.clone();
+
+    let body = tokio_util::io::ReaderStream::new(stdout);
+    let response = warp::reply::stream(body);
+    let response = warp::reply::with_status(response, StatusCode::OK);
+    let response = warp::reply::with_header(response, "content-type", "video/mp4");
+    let response = warp::reply::with_header(response, "cache-control", "no-store");
+    let response = warp::reply::with_header(response, "x-turbopix-mode", mode.as_str());
+    let response = warp::reply::with_header(
+        response,
+        "x-turbopix-mime",
+        output_mime(mode, &caps.codec, caps.audio_codec.as_deref()),
+    );
+    // Which encoder produced this run's bytes. The copy modes send no header at
+    // all — no video encoding happened — which the player renders as "no hint",
+    // never as a CPU conversion.
+    let response: Box<dyn Reply> = match encoder {
+        Some(encoder) => Box::new(warp::reply::with_header(
+            response,
+            "x-turbopix-encoder",
+            encoder,
+        )),
+        None => Box::new(response),
+    };
+    let response: Box<dyn Reply> = match duration {
+        Some(secs) => Box::new(warp::reply::with_header(
+            response,
+            "x-turbopix-duration",
+            format!("{secs:.3}"),
+        )),
+        None => response,
+    };
+    Ok(response)
+```
+
+(`Box<dyn Reply>` is itself a `Reply` — `impl<T: Reply + ?Sized> Reply for Box<T>` — so the duration header can wrap the boxed response. This replaces the existing tail of `stream_video`.)
+
 Two invariants to preserve while editing (call them out in a code comment):
 
 - **The permit is acquired exactly once, before either spawn, and the respawn never re-acquires it.** `spawn_stream_child` deliberately does not touch the semaphore: replacing the process must not consume a second slot, or a hardware failure would shrink the pool until restarts. The pool bound stays the existing E2E `stream_endpoint_returns_503` coverage (that spec saturates the pool and asserts the 503), so no new test is added for it — a permit-count assertion in a unit test would race every other test in the binary.
@@ -2190,7 +2344,17 @@ Two invariants to preserve while editing (call them out in a code comment):
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --lib video_stream`
-Expected: all pass — the 3 argument tests, the 4 fake-ffmpeg/gate tests, and every pre-existing stream test (they call `start_stream`, whose plan resolves to `None` in the test binary).
+Expected: all pass — the 3 argument tests, the 6 fake-ffmpeg/gate tests, and every pre-existing stream test (they call `start_stream`, whose plan resolves to `None` in the test binary).
+
+Then extend the two existing handler tests in `src/handlers_video.rs` that already exercise the stream endpoint (`stream_request_cannot_downgrade`, which asserts `x-turbopix-mode: transcode`, and `stream_endpoint_serves_fragmented_bytes`, which asserts `x-turbopix-mode: remux`):
+
+- the transcode run must carry `x-turbopix-encoder` whose value is one of `libx264` / the five hardware names (the test binary never initialises a plan, so it reads `libx264`; the assertion lists the allowed set rather than pinning the host's verdict),
+- the remux run must carry **no** `x-turbopix-encoder` header at all.
+
+Run: `cargo test --lib handlers_video`
+Expected: all pass.
+
+Also assert the same two facts on the response-level `x-turbopix-encoder` value in the request-level helper they already use (`resp.headers()["x-turbopix-encoder"]` — a missing header must make the lookup fail, so write the remux assertion as `assert!(response.headers().get("x-turbopix-encoder").is_none())`).
 
 - [ ] **Step 5: Run the transcoding E2E spec against the real backend**
 
@@ -2213,7 +2377,322 @@ git commit -m "feat(video): stream the transcode rung on the probed encoder with
 
 ---
 
-## Task 5: E2E coverage for the reported encoder and full-suite verification
+## Task 5: Subtle encoder hint in the player
+
+**Files:**
+- Modify: `src/handlers_video.rs` (the `?decision` payload carries `encoder` for a cached whole-file artifact)
+- Modify: `frontend/src/lib/video/msePlayer.js` (`onEncoder` reads `x-turbopix-encoder`)
+- Create: `frontend/src/lib/video/encoderHint.js`
+- Modify: `frontend/src/components/PhotoViewer.svelte` (state, chip, reset points, scoped styles)
+- Modify: `frontend/src/components/Icon.svelte` (register `zap`)
+- Modify: `frontend/src/i18n/en.json`, `frontend/src/i18n/de.json`
+- Test: `tests/encoder-hint.test.js` (new), `tests/mse-player.test.js` (extend), `tests/e2e/specs/transcoding.e2e.spec.js` (extend)
+
+**Interfaces:**
+- Consumes: `x-turbopix-encoder` on `/api/photos/{hash}/video/stream` responses (Task 4), `encoder` on the transcode status payload (Task 3), `encoder` in the `?decision` JSON (this task).
+- Produces:
+  - `frontend/src/lib/video/encoderHint.js`: `export const HARDWARE_ENCODERS: string[]`, `export const isHardwareEncoder = (encoder) => boolean`
+  - `createStreamPlayer(videoEl, { …, onEncoder })` — called once per run with the header value or `null`
+  - i18n keys `video.encoder.gpu` / `video.encoder.cpu`, both taking an `{encoder}` value
+  - DOM contract: `[data-testid="viewer-encoder-hint"]` with `role="img"` and the label in `aria-label`; absent when nothing is being video-encoded
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/encoder-hint.test.js`:
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  HARDWARE_ENCODERS,
+  isHardwareEncoder,
+} from '../frontend/src/lib/video/encoderHint.js';
+
+test('every encoder the server may report as hardware classifies as hardware', () => {
+  for (const encoder of HARDWARE_ENCODERS) {
+    assert.equal(isHardwareEncoder(encoder), true, encoder);
+  }
+});
+
+test('software, empty and unknown values never classify as hardware', () => {
+  for (const value of ['libx264', 'hevc_vaapi', '', '  ', null, undefined, 0]) {
+    assert.equal(isHardwareEncoder(value), false, String(value));
+  }
+});
+```
+
+Extend `tests/mse-player.test.js` with a case that drives `createStreamPlayer` against a response carrying the header (the file already fakes `fetch`, and its `x-turbopix-mime` case at ~line 569 is the pattern to copy; its `createPlayer` helper forwards `onState`/`onError`, so forward `onEncoder` the same way):
+
+```js
+test('reports the run encoder to the caller, and null when the header is absent', async () => {
+  // GIVEN a run that names a hardware encoder
+  const video = fakeVideo();
+  const seen = [];
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-turbopix-encoder': 'h264_vaapi' }),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const hardwarePlayer = createPlayer(video, { onEncoder: (encoder) => seen.push(encoder) });
+  await hardwarePlayer.start(0);
+
+  // AND a second run that sends no such header (a copy delivery)
+  const copyVideo = fakeVideo();
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const copyPlayer = createPlayer(copyVideo, { onEncoder: (encoder) => seen.push(encoder) });
+  await copyPlayer.start(0);
+
+  // THEN the caller sees the value, then null — never undefined and never ''
+  assert.deepEqual(seen, ['h264_vaapi', null]);
+});
+```
+
+Extend `tests/e2e/specs/transcoding.e2e.spec.js`:
+
+```js
+  test('should hint which encoder serves a converting video, and none for direct play', async ({ page }) => {
+    test.setTimeout(120_000);
+    const hint = page.locator('[data-testid="viewer-encoder-hint"]');
+
+    // GIVEN a video the client cannot play (the server converts it)
+    const hevcPhoto = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    await TestHelpers.clearCachedConversions(hevcPhoto.hash_sha256);
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator(TestHelpers.selectors.photoCard(hevcPhoto.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    // THEN exactly one hint is visible, and its accessible label names the
+    // encoder that is serving the playback
+    await expect(hint).toHaveCount(1);
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveAttribute(
+      'aria-label',
+      /\((?:libx264|h264_nvenc|h264_vaapi|h264_qsv|h264_amf|h264_videotoolbox)\)$/
+    );
+
+    // WHEN the viewer moves to a natively playable video without being closed
+    const h264Photo = await findVideoByFilename(page, 'test_video.mp4');
+    await TestHelpers.openViewer(page, h264Photo.hash_sha256);
+    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
+
+    // THEN the hint is gone: nothing is being video-encoded, and the previous
+    // playback's hint must not carry over
+    await expect(hint).toHaveCount(0);
+  });
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```bash
+npm run test:unit
+npx playwright test tests/e2e/specs/transcoding.e2e.spec.js -g "hint which encoder"
+```
+Expected: the node test fails to import `encoderHint.js`; the Playwright test finds no `[data-testid="viewer-encoder-hint"]` element.
+
+- [ ] **Step 3: Add the classifier and the i18n keys**
+
+Create `frontend/src/lib/video/encoderHint.js`:
+
+```js
+/**
+ * The encoder names the server may report through `x-turbopix-encoder` (and
+ * through the transcode status payload) that mean a GPU produced the bytes.
+ *
+ * These are ffmpeg's own encoder names. Anything outside this list — `libx264`,
+ * an unknown name, an empty header, a missing one — is treated as "not
+ * hardware": the hint may never claim a GPU it cannot name.
+ */
+export const HARDWARE_ENCODERS = [
+  'h264_nvenc',
+  'h264_vaapi',
+  'h264_qsv',
+  'h264_amf',
+  'h264_videotoolbox',
+];
+
+/**
+ * @param {string|null|undefined} encoder
+ * @returns {boolean}
+ */
+export const isHardwareEncoder = (encoder) =>
+  typeof encoder === 'string' && HARDWARE_ENCODERS.includes(encoder);
+```
+
+Add to both bundles (the `video` object, beside the other `video.*` keys — the objects must stay structurally identical):
+
+```json
+"encoder": {
+  "gpu": "Conversion is running on the GPU ({encoder})",
+  "cpu": "Conversion is running on the CPU ({encoder})"
+}
+```
+
+German (`de.json`): `"Die Konvertierung läuft auf der GPU ({encoder})"` / `"Die Konvertierung läuft auf der CPU ({encoder})"`.
+
+Run `npm run test:i18n`. If the integrity test rejects the `{encoder}` placeholder, add `encoder` to that test's placeholder allow-list — do not drop the interpolation and do not re-pin the test around a different wording.
+
+- [ ] **Step 4: Report the run's encoder from the stream player**
+
+In `frontend/src/lib/video/msePlayer.js`, add `onEncoder` to the documented options and the destructured parameters (defaulting to a no-op), then report the header next to where `x-turbopix-mime` is read (~line 297):
+
+```js
+      // Which encoder produced this run's bytes. An absent header means no video
+      // encoding happened (a remux or a copy), which the UI renders as "no
+      // hint" — never as a CPU conversion.
+      const encoderHeader = response.headers.get('x-turbopix-encoder');
+      onEncoder(encoderHeader && encoderHeader.trim() !== '' ? encoderHeader.trim() : null);
+```
+
+- [ ] **Step 5: Show the hint in the viewer**
+
+In `src/handlers_video.rs`, add the encoder to the `?decision` payload for a cached whole-file artifact (the client cannot read a response header off the media element's own request):
+
+```rust
+    // A cached conversion is served as a file, so its encoder cannot ride on a
+    // response header the client is able to read: it comes from the retained
+    // conversion status instead. An evicted entry simply omits the field, and
+    // the hint then stays hidden rather than guessing.
+    let cached_encoder = cached_whole_file
+        .then(|| get_transcode_status(&photo.hash_sha256).and_then(|status| status.encoder))
+        .flatten();
+```
+
+and include `"encoder": cached_encoder` in the `direct` decision object (the `stream` case needs nothing: its per-run header arrives with the stream response).
+
+In `frontend/src/components/Icon.svelte`, register the feather `zap` icon (`cpu` is already registered):
+
+```js
+  import zap from 'feather-icons/dist/icons/zap.svg?raw';
+```
+
+```js
+    zap,
+```
+
+In `frontend/src/components/PhotoViewer.svelte`:
+
+1. Import the classifier and add the state beside `transcodeMessage` (~line 42):
+
+```js
+  import { isHardwareEncoder } from '../lib/video/encoderHint.js';
+```
+
+```js
+  // The encoder serving the current playback, when the server video-encodes it.
+  // `null` means "not video-encoded" (direct play, remux, or a copied video
+  // track), which shows no hint at all.
+  let activeEncoder = $state(null);
+  const encoderIsHardware = $derived(isHardwareEncoder(activeEncoder));
+  const encoderHintLabel = $derived(
+    activeEncoder
+      ? get(t)(encoderIsHardware ? 'video.encoder.gpu' : 'video.encoder.cpu', {
+          values: { encoder: activeEncoder },
+        })
+      : ''
+  );
+```
+
+2. Set it wherever the decision lands, so every playback states its own answer (§FR-012):
+
+- `decision.action === 'direct'` (~line 747): `activeEncoder = decision.encoder ?? null;` — right before `setVideoSource(photo, decision.url, true)`.
+- `decision.action === 'stream'` (~line 751): `activeEncoder = null;` — the upcoming run's header is authoritative.
+- the stream player's options (~line 842):
+
+```js
+      onEncoder: (encoder) => {
+        if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+        activeEncoder = encoder;
+      },
+```
+
+- the transcode-status poll's success path (where the completed artifact is handed to `setVideoSource`): `activeEncoder = status.encoder ?? null;` under the existing staleness guard.
+- `hideTranscodeToast()` (~line 982): `activeEncoder = null;`
+- `close()` (~line 469) and `playOriginalAnyway(photo)` (~line 1101): `activeEncoder = null;` — the original is played as-is, nothing encodes it.
+
+3. Render the chip inside `.viewer-main`, after the loading indicator (~line 1810):
+
+```svelte
+      {#if activeEncoder}
+        <div
+          class="viewer-encoder-hint"
+          class:is-hardware={encoderIsHardware}
+          data-testid="viewer-encoder-hint"
+          role="img"
+          aria-label={encoderHintLabel}
+        >
+          <Icon name={encoderIsHardware ? 'zap' : 'cpu'} width={14} height={14} />
+        </div>
+      {/if}
+```
+
+4. Add the scoped style to that component's `<style>` block (no new tokens, no animation, no layout shift — and `pointer-events: none` so the media box keeps every click):
+
+```css
+  /* Encoder hint: informational, never interactive. Low opacity so it reads as
+     viewer chrome rather than as a badge competing with the notices. */
+  .viewer-encoder-hint {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-3);
+    z-index: var(--z-base);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-full);
+    background: var(--viewer-btn-bg);
+    color: var(--viewer-btn-color);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .viewer-encoder-hint.is-hardware {
+    color: var(--accent-color);
+  }
+```
+
+If `.viewer-main` turns out not to be a positioning context, give it `position: relative` (it already holds the absolutely-positioned `.viewer-loading-indicator`, so it should be).
+
+- [ ] **Step 6: Run the tests, build and lint**
+
+```bash
+npm run test:unit
+npm run test:i18n
+npm run lint
+npm run build
+cargo build --bin turbo-pix
+npx playwright test tests/e2e/specs/transcoding.e2e.spec.js
+```
+
+Expected: the node tests pass (including the new `encoder-hint` and the extended `mse-player` cases), i18n parity holds, lint is clean, `npm run build` succeeds (a style mistake in the Svelte block only surfaces here), and the Playwright spec passes — the hint visible for the converting HEVC fixture and gone after switching to the natively playable one.
+
+Confirm visually too (the style rules are the one part no assertion covers): open the HEVC fixture in the running server and check the 22 px icon sits in the media box's top-left corner, unobtrusive in both light and dark themes.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/handlers_video.rs frontend/src/lib/video/encoderHint.js frontend/src/lib/video/msePlayer.js \
+  frontend/src/components/PhotoViewer.svelte frontend/src/components/Icon.svelte \
+  frontend/src/i18n/en.json frontend/src/i18n/de.json tests/encoder-hint.test.js \
+  tests/mse-player.test.js tests/e2e/specs/transcoding.e2e.spec.js
+git commit -m "feat(viewer): show a subtle hint naming the encoder serving the current video"
+```
+
+---
+
+## Task 6: E2E coverage for the reported encoder and full-suite verification
 
 **Files:**
 - Modify: `tests/e2e/specs/transcoding.e2e.spec.js`
@@ -2294,7 +2773,7 @@ npm run test:unit
 npm run test:e2e
 ```
 
-Expected: all green. `cargo test` count must be the pre-change count plus the 30 new tests (10 + 8 + 8 + 7 minus the ones merged into existing tests) — record the exact numbers in the commit message.
+Expected: all green. `cargo test` must report the pre-change suite plus the new tests: 10 in `video_encoder` (Task 1), 8 in `video_encoder` (Task 2), 9 in `video_processor` (Task 3), 9 in `video_stream` (Task 4), and `npm run test:unit` must report the new `encoder-hint` file plus the extended `mse-player` case. Record the exact counts in the commit message.
 
 - [ ] **Step 4: Commit**
 
@@ -2305,7 +2784,7 @@ git commit -m "test(e2e): assert the reported transcode encoder and keep playbac
 
 ---
 
-## Task 6: Prove the GPU path on real hardware, then record the learnings
+## Task 7: Prove the GPU path on real hardware, then record the learnings
 
 **Files:**
 - Modify: `AGENTS.md` (Learnings entry 7)
@@ -2329,6 +2808,8 @@ curl -s "http://localhost:18473/api/photos/$HASH/video/status" | jq .
 ```
 
 Expected: the startup log names `h264_vaapi (/dev/dri/renderD129)` and the completed status reports `"encoder": "h264_vaapi"`. If the status reports `libx264`, the probe rejected the encoder: `RUST_LOG=debug` shows which candidate failed and why.
+
+Then confirm the player hint end to end in the browser: open the HEVC fixture in the running server and check that the top-left icon renders in the accent colour (`zap`, GPU) with the GPU label, and that opening `test_video.mp4` (direct play) shows no icon at all.
 
 - [ ] **Step 2: Measure the speedup and the quality on the same host**
 
@@ -2380,7 +2861,8 @@ Extend Learnings entry 7 (do not add an entry — the section is capped at 10) w
 - the probe must run the *job's* argument shape (`-vaapi_device` + `-vf format=nv12,hwupload` + `-c:v h264_vaapi -qp 23`) because ffmpeg listing an encoder proves nothing — on this host `h264_qsv`/`h264_amf` are listed but unusable, and `/dev/dri/renderD128` (AMD) is listed but has no H.264 encode entrypoint while `renderD129` (Intel) works;
 - VAAPI ranks above QSV, and a broken candidate can cost seconds (QSV's MFX session failure took 2.06 s) — the probe is bounded by `PROBE_TIMEOUT` (2 s) for that reason;
 - parity is by number, not by bitrate: `-qp 23` / `-cq 23 -b:v 0` / `-global_quality 23` land next to `-crf 23` in SSIM, and hardware output is ~40 % larger at that quality;
-- a hardware failure retries once in software *within the same job* (whole-file) or inside the same request before the first byte (stream), and a timeout is never retried; progress is guarded by a shared high-water mark so the retry cannot drag the client's percentage backwards.
+- a hardware failure retries once in software *within the same job* (whole-file) or inside the same request before the first byte (stream), and a timeout is never retried; progress is guarded by a shared high-water mark so the retry cannot drag the client's percentage backwards;
+- the player hint reads the same fact from three carriers — `x-turbopix-encoder` on a live stream run, `TranscodeStatus.encoder` after a whole-file conversion, and `encoder` in the `?decision` payload for a cached artifact — and *silence* is the fourth answer: a video copy has no encoder at all (`ConversionOutcome.encoder` is an `Option`), which is why the viewer's classifier treats an absent header, an evicted status and a copy identically (hidden), and never as "converted on the CPU".
 
 Verify every other entry in the Learnings section is still accurate before committing (the repo rule requires this).
 
@@ -2406,9 +2888,12 @@ git commit -m "docs(agents): record hardware encoder probing and fallback learni
 | FR-007 delivered media unchanged | Task 1 pix-format/profile rules, Task 4 E2E run |
 | FR-008 existing gating preserved | Task 3 keeps `acquire_transcode_permit` and the timeout; Task 4 keeps the permit across the respawn |
 | FR-009 identical without hardware | `reencode_args_are_unchanged_without_a_plan`, `transcode_args_are_unchanged_without_a_plan`, `planless_stream_returns_the_childs_bytes_verbatim` |
-| FR-010 encoder observable | Task 3 `TranscodeStatus.encoder` + job-level `info!`/`warn!`, Task 5 E2E assertion |
-| SC-001 (GPU host reports hardware) | Task 6 Step 1 |
-| SC-002 (GPU-less host unchanged) | Task 5 full-suite run on the CI host |
-| SC-003 (failure still delivers) | Task 3 fallback tests, Task 6 Step 3 |
-| SC-004 (≤50 % wall-clock) | Task 6 Step 2 |
-| SC-005 (no client-visible regression) | Task 4 Step 5, Task 5 Step 3 |
+| FR-010 encoder observable | Task 3 `TranscodeStatus.encoder` + job-level `info!`/`warn!`, Task 4 `x-turbopix-encoder`, Task 5 `decision.encoder`, Task 6 E2E assertion |
+| FR-011 hint shows GPU vs CPU, hidden when nothing is video-encoded | Task 5 classifier + chip + `copy_modes_report_no_encoder` (Task 4) + Task 5 E2E assertions |
+| FR-012 hint names the real encoder, no new round trip or control, cleared per video, translated label | Task 4 `StreamHandle.encoder` (respawn reports software), Task 5 `onEncoder` staleness guard + per-playback resets + i18n keys, Task 6 i18n gate |
+| SC-001 (GPU host reports hardware) | Task 7 Step 1 |
+| SC-002 (GPU-less host unchanged) | Task 6 full-suite run on the CI host |
+| SC-003 (failure still delivers) | Task 3 fallback tests, Task 7 Step 3 |
+| SC-004 (≤50 % wall-clock) | Task 7 Step 2 |
+| SC-005 (no client-visible regression) | Task 4 Step 5, Task 6 Step 3 |
+| SC-006 (hint visible for a conversion, absent for direct play, cleared on advance) | Task 5 Step 6 Playwright spec, Task 7 Step 1 |

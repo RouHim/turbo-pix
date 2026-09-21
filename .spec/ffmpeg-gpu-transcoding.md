@@ -32,6 +32,15 @@ The probe passed but a real job fails (device busy, driver session limit, driver
 2. Given both attempts fail, When the job settles, Then the existing failure semantics apply unchanged (`Failed`/`Timeout` state, existing `X-Transcode-Warning`, existing retry cooldown).
 3. Given a live stream whose hardware attempt fails, When the failure occurs, Then the internal fallback does not consume a step of the client-visible `remux → audio → transcode` ladder and does not change the mode the client asked for.
 
+### Scenario 4 - Subtle encoder hint in the player (P2)
+While a video is being converted server-side, the player shows a small, unobtrusive icon telling the user whether that conversion is running on the GPU or on the CPU. The hint describes the playback in front of them, so it never appears when nothing is being video-encoded.
+
+**Acceptance**
+1. Given a video the server is converting or streaming with a hardware encoder, When playback starts, Then a small icon with an accessible label naming the GPU encoder is visible in the player.
+2. Given the same video converted by the software encoder, When playback starts, Then the icon is present with the software label instead — "not GPU" is always distinguishable from "no information".
+3. Given a video played directly, remuxed, or served with its video track copied (audio-only conversion), When playback starts, Then no hint is shown, because no video encoding is happening.
+4. Given a hint shown for one video, When the user moves to the next video or closes the viewer, Then the hint does not carry over to a playback it does not describe.
+
 ## Functional Requirements
 - **FR-001**: The server MUST decide hardware-encoder usability from a real (small, cheap) encode attempt, not from ffmpeg's encoder listing alone.
 - **FR-002**: The usability verdict MUST be process-wide and computed once; per-job re-probing is prohibited.
@@ -42,7 +51,9 @@ The probe passed but a real job fails (device busy, driver session limit, driver
 - **FR-007**: Delivered media characteristics MUST be unchanged — H.264 (8-bit, `yuv420p`, Main/High profile) plus AAC audio in the same container, playable by the same client matrix. Hardware output MUST NOT require a newer client decoder than the software output.
 - **FR-008**: All existing gating MUST still apply to hardware jobs: worker-pool permits, per-transcode timeout, the three cache namespaces, `claim_transcode` dedup, and the busy `503` + `Retry-After` behaviour.
 - **FR-009**: When no hardware encoder is usable, behaviour MUST be indistinguishable from the current build: same ffmpeg invocations, same artifacts, same status transitions, same logs (no new warnings).
-- **FR-010**: The encoder actually used and any hardware-to-software fallback MUST be observable: logged per job, and reported through the existing transcode status surface.
+- **FR-010**: The encoder actually used and any hardware-to-software fallback MUST be observable: logged per job, reported through the existing transcode status surface for whole-file conversions, and reported per run on the live-stream response so a client can tell which encoder served the bytes it is playing.
+- **FR-011**: The player MUST show a subtle, icon-only hint stating whether the video being played is currently being video-encoded by the GPU or by the CPU. A playback that is not video-encoded — direct play, remux, or a conversion that copies the video track — MUST show no hint, so "not GPU" is always distinguishable from "no information".
+- **FR-012**: The hint MUST describe the bytes actually being played: a run that fell back to the software encoder MUST read as software. It MUST NOT require a new network round trip or add a new user-facing control, MUST be cleared when the viewer moves to another video or closes, and MUST carry an accessible text label translated in every supported language rather than relying on the glyph alone.
 
 ## Key Entities
 - **Encoder backend**: a candidate hardware encoder (NVENC, QSV, VAAPI, AMF, VideoToolbox) plus the process-wide usability verdict established by the startup probe.
@@ -57,6 +68,9 @@ The probe passed but a real job fails (device busy, driver session limit, driver
 - Container deployment without GPU device passthrough → behaves exactly like Scenario 2.
 - Empty, 0-byte or `.pending-*` sources → unchanged empty-output path; never reaches the encoder.
 - A conversion deleted or rotated mid-job → existing `currentPhoto?.hash_sha256` staleness guards and cache cleanup semantics are unaffected by encoder choice.
+- Cached artifact replayed after its conversion status was evicted from the status store → the hint stays hidden rather than guessing which encoder produced the file.
+- A live run that falls back from hardware to software after the hint was already shown → the hint must follow the run's actual encoder, never the planned one.
+- Hint shown while the viewer auto-advances to the next photo → cleared with the playback it described, never left behind for a video the hint does not describe.
 
 ## Research Notes
 - https://jellyfin.org/docs/general/post-install/transcoding/hardware-acceleration/ — reference landscape for NVENC/QSV/VAAPI/AMF/VideoToolbox selection; confirms each vendor needs its own device/init handling and that availability must be actively probed.
@@ -70,6 +84,8 @@ The probe passed but a real job fails (device busy, driver session limit, driver
 - Both transcoding paths are in scope (confirmed): cached whole-file conversion and the live stream rung.
 - Single-host LAN deployment, no cross-host cache sharing — so the existing cache namespaces stay valid regardless of which encoder produced an artifact.
 - The existing worker-pool size and per-transcode timeout remain the right valves for hardware jobs; they are not re-tuned by this feature.
+- The player hint is informational only: no toggle, no preference, and no operator configuration — consistent with the hands-off decision.
+- "Subtle" means icon-only, low-contrast, no layout shift: it may not become a second notice competing with the existing conversion notice.
 
 ## Success Criteria
 - **SC-001**: On a host with a usable hardware encoder, a completed conversion reports a hardware encoder and its artifact plays back through the existing video E2E flows.
@@ -77,3 +93,4 @@ The probe passed but a real job fails (device busy, driver session limit, driver
 - **SC-003**: A hardware failure injected at job level still yields a completed, playable artifact within the existing per-transcode timeout, with the fallback logged.
 - **SC-004**: On a GPU host, a 1080p HEVC→H.264 conversion completes in at most 50% of the software baseline measured on the same host.
 - **SC-005**: Live streaming on a GPU host passes the existing seek/buffering/ladder E2E coverage unchanged — no client-visible regression.
+- **SC-006**: Opening a video the client cannot play shows exactly one encoder hint (hardware on a GPU host, software on a CPU-only host), opening a natively playable video shows none, and auto-advancing to the next video clears the previous hint.

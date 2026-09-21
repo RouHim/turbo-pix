@@ -65,8 +65,9 @@ use crate::video_capability::{plan, ClientCodecs, Delivery};
 use crate::video_probe::ResolvedCapabilities;
 use crate::video_processor::{
     claim_transcode, convert_video_with_progress, get_copied_path_versioned, get_transcode_status,
-    get_transcoded_path_versioned, remux_to_faststart_mp4, set_transcode_status, FileConversion,
-    SourceCodecs, TranscodeClaim, TranscodeState, TranscodeStatus,
+    get_transcoded_path_versioned, remux_sidecar_path, remux_to_faststart_mp4,
+    set_transcode_status, FileConversion, SourceCodecs, TranscodeClaim, TranscodeState,
+    TranscodeStatus,
 };
 use crate::video_stream::{
     output_mime, start_stream, supervise, StreamHandle, StreamMode, StreamStartError,
@@ -925,22 +926,6 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         return;
     }
     spawn_whole_file_transcode(photo, output, conversion, codecs);
-}
-
-/// Faststart remux sidecar path under `{TRANSCODE_CACHE_DIR}/remux/`, versioned
-/// by the source's content fingerprint (size + mtime millis) exactly like the
-/// transcode cache, so an in-place edit produces a new sidecar instead of
-/// serving a stale moov-at-start copy.
-fn remux_sidecar_path(
-    cache_dir: &str,
-    original_hash: &str,
-    file_size: i64,
-    modified_millis: i64,
-) -> std::path::PathBuf {
-    Path::new(cache_dir).join("remux").join(format!(
-        "{}_{}_{}.mp4",
-        original_hash, file_size, modified_millis
-    ))
 }
 
 /// Parse a single-range `Range` header value (e.g. "bytes=0-1023", "bytes=-500").

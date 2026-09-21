@@ -437,6 +437,9 @@ pub async fn delete_photo(
         if let Err(e) = cache_manager_clone.clear_for_hash(&photo_hash).await {
             log::warn!("Failed to clear cache for {}: {}", photo_hash, e);
         }
+        // Conversions live outside the thumbnail cache: remove them too, or a
+        // deleted photo's transcodes stay on disk forever.
+        crate::video_processor::clear_transcode_cache_for_hash(&photo_hash);
     });
 
     // Delete semantic vector

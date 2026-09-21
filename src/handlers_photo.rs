@@ -756,6 +756,9 @@ pub async fn rotate_photo(
             if let Err(e) = cache_manager.clear_for_hash(&old_hash).await {
                 log::warn!("Failed to clear cache for {}: {}", old_hash, e);
             }
+            // Same staleness rule as thumbnails: the content version changed, so the
+            // old hash's conversions can never be served again.
+            crate::video_processor::clear_transcode_cache_for_hash(&old_hash);
             Ok(warp::reply::json(&updated_photo))
         }
         Err(e) => {

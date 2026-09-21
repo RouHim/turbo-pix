@@ -854,6 +854,13 @@
     if (!videoEl) return;
     destroyStreamPlayer();
     hasUserChosenOriginal = false;
+    // Every run states its own answer, so a starting run claims nothing: the
+    // failed rung's encoder must not survive into the escalated one (a remux
+    // retry would otherwise wear the encoder of the transcode that just died)
+    // and a saturation retry must not resurrect it either. `onEncoder` reports
+    // this run's own `x-turbopix-encoder` header — the value, or `null` for a
+    // run that copies the video track — and re-establishes the hint.
+    activeEncoder = null;
     const mode = modeOverride || decision.mode;
     const separator = decision.url.includes('?') ? '&' : '?';
     // The decision URL carries neither `mode` nor `start`: the player always
@@ -993,7 +1000,9 @@
       return;
     }
     // The error toast owns the notice (and its own escape hatch) from here on.
-    // Nothing is being video-encoded any more, so no encoder may be claimed.
+    // Nothing is being video-encoded any more, so no encoder may be claimed —
+    // the escalation branch above gets the same reset from `playStream`, which
+    // clears it for every run it starts.
     streamWaiting = false;
     activeEncoder = null;
     showTranscodeToast(

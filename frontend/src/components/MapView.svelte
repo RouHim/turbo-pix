@@ -178,14 +178,45 @@
     });
   }
 
+  /**
+   * Moves focus onto the popup's first thumbnail (FR-018).
+   *
+   * Leaflet's `DivOverlay.update()` writes and clears an inline
+   * `visibility: hidden` on the popup container while it lays the popup out.
+   * Under `prefers-reduced-motion` the global `transition-duration: 0.01ms` rule
+   * pairs with the initial `transition-property: all`, so that write becomes a
+   * transition: the container — and then the thumbnails inside it, one nesting
+   * level per frame — still compute `hidden` when `popupopen` fires, and
+   * Chromium refuses focus on a hidden element. Retry on the frames the
+   * transition needs; the cap keeps a popup that never gets a thumbnail from
+   * spinning, and a closed popup ends the retries.
+   */
+  function focusFirstPopupItem(popupNode, popupEl, framesLeft = 8) {
+    popupNode.querySelector('button')?.focus();
+    // Done once focus is inside the popup at all: the thumbnail focus landed, or
+    // the user has already moved on within it.
+    if (popupEl.contains(document.activeElement) || !popupNode.isConnected || framesLeft === 0) {
+      return;
+    }
+    requestAnimationFrame(() => focusFirstPopupItem(popupNode, popupEl, framesLeft - 1));
+  }
+
   function bindLocationMarker(marker, location) {
     const popupNode = document.createElement('div');
     popupNode.className = 'map-popup-host';
-    marker.bindPopup(popupNode, { maxWidth: 320, minWidth: 260, autoPan: true, closeButton: true });
+    marker.bindPopup(popupNode, {
+      maxWidth: 320,
+      minWidth: 260,
+      // FR-018: `autoPan` animates a 250 ms `panBy`, so the preference turns
+      // the pan off — the popup still opens, it just arrives without movement.
+      autoPan: !prefersReducedMotion,
+      closeButton: true,
+    });
 
-    // Leaflet detaches the popup's DOM before it fires `popupclose`, so focus
-    // lands on <body> and the element that had it is no longer connected: that
-    // signature is what "the popup had focus when it closed" looks like.
+    // Where focus was inside the popup when it closed. With the fade animation
+    // Leaflet's removal is deferred, so the popup is still connected — and still
+    // holds focus — when `popupclose` fires; the reduced-motion path has already
+    // detached it and dropped focus to <body>. Both signatures are read below.
     let lastFocused = null;
     popupNode.addEventListener('focusin', (event) => {
       lastFocused = event.target;
@@ -205,19 +236,21 @@
       // markers Tab would walk through every marker first — move focus into the
       // popup so keyboard users land on the thumbnails (FR-018). flushSync makes
       // the freshly mounted markup available right here, so every (re)open lands
-      // on a thumbnail; the frame fallback only covers an empty popup.
+      // on a thumbnail.
       flushSync();
-      const firstThumbnail = popupNode.querySelector('button');
-      if (firstThumbnail) firstThumbnail.focus();
-      else requestAnimationFrame(() => popupNode.querySelector('button')?.focus());
+      focusFirstPopupItem(popupNode, marker.getPopup().getElement());
     });
 
     marker.on('popupclose', () => {
-      // Keyboard dismissal sets the flag; otherwise the browser's own focus
-      // teardown tells the story: the element that had focus is gone and focus
-      // fell back to <body>.
+      // Keyboard dismissal sets the flag. Otherwise ask where focus was rather
+      // than where the browser's teardown left it: on the default configuration
+      // the popup is faded out, so its DOM keeps focus for another 200 ms and
+      // `activeElement` still sits inside it here, while the reduced-motion path
+      // has detached the popup and dropped focus to <body>.
+      const popupEl = marker.getPopup()?.getElement();
       const focusDropped =
         restoreFocusOnClose ||
+        (popupEl != null && popupEl.contains(document.activeElement)) ||
         (!lastFocused?.isConnected && document.activeElement === document.body);
       restoreFocusOnClose = false;
       lastFocused = null;
@@ -228,11 +261,17 @@
       }
       if (openPopupKey === location.key) openPopupKey = null;
       // A render requested while the popup was open replaces every marker, so it
-      // has to run before focus is handed back — otherwise it would tear the
-      // just-focused icon back out of the DOM.
+      // is replayed on the next frame instead of here: Leaflet closes the popup
+      // from the synthetic `preclick` it dispatches BEFORE it resolves the
+      // `click` target, so clearing the layers inside that dispatch would detach
+      // the clicked marker and swallow its popup / cluster expansion until a
+      // second click. `fromViewChange` keeps the wait-for-popup rule for the
+      // popup that click may have opened by then; the replay moves focus to the
+      // replacement marker itself, so the handback below stays on the element
+      // still in the DOM.
       if (renderPending) {
         renderPending = false;
-        renderClusters();
+        requestAnimationFrame(() => renderClusters({ fromViewChange: true }));
       }
       // Only take focus back if the popup dropped it: a mouse user closing the
       // popup left focus on the map container and must not have it yanked away.
@@ -283,6 +322,9 @@
         renderPending = true;
         return;
       }
+      // This path rebuilds every marker itself, so the popup's close handler
+      // must not schedule the replay frame as well: consume the flag first.
+      renderPending = false;
       map.closePopup();
     }
 
@@ -293,8 +335,14 @@
     );
     const byKey = new Map(locations.map((location) => [location.key, location]));
     // A re-render replaces every marker; a keyboard user parked on one keeps
-    // their place by having focus moved to its replacement.
-    const focusedLocation = document.activeElement?.getAttribute?.('data-map-location') ?? null;
+    // their place by having focus moved to its replacement. A cluster is not
+    // replaced — activating it zooms until its members become individual dots —
+    // so its element disappears with nothing to inherit focus and the map
+    // container takes it back instead of letting it fall to <body>.
+    const activeElement = document.activeElement;
+    const focusedLocation = activeElement?.getAttribute?.('data-map-location') ?? null;
+    const focusedCluster =
+      focusedLocation === null && activeElement?.hasAttribute?.('data-map-cluster');
 
     clusterLayer.clearLayers();
     locationMarkers.clear();
@@ -304,9 +352,12 @@
       const longitude = wrapLongitudeForView(rawLongitude, bounds.getWest(), bounds.getEast());
 
       if (feature.properties.cluster) {
-        const count = feature.properties.point_count;
+        // FR-006: the bubble, `data-map-cluster`, and the aria-label all carry
+        // the photos the cluster aggregates — `point_count` counts the
+        // locations behind it, which would understate a multi-photo location.
+        const photoCount = feature.properties.photoCount;
         const marker = L.marker([latitude, longitude], {
-          icon: clusterIcon(count),
+          icon: clusterIcon(photoCount),
           keyboard: true,
         });
         const expand = () => expandCluster(feature.properties.cluster_id, [latitude, longitude]);
@@ -314,11 +365,11 @@
         marker.addTo(clusterLayer);
         const element = marker.getElement();
         if (element) {
-          element.setAttribute('data-map-cluster', String(count));
+          element.setAttribute('data-map-cluster', String(photoCount));
           element.setAttribute(
             'aria-label',
             get(t)('map.clusterLabel', {
-              values: { count },
+              values: { count: photoCount },
               default: '{count} photos, activate to zoom in',
             })
           );
@@ -355,6 +406,8 @@
     if (focusedLocation) {
       const focusedIcon = locationMarkers.get(focusedLocation)?.getElement();
       if (focusedIcon?.isConnected) focusedIcon.focus();
+    } else if (focusedCluster) {
+      map.getContainer().focus();
     }
   }
 
@@ -449,13 +502,22 @@
   });
 
   $effect(() => {
-    // FR-006: cluster the unique coordinate locations; the index is rebuilt
-    // whenever the result set changes, and markers follow immediately.
-    clusterIndex = new Supercluster({ radius: CLUSTER_RADIUS, maxZoom: CLUSTER_MAX_ZOOM }).load(
+    // FR-006: cluster the unique coordinate locations; each point carries its
+    // location's photo count so the index itself can aggregate photos, and the
+    // index is rebuilt whenever the result set changes (markers follow
+    // immediately).
+    clusterIndex = new Supercluster({
+      radius: CLUSTER_RADIUS,
+      maxZoom: CLUSTER_MAX_ZOOM,
+      map: (properties) => ({ photoCount: properties.photoCount }),
+      reduce: (accumulated, properties) => {
+        accumulated.photoCount += properties.photoCount;
+      },
+    }).load(
       locations.map((location) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] },
-        properties: { key: location.key },
+        properties: { key: location.key, photoCount: location.photos.length },
       }))
     );
     untrack(() => renderClusters());

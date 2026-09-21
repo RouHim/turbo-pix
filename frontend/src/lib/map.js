@@ -76,20 +76,19 @@ export function formatCoordinates({ latitude, longitude }) {
  * Markers are placed via `latLngToLayerPoint`/`project`, which never wrap
  * longitude — only the tile URL wraps — so `bounds` is the raw visible
  * window, e.g. [-155.35, 182.15] for a 1920px window at zoom 3 centred on
- * Berlin. A longitude already inside the window stays put; otherwise the
- * ±360° copy is used when (and only when) that copy is inside the window, so
- * a photo can never be pushed off-screen by a seam. Returns `lng` unchanged
- * when no copy is visible.
+ * Berlin. Panning is unbounded, so the window can sit more than one world away
+ * from the canonical longitude: pick the `±360°` copy nearest the window
+ * centre, and use it only when it falls inside the window, so a photo can
+ * never be pushed off-screen by a seam. Returns `lng` unchanged when no copy
+ * is visible.
  * @param {number} lng - photo longitude, between -180 and 180
  * @param {number} west - bounds.getWest()
  * @param {number} east - bounds.getEast()
  * @returns {number}
  */
 export function wrapLongitudeForView(lng, west, east) {
-  if (lng >= west && lng <= east) return lng;
-  if (lng + 360 >= west && lng + 360 <= east) return lng + 360;
-  if (lng - 360 >= west && lng - 360 <= east) return lng - 360;
-  return lng;
+  const shifted = lng + 360 * Math.round(((west + east) / 2 - lng) / 360);
+  return shifted >= west && shifted <= east ? shifted : lng;
 }
 
 /**

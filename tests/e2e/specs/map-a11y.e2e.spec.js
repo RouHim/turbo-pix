@@ -211,6 +211,40 @@ test.describe('Map degradation and accessibility', () => {
     await expect(page).toHaveURL(new RegExp(`photo=${hash}`));
   });
 
+  test('reduced motion keeps the keyboard path into and out of the popup', async ({ page }) => {
+    // FR-018/SC-007. The reduce-motion path opens the popup without the fade or
+    // the pan, so the focus handoff has to survive without those frames: a user
+    // with the OS preference set still has to land on a thumbnail, and Escape
+    // still has to dismiss the popup from there.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await TestHelpers.stubMapTiles(page);
+    await TestHelpers.goto(page, '/map');
+    await expect(page.locator('[data-testid="map-view"]')).toHaveAttribute(
+      'data-reduced-motion',
+      'true'
+    );
+    await waitForMapFeatures(page);
+    await waitForSettledFeatures(page);
+
+    const marker = await revealLocationMarker(page);
+    await marker.focus();
+    await page.keyboard.press('Enter');
+
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    // Landing on the first thumbnail is what keeps the popup's photos one Tab
+    // away; without it a keyboard user walks the remaining markers first.
+    await expect(popup.locator('[data-map-popup-photo]').first()).toBeFocused();
+
+    // Escape only reaches the map's own handler while focus sits inside the
+    // popup pane, and Leaflet's Escape hook is unhooked once the map container
+    // has lost focus — so a thumbnail that is not focused leaves the popup
+    // undismissable. The marker gets focus back on the way out.
+    await page.keyboard.press('Escape');
+    await expect(popup).toHaveCount(0);
+    await expect(page.locator('[data-map-location]:focus')).toHaveCount(1);
+  });
+
   test('reduced motion turns off animated zooming', async ({ page }) => {
     // FR-018/SC-007.
     await page.emulateMedia({ reducedMotion: 'reduce' });

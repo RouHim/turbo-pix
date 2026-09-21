@@ -79,6 +79,9 @@ test('wrapLongitudeForView moves a longitude onto its visible ±360 copy', () =>
   assert.equal(wrapLongitudeForView(-170, 21.25, 358.75), 190);
   // The mirror: a window panned west across the seam shows the -360 copy.
   assert.equal(wrapLongitudeForView(175, -198.75, 138.75), -185);
+  // Panning is unbounded, so the window can sit a whole world further east
+  // than the probe above: the +720 copy is the visible one.
+  assert.equal(wrapLongitudeForView(13.4, 720, 1058.8), 733.4);
 });
 
 test('wrapLongitudeForView keeps a longitude with no visible copy as-is', () => {

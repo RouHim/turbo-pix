@@ -84,8 +84,8 @@
   }
 
   .map-popup-item img {
-    width: 48px;
-    height: 48px;
+    width: var(--space-12);
+    height: var(--space-12);
     border-radius: var(--radius-sm);
     object-fit: cover;
   }

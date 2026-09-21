@@ -79,10 +79,13 @@ export class TestHelpers {
    */
   static setPhotoLocationInDb(fileName, latitude, longitude) {
     const metadata = JSON.stringify({ location: { latitude, longitude } });
-    execSync(
-      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', ${latitude}, '$.location.longitude', ${longitude}) WHERE filename = '${fileName}'"`,
-      { stdio: 'pipe' }
-    );
+    // `PRAGMA busy_timeout=5000` like every sibling seeding site: the sqlite3
+    // CLI waits 0 ms by default, so a concurrent server write fails the UPDATE
+    // and execSync throws.
+    const sql =
+      `PRAGMA busy_timeout=5000; ` +
+      `UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', ${latitude}, '$.location.longitude', ${longitude}) WHERE filename = '${fileName}'`;
+    execSync(`sqlite3 "${TEST_DB_PATH}" "${sql}"`, { stdio: 'pipe' });
     return metadata;
   }
 
@@ -92,10 +95,10 @@ export class TestHelpers {
    * `metadata.location` treat as "no location".
    */
   static clearPhotoLocationInDb(fileName) {
-    execSync(
-      `sqlite3 "${TEST_DB_PATH}" "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', null, '$.location.longitude', null) WHERE filename = '${fileName}'"`,
-      { stdio: 'pipe' }
-    );
+    const sql =
+      `PRAGMA busy_timeout=5000; ` +
+      `UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', null, '$.location.longitude', null) WHERE filename = '${fileName}'`;
+    execSync(`sqlite3 "${TEST_DB_PATH}" "${sql}"`, { stdio: 'pipe' });
   }
 
   static async verifyActiveView(page, viewName) {

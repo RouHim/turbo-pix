@@ -12,7 +12,8 @@ use crate::image_editor::{self, RotationAngle};
 use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{
-    with_cache, with_db, DatabaseError, NotFoundError, PermissionError, ValidationError,
+    handle_rejection, with_cache, with_db, DatabaseError, NotFoundError, PermissionError,
+    ValidationError,
 };
 
 /// Cap for JSON request bodies (favorite/metadata/rotate). All three payloads
@@ -147,9 +148,22 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
 }
 
 pub async fn list_map_photos(
-    query: MapPhotoQuery,
+    query: Option<MapPhotoQuery>,
     db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
+) -> Result<warp::reply::Response, Rejection> {
+    // `None` is a query `warp::query` could not deserialize; see the map route.
+    let Some(query) = query else {
+        // Reuse the shared rejection handler so the 400 body is byte-identical
+        // to `/api/photos?page=abc`. `handle_rejection` is infallible, hence the
+        // unreachable arm.
+        let reply = handle_rejection(reject::custom(ValidationError {
+            message: "Invalid query parameters".to_string(),
+        }))
+        .await
+        .unwrap_or_else(|never| match never {});
+        return Ok(reply.into_response());
+    };
+
     let search_query = SearchQuery {
         q: query.q.clone(),
         year: query.year,
@@ -165,7 +179,7 @@ pub async fn list_map_photos(
     )
     .await
     {
-        Ok(photos) => Ok(warp::reply::json(&MapPhotosResponse { photos })),
+        Ok(photos) => Ok(warp::reply::json(&MapPhotosResponse { photos }).into_response()),
         Err(e) => {
             log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
@@ -1152,7 +1166,18 @@ pub fn build_photo_routes(
         .and(warp::path("map"))
         .and(warp::path::end())
         .and(warp::get())
-        .and(warp::query::<MapPhotoQuery>())
+        // A malformed parameter (`?year=abc`) makes `warp::query` reject with
+        // `InvalidQuery`, but that rejection arrives *together* with the
+        // `{hash}` route's `NotFoundError` (it matches `/api/photos/map` as
+        // well) and `handle_rejection` tests `NotFoundError` first — answering
+        // 404 "Photo not found" instead of the project's 400. Extract an
+        // `Option` so the map route answers the malformed case itself.
+        .and(
+            warp::query::<MapPhotoQuery>()
+                .map(Some)
+                .or(warp::any().map(|| None))
+                .unify(),
+        )
         .and(with_db(db_pool.clone()))
         .and_then(list_map_photos);
 
@@ -2038,6 +2063,41 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_map_invalid_query_param_returns_bad_request() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let routes = build_test_routes(db_pool, PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        // `/api/photos/map` shares its path shape with the `{hash}` route, whose
+        // NotFoundError used to win the combined rejection and answer 404
+        // "Photo not found". The body message is what discriminates the two
+        // (both branches are 4xx).
+        for path in [
+            "/api/photos/map?year=abc",
+            "/api/photos/map?album=99999999999999999999",
+        ] {
+            let response = warp::test::request().path(path).reply(&routes).await;
+
+            assert_eq!(response.status(), 400, "{} must be a client error", path);
+            let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(body["error"], "Invalid query parameters", "{}", path);
+        }
+
+        // The `{hash}` route keeps its own answer: only the query contract
+        // moved, so an unknown hash still reports the body the shadowed
+        // rejection used to leak into the map route.
+        let missing = warp::test::request()
+            .path("/api/photos/does-not-exist")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(missing.status(), 404);
+        let body: serde_json::Value = serde_json::from_slice(missing.body()).unwrap();
+        assert_eq!(body["error"], "Photo not found");
     }
 
     #[tokio::test]

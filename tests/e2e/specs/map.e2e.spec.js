@@ -136,39 +136,44 @@ test.describe('Map view', () => {
     );
   });
 
-  test('plots every geo-located location as a marker or cluster', async ({ page }) => {
+  test('plots every geo-located photo as a marker or cluster', async ({ page }) => {
     await TestHelpers.goto(page, '/map');
     await expect(page.locator('[data-testid="map-canvas"]')).toBeVisible();
 
-    const expectedLocations = await page.evaluate(async () => {
+    const expectedPhotos = await page.evaluate(async () => {
       const response = await fetch('/api/photos/map');
       const { photos } = await response.json();
-      const keys = new Set();
+      let located = 0;
       for (const photo of photos) {
         const latitude = photo.metadata?.location?.latitude;
         const longitude = photo.metadata?.location?.longitude;
-        if (typeof latitude === 'number' && typeof longitude === 'number') {
-          keys.add(`${latitude},${longitude}`);
-        }
+        if (typeof latitude === 'number' && typeof longitude === 'number') located += 1;
       }
-      return keys.size;
+      return located;
     });
-    test.skip(expectedLocations === 0, 'No geo-located photos in the test library');
+    test.skip(expectedPhotos === 0, 'No geo-located photos in the test library');
 
-    // Supercluster guarantees every point is represented: a cluster reports how
-    // many locations it aggregates (FR-006), so clusters + individual markers
-    // must equal the library's unique coordinates (FR-009).
+    // Supercluster guarantees every point is represented, and each feature
+    // announces the PHOTOS it stands for — a cluster the ones it aggregates
+    // (FR-006), a marker its location's count (FR-009) — so both kinds must add
+    // up to the library's 14 geo-located photos (10 `cluster_*` plus 4
+    // `archive_*`, all car.jpg copies). The seeded pair's cluster holds 2
+    // locations but 14 photos, so announcing the location count fails.
     await expect
       .poll(async () =>
         page.evaluate(() => {
-          const clustered = [...document.querySelectorAll('[data-map-cluster]')].reduce(
-            (sum, element) => sum + Number(element.getAttribute('data-map-cluster')),
-            0
+          const announced = (selector, attribute) =>
+            [...document.querySelectorAll(selector)].reduce(
+              (sum, element) => sum + Number(element.getAttribute(attribute)),
+              0
+            );
+          return (
+            announced('[data-map-cluster]', 'data-map-cluster') +
+            announced('[data-map-location]', 'data-map-location-count')
           );
-          return clustered + document.querySelectorAll('[data-map-location]').length;
         })
       )
-      .toBe(expectedLocations);
+      .toBe(expectedPhotos);
   });
 
   test('cluster click separates the cluster into individual markers', async ({ page }) => {
@@ -291,10 +296,28 @@ test.describe('Map view', () => {
     await TestHelpers.goto(page, '/map');
     await waitForMapFeatures(page);
 
+    // FR-006: the fitted view holds the seeded pair in one cluster, whose
+    // bubble, data attribute, and label carry the PHOTOS it aggregates. The
+    // pair's cluster covers 2 locations but all the library's geo-located
+    // photos, so announcing the location count (2) fails here.
+    const expectedClusterPhotos = await page.evaluate(async () => {
+      const response = await fetch('/api/photos/map');
+      const { photos } = await response.json();
+      return photos.filter((photo) => {
+        const latitude = photo.metadata?.location?.latitude;
+        const longitude = photo.metadata?.location?.longitude;
+        return typeof latitude === 'number' && typeof longitude === 'number';
+      }).length;
+    });
+
     const cluster = page.locator('[data-map-cluster]').first();
     await expect(cluster).toBeVisible();
-    await expect(cluster).toHaveAttribute('data-map-cluster', '2');
-    await expect(cluster).toHaveAttribute('aria-label', /photos, activate to zoom in/);
+    await expect(cluster).toHaveAttribute('data-map-cluster', String(expectedClusterPhotos));
+    await expect(cluster).toHaveAttribute(
+      'aria-label',
+      `${expectedClusterPhotos} photos, activate to zoom in`
+    );
+    await expect(cluster).toHaveText(String(expectedClusterPhotos));
 
     const before = await page.locator('[data-map-location]').count();
     await cluster.click();
@@ -351,5 +374,41 @@ test.describe('Map view', () => {
 
     await page.keyboard.press('Escape');
     await expect(popup).toBeHidden();
+  });
+
+  test('closing a popup with its close button returns focus to the marker', async ({ page }) => {
+    // FR-018: the popup's own close button is the dismissal a keyboard user
+    // reaches by Tab, so it must hand focus back exactly like Escape does. On
+    // the default configuration Leaflet fades the popup out, which defers its
+    // DOM removal — and the focus inside it — by 200 ms past `popupclose`, so
+    // the assertion below can only pass if the handback reads where focus was
+    // instead of where the browser's teardown left it.
+    await TestHelpers.goto(page, '/map');
+    await waitForMapFeatures(page);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if ((await page.locator('[data-map-location]').count()) > 0) break;
+      const cluster = page.locator('[data-map-cluster]').first();
+      if ((await cluster.count()) === 0) break;
+      await cluster.click();
+      await expect(page.locator('.leaflet-zoom-anim')).toHaveCount(0);
+    }
+
+    const marker = page.locator('[data-map-location]').first();
+    await expect(marker).toBeVisible();
+    const key = await marker.getAttribute('data-map-location');
+    await marker.focus();
+    await page.keyboard.press('Enter');
+
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-map-popup-photo]').first()).toBeFocused();
+
+    await popup.locator('.leaflet-popup-close-button').click();
+    // `toBeHidden` waits out the deferred removal, which is what drops focus to
+    // <body> — asserting before it lands would pass on the broken behaviour.
+    await expect(popup).toBeHidden();
+
+    await expect(page.locator(`[data-map-location="${key}"]`)).toBeFocused();
   });
 });

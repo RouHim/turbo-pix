@@ -65,9 +65,9 @@ use crate::video_capability::{plan, ClientCodecs, Delivery};
 use crate::video_probe::ResolvedCapabilities;
 use crate::video_processor::{
     claim_transcode, convert_video_with_progress, get_copied_path_versioned, get_transcode_status,
-    get_transcoded_path_versioned, remux_sidecar_path, remux_to_faststart_mp4,
-    set_transcode_status, FileConversion, SourceCodecs, TranscodeClaim, TranscodeState,
-    TranscodeStatus,
+    get_transcoded_path_versioned, purge_old_transcode_versions, remux_sidecar_path,
+    remux_to_faststart_mp4, set_transcode_status, FileConversion, SourceCodecs, TranscodeClaim,
+    TranscodeState, TranscodeStatus,
 };
 use crate::video_stream::{
     output_mime, start_stream, supervise, StreamHandle, StreamMode, StreamStartError,
@@ -688,7 +688,13 @@ async fn serve_whole_file_transcode(
                 // transcode.
                 // Spawn the kind this delivery computed: its artifact slot is
                 // the one the client's decision (and the next one) checks.
-                spawn_whole_file_transcode(photo, transcoded_path.clone(), conversion, codecs);
+                spawn_whole_file_transcode(
+                    photo,
+                    transcoded_path.clone(),
+                    cache_path.to_path_buf(),
+                    conversion,
+                    codecs,
+                );
 
                 let response = warp::reply::with_status(
                     warp::reply::json(&json!({
@@ -725,6 +731,7 @@ async fn serve_whole_file_transcode(
 fn spawn_whole_file_transcode(
     photo: &Photo,
     output_path: PathBuf,
+    cache_root: PathBuf,
     conversion: FileConversion,
     codecs: SourceCodecs<'_>,
 ) {
@@ -776,29 +783,11 @@ fn spawn_whole_file_transcode(
         {
             Ok(_) => {
                 // Only one transcode version file per hash: remove older `{hash}_*.mp4`
-                // siblings now that the new version is in place (the versioned name
-                // folds in size+mtime, so an in-place edit produces a new file rather
-                // than overwriting).
-                if let Some(parent) = output_path.parent() {
-                    if let Ok(entries) = std::fs::read_dir(parent) {
-                        let new_name = output_path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or_default();
-                        for entry in entries.filter_map(|e| e.ok()) {
-                            let path = entry.path();
-                            let is_old_version =
-                                path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                                    n.starts_with(&format!("{}_", hash))
-                                        && n.ends_with(".mp4")
-                                        && n != new_name
-                                });
-                            if is_old_version {
-                                let _ = std::fs::remove_file(&path);
-                            }
-                        }
-                    }
-                }
+                // siblings in EVERY namespace now that the new version is in place (the
+                // versioned name folds in size+mtime, so an in-place edit produces a new
+                // file rather than overwriting; the old code only purged the artifact's
+                // own directory).
+                purge_old_transcode_versions(&cache_root, &hash, &output_path);
                 set_transcode_status(
                     &hash,
                     TranscodeStatus {
@@ -882,9 +871,15 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         // concurrent fills cannot interleave.
         let source = PathBuf::from(&photo.file_path);
         let hash = photo.hash_sha256.clone();
+        let cache_root = PathBuf::from(&cache_dir);
+        let sidecar_keep = sidecar.clone();
         tokio::spawn(async move {
             match remux_to_faststart_mp4(&source, &sidecar).await {
-                Ok(()) => log::info!("Remux cache ready for {hash}"),
+                Ok(()) => {
+                    log::info!("Remux cache ready for {hash}");
+                    // An in-place edit versions the sidecar name; drop the stale ones.
+                    purge_old_transcode_versions(&cache_root, &hash, &sidecar_keep);
+                }
                 Err(e) => log::warn!("Remux cache fill failed for {hash}: {e}"),
             }
         });
@@ -925,7 +920,7 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
     if claim_transcode(&photo.hash_sha256) != TranscodeClaim::Started {
         return;
     }
-    spawn_whole_file_transcode(photo, output, conversion, codecs);
+    spawn_whole_file_transcode(photo, output, PathBuf::from(&cache_dir), conversion, codecs);
 }
 
 /// Parse a single-range `Range` header value (e.g. "bytes=0-1023", "bytes=-500").

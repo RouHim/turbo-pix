@@ -1331,6 +1331,38 @@ pub fn clear_transcode_cache_for_hash(hash: &str) {
     }
 }
 
+/// Removes stale `{hash}_*.mp4` siblings (and `{hash}_*.tmp` leftovers) in
+/// every transcode namespace except `keep`.
+///
+/// Cache filenames fold in size+mtime, so an in-place edit produces a NEW
+/// file rather than overwriting — without this the old version stays on disk
+/// forever. The previous code only purged the artifact's own directory; the
+/// other two namespaces (`copied/` vs `transcoded/`, plus `remux/`) kept
+/// their stale copies.
+pub(crate) fn purge_old_transcode_versions(cache_root: &Path, hash: &str, keep: &Path) {
+    let keep_name = keep
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let prefix = format!("{hash}_");
+    for ns in ["transcoded", "copied", "remux"] {
+        let dir = cache_root.join(ns);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let is_old_version = entry.file_name().to_str().is_some_and(|n| {
+                n.starts_with(&prefix)
+                    && n != keep_name
+                    && (n.ends_with(".mp4") || n.ends_with(".tmp"))
+            });
+            if is_old_version {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2777,6 +2809,54 @@ pub(crate) mod tests {
 
         // THEN every `{hash}_*` file is gone in all three namespaces, the other hash survives
         assert!(doomed.iter().all(|p| !p.exists()));
+        assert!(kept.exists());
+    }
+
+    #[test]
+    fn purge_old_transcode_versions_keeps_only_new_artifact() {
+        // GIVEN old versions across all namespaces plus a temp and another hash's file
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let other = "3333333333333333333333333333333333333333333333333333333333333333";
+        let new_path = root.join("transcoded").join(format!("{hash}_300_400.mp4"));
+        let mut doomed = Vec::new();
+        for (ns, names) in [
+            (
+                "transcoded",
+                vec![
+                    format!("{hash}_100_200.mp4"),
+                    format!("{hash}_100_200.mp4.tmp"),
+                ],
+            ),
+            ("copied", vec![format!("{hash}_100_200.mp4")]),
+            (
+                "remux",
+                vec![
+                    format!("{hash}_100_200.mp4"),
+                    format!("{hash}_100_200.9.0.tmp"),
+                ],
+            ),
+        ] {
+            let dir = root.join(ns);
+            std::fs::create_dir_all(&dir).unwrap();
+            for name in names {
+                let p = dir.join(name);
+                std::fs::write(&p, b"x").unwrap();
+                doomed.push(p);
+            }
+        }
+        std::fs::create_dir_all(root.join("transcoded")).unwrap();
+        std::fs::write(&new_path, b"new").unwrap();
+        let kept = root.join("copied").join(format!("{other}_100_200.mp4"));
+        std::fs::write(&kept, b"x").unwrap();
+
+        // WHEN old versions are purged keeping the new artifact
+        purge_old_transcode_versions(root, hash, &new_path);
+
+        // THEN only the new artifact and the other hash survive
+        assert!(doomed.iter().all(|p| !p.exists()));
+        assert!(new_path.exists());
         assert!(kept.exists());
     }
 }

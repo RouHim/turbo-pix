@@ -260,6 +260,14 @@ pub async fn get_video_file(
             Delivery::Direct => false,
         };
 
+    // A cached conversion is served as a file, so its encoder cannot ride on a
+    // response header the client is able to read: it comes from the retained
+    // conversion status instead. An evicted entry simply omits the field, and
+    // the hint then stays hidden rather than guessing.
+    let cached_encoder = cached_whole_file
+        .then(|| get_transcode_status(&photo.hash_sha256).and_then(|status| status.encoder))
+        .flatten();
+
     // `?decision` (bare or `=true`): don't stream — return the recommended
     // playback action as JSON so the client can pick without probing the
     // stream itself. A `stream` decision's `url` carries NEITHER `start` nor
@@ -295,6 +303,7 @@ pub async fn get_video_file(
                 "duration": caps.duration_secs,
                 "cached": true,
                 "reason": null,
+                "encoder": cached_encoder,
             }),
             // Same for a cached faststart sidecar: the source only needed its
             // moov moved, and that copy already exists.

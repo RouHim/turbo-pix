@@ -306,6 +306,10 @@
     },
     "file_empty": "Dieses Video ist leer oder wird noch synchronisiert.",
     "conversion_reason": "Video konnte nicht konvertiert werden: {reason}",
-    "play_original": "Original trotzdem abspielen"
+    "play_original": "Original trotzdem abspielen",
+    "encoder": {
+      "gpu": "Die Konvertierung läuft auf der GPU ({encoder})",
+      "cpu": "Die Konvertierung läuft auf der CPU ({encoder})"
+    }
   }
 }

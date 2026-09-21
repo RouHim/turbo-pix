@@ -16,6 +16,7 @@
   } from '../lib/utils.js';
   import { logger } from '../lib/logger.js';
   import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
+  import { isHardwareEncoder } from '../lib/video/encoderHint.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import Icon from './Icon.svelte';
@@ -41,6 +42,18 @@
   let isLoading = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
+  // The encoder serving the current playback, when the server video-encodes it.
+  // `null` means "not video-encoded" (direct play, remux, or a copied video
+  // track), which shows no hint at all.
+  let activeEncoder = $state(null);
+  const encoderIsHardware = $derived(isHardwareEncoder(activeEncoder));
+  const encoderHintLabel = $derived(
+    activeEncoder
+      ? get(t)(encoderIsHardware ? 'video.encoder.gpu' : 'video.encoder.cpu', {
+          values: { encoder: activeEncoder },
+        })
+      : ''
+  );
   // A stream run is waiting for a free conversion slot (503): not an error, but
   // the user must keep the "play original anyway" escape hatch. Rendered, so a
   // reactive state.
@@ -496,6 +509,8 @@
     isOpen = false;
     isPendingCollage = false;
     isAcceptingCollage = false;
+    // Nothing plays behind a closed viewer, so nothing is being encoded.
+    activeEncoder = null;
 
     if (viewerEl) {
       if (imageEl) imageEl.style.viewTransitionName = '';
@@ -568,6 +583,10 @@
     // idempotent, so the video paths (which also tear down) stay safe.
     destroyStreamPlayer();
     hideTranscodeToast();
+    // The previous photo's encoder claim dies with its playback: an image (or
+    // any later branch) must never inherit it, and every video path below
+    // states its own answer.
+    activeEncoder = null;
 
     resetZoom();
     isLoading = true;
@@ -714,6 +733,10 @@
     // and so does the notice it put up. This photo owns the toast now.
     destroyStreamPlayer();
     hideTranscodeToast();
+    // A retry of the SAME photo (a playback failure) bypasses displayPhoto, so
+    // the claim from the attempt that just failed is dropped here too: every
+    // branch below (or the run it starts) states this attempt's own answer.
+    activeEncoder = null;
 
     if (forceTranscode) {
       // Explicit retry (e.g. HEVC playback failure): jump straight to the
@@ -745,10 +768,13 @@
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
     if (decision.action === 'direct') {
+      activeEncoder = decision.encoder ?? null;
       setVideoSource(photo, decision.url, true);
       return;
     }
     if (decision.action === 'stream') {
+      // The upcoming run's own header is authoritative for this playback.
+      activeEncoder = null;
       if (!decision.mime || !mseSupported(decision.mime)) {
         // Legacy fallback: whole-file conversion for browsers without MSE for
         // this codec; keeps the escape hatch intact.
@@ -862,6 +888,10 @@
         }
       },
       onError: (error) => handleStreamFailure(photo, decision, mode, error),
+      onEncoder: (encoder) => {
+        if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+        activeEncoder = encoder;
+      },
     });
     videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.style.display = 'block';
@@ -963,7 +993,9 @@
       return;
     }
     // The error toast owns the notice (and its own escape hatch) from here on.
+    // Nothing is being video-encoded any more, so no encoder may be claimed.
     streamWaiting = false;
+    activeEncoder = null;
     showTranscodeToast(
       get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
       true
@@ -1054,6 +1086,10 @@
               transcode: true,
               clientCodecs: videoCodecSupport.getClientCodecsString(),
             });
+            // The completed artifact's own encoder: the file delivery carries no
+            // response header the client can read (staleness is already ruled
+            // out by bailIfStale above).
+            activeEncoder = status.encoder ?? null;
             setVideoSource(photo, newUrl, false);
             resolve('Completed');
           } else if (status.state === 'Failed') {
@@ -1107,6 +1143,8 @@
     // and fight the choice they just made.
     destroyStreamPlayer();
     hideTranscodeToast();
+    // The original is played as-is: nothing encodes it, so nothing is claimed.
+    activeEncoder = null;
     setVideoSource(
       photo,
       getVideoUrl(photo.hash_sha256, {
@@ -1808,6 +1846,17 @@
       <div class="viewer-loading-indicator" class:show={isLoading}>
         <div class="spinner"></div>
       </div>
+      {#if activeEncoder}
+        <div
+          class="viewer-encoder-hint"
+          class:is-hardware={encoderIsHardware}
+          data-testid="viewer-encoder-hint"
+          role="img"
+          aria-label={encoderHintLabel}
+        >
+          <Icon name={encoderIsHardware ? 'zap' : 'cpu'} width={14} height={14} />
+        </div>
+      {/if}
     </div>
 
     <div class="viewer-sidebar" id="viewer-sidebar" class:show={showSidebar}>
@@ -2105,6 +2154,29 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  /* Encoder hint: informational, never interactive. Low opacity so it reads as
+     viewer chrome rather than as a badge competing with the notices. */
+  .viewer-encoder-hint {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-3);
+    z-index: var(--z-base);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-full);
+    background: var(--viewer-btn-bg);
+    color: var(--viewer-btn-color);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .viewer-encoder-hint.is-hardware {
+    color: var(--accent-color);
   }
 
   .viewer-sidebar {

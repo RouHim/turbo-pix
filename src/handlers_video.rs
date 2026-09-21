@@ -764,6 +764,7 @@ fn spawn_whole_file_transcode(
                     started_at: Some(started_at),
                     error: None,
                     percent,
+                    encoder: None,
                 },
             );
         })
@@ -781,7 +782,7 @@ fn spawn_whole_file_transcode(
         )
         .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
                 // Only one transcode version file per hash: remove older `{hash}_*.mp4`
                 // siblings in EVERY namespace now that the new version is in place (the
                 // versioned name folds in size+mtime, so an in-place edit produces a new
@@ -796,6 +797,7 @@ fn spawn_whole_file_transcode(
                         started_at: Some(started_at),
                         error: None,
                         percent: Some(100),
+                        encoder: outcome.encoder.clone(),
                     },
                 );
             }
@@ -815,6 +817,7 @@ fn spawn_whole_file_transcode(
                         started_at: Some(started_at),
                         error: Some(error),
                         percent: None,
+                        encoder: None,
                     },
                 );
             }
@@ -1837,6 +1840,7 @@ mod tests {
             started_at: Some(Utc::now()),
             error: None,
             percent: None,
+            encoder: None,
         };
         set_transcode_status(hash, expected.clone());
 
@@ -1865,6 +1869,7 @@ mod tests {
                 started_at: Some(started_at),
                 error: None,
                 percent: Some(42),
+                encoder: None,
             },
         );
 
@@ -1902,6 +1907,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 error: None,
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -1919,6 +1925,7 @@ mod tests {
                 started_at: in_progress.started_at,
                 error: None,
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -2495,6 +2502,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("conversion failed".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
         let audio_client = decision_for(&db_pool, hash, "hevc,aac").await;
@@ -2896,6 +2904,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -2990,6 +2999,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("Transcoding timed out after 300s".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -3111,6 +3121,7 @@ mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("ffmpeg transcode exited with status 1".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -3182,6 +3193,7 @@ mod tests {
                 started_at: Some(started_at),
                 error: None,
                 percent: None,
+                encoder: None,
             },
         );
 

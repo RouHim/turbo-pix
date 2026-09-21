@@ -168,6 +168,8 @@ pub async fn list_map_photos(
         q: query.q.clone(),
         year: query.year,
         month: query.month,
+        to_year: None,
+        to_month: None,
     };
 
     match Photo::list_all_filtered(

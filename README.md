@@ -39,6 +39,8 @@ Here are some key differences:
 - **Photo / Video Browsing**: View your photo and video collection
 - **Semantic Search**: Search photos by describing their content
 - **Timeline View**: See photo density over time
+- **Map View**: Plot every geo-located photo on an OpenStreetMap tile layer, clustered by location, and open
+  photos straight from a place
 - **Metadata Display**: View camera settings, date taken, and GPS coordinates
 - **Dark Mode**: Switch between light and dark themes
 - **Favorites**: Mark photos to find them later
@@ -127,6 +129,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_ALLOWED_HOSTS` | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | *(loopback names)* | No       |
 | `TURBO_PIX_LOCALE`        | Default UI locale (`en`, `de`)                    | `en`                                  | No       |
 | `TURBO_PIX_NOMINATIM_URL` | Base URL for the Nominatim geocoding service      | `https://nominatim.openstreetmap.org` | No       |
+| `TURBO_PIX_TILE_URL`      | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
 | `RUST_LOG`                | Log level (trace, debug, info, warn, error)       | `info`                                | No       |
 
 ### Derived Paths

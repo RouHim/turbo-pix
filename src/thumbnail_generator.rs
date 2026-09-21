@@ -480,6 +480,7 @@ mod tests {
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
         };
 
         (config, temp_dir)
@@ -736,6 +737,7 @@ mod tests {
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -795,6 +797,7 @@ mod tests {
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -891,6 +894,7 @@ mod tests {
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -997,6 +1001,7 @@ mod tests {
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
         };
         let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();

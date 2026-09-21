@@ -109,6 +109,30 @@ class TurboPixAPI {
     return this.request(endpoint, options);
   }
 
+  /**
+   * Retrieves the complete filtered photo set for the Map view (no pagination).
+   * @param {Object} params - query, sort, order, year, month, album
+   * @param {Object} options - Fetch options (signal for AbortController, etc.)
+   * @returns {Promise<{photos: Array}>}
+   */
+  async getMapPhotos(params = {}, options = {}) {
+    const searchParams = new URLSearchParams();
+
+    if (params.query) searchParams.set('q', params.query);
+    if (params.sort) searchParams.set('sort', params.sort);
+    if (params.order) searchParams.set('order', params.order);
+    if (params.year !== undefined && params.year !== null) searchParams.set('year', params.year);
+    if (params.month !== undefined && params.month !== null)
+      searchParams.set('month', params.month);
+    if (params.album !== undefined && params.album !== null)
+      searchParams.set('album', params.album);
+
+    const queryString = searchParams.toString();
+    const endpoint = `/api/photos/map${queryString ? `?${queryString}` : ''}`;
+
+    return this.request(endpoint, options);
+  }
+
   async getPhoto(hash, options = {}) {
     return this.request(`/api/photos/${hash}`, options);
   }

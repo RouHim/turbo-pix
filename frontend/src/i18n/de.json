@@ -7,6 +7,7 @@
     "videos": "Videos",
     "collages": "Collagen",
     "housekeeping": "Aufräumen",
+    "map": "Karte",
     "load_more": "Mehr laden",
     "loading": "Wird geladen...",
     "no_photos_found": "Keine Fotos gefunden",
@@ -188,6 +189,15 @@
     "working": "Arbeite…",
     "days": "Tage",
     "apply": "Anwenden"
+  },
+  "map": {
+    "withoutLocation": "{count} Fotos ohne Standortdaten",
+    "noGeoPhotos": "Keine Fotos mit Standortdaten in den aktuellen Filtern",
+    "tilesUnavailable": "Kartenkacheln nicht verfügbar – Marker werden ohne Kartenhintergrund angezeigt.",
+    "markerLabel": "{count} Fotos bei {place}",
+    "clusterLabel": "{count} Fotos, zum Vergrößern aktivieren",
+    "openPhoto": "Foto vom {date} öffnen",
+    "attributionLabel": "OpenStreetMap-Mitwirkende"
   },
   "errors": {
     "error_loading_photos": "Fehler beim Laden der Fotos",

@@ -274,6 +274,7 @@ function createPlayer(video, options = {}) {
     duration: options.duration ?? 2,
     onState: options.onState ?? (() => {}),
     onError: options.onError ?? (() => {}),
+    onEncoder: options.onEncoder ?? (() => {}),
   });
 }
 
@@ -614,6 +615,40 @@ test('a run without an advertised MIME keeps the decision MIME', async () => {
   );
 
   player.destroy();
+});
+
+test('reports the run encoder to the caller, and null when the header is absent', async () => {
+  // GIVEN a run that names a hardware encoder
+  const video = fakeVideo();
+  const seen = [];
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-turbopix-encoder': 'h264_vaapi' }),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const hardwarePlayer = createPlayer(video, { onEncoder: (encoder) => seen.push(encoder) });
+  await hardwarePlayer.start(0);
+
+  // AND a second run that sends no such header (a copy delivery)
+  const copyVideo = fakeVideo();
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+    });
+  const copyPlayer = createPlayer(copyVideo, { onEncoder: (encoder) => seen.push(encoder) });
+  await copyPlayer.start(0);
+
+  // THEN the caller sees the value, then null — never undefined and never ''
+  assert.deepEqual(seen, ['h264_vaapi', null]);
+
+  hardwarePlayer.destroy();
+  copyPlayer.destroy();
 });
 
 test('a stream that ends before the declared duration reports a failure, not `ended`', async () => {

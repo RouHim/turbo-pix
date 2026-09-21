@@ -164,6 +164,10 @@ class TurboPixAPI {
         duration: typeof data.duration === 'number' ? data.duration : null,
         cached: Boolean(data.cached),
         reason: data.reason ?? null,
+        // The encoder a cached whole-file delivery was produced with. A file
+        // carries no response header the client can read, so this field is the
+        // only way the viewer can name it; absent means "not video-encoded".
+        encoder: typeof data.encoder === 'string' ? data.encoder : null,
       };
     } catch (e) {
       if (logger) {

@@ -36,6 +36,7 @@
   import trash2 from 'feather-icons/dist/icons/trash-2.svg?raw';
   import video from 'feather-icons/dist/icons/video.svg?raw';
   import x from 'feather-icons/dist/icons/x.svg?raw';
+  import zap from 'feather-icons/dist/icons/zap.svg?raw';
 
   const ICONS = {
     'alert-circle': alertCircle,
@@ -75,6 +76,7 @@
     'trash-2': trash2,
     video,
     x,
+    zap,
   };
 
   const { name, width = 24, height = 24, class: className = '', ariaHidden = true } = $props();

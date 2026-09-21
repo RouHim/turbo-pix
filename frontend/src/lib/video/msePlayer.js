@@ -57,9 +57,12 @@ function once(target, event) {
 
 /**
  * @param {HTMLVideoElement} videoEl
- * @param {{streamUrl: string, mime: string, duration: number|null, onState: (state: string) => void, onError: (error: Error) => void}} options
+ * @param {{streamUrl: string, mime: string, duration: number|null, onState: (state: string) => void, onError: (error: Error) => void, onEncoder: (encoder: string|null) => void}} options
  */
-export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState, onError }) {
+export function createStreamPlayer(
+  videoEl,
+  { streamUrl, mime, duration, onState, onError, onEncoder }
+) {
   let mediaSource = null;
   let sourceBuffer = null;
   let controller = null;
@@ -296,6 +299,12 @@ export function createStreamPlayer(videoEl, { streamUrl, mime, duration, onState
       // the remaining rungs on a delivery that was perfectly playable.
       const advertisedMime = response.headers.get('x-turbopix-mime');
       const runMime = advertisedMime && mseSupported(advertisedMime) ? advertisedMime : mime;
+
+      // Which encoder produced this run's bytes. An absent header means no video
+      // encoding happened (a remux or a copy), which the UI renders as "no
+      // hint" — never as a CPU conversion.
+      const encoderHeader = response.headers.get('x-turbopix-encoder');
+      onEncoder?.(encoderHeader && encoderHeader.trim() !== '' ? encoderHeader.trim() : null);
 
       mediaSource = new MediaSource();
       videoEl.src = URL.createObjectURL(mediaSource);

@@ -1,10 +1,11 @@
 use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
+use crate::video_encoder::{self, HwPlan, SOFTWARE_ENCODER};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -32,6 +33,9 @@ pub struct TranscodeStatus {
     /// Progress percentage of the current transcode (0..=100), when known.
     /// `None` when no progress signal is available (e.g. duration unknown).
     pub percent: Option<u8>,
+    /// ffmpeg encoder that produced the artifact (`libx264` or a hardware
+    /// encoder), set on `Completed`. `None` while unknown.
+    pub encoder: Option<String>,
 }
 
 static TRANSCODE_STATUS_STORE: OnceLock<Mutex<HashMap<String, TranscodeStatus>>> = OnceLock::new();
@@ -260,6 +264,7 @@ fn in_progress_status(hash: &str) -> TranscodeStatus {
         started_at: Some(Utc::now()),
         error: None,
         percent: None,
+        encoder: None,
     }
 }
 
@@ -878,6 +883,18 @@ pub struct SourceCodecs<'a> {
     pub audio: Option<&'a str>,
 }
 
+/// What a finished conversion actually did, so the caller can report it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionOutcome {
+    /// The ffmpeg encoder that produced the artifact, or `None` when the
+    /// conversion did not encode video at all (a `VideoCopy`). `None` is a
+    /// meaningful answer: the player hint stays hidden for a copy, because no
+    /// GPU/CPU claim applies to a track that was passed through.
+    pub encoder: Option<String>,
+    /// True when a hardware attempt failed and the software encoder finished.
+    pub fell_back: bool,
+}
+
 /// Write a whole-file conversion of `input` to `output`, reporting progress
 /// percentage to `on_progress` as ffmpeg emits `-progress pipe:1` lines.
 /// `on_progress` is called with `Some(percent)` (0..=100) whenever a progress
@@ -890,41 +907,32 @@ pub struct SourceCodecs<'a> {
 /// audio track is copied or converted — see [`build_conversion_args`].
 /// `codecs.video` only matters for [`FileConversion::VideoCopy`], where it picks
 /// the sample-entry tag.
+///
+/// A re-encode runs on the hardware encoder the startup probe selected when
+/// there is one, and finishes in [`SOFTWARE_ENCODER`] if that attempt fails:
+/// the probe vouches for the encoder, not for the device staying available.
+/// The [`ConversionOutcome`] names the encoder that produced the artifact.
 pub async fn convert_video_with_progress(
     input_path: &Path,
     output_path: &Path,
     conversion: FileConversion,
     codecs: SourceCodecs<'_>,
     on_progress: Arc<dyn Fn(Option<u8>) + Send + Sync>,
-) -> CacheResult<()> {
-    convert_video_with_timeout(
+) -> CacheResult<ConversionOutcome> {
+    // A copy never encodes, so it never asks for a hardware encoder.
+    let plan = match conversion {
+        FileConversion::Reencode => video_encoder::active(),
+        FileConversion::VideoCopy => None,
+    };
+    convert_with_fallback(
         input_path,
         output_path,
         conversion,
         codecs,
         Duration::from_secs(transcode_timeout_secs()),
+        get_ffmpeg_path(),
         Some(on_progress),
-    )
-    .await
-}
-
-async fn convert_video_with_timeout(
-    input_path: &Path,
-    output_path: &Path,
-    conversion: FileConversion,
-    codecs: SourceCodecs<'_>,
-    timeout_duration: Duration,
-    on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
-) -> CacheResult<()> {
-    let ffmpeg_path = get_ffmpeg_path();
-    convert_video_with_timeout_and_path(
-        input_path,
-        output_path,
-        conversion,
-        codecs,
-        timeout_duration,
-        ffmpeg_path,
-        on_progress,
+        plan,
     )
     .await
 }
@@ -948,12 +956,18 @@ async fn convert_video_with_timeout(
 /// [`FileConversion::VideoCopy`] of HEVC is tagged `hvc1` so the artifact's
 /// sample entry matches the codec string the client declared and was told
 /// about; every other case ignores it.
+///
+/// `plan` is the hardware encoder the startup probe selected, or `None` for
+/// the software path. It only ever replaces the video encoder block of a
+/// [`FileConversion::Reencode`] — a copy passes frames through untouched, and
+/// `None` reproduces the historical libx264 invocation exactly (spec FR-009).
 pub fn build_conversion_args(
     input: &Path,
     output: &Path,
     conversion: FileConversion,
     codecs: SourceCodecs<'_>,
     with_progress: bool,
+    plan: Option<&HwPlan>,
 ) -> Vec<String> {
     let input_path = input.to_string_lossy().into_owned();
     let mut args: Vec<String> = ["-i", &input_path, "-map", "0:v:0", "-map", "0:a:0?"]
@@ -963,17 +977,31 @@ pub fn build_conversion_args(
     match conversion {
         FileConversion::Reencode => {
             // Hardware-accelerated decoding is worth asking for only when the
-            // video is actually decoded (a copy never is).
+            // video is actually decoded (a copy never is). `auto` delegates
+            // when the source is decodable in hardware and stays in software
+            // otherwise, so the encoder decision is the one that needs probing.
             args.splice(0..0, ["-hwaccel", "auto"].iter().map(|arg| arg.to_string()));
-            args.extend(
-                [
-                    "-c:v", "libx264", // More widely available than libopenh264
-                    "-preset", "fast", // Good for real-time transcoding
-                    "-crf", "23", // 18-28, lower = better quality
-                ]
-                .iter()
-                .map(|arg| arg.to_string()),
-            );
+            match plan {
+                Some(plan) => {
+                    // Device selection precedes the input; the upload filter and
+                    // the encoder options belong to the output.
+                    args.splice(0..0, plan.input_args());
+                    if let Some(filter) = plan.upload_filter_args() {
+                        args.extend(filter);
+                    }
+                    args.extend(plan.video_args());
+                    log::info!("Converting with hardware encoder {}", plan.label());
+                }
+                None => args.extend(
+                    [
+                        "-c:v", "libx264", // More widely available than libopenh264
+                        "-preset", "fast", // Good for real-time transcoding
+                        "-crf", "23", // 18-28, lower = better quality
+                    ]
+                    .iter()
+                    .map(|arg| arg.to_string()),
+                ),
+            }
         }
         // The client plays this video already: copying it keeps the artifact
         // bit-identical to the source instead of adding a generation of loss.
@@ -1066,7 +1094,23 @@ impl ProgressParser {
     }
 }
 
-async fn convert_video_with_timeout_and_path(
+/// One conversion attempt, with its failure modes kept apart: the caller
+/// retries an ordinary failure in software, but a timeout has already spent the
+/// whole per-transcode budget and must not spend a second one.
+enum Attempt {
+    Done,
+    Failed(String),
+    TimedOut(String),
+}
+
+/// One conversion attempt with one encoder, writing through a temp file in the
+/// output's directory and renaming it into place only on success.
+///
+/// The parameter list is the whole job description, threaded explicitly so an
+/// attempt and its [`convert_with_fallback`] caller stay call-compatible;
+/// grouping it into a struct would only move the same fields one level down.
+#[allow(clippy::too_many_arguments)]
+async fn convert_attempt(
     input_path: &Path,
     output_path: &Path,
     conversion: FileConversion,
@@ -1074,7 +1118,8 @@ async fn convert_video_with_timeout_and_path(
     timeout_duration: Duration,
     ffmpeg_path: String,
     on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
-) -> CacheResult<()> {
+    plan: Option<&HwPlan>,
+) -> Attempt {
     // Write to a temp file in the SAME directory as the final path so the
     // completed file can be atomically renamed into place. A failed or
     // timed-out transcode must never leave a partial file at `output_path`,
@@ -1083,16 +1128,16 @@ async fn convert_video_with_timeout_and_path(
     let output_path_owned = output_path.to_path_buf();
 
     let inner = async {
-        let _permit = acquire_transcode_permit().await?;
+        let _permit = match acquire_transcode_permit().await {
+            Ok(permit) => permit,
+            Err(e) => return Attempt::Failed(e.to_string()),
+        };
 
         // Create output directory if it doesn't exist
         if let Some(parent) = temp_output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                CacheError::VideoProcessingError(format!(
-                    "Failed to create output directory: {}",
-                    e
-                ))
-            })?;
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return Attempt::Failed(format!("Failed to create output directory: {e}"));
+            }
         }
 
         // Probe the input duration once so progress can be expressed as a
@@ -1119,7 +1164,8 @@ async fn convert_video_with_timeout_and_path(
         // `build_conversion_args` decides how the video and audio tracks are
         // handled; `-progress pipe:1` (when someone consumes it) streams
         // key=value progress lines to stdout, which we read incrementally to
-        // report percent.
+        // report percent. `plan` picks the encoder: `Some` replaces the libx264
+        // flags with a hardware encoder, `None` is the software path.
         let ffmpeg_path_for_err = ffmpeg_path.clone();
         let mut command = TokioCommand::new(ffmpeg_path);
         command
@@ -1132,24 +1178,24 @@ async fn convert_video_with_timeout_and_path(
                 conversion,
                 codecs,
                 with_progress,
+                plan,
             ));
 
-        let mut child = command.spawn().map_err(|e| {
-            CacheError::VideoProcessingError(format_binary_error(
-                "ffmpeg",
-                &ffmpeg_path_for_err,
-                &e,
-            ))
-        })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Attempt::Failed(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
+            }
+        };
 
         // Drain stdout (progress) incrementally; collect stderr for the error
         // message so a long ffmpeg run cannot deadlock on a full pipe.
-        let stdout = child.stdout.take().ok_or_else(|| {
-            CacheError::VideoProcessingError("ffmpeg stdout pipe unavailable".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            CacheError::VideoProcessingError("ffmpeg stderr pipe unavailable".to_string())
-        })?;
+        let Some(stdout) = child.stdout.take() else {
+            return Attempt::Failed("ffmpeg stdout pipe unavailable".to_string());
+        };
+        let Some(stderr) = child.stderr.take() else {
+            return Attempt::Failed("ffmpeg stderr pipe unavailable".to_string());
+        };
 
         let mut stderr_reader = BufReader::new(stderr);
         let stderr_handle = tokio::spawn(async move {
@@ -1175,47 +1221,167 @@ async fn convert_video_with_timeout_and_path(
         }
 
         // Wait for ffmpeg to finish, then join the stderr collector.
-        let status = child.wait().await.map_err(|e| {
-            CacheError::VideoProcessingError(format_binary_error(
-                "ffmpeg",
-                &ffmpeg_path_for_err,
-                &e,
-            ))
-        })?;
+        let status = match child.wait().await {
+            Ok(status) => status,
+            Err(e) => {
+                return Attempt::Failed(format_binary_error("ffmpeg", &ffmpeg_path_for_err, &e))
+            }
+        };
         let stderr = stderr_handle.await.unwrap_or_default();
 
         if !status.success() {
             log::error!("FFmpeg transcoding failed!");
             log::error!("FFmpeg stderr: {}", stderr);
             let _ = std::fs::remove_file(&temp_output_path);
-            return Err(CacheError::VideoProcessingError(format!(
+            return Attempt::Failed(format!(
                 "ffmpeg transcode exited with status {}. stderr: {}",
                 status, stderr
-            )));
+            ));
         }
 
         // Move the completed temp file into place (atomic on the same filesystem).
-        std::fs::rename(&temp_output_path, &output_path_owned).map_err(|e| {
+        if let Err(e) = std::fs::rename(&temp_output_path, &output_path_owned) {
             let _ = std::fs::remove_file(&temp_output_path);
-            CacheError::VideoProcessingError(format!(
-                "Failed to move transcoded video into place: {}",
-                e
-            ))
-        })?;
+            return Attempt::Failed(format!("Failed to move transcoded video into place: {}", e));
+        }
 
-        Ok::<(), CacheError>(())
+        Attempt::Done
     };
 
     match timeout(timeout_duration, inner).await {
-        Ok(result) => result,
+        Ok(attempt) => attempt,
         Err(_) => {
             // The inner future (and with it the ffmpeg child, via kill_on_drop)
             // has been dropped; remove whatever partial output it wrote.
             let _ = std::fs::remove_file(&temp_output_path);
-            Err(CacheError::VideoProcessingError(format!(
+            Attempt::TimedOut(format!(
                 "Transcoding timed out after {}s",
                 timeout_duration.as_secs()
-            )))
+            ))
+        }
+    }
+}
+
+/// Progress callback shared by every attempt of one job, so the software retry
+/// cannot lower the percentage the client already saw: each attempt's parser
+/// counts from zero, the high-water mark does not.
+#[derive(Clone, Default)]
+struct ProgressHighWater {
+    last: Arc<AtomicU8>,
+}
+
+impl ProgressHighWater {
+    fn wrap(
+        &self,
+        callback: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
+    ) -> Option<Arc<dyn Fn(Option<u8>) + Send + Sync>> {
+        let last = Arc::clone(&self.last);
+        callback.map(move |callback| {
+            Arc::new(move |percent: Option<u8>| match percent {
+                Some(percent) => {
+                    if last.fetch_max(percent, Ordering::Relaxed) < percent {
+                        callback(Some(percent));
+                    }
+                }
+                None => callback(None),
+            }) as Arc<dyn Fn(Option<u8>) + Send + Sync>
+        })
+    }
+}
+
+/// Convert with the hardware plan first, finishing in software when that
+/// attempt fails.
+///
+/// The probe can prove that a hardware encoder opens and encodes, but not that
+/// it will accept *this* source on *this* day: the device can be busy, gone, or
+/// refusing the pixel format. The user must still get their video, so an
+/// ordinary failure is retried once without the plan. A timeout is not retried
+/// — the budget is already spent.
+///
+/// The arguments mirror [`convert_attempt`]; that shape is what the tests drive
+/// with a plan and without one.
+#[allow(clippy::too_many_arguments)]
+async fn convert_with_fallback(
+    input_path: &Path,
+    output_path: &Path,
+    conversion: FileConversion,
+    codecs: SourceCodecs<'_>,
+    timeout_duration: Duration,
+    ffmpeg_path: String,
+    on_progress: Option<Arc<dyn Fn(Option<u8>) + Send + Sync>>,
+    plan: Option<HwPlan>,
+) -> CacheResult<ConversionOutcome> {
+    let progress = ProgressHighWater::default();
+    // A copy passes the video track through, so there is no encoder to report:
+    // `None` is what keeps the player hint hidden for it.
+    let encodes_video = conversion != FileConversion::VideoCopy;
+    let software_outcome = |fell_back: bool| ConversionOutcome {
+        encoder: encodes_video.then(|| SOFTWARE_ENCODER.to_string()),
+        fell_back,
+    };
+
+    let Some(plan) = plan else {
+        return match convert_attempt(
+            input_path,
+            output_path,
+            conversion,
+            codecs,
+            timeout_duration,
+            ffmpeg_path,
+            progress.wrap(on_progress),
+            None,
+        )
+        .await
+        {
+            Attempt::Done => Ok(software_outcome(false)),
+            Attempt::Failed(message) | Attempt::TimedOut(message) => {
+                Err(CacheError::VideoProcessingError(message))
+            }
+        };
+    };
+
+    let first = convert_attempt(
+        input_path,
+        output_path,
+        conversion,
+        codecs,
+        timeout_duration,
+        ffmpeg_path.clone(),
+        progress.wrap(on_progress.clone()),
+        Some(&plan),
+    )
+    .await;
+
+    match first {
+        Attempt::Done => Ok(ConversionOutcome {
+            encoder: encodes_video.then(|| plan.encoder().name().to_string()),
+            fell_back: false,
+        }),
+        Attempt::TimedOut(message) => Err(CacheError::VideoProcessingError(message)),
+        Attempt::Failed(message) => {
+            log::warn!(
+                "Hardware encoder {} failed ({}); retrying with {}",
+                plan.label(),
+                message,
+                SOFTWARE_ENCODER
+            );
+            match convert_attempt(
+                input_path,
+                output_path,
+                conversion,
+                codecs,
+                timeout_duration,
+                ffmpeg_path,
+                progress.wrap(on_progress),
+                None,
+            )
+            .await
+            {
+                Attempt::Done => Ok(software_outcome(true)),
+                Attempt::Failed(message) | Attempt::TimedOut(message) => {
+                    Err(CacheError::VideoProcessingError(message))
+                }
+            }
         }
     }
 }
@@ -1370,6 +1536,7 @@ pub(crate) mod tests {
     use crate::db::{create_in_memory_pool, Photo};
     use crate::thumbnail_generator::ThumbnailGenerator;
     use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
+    use crate::video_encoder::HwEncoder;
     use chrono::Utc;
     use std::cell::Cell;
     use std::io::{Error, ErrorKind};
@@ -2139,13 +2306,14 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = convert_video_with_timeout_and_path(
+        let result = convert_with_fallback(
             &input,
             &output,
             FileConversion::Reencode,
             SourceCodecs::default(),
             Duration::from_secs(1),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
             None,
         )
         .await;
@@ -2186,13 +2354,14 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = convert_video_with_timeout_and_path(
+        let result = convert_with_fallback(
             &input,
             &output,
             FileConversion::Reencode,
             SourceCodecs::default(),
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
             None,
         )
         .await;
@@ -2227,13 +2396,14 @@ pub(crate) mod tests {
         let output = temp_dir.path().join("nested/output.mp4");
         std::fs::write(&input, b"not-a-real-video").unwrap();
 
-        let result = convert_video_with_timeout_and_path(
+        let result = convert_with_fallback(
             &input,
             &output,
             FileConversion::Reencode,
             SourceCodecs::default(),
             Duration::from_secs(5),
             ffmpeg_script.to_str().unwrap().to_string(),
+            None,
             None,
         )
         .await;
@@ -2283,6 +2453,7 @@ pub(crate) mod tests {
                 conversion,
                 SourceCodecs { video, audio },
                 with_progress,
+                None,
             )
             .join(" ")
         };
@@ -2373,6 +2544,335 @@ pub(crate) mod tests {
         );
     }
 
+    /// A copy never encodes, and the software path is what a GPU-less host
+    /// runs, so a planless build has to produce the historical invocation
+    /// byte-for-byte (spec FR-009).
+    #[test]
+    fn reencode_args_are_unchanged_without_a_plan() {
+        // GIVEN the software path (no plan, exactly what a GPU-less host uses)
+        let args = build_conversion_args(
+            Path::new("/in.mp4"),
+            Path::new("/out.mp4"),
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: Some("aac"),
+            },
+            false,
+            None,
+        )
+        .join(" ");
+
+        // THEN the ffmpeg invocation is byte-for-byte the historical one
+        assert_eq!(
+            args,
+            "-hwaccel auto -i /in.mp4 -map 0:v:0 -map 0:a:0? -c:v libx264 -preset fast -crf 23 \
+             -c:a copy -movflags +faststart -y -f mp4 /out.mp4",
+        );
+    }
+
+    #[test]
+    fn reencode_args_swap_in_the_hardware_encoder() {
+        // GIVEN a VAAPI plan on a render node
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN the conversion arguments are built
+        let args = build_conversion_args(
+            Path::new("/in.mp4"),
+            Path::new("/out.mp4"),
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: Some("aac"),
+            },
+            false,
+            Some(&plan),
+        )
+        .join(" ");
+
+        // THEN the device precedes the input, frames are uploaded, the encoder
+        // is VAAPI's and no libx264 flag survives
+        let device_index = args.find("-vaapi_device").expect("device missing");
+        let input_index = args.find("-i /in.mp4").expect("input missing");
+        assert!(device_index < input_index, "device must precede -i: {args}");
+        assert!(args.contains("-vf format=nv12,hwupload"), "{args}");
+        assert!(args.contains("-c:v h264_vaapi"), "{args}");
+        assert!(args.contains("-qp 23"), "{args}");
+        assert!(!args.contains("libx264"), "{args}");
+        assert!(!args.contains("-crf"), "{args}");
+        // AND the container and audio handling are untouched
+        assert!(args.contains("-movflags +faststart"), "{args}");
+        assert!(args.contains("-f mp4"), "{args}");
+    }
+
+    #[test]
+    fn video_copy_args_ignore_the_plan() {
+        // GIVEN a plan and a conversion that only remuxes the video track
+        let plan = HwPlan::new(HwEncoder::Nvenc, None);
+
+        // WHEN the arguments are built
+        let args = build_conversion_args(
+            Path::new("/in.mp4"),
+            Path::new("/out.mp4"),
+            FileConversion::VideoCopy,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: Some("ac3"),
+            },
+            false,
+            Some(&plan),
+        )
+        .join(" ");
+
+        // THEN nothing about the encoder changes: a copy never encodes
+        assert!(args.contains("-c:v copy"), "{args}");
+        assert!(!args.contains("h264_nvenc"), "{args}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hardware_failure_falls_back_to_the_software_encoder() {
+        // GIVEN an ffmpeg whose hardware encoder refuses every source
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            format!(
+                "#!/usr/bin/env sh\n\
+                 printf '%s\\n' \"$*\" >> '{}'\n\
+                 for last; do :; done\n\
+                 case \"$*\" in\n\
+                 *h264_vaapi*) exit 1 ;;\n\
+                 esac\n\
+                 touch \"$last\"\n\
+                 exit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs
+        let outcome = convert_with_fallback(
+            Path::new("test-data/test_video_hevc.mp4"),
+            &output,
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            Duration::from_secs(30),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            Some(plan),
+        )
+        .await
+        .expect("the software retry must finish the job");
+
+        // THEN the artifact exists, the outcome names the software encoder, and
+        // both attempts were made against the same output
+        assert!(output.exists(), "the fallback artifact must exist");
+        assert_eq!(outcome.encoder.as_deref(), Some("libx264"));
+        assert!(outcome.fell_back);
+        let lines = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            lines.lines().any(|line| line.contains("h264_vaapi")),
+            "{lines}"
+        );
+        assert!(
+            lines.lines().any(|line| line.contains("libx264")),
+            "{lines}"
+        );
+        // AND no temp file is left behind
+        assert!(!output.with_extension("mp4.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_successful_hardware_conversion_reports_the_hardware_encoder() {
+        // GIVEN an ffmpeg whose hardware encoder works
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nfor last; do :; done\ntouch \"$last\"\nexit 0\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs
+        let outcome = convert_with_fallback(
+            Path::new("test-data/test_video_hevc.mp4"),
+            &output,
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            Duration::from_secs(30),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            Some(plan),
+        )
+        .await
+        .expect("the hardware conversion must succeed");
+
+        // THEN the outcome names it and reports no fallback
+        assert_eq!(outcome.encoder.as_deref(), Some("h264_vaapi"));
+        assert!(!outcome.fell_back);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_video_copy_reports_no_encoder() {
+        // GIVEN a conversion that copies the video track (the `copied/`
+        // namespace, used for audio-only conversions)
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nfor last; do :; done\ntouch \"$last\"\nexit 0\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs
+        let outcome = convert_with_fallback(
+            Path::new("test-data/test_video_ac3.mp4"),
+            &output,
+            FileConversion::VideoCopy,
+            SourceCodecs {
+                video: Some("h264"),
+                audio: Some("ac3"),
+            },
+            Duration::from_secs(30),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            None,
+        )
+        .await
+        .expect("the copy must succeed");
+
+        // THEN there is no encoder to report: nothing encoded the video, so the
+        // player hint stays hidden instead of claiming a CPU conversion
+        assert_eq!(outcome.encoder, None);
+        assert!(!outcome.fell_back);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_fallback_reports_the_software_error_and_leaves_no_debris() {
+        // GIVEN an ffmpeg that fails for every encoder
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nprintf '%s\\n' 'boom' >&2\nexit 1\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs
+        let result = convert_with_fallback(
+            Path::new("test-data/test_video_hevc.mp4"),
+            &output,
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            Duration::from_secs(30),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            Some(plan),
+        )
+        .await;
+
+        // THEN the failure surfaces and nothing is left at the output path
+        assert!(result.is_err(), "both attempts failed, so the job fails");
+        assert!(!output.exists(), "no partial artifact may survive");
+        assert!(!output.with_extension("mp4.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_hardware_attempt_is_not_retried_in_software() {
+        // GIVEN an ffmpeg whose hardware attempt hangs past the deadline
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            format!(
+                "#!/usr/bin/env sh\n\
+                 printf '%s\\n' \"$*\" >> '{}'\n\
+                 case \"$*\" in\n\
+                 *h264_vaapi*) sleep 30 ;;\n\
+                 esac\n\
+                 for last; do :; done\n\
+                 touch \"$last\"\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs out of time
+        let result = convert_with_fallback(
+            Path::new("test-data/test_video_hevc.mp4"),
+            &output,
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            Duration::from_secs(1),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            Some(plan),
+        )
+        .await;
+
+        // THEN it fails without spending a second budget: the hardware attempt
+        // already consumed the whole per-transcode deadline
+        assert!(result.is_err());
+        let lines = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            lines.lines().filter(|line| !line.is_empty()).count(),
+            1,
+            "a timeout must not trigger a second attempt: {lines}"
+        );
+    }
+
+    #[test]
+    fn progress_never_goes_backwards_across_a_fallback() {
+        // GIVEN a high-water wrapper shared by two attempts
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let callback: Arc<dyn Fn(Option<u8>) + Send + Sync> =
+            Arc::new(move |percent| seen_clone.lock().unwrap().push(percent));
+        let wrapper = ProgressHighWater::default().wrap(Some(callback));
+
+        // WHEN the hardware attempt reports 30 and the software retry restarts
+        // from zero and climbs to 40
+        for percent in [Some(30), Some(10), Some(20), Some(40)] {
+            wrapper.as_ref().unwrap()(percent);
+        }
+
+        // THEN only the forward-moving values reach the client
+        assert_eq!(*seen.lock().unwrap(), vec![Some(30), Some(40)]);
+    }
+
     #[test]
     fn test_transcode_status_json() {
         let status = TranscodeStatus {
@@ -2381,6 +2881,7 @@ pub(crate) mod tests {
             started_at: None,
             error: None,
             percent: None,
+            encoder: Some("h264_vaapi".to_string()),
         };
 
         let json = serde_json::to_string(&status).expect("JSON serialization failed");
@@ -2392,6 +2893,11 @@ pub(crate) mod tests {
         assert!(
             json.contains("\"hash\":\"abc\""),
             "JSON should contain hash abc, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"encoder\":\"h264_vaapi\""),
+            "JSON should carry the encoder that produced the artifact, got: {}",
             json
         );
     }
@@ -2534,6 +3040,7 @@ pub(crate) mod tests {
             started_at: Some(Utc::now()),
             error: None,
             percent: None,
+            encoder: None,
         };
         set_transcode_status("test_hash", status.clone());
 
@@ -2585,6 +3092,7 @@ pub(crate) mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("boom".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
         assert_eq!(
@@ -2600,6 +3108,7 @@ pub(crate) mod tests {
                 started_at: Some(Utc::now()),
                 error: Some("timed out".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
         assert_eq!(
@@ -2624,6 +3133,7 @@ pub(crate) mod tests {
                 ),
                 error: Some("boom".to_string()),
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -2652,6 +3162,7 @@ pub(crate) mod tests {
                     started_at: None,
                     error: None,
                     percent: None,
+                    encoder: None,
                 },
             );
         }
@@ -2676,6 +3187,7 @@ pub(crate) mod tests {
                     started_at: None,
                     error: None,
                     percent: None,
+                    encoder: None,
                 },
             );
         }
@@ -2687,6 +3199,7 @@ pub(crate) mod tests {
                 started_at: None,
                 error: None,
                 percent: None,
+                encoder: None,
             },
         );
 
@@ -2714,6 +3227,7 @@ pub(crate) mod tests {
                     started_at: None,
                     error: None,
                     percent: None,
+                    encoder: None,
                 },
             );
         }

@@ -35,6 +35,7 @@ pub mod semantic_search;
 pub mod thumbnail_generator;
 pub mod thumbnail_types;
 pub mod video_capability;
+pub mod video_encoder;
 pub mod video_probe;
 pub mod video_processor;
 pub mod video_stream;

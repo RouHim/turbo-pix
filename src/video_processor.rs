@@ -1279,6 +1279,58 @@ pub fn get_copied_path_versioned(
     ))
 }
 
+/// Faststart remux sidecar path under `{cache_dir}/remux/`, versioned by the
+/// source's content fingerprint (size + mtime millis) exactly like the
+/// transcode cache. (Moved from handlers_video so all three transcode
+/// namespaces have one home module.)
+pub(crate) fn remux_sidecar_path(
+    cache_dir: &str,
+    original_hash: &str,
+    file_size: i64,
+    modified_millis: i64,
+) -> std::path::PathBuf {
+    Path::new(cache_dir).join("remux").join(format!(
+        "{}_{}_{}.mp4",
+        original_hash, file_size, modified_millis
+    ))
+}
+
+/// Removes every transcode-cache file for `hash`: finished versioned
+/// artifacts (`{hash}_*.mp4`) and temp leftovers (`{hash}_*.tmp`) in the
+/// `transcoded/`, `copied/` and `remux/` namespaces.
+///
+/// `clear_for_hash` (CacheManager) only covers thumbnails — without this call
+/// a deleted photo's conversions stay on disk forever. The `{hash}_` prefix
+/// uses the full 64-hex path hash, so no other photo's files can match.
+pub fn clear_transcode_cache_for_hash(hash: &str) {
+    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
+        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
+    let root = Path::new(&cache_dir);
+    let prefix = format!("{hash}_");
+    for ns in ["transcoded", "copied", "remux"] {
+        let dir = root.join(ns);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let path = entry.path();
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!(
+                        "Failed to remove transcode cache file {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2691,5 +2743,40 @@ pub(crate) mod tests {
         assert!(finished.exists());
         assert!(other_finished.exists());
         assert!(real.exists());
+    }
+    #[tokio::test]
+    async fn clear_transcode_cache_for_hash_removes_all_namespaces() {
+        // GIVEN versioned artifacts plus a temp in every namespace, and another hash's files
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", temp.path().to_str().unwrap());
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let other = "2222222222222222222222222222222222222222222222222222222222222222";
+        let mut doomed = Vec::new();
+        for ns in ["transcoded", "copied", "remux"] {
+            let dir = temp.path().join(ns);
+            std::fs::create_dir_all(&dir).unwrap();
+            for name in [
+                format!("{hash}_100_200.mp4"),
+                format!("{hash}_300_400.mp4"),
+                format!("{hash}_100_200.mp4.tmp"),
+            ] {
+                let p = dir.join(name);
+                std::fs::write(&p, b"x").unwrap();
+                doomed.push(p);
+            }
+        }
+        let kept = temp
+            .path()
+            .join("transcoded")
+            .join(format!("{other}_100_200.mp4"));
+        std::fs::write(&kept, b"x").unwrap();
+
+        // WHEN the hash's transcode cache is cleared
+        clear_transcode_cache_for_hash(hash);
+
+        // THEN every `{hash}_*` file is gone in all three namespaces, the other hash survives
+        assert!(doomed.iter().all(|p| !p.exists()));
+        assert!(kept.exists());
     }
 }

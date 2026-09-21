@@ -159,6 +159,8 @@ impl PhotoProcessor {
             if let Err(e) = cache_manager.clear_for_hash(hash).await {
                 error!("Failed to clear cache for {}: {}", hash, e);
             }
+            // Conversions are keyed by the same hash; orphan rows must not leave them behind.
+            crate::video_processor::clear_transcode_cache_for_hash(hash);
         }
 
         // Step 4: Process all files found on disk (with pre-check for unchanged files)

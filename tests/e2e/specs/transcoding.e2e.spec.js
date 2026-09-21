@@ -151,4 +151,53 @@ test.describe('Transcoding', () => {
       /\((?:libx264|h264_nvenc|h264_vaapi|h264_qsv|h264_amf|h264_videotoolbox)\)$/
     );
   });
+
+  test('should report the encoder that produced the conversion', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    // GIVEN an AVI/mpeg4 source that always converts (Chromium cannot play it)
+    const photo = await findVideoByFilename(page, 'test_video_legacy.avi');
+    await TestHelpers.clearCachedConversions(photo.hash_sha256);
+
+    // WHEN the conversion is requested and completes
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    // `?transcode=true` is the whole-file escape hatch: it is the request that
+    // claims the conversion slot and spawns the job. A bare byte request for a
+    // stream delivery serves the original instead (nothing is claimed), so the
+    // status endpoint below would answer 404 forever.
+    const trigger = await page.request.get(`/api/photos/${photo.hash_sha256}/video?transcode=true`);
+    expect(trigger.status()).toBe(202);
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(`/api/photos/${photo.hash_sha256}/video/status`);
+          if (!response.ok()) return 'missing-status';
+          const status = await response.json();
+          return status.state;
+        },
+        { timeout: 90_000, intervals: [1000] }
+      )
+      .toBe('Completed');
+
+    // THEN the status names a known encoder and never an alias or a flag blob
+    const status = await (
+      await page.request.get(`/api/photos/${photo.hash_sha256}/video/status`)
+    ).json();
+    expect([
+      'libx264',
+      'h264_nvenc',
+      'h264_vaapi',
+      'h264_qsv',
+      'h264_amf',
+      'h264_videotoolbox',
+    ]).toContain(status.encoder);
+
+    // AND playback of the produced artifact is unaffected
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator(TestHelpers.selectors.photoCard(photo.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
+  });
 });

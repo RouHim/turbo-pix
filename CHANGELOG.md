@@ -1,3 +1,43 @@
+# [2.42.0](https://github.com/RouHim/turbo-pix/compare/2.41.3...2.42.0) (2026-09-21)
+
+
+### Bug Fixes
+
+* **api:** make out-of-range month bounds match nothing ([33c001e](https://github.com/RouHim/turbo-pix/commit/33c001ea1b6b7bc0aca7d7648ec834a82a772e3d))
+* **map:** close popups from the map keyboard path and cover cluster activation ([926aee7](https://github.com/RouHim/turbo-pix/commit/926aee74c4d01821fa056c190c4c56cd19470963))
+* **map:** harden cluster counts, focus paths, query errors and wrap-around markers ([508b996](https://github.com/RouHim/turbo-pix/commit/508b996380fcee5996a5e273876acc4b9386758e))
+* **map:** keep wrapped marker longitudes inside the visible window ([5c553a2](https://github.com/RouHim/turbo-pix/commit/5c553a23593eabab7cfd0f411947016b9e6d43df))
+* **map:** thread date-range bounds through map listing ([4c7a115](https://github.com/RouHim/turbo-pix/commit/4c7a115d2435921b6b2236348cec308c97a4d200))
+* **saved-searches:** reject overflowing range bounds instead of wrapping ([dbb100f](https://github.com/RouHim/turbo-pix/commit/dbb100f24221c949a638afe311e38192b7a6ea94))
+* **timeline:** address selector review findings (tab reachability, zoom-across-resize, pan clamp, reset, reap, suppressClick) ([50aa7bf](https://github.com/RouHim/turbo-pix/commit/50aa7bf1b9813cbf0cb24bdb68b051e40567189c))
+* **timeline:** guard the handle-slider commit against a zero-photo collapse ([1ae4149](https://github.com/RouHim/turbo-pix/commit/1ae41496e7f86ab8c7b3868add667c31078f2c0d))
+* **timeline:** honour user view gestures, grid-align keyboard steps and year selection ([8522185](https://github.com/RouHim/turbo-pix/commit/85221852b141b6ac4cdeadf2d15fded531ce3898))
+* **timeline:** keep a month activation a single-period filter ([d54861f](https://github.com/RouHim/turbo-pix/commit/d54861f40b1ffe13b08a9db457876d9bdb440a56))
+* **timeline:** keep pan gestures out of suppressClick, silence the lane click a11y warning, raise the indexing-completion budget ([01b1819](https://github.com/RouHim/turbo-pix/commit/01b181905db60d81f80c7a5de956eb5801c858a3))
+* **timeline:** refuse a zero-photo single period and keep the roving focus ([682c324](https://github.com/RouHim/turbo-pix/commit/682c324ab029e8d29c055968e3832e0d68f98521))
+* **timeline:** release tracked pointers at the window and pin the announced period names ([5d9355b](https://github.com/RouHim/turbo-pix/commit/5d9355b7d6427d6d4317dbe957ffcea3b43f611b))
+* **timeline:** suppress the click an Escape-cancelled gesture releases onto a column ([66d3e50](https://github.com/RouHim/turbo-pix/commit/66d3e509f70f1eb1513474bcba803344853cd953))
+* **timeline:** zoom with a two-finger pinch and announce decade columns correctly ([f734faa](https://github.com/RouHim/turbo-pix/commit/f734faadef79ff09aaf05f7a0c183ea61f142b90))
+
+
+### Features
+
+* **api:** filter photos by inclusive month range ([cdc754b](https://github.com/RouHim/turbo-pix/commit/cdc754b5465a53b7579d4e61075b8fd84d1abf1a))
+* **map:** add map data helpers and unpaginated photo listing client ([0c4bc29](https://github.com/RouHim/turbo-pix/commit/0c4bc29b969020800bc2224e0fa6500e53f7cacb))
+* **map:** add unpaginated /api/photos/map listing ([8328fef](https://github.com/RouHim/turbo-pix/commit/8328fef5efbee08e65961d2a72aa9177321e6361))
+* **map:** add unpaginated filtered photo query ([e8d0737](https://github.com/RouHim/turbo-pix/commit/e8d07371c997ee3189e17b1b9778d8a720ae77fc))
+* **map:** make the OSM tile endpoint operator-configurable ([6fd1140](https://github.com/RouHim/turbo-pix/commit/6fd1140841b8cb7871d843cf98ce18bf5aeabc15))
+* **map:** register the map view with tiles, attribution, and states ([0f570b2](https://github.com/RouHim/turbo-pix/commit/0f570b2a0be6fb048f0f60b3fb71816f5d99c485))
+* **map:** render clustered photo markers with popups and viewer handoff ([d2f9064](https://github.com/RouHim/turbo-pix/commit/d2f9064a6cdb48e127b9305859c504d86e00b8f1))
+* **saved-searches:** persist inclusive date-range bounds ([7acecf7](https://github.com/RouHim/turbo-pix/commit/7acecf7ab4aa402a4d395c94744d082aa026a785))
+* **timeline:** add pure month-index model, drop year aggregates ([8ebdb5a](https://github.com/RouHim/turbo-pix/commit/8ebdb5aff63f26f932749195219be8c7aed66475))
+* **timeline:** add pure zoom/pan/label geometry with tests ([ef6004f](https://github.com/RouHim/turbo-pix/commit/ef6004ff065c339d2991e76b2348a06fa6af1de1))
+* **timeline:** add route date-filter mapping with tests ([961922d](https://github.com/RouHim/turbo-pix/commit/961922d1ebc5dfee35d5e162b07734ac70bafb32))
+* **timeline:** carry the date range through route, API and saved searches ([f5de7b5](https://github.com/RouHim/turbo-pix/commit/f5de7b5a80e7d8a3fdd75cad5c5b11398e16c3c2))
+* **timeline:** keyboard operation and announcements for the selector ([62446e0](https://github.com/RouHim/turbo-pix/commit/62446e010d1349eec36377c94d54ad5fee2c4910))
+* **timeline:** month-granular selection with drill-in, brush and handles ([78969c1](https://github.com/RouHim/turbo-pix/commit/78969c1327bbe26f1678239e9277b7362c60e1b1))
+* **timeline:** replace the desktop rail with a zoomable overview ([3ed1964](https://github.com/RouHim/turbo-pix/commit/3ed19646fcd724846e7464b127f53bad05e19cee))
+
 ## [2.41.3](https://github.com/RouHim/turbo-pix/compare/2.41.2...2.41.3) (2026-09-20)
 
 ## [2.41.2](https://github.com/RouHim/turbo-pix/compare/2.41.1...2.41.2) (2026-09-18)

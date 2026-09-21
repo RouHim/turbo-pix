@@ -766,7 +766,37 @@ In `src/video_processor.rs`, widen the test helper (line ~2025) so the new modul
     pub(crate) fn make_executable(path: &Path) {
 ```
 
-Add to `src/video_encoder.rs` (above `#[cfg(test)]`):
+Add to `src/video_encoder.rs` (above `#[cfg(test)]`).
+
+**First restore what the probe side needs.** The repo's zero-warning rule makes unused imports, constants and helpers hard errors, so Task 1 shipped only what its own tests called: add back the imports, the two probe constants, and the render-node gate (and drop the `#[cfg(test)]` attribute Task 1 put on `lists_encoder`, which production code now calls).
+
+```rust
+use std::process::Stdio;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use tokio::process::Command;
+use tokio::time::timeout;
+
+/// Longest a single ffmpeg probe (encoder listing or encode) may take. A
+/// working encode answers in milliseconds; a broken vendor runtime can hang,
+/// and a false "unusable" verdict is cheaper than a stalled boot.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Synthetic probe input: instant to encode, comfortably above every vendor's
+/// minimum frame size, and available without a file on disk.
+const PROBE_INPUT: &str = "color=c=black:s=320x240:r=30:d=0.1";
+```
+
+```rust
+    /// Backends driven through a DRM render node. Linux-only: the same encoders
+    /// take their device implicitly on other platforms.
+    fn needs_render_node(self) -> bool {
+        cfg!(target_os = "linux") && matches!(self, Self::Vaapi | Self::Qsv | Self::Amf)
+    }
+```
+
+Then the verdict, detection and probe:
 
 ```rust
 /// The process's verdict, resolved once. `None` is a real verdict ("no usable

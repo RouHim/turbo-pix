@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::SemaphorePermit;
 use tokio::task::JoinHandle;
 
+use crate::video_encoder::{self, HwPlan, SOFTWARE_ENCODER};
 use crate::video_processor::{
     acquire_transcode_permit, format_binary_error, get_ffmpeg_path, transcode_timeout_secs,
 };
@@ -45,6 +46,13 @@ pub const FULL_RUN_MAX_START_SECS: f64 = 0.5;
 /// the configured timeout, cheap enough to keep watching for the hours a long
 /// conversion legitimately runs.
 const STALL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Longest a hardware-planned run may take to hand over its first bytes before
+/// it is treated as merely slow instead of broken. ffmpeg writes the fragmented
+/// header as soon as the encoder opens, so a hardware encoder that cannot start
+/// produces nothing and exits; a silent-but-alive run is left to the stall
+/// watchdog, which knows how to tell "stuck" from "long".
+const FIRST_BYTES_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Longest a killed run's stderr drain may hold up the watchdog's answer. The
 /// drain only feeds the error message; a descendant that outlives the killed
@@ -103,15 +111,27 @@ pub fn stream_queue_wait_secs() -> u64 {
 /// apart. `-map 0:a:0?` tolerates sources with no audio track. `video_codec` is
 /// the source's first video track as the capability record resolved it, and only
 /// matters for the copy modes — see the `-tag:v` note below.
+///
+/// `plan` is the probed hardware encoder to run the transcode rung on; `None`
+/// (and every copy mode, which never encodes video) keeps the historical
+/// argument vector byte for byte. The device option is an *input* option, so a
+/// plan's `input_args` are spliced in ahead of `-i` — ffmpeg rejects a device
+/// named after the input, and VAAPI's upload filter cannot arm the encoder
+/// without it.
 pub fn build_args(
     mode: StreamMode,
     input: &Path,
     start_secs: f64,
     video_codec: &str,
+    plan: Option<&HwPlan>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["-v".into(), "error".into(), "-nostdin".into()];
     if mode == StreamMode::Transcode {
         args.extend(["-hwaccel".into(), "auto".into()]);
+        // Device selection is an input option, like `-hwaccel`.
+        if let Some(plan) = plan {
+            args.splice(0..0, plan.input_args());
+        }
     }
     if start_secs > 0.0 {
         args.extend(["-ss".into(), format!("{start_secs:.3}")]);
@@ -124,34 +144,64 @@ pub fn build_args(
         "0:a:0?".into(),
     ]);
     match mode {
-        StreamMode::Transcode => args.extend(
-            [
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "23",
-                "-pix_fmt",
-                "yuv420p",
-                "-profile:v",
-                "main",
-                "-g",
-                "48",
-                "-keyint_min",
-                "48",
-                "-sc_threshold",
-                "0",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "160k",
-                "-ac",
-                "2",
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        ),
+        StreamMode::Transcode => match plan {
+            Some(plan) => {
+                // A backend that only encodes hardware surfaces needs the
+                // upload in the filter graph; the rest take decoder frames.
+                if let Some(filter) = plan.upload_filter_args() {
+                    args.extend(filter);
+                }
+                args.extend(plan.video_args());
+                args.extend(
+                    [
+                        "-profile:v",
+                        "main",
+                        "-g",
+                        "48",
+                        "-keyint_min",
+                        "48",
+                        "-sc_threshold",
+                        "0",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "160k",
+                        "-ac",
+                        "2",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string()),
+                );
+            }
+            None => args.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "23",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-profile:v",
+                    "main",
+                    "-g",
+                    "48",
+                    "-keyint_min",
+                    "48",
+                    "-sc_threshold",
+                    "0",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "160k",
+                    "-ac",
+                    "2",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
+            ),
+        },
         StreamMode::Audio => args.extend(
             ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ac", "2"]
                 .iter()
@@ -264,6 +314,12 @@ impl ProgressStamp {
 /// flow, so it is the only honest witness of "still making progress".
 #[derive(Debug)]
 pub struct ProgressReader {
+    /// Bytes read from the child before the response body existed — a
+    /// hardware-planned run's first chunk, which the first-byte gate had to read
+    /// to decide whether the encoder opened. Replayed ahead of `inner` so the
+    /// body still starts at the first byte of the stream.
+    prefix: Vec<u8>,
+    prefix_pos: usize,
     inner: ChildStdout,
     stamp: ProgressStamp,
 }
@@ -275,6 +331,19 @@ impl AsyncRead for ProgressReader {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let this = self.get_mut();
+        if this.prefix_pos < this.prefix.len() {
+            let remaining = this.prefix.len() - this.prefix_pos;
+            let take = remaining.min(buf.remaining());
+            let end = this.prefix_pos + take;
+            buf.put_slice(&this.prefix[this.prefix_pos..end]);
+            this.prefix_pos = end;
+            if this.prefix_pos == this.prefix.len() {
+                this.prefix.clear();
+                this.prefix_pos = 0;
+            }
+            this.stamp.touch();
+            return Poll::Ready(Ok(()));
+        }
         let polled = Pin::new(&mut this.inner).poll_read(cx, buf);
         if matches!(polled, Poll::Ready(Ok(()))) {
             this.stamp.touch();
@@ -301,6 +370,13 @@ pub struct StreamHandle {
     pub permit: SemaphorePermit<'static>,
     /// The watchdog's view of this run's progress; hand it to [`supervise`].
     pub progress: ProgressStamp,
+    /// Encoder that produced *these* bytes: the plan's encoder for a hardware
+    /// run, `libx264` for a plan-less (or respawned) transcode, and `None` for
+    /// the copy modes. The response advertises it so the client can tell a CPU
+    /// conversion from a hardware one; `None` has to stay distinguishable from
+    /// `libx264`, because a remux that reported the software encoder would show
+    /// a "CPU conversion" hint for a run that encoded nothing at all.
+    pub encoder: Option<String>,
 }
 
 /// Start one stream run. `video_codec` is the source's first video track as the
@@ -311,6 +387,27 @@ pub async fn start_stream(
     start_secs: f64,
     video_codec: &str,
 ) -> Result<StreamHandle, StreamStartError> {
+    // Only the transcode rung encodes, so only it can use a hardware encoder.
+    let plan = match mode {
+        StreamMode::Transcode => video_encoder::active(),
+        _ => None,
+    };
+    start_stream_with_plan(mode, input, start_secs, video_codec, plan).await
+}
+
+/// [`start_stream`] with the encoder decision injected, so tests can exercise
+/// the hardware path without initialising the process-wide verdict.
+pub async fn start_stream_with_plan(
+    mode: StreamMode,
+    input: &Path,
+    start_secs: f64,
+    video_codec: &str,
+    plan: Option<HwPlan>,
+) -> Result<StreamHandle, StreamStartError> {
+    // Acquired exactly once, before either spawn: the respawn below replaces a
+    // process, and a second slot for it would shrink the pool on every hardware
+    // failure until a restart. `spawn_stream_child` therefore never touches the
+    // semaphore. The permit is dropped with the handle on every early return.
     let permit = match tokio::time::timeout(
         Duration::from_secs(stream_queue_wait_secs()),
         acquire_transcode_permit(),
@@ -323,8 +420,84 @@ pub async fn start_stream(
     };
 
     let ffmpeg = get_ffmpeg_path();
-    let mut child = Command::new(&ffmpeg)
-        .args(build_args(mode, input, start_secs, video_codec))
+    let mut child =
+        spawn_stream_child(&ffmpeg, mode, input, start_secs, video_codec, plan.as_ref())?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| StreamStartError::Spawn("ffmpeg stdout pipe unavailable".to_string()))?;
+
+    let mut prefix = Vec::new();
+    // Whether the run now holding the pipes is still on the plan: the respawn
+    // drops it, and the reported encoder has to follow the bytes.
+    let mut used_plan = plan.is_some();
+    if plan.is_some() {
+        // A hardware encoder that passed its probe can still refuse the real
+        // source. That shows up as "died before the init segment", and it has
+        // to be replaced here: once bytes have reached the body the run can no
+        // longer be swapped, and the client would spend a ladder step on a
+        // failure it cannot see coming.
+        match take_first_bytes(&mut child, &mut stdout).await {
+            Ok(first) => prefix = first,
+            Err(()) => {
+                log::warn!(
+                    "Hardware encoder produced nothing for {}; retrying with the software encoder",
+                    input.display()
+                );
+                drop(child);
+                used_plan = false;
+                child = spawn_stream_child(&ffmpeg, mode, input, start_secs, video_codec, None)?;
+                stdout = child.stdout.take().ok_or_else(|| {
+                    StreamStartError::Spawn("ffmpeg stdout pipe unavailable".to_string())
+                })?;
+            }
+        }
+    }
+    // Taken after the gate: the gate consumes the failed run's stderr for the
+    // log, and every run that survives the gate still has its pipe.
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| StreamStartError::Spawn("ffmpeg stderr pipe unavailable".to_string()))?;
+
+    // The encoder that produced the bytes this handle will deliver. The copy
+    // modes report nothing: they never encode video, and "no claim" has to stay
+    // distinguishable from "encoded on the CPU".
+    let encoder = (mode == StreamMode::Transcode).then(|| {
+        plan.as_ref()
+            .filter(|_| used_plan)
+            .map_or(SOFTWARE_ENCODER, |plan| plan.encoder().name())
+            .to_string()
+    });
+
+    let progress = ProgressStamp::new();
+    Ok(StreamHandle {
+        mode,
+        stdout: ProgressReader {
+            prefix,
+            prefix_pos: 0,
+            inner: stdout,
+            stamp: progress.clone(),
+        },
+        stderr,
+        child,
+        permit,
+        progress,
+        encoder,
+    })
+}
+
+/// Spawn one stream run, with the plan's device arguments when there is one.
+fn spawn_stream_child(
+    ffmpeg: &str,
+    mode: StreamMode,
+    input: &Path,
+    start_secs: f64,
+    video_codec: &str,
+    plan: Option<&HwPlan>,
+) -> Result<Child, StreamStartError> {
+    Command::new(ffmpeg)
+        .args(build_args(mode, input, start_secs, video_codec, plan))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -333,29 +506,52 @@ pub async fn start_stream(
         // ffmpeg would keep a conversion slot while streaming to nobody.
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| StreamStartError::Spawn(format_binary_error("ffmpeg", &ffmpeg, &e)))?;
+        .map_err(|e| StreamStartError::Spawn(format_binary_error("ffmpeg", ffmpeg, &e)))
+}
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| StreamStartError::Spawn("ffmpeg stdout pipe unavailable".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| StreamStartError::Spawn("ffmpeg stderr pipe unavailable".to_string()))?;
-
-    let progress = ProgressStamp::new();
-    Ok(StreamHandle {
-        mode,
-        stdout: ProgressReader {
-            inner: stdout,
-            stamp: progress.clone(),
-        },
-        stderr,
-        child,
-        permit,
-        progress,
-    })
+/// Wait for a hardware-planned run to hand over its first bytes.
+///
+/// `Err(())` means the run produced nothing and is not worth keeping (it either
+/// exited or closed stdout); `Ok(vec![])` means it is alive but slow, which the
+/// stall watchdog owns, not this gate — the run is kept and streams whenever it
+/// gets there. Whatever was read is returned so the response body can start at
+/// the first byte.
+async fn take_first_bytes(child: &mut Child, stdout: &mut ChildStdout) -> Result<Vec<u8>, ()> {
+    let mut buf = vec![0u8; 64 * 1024];
+    // Bytes first: a run that wrote its init segment and exited immediately
+    // (a very short source) must read as "started", not as "produced nothing".
+    // Pipes keep buffered data readable after the writer is gone, and the two
+    // arms can be ready in the same poll — `biased` makes the read win.
+    let gate = async {
+        tokio::select! {
+            biased;
+            read = stdout.read(&mut buf) => match read {
+                Ok(n) if n > 0 => Ok(n),
+                _ => Err(()),
+            },
+            status = child.wait() => {
+                log::debug!("Hardware stream run exited before its first bytes: {status:?}");
+                Err(())
+            }
+        }
+    };
+    match tokio::time::timeout(FIRST_BYTES_TIMEOUT, gate).await {
+        Ok(Ok(n)) => Ok(buf[..n].to_vec()),
+        Ok(Err(_)) => {
+            // Why the encoder refused (a busy device, a pixel format it cannot
+            // take) is only in its stderr, and this run's process is about to be
+            // dropped: read it while the pipe is still there.
+            if let Some(mut stderr) = child.stderr.take() {
+                let mut text = String::new();
+                let _ =
+                    tokio::time::timeout(STDERR_DRAIN_TIMEOUT, stderr.read_to_string(&mut text))
+                        .await;
+                log::debug!("Hardware stream run produced no output: {}", text.trim());
+            }
+            Err(())
+        }
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 /// Join the stderr drain, but never let it delay the outcome: the drained text
@@ -386,8 +582,6 @@ pub async fn supervise(
     stderr: ChildStderr,
     progress: ProgressStamp,
 ) -> Result<(), String> {
-    use tokio::io::AsyncReadExt;
-
     let stderr_task = tokio::spawn(async move {
         let mut reader = stderr;
         let mut buf = String::new();
@@ -443,6 +637,9 @@ pub async fn supervise(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video_encoder::{HwEncoder, HwPlan};
+    use crate::video_processor::tests::TestEnvGuard;
+    use tempfile::TempDir;
 
     /// Upper bound on how many bytes a head assertion reads from the stream.
     const HEAD_BYTES: usize = 64 * 1024;
@@ -483,7 +680,13 @@ mod tests {
 
     #[test]
     fn transcode_args_reencode_into_fragmented_mp4() {
-        let args = build_args(StreamMode::Transcode, Path::new("/in.mp4"), 0.0, "hevc");
+        let args = build_args(
+            StreamMode::Transcode,
+            Path::new("/in.mp4"),
+            0.0,
+            "hevc",
+            None,
+        );
         let joined = args.join(" ");
         assert!(joined.contains("-c:v libx264"));
         assert!(joined.contains("-preset veryfast"));
@@ -500,7 +703,8 @@ mod tests {
 
     #[test]
     fn audio_mode_copies_video_and_reencodes_audio() {
-        let joined = build_args(StreamMode::Audio, Path::new("/in.mp4"), 12.5, "h264").join(" ");
+        let joined =
+            build_args(StreamMode::Audio, Path::new("/in.mp4"), 12.5, "h264", None).join(" ");
         assert!(joined.contains("-ss 12.500 -i /in.mp4"));
         assert!(joined.contains("-c:v copy"));
         assert!(joined.contains("-c:a aac"));
@@ -509,7 +713,8 @@ mod tests {
 
     #[test]
     fn remux_mode_copies_everything() {
-        let joined = build_args(StreamMode::Remux, Path::new("/in.mkv"), 3.0, "h264").join(" ");
+        let joined =
+            build_args(StreamMode::Remux, Path::new("/in.mkv"), 3.0, "h264", None).join(" ");
         assert!(joined.contains("-c copy"));
         assert!(!joined.contains("libx264"));
     }
@@ -520,7 +725,7 @@ mod tests {
         // client was promised `hvc1.*` in the MIME: the init segment has to
         // carry the tag the SourceBuffer was created for.
         for mode in [StreamMode::Remux, StreamMode::Audio] {
-            let args = build_args(mode, Path::new("/in.mkv"), 0.0, "hevc");
+            let args = build_args(mode, Path::new("/in.mkv"), 0.0, "hevc", None);
             assert!(
                 args.iter().any(|arg| arg == "-tag:v") && args.iter().any(|arg| arg == "hvc1"),
                 "{mode:?} must tag a copied HEVC track hvc1: {}",
@@ -528,7 +733,7 @@ mod tests {
             );
         }
         for codec in ["h264", "av1", "vp9", "vp8", ""] {
-            let args = build_args(StreamMode::Remux, Path::new("/in.mkv"), 0.0, codec);
+            let args = build_args(StreamMode::Remux, Path::new("/in.mkv"), 0.0, codec, None);
             assert!(
                 !args.iter().any(|arg| arg == "-tag:v"),
                 "a {codec} copy must not carry hvc1: {}",
@@ -545,13 +750,75 @@ mod tests {
         // exists; with `delay_moov` it writes the moov once the first packets
         // have been parsed, still ahead of every fragment.
         for mode in [StreamMode::Remux, StreamMode::Audio, StreamMode::Transcode] {
-            let joined = build_args(mode, Path::new("/in.mp4"), 0.0, "h264").join(" ");
+            let joined = build_args(mode, Path::new("/in.mp4"), 0.0, "h264", None).join(" ");
             assert!(
                 joined.contains(
                     "-movflags frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+delay_moov"
                 ),
                 "{mode:?} must request delay_moov: {joined}"
             );
+        }
+    }
+
+    #[test]
+    fn transcode_args_are_unchanged_without_a_plan() {
+        // GIVEN the software path
+        let args = build_args(
+            StreamMode::Transcode,
+            Path::new("/in.mp4"),
+            0.0,
+            "hevc",
+            None,
+        );
+
+        // THEN the historical argument vector is intact
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(args.contains(&"veryfast".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("h264_")));
+        assert!(!args.contains(&"-vaapi_device".to_string()));
+    }
+
+    #[test]
+    fn transcode_args_swap_in_the_hardware_encoder() {
+        // GIVEN a VAAPI plan
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN the stream arguments are built
+        let args = build_args(
+            StreamMode::Transcode,
+            Path::new("/in.mp4"),
+            0.0,
+            "hevc",
+            Some(&plan),
+        );
+        let joined = args.join(" ");
+
+        // THEN the device precedes the input, frames are uploaded, and the
+        // client-visible profile and fragmented-output contract are untouched
+        assert!(joined.find("-vaapi_device").unwrap() < joined.find("-i /in.mp4").unwrap());
+        assert!(joined.contains("-vf format=nv12,hwupload"), "{joined}");
+        assert!(joined.contains("-c:v h264_vaapi"), "{joined}");
+        assert!(!joined.contains("libx264"), "{joined}");
+        assert!(joined.contains("-profile:v main"), "{joined}");
+        assert!(joined.contains("-pix_fmt yuv420p"), "{joined}");
+        assert!(
+            joined.contains(
+                "-movflags frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+delay_moov"
+            ),
+            "{joined}"
+        );
+    }
+
+    #[test]
+    fn copy_modes_ignore_the_plan() {
+        // GIVEN a plan and the two modes that do not encode video
+        let plan = HwPlan::new(HwEncoder::Nvenc, None);
+
+        // THEN neither picks up a hardware encoder
+        for mode in [StreamMode::Remux, StreamMode::Audio] {
+            let joined = build_args(mode, Path::new("/in.mkv"), 0.0, "hevc", Some(&plan)).join(" ");
+            assert!(!joined.contains("h264_nvenc"), "{mode:?}: {joined}");
+            assert!(!joined.contains("-vaapi_device"), "{mode:?}: {joined}");
         }
     }
 
@@ -819,6 +1086,8 @@ mod tests {
         let stderr = child.stderr.take().unwrap();
         let progress = ProgressStamp::new();
         let mut reader = ProgressReader {
+            prefix: Vec::new(),
+            prefix_pos: 0,
             inner: child.stdout.take().unwrap(),
             stamp: progress.clone(),
         };
@@ -949,6 +1218,202 @@ mod tests {
             semaphore.available_permits(),
             capacity,
             "the permits handed back must be exactly the pool that was held"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn immediate_hardware_failure_respawns_in_software() {
+        // GIVEN an ffmpeg whose hardware encoder cannot open the source but
+        // whose software encoder streams fine
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            format!(
+                "#!/usr/bin/env sh\n\
+                 printf '%s\\n' \"$*\" >> '{}'\n\
+                 case \"$*\" in\n\
+                 *h264_vaapi*) printf '%s\\n' 'encoder refused' >&2; exit 1 ;;\n\
+                 esac\n\
+                 printf 'ftypsoftware-run'\n\
+                 exit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let fixture = Path::new("test-data/test_video_hevc.mp4");
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN the stream starts with that plan
+        let mut handle =
+            start_stream_with_plan(StreamMode::Transcode, fixture, 0.0, "hevc", Some(plan))
+                .await
+                .expect("the software respawn must deliver a stream");
+
+        // THEN the client gets the software run's bytes, from a run that was
+        // launched without the hardware flags
+        let mut head = vec![0u8; 16];
+        tokio::io::AsyncReadExt::read_exact(&mut handle.stdout, &mut head)
+            .await
+            .expect("body must carry bytes");
+        assert_eq!(&head, b"ftypsoftware-run");
+        let lines: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "expected a hardware attempt then a respawn: {lines:?}"
+        );
+        assert!(lines[0].contains("h264_vaapi"), "{lines:?}");
+        assert!(!lines[1].contains("h264_vaapi"), "{lines:?}");
+        // AND the run reports the encoder that actually produced these bytes
+        assert_eq!(handle.encoder.as_deref(), Some("libx264"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_hardware_stream_run_reports_the_hardware_encoder() {
+        // GIVEN an ffmpeg that streams fine on any encoder
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(&ffmpeg, "#!/usr/bin/env sh\nprintf 'ftypmoov'\nexit 0\n").unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN a transcode run starts with that plan
+        let handle = start_stream_with_plan(
+            StreamMode::Transcode,
+            Path::new("test-data/test_video_hevc.mp4"),
+            0.0,
+            "hevc",
+            Some(plan),
+        )
+        .await
+        .expect("stream must start");
+
+        // THEN the run names the hardware encoder for the bytes it will deliver
+        assert_eq!(handle.encoder.as_deref(), Some("h264_vaapi"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_modes_report_no_encoder() {
+        // GIVEN a plan the copy modes must not use
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(&ffmpeg, "#!/usr/bin/env sh\nprintf 'ftypmoov'\nexit 0\n").unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let plan = HwPlan::new(HwEncoder::Nvenc, None);
+
+        // WHEN each copy mode starts
+        // THEN none of them claims an encoder: no video was encoded, so the
+        // player shows no hint rather than a CPU badge
+        for mode in [StreamMode::Remux, StreamMode::Audio] {
+            let handle = start_stream_with_plan(
+                mode,
+                Path::new("test-data/test_video_hevc.mp4"),
+                0.0,
+                "hevc",
+                Some(plan.clone()),
+            )
+            .await
+            .expect("copy stream must start");
+            assert_eq!(handle.encoder, None, "{mode:?} must not report an encoder");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn first_bytes_are_preserved_for_the_body() {
+        // GIVEN an ffmpeg that emits its init segment and then a marker
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nprintf 'ftypmoovpayload'\nexit 0\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+        let fixture = Path::new("test-data/test_video_hevc.mp4");
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+
+        // WHEN a hardware-planned stream starts (the gate therefore read the
+        // first bytes before the body existed)
+        let mut handle =
+            start_stream_with_plan(StreamMode::Transcode, fixture, 0.0, "hevc", Some(plan))
+                .await
+                .expect("stream must start");
+
+        // THEN the body still starts at the first byte, exactly once
+        let mut all = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut handle.stdout, &mut all)
+            .await
+            .expect("body must be readable");
+        assert_eq!(all, b"ftypmoovpayload");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn planless_stream_returns_the_childs_bytes_verbatim() {
+        // GIVEN the software path (no plan, no gate)
+        let temp = TempDir::new().unwrap();
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            "#!/usr/bin/env sh\nprintf 'ftypmoovpayload'\nexit 0\n",
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg.to_str().unwrap());
+
+        // WHEN the stream starts
+        let mut handle = start_stream_with_plan(
+            StreamMode::Transcode,
+            Path::new("test-data/test_video_hevc.mp4"),
+            0.0,
+            "hevc",
+            None,
+        )
+        .await
+        .expect("stream must start");
+
+        // THEN the bytes are exactly the child's output
+        let mut all = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut handle.stdout, &mut all)
+            .await
+            .expect("body must be readable");
+        assert_eq!(all, b"ftypmoovpayload");
+    }
+
+    #[tokio::test]
+    async fn spawn_error_still_maps_to_start_error() {
+        // GIVEN a binary that does not exist
+        let _ffmpeg_guard = TestEnvGuard::set("FFMPEG_PATH", "/nonexistent/ffmpeg");
+
+        // WHEN a stream is started
+        let result = start_stream_with_plan(
+            StreamMode::Transcode,
+            Path::new("test-data/test_video_hevc.mp4"),
+            0.0,
+            "hevc",
+            None,
+        )
+        .await;
+
+        // THEN it is reported as a spawn failure, not swallowed by the gate
+        assert!(
+            matches!(result, Err(StreamStartError::Spawn(_))),
+            "expected a spawn error"
         );
     }
 }

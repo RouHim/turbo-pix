@@ -1118,6 +1118,7 @@ pub async fn stream_video(
         child,
         permit,
         progress,
+        encoder,
         ..
     } = handle;
     let hash = photo.hash_sha256.clone();
@@ -1166,13 +1167,26 @@ pub async fn stream_video(
         "x-turbopix-mime",
         output_mime(mode, &caps.codec, caps.audio_codec.as_deref()),
     );
+    // Which encoder produced this run's bytes. The copy modes send no header at
+    // all — no video encoding happened — which the player renders as "no hint",
+    // never as a CPU conversion. This is the only place a client can learn a
+    // live run's encoder: the media element's own request is unreadable to
+    // script, so a missing header has to mean "nothing was encoded".
+    let response: Box<dyn Reply> = match encoder {
+        Some(encoder) => Box::new(warp::reply::with_header(
+            response,
+            "x-turbopix-encoder",
+            encoder,
+        )),
+        None => Box::new(response),
+    };
     let response: Box<dyn Reply> = match duration {
         Some(secs) => Box::new(warp::reply::with_header(
             response,
             "x-turbopix-duration",
             format!("{secs:.3}"),
         )),
-        None => Box::new(response),
+        None => response,
     };
     Ok(response)
 }
@@ -3339,6 +3353,26 @@ mod tests {
                 "transcode",
                 "hint {hint:?} must not downgrade a required transcode"
             );
+            // A live run's encoder is only ever visible here: the media
+            // element's own request is unreadable to script. The test binary
+            // never initialises a hardware plan, so this reads `libx264`; the
+            // assertion lists the whole legal set instead of pinning the
+            // host's probe verdict.
+            let encoder = response.headers()["x-turbopix-encoder"]
+                .to_str()
+                .expect("the encoder header must be readable");
+            assert!(
+                [
+                    "libx264",
+                    "h264_nvenc",
+                    "h264_vaapi",
+                    "h264_qsv",
+                    "h264_amf",
+                    "h264_videotoolbox",
+                ]
+                .contains(&encoder),
+                "a transcode must name the encoder that produced its bytes, got {encoder:?} (hint {hint:?})"
+            );
             let _ = collect_response_body(response).await;
         }
     }
@@ -3407,6 +3441,13 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-turbopix-mode"], "remux");
         assert_eq!(response.headers()["content-type"], "video/mp4");
+        // A remux copies the video track, so no encoding happened and the
+        // client must get no encoder header at all — an absent header is what
+        // makes the player show no hint instead of a "CPU conversion" claim.
+        assert!(
+            response.headers().get("x-turbopix-encoder").is_none(),
+            "a remux must not advertise an encoder"
+        );
 
         let body = collect_response_body(response).await;
         assert!(body.windows(4).any(|w| w == b"ftyp"));

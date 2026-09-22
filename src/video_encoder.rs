@@ -774,6 +774,7 @@ mod tests {
         assert_eq!(plan.map(|p| p.encoder()), Some(HwEncoder::Vaapi));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn without_a_render_node_the_node_backends_are_never_probed() {
         // GIVEN an ffmpeg that lists VAAPI and a machine with no render nodes

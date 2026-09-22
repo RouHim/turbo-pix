@@ -205,12 +205,39 @@ test.describe('Transcoding', () => {
       'h264_videotoolbox',
     ]).toContain(status.encoder);
 
-    // AND playback of the produced artifact is unaffected
+    // AND playback of the produced artifact is unaffected: the artifact is
+    // decoded, not merely present. A truncated conversion output — the exact
+    // failure mode the whole-file encoder path can produce — is still served
+    // and still renders a `<video>`, so it would pass a visibility-only
+    // assertion while the element carries an `error` and no frame at all. The
+    // cached artifact plays as a file, and the viewer only auto-plays a file
+    // when its autoPlay setting is on (the MSE path self-plays), so enable it
+    // before opening.
+    await page.evaluate(() =>
+      localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+    );
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);
     await page.locator(TestHelpers.selectors.photoCard(photo.hash_sha256)).click();
     await TestHelpers.verifyViewerOpen(page);
-    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
+    const video = page.locator(TestHelpers.selectors.viewerVideo);
+    await expect(video).toBeVisible();
+    await page.waitForFunction(
+      (hash) => {
+        const el = document.querySelector('#viewer-video');
+        // Anchored on the photo this element holds, so a stale source of an
+        // earlier delivery cannot stand in for the artifact produced above.
+        return (
+          el &&
+          el.dataset.photoHash === hash &&
+          el.readyState >= 2 &&
+          el.currentTime > 0 &&
+          !el.error
+        );
+      },
+      photo.hash_sha256,
+      { timeout: 30_000 }
+    );
   });
 });
 

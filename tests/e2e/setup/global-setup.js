@@ -1,4 +1,4 @@
-import { exec, spawn } from 'child_process';
+import { exec, execFileSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { copyFile, mkdir, readlink, rm, utimes, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -112,6 +112,70 @@ async function setupTestDataDirectory() {
   console.log('Test data directory created');
 }
 
+/**
+ * Seed the multi-track fixture as a progressive all-stream twin of its source.
+ *
+ * The source ships with its moov at the end, so the indexing pass would
+ * faststart it in place with `-c copy -movflags +faststart` and no `-map`:
+ * ffmpeg's default stream selection keeps at most one stream per type and
+ * silently drops the AC-3 track, leaving a plain h264+aac file that makes the
+ * multi-track spec's "the second (AC-3) track must not be picked" assertion
+ * vacuous. Remuxing here with `-map 0` keeps h264+aac+ac3 and moves the moov to
+ * the front, so `fix_moov_atom`'s progressive check is already satisfied and
+ * the indexing pass leaves every stream alone.
+ *
+ * Fails loudly: a seed that silently lost a track would make the spec assert
+ * against the wrong file, which is exactly the state this avoids.
+ */
+function seedMultitrackFixture(source, destination) {
+  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
+  const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
+  try {
+    execFileSync(
+      ffmpeg,
+      [
+        '-v',
+        'error',
+        '-y',
+        '-i',
+        source,
+        '-map',
+        '0',
+        '-c',
+        'copy',
+        '-movflags',
+        '+faststart',
+        destination,
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    );
+  } catch (error) {
+    throw new Error(
+      `Failed to seed ${destination} from ${source} with ${ffmpeg}: ` +
+        `${error.stderr?.toString().trim() || error.message}`
+    );
+  }
+
+  const streams = execFileSync(ffprobe, [
+    '-v',
+    'error',
+    '-show_entries',
+    'stream=codec_type',
+    '-of',
+    'default=noprint_wrappers=1:nokey=1',
+    destination,
+  ])
+    .toString()
+    .trim()
+    .split('\n');
+  if (streams.length !== 3) {
+    throw new Error(
+      `Seeded ${destination} with ${streams.length} stream(s) [${streams.join(', ')}], ` +
+        'expected 3 (video, audio, audio)'
+    );
+  }
+}
+
 async function seedTestMedia() {
   console.log('Seeding generated test media...');
 
@@ -209,7 +273,9 @@ async function seedTestMedia() {
   }
 
   // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
-  // silent h264, an h264 with two audio tracks, a progressive-less h264 and a
+  // silent h264, an h264 with two audio tracks (h264+aac+ac3, seeded as a
+  // progressive all-stream remux of its source — see seedMultitrackFixture — so
+  // the indexing pass keeps all three streams), a progressive-less h264 and a
   // legacy MPEG-4/AVI rip. The dates pinned here only fix each file's
   // `date_modified` (the conversion cache key); the sort order the videos view
   // and the first-card specs see is pinned in updateTestPhotoDates, because a
@@ -225,7 +291,13 @@ async function seedTestMedia() {
     const source = path.join('test-data', fixture);
     const destination = path.join(photosDir, fixture);
     if (existsSync(source)) {
-      await copyFile(source, destination);
+      if (fixture === 'test_video_multitrack.mp4') {
+        // Remuxed to keep both audio tracks, not copied: see
+        // seedMultitrackFixture.
+        seedMultitrackFixture(source, destination);
+      } else {
+        await copyFile(source, destination);
+      }
       const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
       await utimes(destination, date, date);
     } else {

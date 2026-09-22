@@ -318,6 +318,44 @@ function gatedFetch() {
   };
 }
 
+/**
+ * `fakeFetch` whose body delivers the run's initialization segment and then
+ * leaves every later `read()` pending until `fail(index, error)` rejects it
+ * (`index` counts the runs in request order). That pending read is where a run
+ * raises an error from its OWN code path — the pump's `await reader.read()` —
+ * which a superseded run still owns after the replacement has detached its
+ * SourceBuffer listeners, so a test can reach the run body's `catch` instead of
+ * firing an event nothing listens for.
+ */
+function stalledBodyFetch() {
+  const calls = [];
+  const failures = [];
+  const fetchImpl = (url) => {
+    calls.push(url);
+    let reads = 0;
+    let fail;
+    const stalled = new Promise((_, reject) => {
+      fail = reject;
+    });
+    failures.push(fail);
+    const reader = {
+      read() {
+        reads += 1;
+        return reads === 1
+          ? Promise.resolve({ done: false, value: new Uint8Array([0, 0, 0, 24]) })
+          : stalled;
+      },
+    };
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: { getReader: () => reader },
+    });
+  };
+  return { fetchImpl, calls, fail: (index, error) => failures[index](error) };
+}
+
 function createPlayer(video, options = {}) {
   globalThis.MediaSource = FakeMediaSource;
   URL.createObjectURL = () => 'blob:fake-media-source';
@@ -577,7 +615,6 @@ test('a refused run reports the HTTP status so saturation is distinguishable', a
   assert.equal(errors.length, 1, 'the refusal reaches the viewer');
   assert.ok(errors[0] instanceof StreamHttpError, 'the failure is typed');
   assert.equal(errors[0].status, 503, 'the status survives to the viewer');
-  assert.equal(errors[0].startAt, 0, 'the run reports the offset it asked for');
   assert.equal(errors[0].retryAfterMs, 2000, "the server's pacing hint is translated");
 
   player.destroy();
@@ -598,7 +635,7 @@ test('a refusal without Retry-After leaves the pacing to the viewer', async () =
   player.destroy();
 });
 
-test('a refused run carries its start offset so the retry resumes the seek', async () => {
+test('a refused seek-restarted run reports its status and pacing hint', async () => {
   const video = fakeVideo();
   const { fetchImpl } = fakeFetch();
   const requested = [];
@@ -627,10 +664,11 @@ test('a refused run carries its start offset so the retry resumes the seek', asy
   assert.equal(requested.length, 2, 'the seek started a second run');
   assert.match(requested[1], /start=15\.000/);
   assert.equal(errors.length, 1, 'the refusal reached the viewer');
+  // The refusal of a seek-restarted run is no different from any other: the
+  // viewer keys its retry on the status and the pacing hint, and resumes the
+  // newest position the user asked for — its own `streamIntentOffset`, never an
+  // offset carried by the refused run.
   assert.equal(errors[0].status, 503);
-  // Without the offset the viewer's retry would restart the video at 0:00 and
-  // silently throw the user's seek away.
-  assert.equal(errors[0].startAt, 15, 'the retry can resume at the seek target');
   assert.equal(errors[0].retryAfterMs, 2000);
 
   player.destroy();
@@ -690,26 +728,37 @@ test('undecodable delivered bytes reach the viewer exactly once', async () => {
 
 test("a superseded run's late error does not escalate the run that replaced it", async () => {
   const video = fakeVideo();
-  const { fetchImpl, calls } = fakeFetch();
+  const { fetchImpl, calls, fail } = stalledBodyFetch();
   globalThis.fetch = fetchImpl;
   const errors = [];
-  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+  // The body of every run here stops after its initialization segment, so each
+  // run sits inside `pump` with a pending `read()`. That is the code path from
+  // which a superseded run raises an error of its own — the run body's `catch`
+  // — and it survives the supersession, unlike the SourceBuffer listeners
+  // `start()` detaches from the run it replaces: firing `error` on the old
+  // buffer reaches nothing and would let the attribution guard rot unnoticed.
+  // A declared duration is honest here: the replacement run starts at 15 s on a
+  // 2 s source, which is the run that has nothing left to deliver, not the
+  // truncated one.
+  const player = createPlayer(video, { duration: 2, onError: (error) => errors.push(error) });
 
-  await player.start(0);
+  const first = player.start(0);
   await settle(10);
-  const firstRun = createdSources.at(-1).sourceBuffers[0];
+  assert.equal(calls.length, 1, 'the first run is in flight');
 
   // A user seek restarts the stream: the old run is superseded, its media is
   // gone, and an error it reports late belongs to a mode the viewer left.
   video._currentTime = 15;
   video.dispatch('seeking');
-  await settle();
+  await settle(10);
+  assert.equal(calls.length, 2, 'the seek restart is still the current run');
 
-  firstRun.fire('error');
-  await settle();
+  // The superseded run's pending read now fails, and its own pump reports that
+  // failure with the signal it was superseded on.
+  fail(0, new Error('the superseded delivery failed'));
+  await settle(10);
 
   assert.equal(errors.length, 0, 'a superseded run must not fail the current one');
-  assert.equal(calls.length, 2, 'the seek restart is still the current run');
 
   // The run now attached still reports its own failure.
   createdSources.at(-1).sourceBuffers[0].fire('error');
@@ -717,6 +766,7 @@ test("a superseded run's late error does not escalate the run that replaced it",
   assert.equal(errors.length, 1, 'the current run reports once');
 
   player.destroy();
+  await first;
 });
 test("a run's buffer is typed from the MIME the server advertises for that run", async () => {
   const video = fakeVideo();
@@ -747,6 +797,11 @@ test("a run's buffer is typed from the MIME the server advertises for that run",
     });
   };
   const player = createPlayer(video, {
+    // No declared duration: this case is about the MIME the run's bytes are
+    // typed with, not about the timeline — the body here closes after the
+    // initialization segment, which a declared duration would report as the
+    // truncation it is.
+    duration: 0,
     mime: decisionMime,
     onError: (error) => errors.push(error),
   });
@@ -837,6 +892,65 @@ test('a stream that ends before the declared duration reports a failure, not `en
   // Reporting a clean end is what hid the notice and left the user stranded
   // with no ladder step and no "play original anyway".
   assert.ok(!states.includes('ended'), 'a truncated stream must not report a clean end');
+
+  player.destroy();
+});
+
+test('a run that buffers nothing at all is a failure even for a 2 s source', async () => {
+  const video = fakeVideo();
+  const states = [];
+  const errors = [];
+  // `fakeFetch(1)` delivers the run's initialization segment and then closes the
+  // body: the run gets past start-up and ends with no coded frame buffered —
+  // what ffmpeg dying mid-stream or the server killing the conversion at its
+  // deadline looks like. The source is 2 s, the duration of the shipped
+  // `test_video_hevc.mp4`: with a flat 2 s slack the threshold was
+  // `2 - 2 <= 0`, which the buffered end of 0 can never fall below, so the
+  // truncation was reported as a clean `ended` — the viewer hid its notice,
+  // never advanced the ladder and never offered "play original anyway".
+  globalThis.fetch = fakeFetch(1).fetchImpl;
+  const player = createPlayer(video, {
+    duration: 2,
+    onState: (value) => states.push(value),
+    onError: (error) => errors.push(error),
+  });
+
+  await player.start(0);
+  await settle(10);
+
+  assert.equal(errors.length, 1, 'the truncated run reaches the viewer');
+  assert.match(errors[0].message, /ended early/);
+  assert.ok(!states.includes('ended'), 'a buffer with no coded frames is not a clean end');
+
+  player.destroy();
+});
+
+test('a run that starts at the end of the clip ends cleanly, not as a truncation', async () => {
+  const video = fakeVideo();
+  const { fetchImpl } = fakeFetch();
+  globalThis.fetch = fetchImpl;
+  const states = [];
+  const errors = [];
+  // The element clamps a seek to the end of the clip onto the media duration
+  // (a scrubber drag to the far right, `currentTime = duration`), and the
+  // server still answers that offset with a stream head. The run's fragment
+  // lands past the declared end, so the clamp strips it and the buffer is empty
+  // by construction: the run has nothing left to deliver. Judged against the
+  // declared duration — a threshold that stays above 0 for every duration — it
+  // reported a truncation, so the viewer escalated its ladder up to three times
+  // for a position that cannot deliver anything and ended on a misleading
+  // "Video conversion failed".
+  const player = createPlayer(video, {
+    duration: 2,
+    onState: (value) => states.push(value),
+    onError: (error) => errors.push(error),
+  });
+
+  await player.start(2);
+  await settle(10);
+
+  assert.equal(errors.length, 0, 'a run with nothing left to deliver is not a truncation');
+  assert.ok(states.includes('ended'), 'the run reports the clean end the viewer expects');
 
   player.destroy();
 });
@@ -1252,7 +1366,7 @@ test('a seek that lands while a run sets up is reported as user intent', async (
   player.destroy();
 });
 
-test('a refused pending-seek run reports the newest target, not the parked element', async () => {
+test('a refused pending-seek run is started at the newest target, not the parked element', async () => {
   const video = fakeVideo();
   const calls = [];
   let releaseFirst;
@@ -1307,20 +1421,16 @@ test('a refused pending-seek run reports the newest target, not the parked eleme
 
   // The element stands on the earlier run's parked offset, which is precisely
   // what a retry reading the element would resume at — discarding the seek it
-  // was armed to resume. The refusal names the offset the user actually picked
-  // instead, and the user seek that left the parked offset was reported, so a
-  // viewer that disarms on that report resumes this offset and nothing else.
+  // was armed to resume. The run the stored target started asks for the offset
+  // the user actually picked, and the user seek that left the parked offset was
+  // reported, so a viewer that disarms on that report resumes this offset and
+  // nothing else.
   assert.equal(video.currentTime, 10, 'the earlier run parked the element on its own offset');
   assert.deepEqual(userSeeks, [25], 'the user seek was reported, never the parked offset');
   assert.equal(calls.length, 2, 'the stored target started its own run');
   assert.match(calls[1], /start=25\.000/);
   assert.equal(errors.length, 1, 'the refusal reached the viewer');
   assert.equal(errors[0].status, 503);
-  assert.equal(
-    errors[0].startAt,
-    25,
-    'the retry resumes the offset the user picked, not the one the element stands on'
-  );
 
   player.destroy();
   await run;
@@ -1440,4 +1550,142 @@ test('a waiting of a later run that has not played is not a stall', async () => 
   release();
   player.destroy();
   await run;
+});
+
+test('the slot-wait notice is armed before the stream request is issued', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const video = fakeVideo();
+  const states = [];
+  const { fetchImpl, calls } = fakeFetch();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const requested = [];
+  // A response held back until `release()`, with the request itself recorded as
+  // it is issued: `calls` (pushed by `fakeFetch` when it builds the response)
+  // stays empty for as long as the server has not answered.
+  globalThis.fetch = (url) => {
+    requested.push(url);
+    return gate.then(() => fetchImpl(url));
+  };
+  const player = createPlayer(video, { onState: (value) => states.push(value) });
+
+  const run = player.start(0);
+  await settle(2);
+  assert.equal(requested.length, 1, 'the run issued its request');
+  assert.equal(calls.length, 0, 'the server has not answered yet');
+  assert.deepEqual(states, [], 'nothing is announced before the notice is due');
+
+  // The hold the notice names happens BEFORE a response exists — a saturated
+  // pool keeps the request pending for its whole queue wait, with neither
+  // headers nor bytes — so the notice has to be reachable right here. Armed
+  // after the response resolved, this timer could only ever fire for a run that
+  // already holds a conversion slot and is slow to emit its first fragment.
+  t.mock.timers.tick(1499);
+  assert.deepEqual(states, [], 'the notice waits out its delay');
+  t.mock.timers.tick(1);
+  assert.deepEqual(states, ['waiting'], 'the notice tracks the hold, not a slow first fragment');
+
+  release();
+  await settle(10);
+  assert.deepEqual(
+    states,
+    ['waiting', 'buffering', 'ended'],
+    'the first bytes replace the notice, and the run then plays out'
+  );
+
+  player.destroy();
+  await run;
+});
+
+test('a refused run leaves no slot-wait notice behind', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const video = fakeVideo();
+  const states = [];
+  const errors = [];
+  globalThis.fetch = () =>
+    Promise.resolve({ ok: false, status: 503, headers: new Headers(), body: null });
+  const player = createPlayer(video, {
+    onState: (value) => states.push(value),
+    onError: (error) => errors.push(error),
+  });
+
+  await player.start(0);
+  await settle();
+  assert.equal(errors.length, 1, 'the refusal reached the viewer');
+  assert.deepEqual(states, [], 'a refused run announces nothing');
+
+  // The notice armed for that run went with it. Firing its timer now would put
+  // "waiting for a free conversion slot" on top of the failure the viewer is
+  // already handling, and re-arm the escape hatch the retry just took down.
+  t.mock.timers.tick(5000);
+  assert.deepEqual(states, [], "the dead run's notice never fires");
+
+  player.destroy();
+});
+
+test('a refused autoplay does not fail the run', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  const { fetchImpl, calls, release } = initSegmentFetch();
+  globalThis.fetch = fetchImpl;
+  // The viewer opened this run without a user activation (a `?photo=…` deep
+  // link, a reload), so the browser's autoplay policy refuses audible
+  // playback. The conversion behind the stream is perfectly healthy, and the
+  // element keeps its native `controls` for a one-click start — reporting this
+  // as a failure would tear the run down, climb the viewer's ladder and end on
+  // "video conversion failed" for a stream that was about to play.
+  let playCalls = 0;
+  video.play = () => {
+    playCalls += 1;
+    return Promise.reject(
+      new DOMException(
+        'play() failed because the user did not interact with the document',
+        'NotAllowedError'
+      )
+    );
+  };
+  const player = createPlayer(video, { duration: 0, onError: (error) => errors.push(error) });
+
+  let settled = false;
+  const run = player.start(0).then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  await settle(10);
+
+  assert.equal(playCalls, 1, 'the run reached playback');
+  assert.equal(errors.length, 0, 'a refused autoplay is not a stream failure');
+  assert.equal(settled, false, 'the run stays live');
+  assert.equal(calls.length, 1, 'no replacement run is started');
+  assert.equal(video.listenerCount('seeking'), 1, 'the player is not torn down');
+
+  player.destroy();
+  release();
+  await run;
+});
+
+test('any other play() rejection still fails the run', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  globalThis.fetch = fakeFetch().fetchImpl;
+  // Only `AbortError` (a superseded source) and `NotAllowedError` (the
+  // autoplay policy) are the element declining to start; every other rejection
+  // is the run's own failure and must reach the viewer.
+  const rejection = new DOMException('the media could not be played', 'NotSupportedError');
+  video.play = () => Promise.reject(rejection);
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(errors.length, 1, 'the failure reaches the viewer');
+  assert.equal(errors[0], rejection, 'the viewer gets the rejection itself');
+
+  player.destroy();
 });

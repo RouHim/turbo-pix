@@ -17,20 +17,20 @@ export function mseSupported(mime) {
  * conversion slot right now" — a saturated worker pool the viewer answers by
  * waiting and retrying — while anything else is a real playback failure.
  *
- * The refusal carries everything the retry needs: the offset this run asked for
- * (resuming the same position, not 0:00) and the server's `Retry-After` pacing
- * hint when it sent one.
+ * The refusal carries the server's `Retry-After` pacing hint when it sent one,
+ * and deliberately nothing about the offset this run asked for: the viewer
+ * keeps its own newest-intent offset and resumes the position the user picked,
+ * which a run the server held for its whole queue wait can be far behind.
  */
 export class StreamHttpError extends Error {
   /**
    * @param {number} status
-   * @param {{startAt?: number, retryAfterMs?: number|null}} [details]
+   * @param {{retryAfterMs?: number|null}} [details]
    */
-  constructor(status, { startAt = 0, retryAfterMs = null } = {}) {
+  constructor(status, { retryAfterMs = null } = {}) {
     super(`stream HTTP ${status}`);
     this.name = 'StreamHttpError';
     this.status = status;
-    this.startAt = startAt;
     this.retryAfterMs = retryAfterMs;
   }
 }
@@ -83,7 +83,6 @@ export function createStreamPlayer(
   let sourceBuffer = null;
   let controller = null;
   let destroyed = false;
-  let restartTimer = null;
   // A start() run is in flight (fetch/MediaSource setup not yet finished). The
   // run has not positioned the element yet, so a `seeking` event now cannot be
   // acted on immediately — it is kept as `pendingSeek` until setup is done.
@@ -249,12 +248,36 @@ export function createStreamPlayer(
         // buffer still short of it stopped part-way, and the viewer must see
         // the failure (the ladder and "play original anyway") instead of the
         // silent stop a bogus `ended` produces. The slack absorbs the last
-        // fragment's rounding.
+        // fragment's rounding, but never more than half the timeline: a flat
+        // 2 s is wider than the whole of any source at or under 2 s, which made
+        // the comparison unsatisfiable there — a run that buffered nothing at
+        // all (ffmpeg dying before its first fragment, the server killing the
+        // conversion at its deadline) fell through to a clean `ended`. Bounded
+        // this way the threshold stays above 0 for every duration, so an empty
+        // buffer — its end is 0, or absent entirely — is always a failure,
+        // whatever the duration.
+        //
+        // A run that started at or past the declared duration is not that case:
+        // the element clamps a seek to the end of the clip onto the media
+        // duration, the server still answers that offset with a stream head,
+        // and the clamp strips the fragment that landed past the end — so the
+        // buffer is empty by construction and the run has nothing left to
+        // deliver. Judged as a truncation it escalated the viewer's ladder for a
+        // position that cannot play anything and ended on a misleading "Video
+        // conversion failed", so only a run whose own start offset is strictly
+        // before the end is judged here.
         const bufferedEnd =
           buffer.buffered.length > 0 ? buffer.buffered.end(buffer.buffered.length - 1) : 0;
-        if (declaredDuration !== null && !signal.aborted && bufferedEnd < declaredDuration - 2) {
-          reportError(signal, new Error('the delivered stream ended early'));
-          return;
+        if (
+          declaredDuration !== null &&
+          !signal.aborted &&
+          buffer.timestampOffset < declaredDuration
+        ) {
+          const slack = Math.min(2, declaredDuration / 2);
+          if (bufferedEnd < declaredDuration - slack) {
+            reportError(signal, new Error('the delivered stream ended early'));
+            return;
+          }
         }
         try {
           if (source.readyState === 'open') source.endOfStream();
@@ -329,7 +352,6 @@ export function createStreamPlayer(
     // A run that has only just been attached has not produced a playable frame:
     // a `waiting` from the element now is the normal no-data state, not a stall.
     startedPlaying = false;
-    clearTimeout(restartTimer);
     try {
       mediaSource?.endOfStream?.();
     } catch {
@@ -338,6 +360,18 @@ export function createStreamPlayer(
 
     let reader;
     let buffer;
+    // Show "waiting for a free conversion slot" if the server holds this run
+    // open. The hold happens BEFORE a response exists: while every worker is
+    // busy the endpoint awaits a free permit for its whole queue wait
+    // (`TURBO_PIX_STREAM_QUEUE_WAIT_SECS`) and only then answers — no headers,
+    // no bytes — so the timer is armed ahead of the request. Armed after the
+    // response resolved it could only ever fire for a run that already holds a
+    // slot and is slow to emit its first fragment, leaving the window the
+    // notice names uncovered (and a seek-restarted run with no notice at all).
+    //
+    // The timer belongs to this run: it is cleared on the first bytes and on
+    // every exit path below, so a superseded run cannot disarm its successor's.
+    const slotTimer = setTimeout(() => state('waiting'), 1500);
     try {
       // Fetch before the MediaSource exists: the MIME this run's bytes are in
       // is only known once the server answers, and a refused (503) run must not
@@ -345,7 +379,6 @@ export function createStreamPlayer(
       const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok || !response.body) {
         throw new StreamHttpError(response.status, {
-          startAt: seconds,
           retryAfterMs: retryAfterMs(response),
         });
       }
@@ -403,13 +436,10 @@ export function createStreamPlayer(
         videoEl.removeEventListener('error', onMediaError);
       };
 
-      // Show "waiting for a free conversion slot" when the server holds the
-      // request open because every worker is busy.
-      restartTimer = setTimeout(() => state('waiting'), 1500);
       reader = response.body.getReader();
       // First bytes arrived: we are buffering, not waiting.
       const first = await reader.read();
-      clearTimeout(restartTimer);
+      clearTimeout(slotTimer);
       if (destroyed) return;
       if (first.done) {
         // A zero-byte source answers 200 with an empty body, and ffmpeg dying
@@ -429,6 +459,15 @@ export function createStreamPlayer(
       // reports it with `waiting`, which `onWaiting` maps back onto this state.
       state('buffering');
       await appendWhenReady(buffer, first.value);
+      // That append is a task boundary — `clampDuration` waits on `updateend`
+      // for a source whose declared duration is known — so a `destroy()` can
+      // land inside it (viewer close, a swipe to another photo, "play original
+      // anyway", the ladder's own teardown). Everything below drives the
+      // element the viewer just tore down, and the MediaSource stays attached
+      // with the fragment this append just buffered, so the dead run would
+      // start (or resume) that media behind a closed viewer or over the photo
+      // the user moved to. Bail out, like every other await in the run.
+      if (destroyed) return;
       // Position the element on the real timeline (each run starts at 0) and
       // remember it, so the `seeking` event this assignment causes is not
       // mistaken for a user seek. The guard belongs to the assignment: only a
@@ -443,14 +482,30 @@ export function createStreamPlayer(
         videoEl.currentTime = seconds;
       }
       videoEl.play().catch((error) => {
-        // AbortError: this play() was superseded by another source. Anything
-        // else (e.g. a refused autoplay) is a real failure, not a silent one.
-        if (error.name !== 'AbortError') reportError(signal, error);
+        // Two rejections are the element declining to start, not a failed run.
+        // `AbortError`: this play() was superseded by another source.
+        // `NotAllowedError`: the browser's autoplay policy refused audible
+        // playback because the run was not started by a user gesture (a
+        // `?photo=…` deep link or a reload calls for the video without one).
+        // The conversion behind the stream is healthy and the element keeps
+        // its native `controls`, so one click starts the media — reporting the
+        // refusal as a run failure would tear the run down, climb the viewer's
+        // ladder and end on "video conversion failed" (with the "play original
+        // anyway" hatch serving bytes this browser cannot play at all) for a
+        // conversion that worked. Every other rejection is a real failure.
+        if (error.name === 'AbortError' || error.name === 'NotAllowedError') return;
+        reportError(signal, error);
       });
     } catch (error) {
       if (error.name !== 'AbortError') reportError(signal, error);
       return;
     } finally {
+      // Whatever ended this run's setup — its first bytes, a refusal, a network
+      // failure, a supersession or `destroy()` — its slot-wait notice must not
+      // outlive it: a stale `waiting` would land on top of the failure the
+      // viewer is already handling and re-arm the escape hatch it just took
+      // down.
+      clearTimeout(slotTimer);
       // Setup finished (or bailed): `seeking` events are user intent again.
       starting = false;
     }
@@ -540,7 +595,6 @@ export function createStreamPlayer(
   function destroy() {
     destroyed = true;
     pendingSeek = null;
-    clearTimeout(restartTimer);
     controller?.abort();
     detachRunErrors?.();
     detachRunErrors = null;

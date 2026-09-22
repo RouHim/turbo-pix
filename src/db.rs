@@ -565,38 +565,55 @@ impl Photo {
         Ok(photo)
     }
 
-    /// Merge-patch the stored `photos.metadata` JSON in one statement (SQLite
-    /// `json_patch` implements RFC 7396), so concurrent capability writes
-    /// cannot tear each other's metadata and unrelated keys survive untouched.
-    pub async fn persist_metadata_patch(
+    /// Merge-patch the stored `photos.metadata` JSON and fill in a duration the
+    /// indexer never captured, in ONE transaction: a capability record is
+    /// either fully written or not written at all. Written as two autocommit
+    /// statements, a failed duration write (SQLITE_BUSY under concurrent API
+    /// writes, disk error, crash between them) left the `capability_version`
+    /// marker behind — and that marker alone completes the record for
+    /// [`crate::video_probe::record_is_complete`], so the probe would
+    /// short-circuit forever after and the NULL duration would be permanent
+    /// until the file changed on disk.
+    ///
+    /// The patch is merge-patched in one statement (SQLite `json_patch`
+    /// implements RFC 7396), so concurrent capability writes cannot tear each
+    /// other's metadata and unrelated keys survive untouched. RFC 7396 treats
+    /// `null` literally: a null member REMOVES the stored key instead of
+    /// storing a null — which is how a caller records "asked, there is none"
+    /// while dropping a stale value. The capability probe does exactly that for
+    /// a source whose probe found no audio track: it always sends the
+    /// `audio_codec` member, so a null deletes any stale codec, and the record
+    /// still reads as "probed, no audio" because the `capability_version`
+    /// marker written by this same call separates it from "never probed". A
+    /// fact whose ABSENCE could not be told apart from "never probed" needs a
+    /// sentinel instead, the way `no_video_stream` does.
+    ///
+    /// A duration is written only where the indexer captured none; a positive
+    /// stored value is never overwritten.
+    pub async fn persist_capability_and_duration(
         pool: &DbPool,
         hash: &str,
         patch: &serde_json::Value,
+        duration_secs: Option<f64>,
     ) -> Result<(), sqlx::Error> {
         let patch = patch.to_string();
+        let mut tx = pool.begin().await?;
         sqlx::query("UPDATE photos SET metadata = json_patch(metadata, ?1) WHERE hash_sha256 = ?2")
-            .bind(patch)
+            .bind(&patch)
             .bind(hash)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(())
-    }
-
-    /// Fill in a duration the indexer never captured; never overwrites a
-    /// positive stored value.
-    pub async fn persist_duration_if_missing(
-        pool: &DbPool,
-        hash: &str,
-        duration_secs: f64,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE photos SET duration = ?1 \
-             WHERE hash_sha256 = ?2 AND (duration IS NULL OR duration <= 0)",
-        )
-        .bind(duration_secs)
-        .bind(hash)
-        .execute(pool)
-        .await?;
+        if let Some(duration_secs) = duration_secs {
+            sqlx::query(
+                "UPDATE photos SET duration = ?1 \
+                 WHERE hash_sha256 = ?2 AND (duration IS NULL OR duration <= 0)",
+            )
+            .bind(duration_secs)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2720,7 +2737,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn persist_metadata_patch_merges_without_clobbering() {
+    async fn persist_capability_and_duration_merges_without_clobbering() {
         let pool = create_in_memory_pool().await.expect("pool");
         // `photos.hash_sha256` carries a `length(...) = 64` CHECK constraint, so
         // the brief's short literal is padded to a valid hash.
@@ -2729,10 +2746,11 @@ pub(crate) mod tests {
         photo.metadata = json!({ "camera": { "make": "Canon" } });
         photo.create(&pool).await.expect("create");
 
-        Photo::persist_metadata_patch(
+        Photo::persist_capability_and_duration(
             &pool,
             &hash,
             &json!({ "video": { "capability_version": 1, "codec": "h264" } }),
+            Some(12.5),
         )
         .await
         .expect("patch");
@@ -2741,5 +2759,70 @@ pub(crate) mod tests {
         assert_eq!(stored.metadata["camera"]["make"], "Canon");
         assert_eq!(stored.metadata["video"]["codec"], "h264");
         assert_eq!(stored.metadata["video"]["capability_version"], 1);
+        assert_eq!(
+            stored.duration,
+            Some(12.5),
+            "the patch and the derived duration land in the same write"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_capability_and_duration_never_overwrites_a_known_duration() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-duration");
+        let mut photo = create_test_photo_with_date(&hash, "duration.mp4", Utc::now());
+        photo.duration = Some(9.0);
+        photo.create(&pool).await.expect("create");
+
+        Photo::persist_capability_and_duration(
+            &pool,
+            &hash,
+            &json!({ "video": { "capability_version": 1, "codec": "h264" } }),
+            Some(30.0),
+        )
+        .await
+        .expect("patch");
+
+        let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
+        assert_eq!(stored.duration, Some(9.0));
+        assert_eq!(stored.metadata["video"]["capability_version"], 1);
+    }
+
+    /// The patch must not survive a failed duration write: `capability_version`
+    /// alone completes the record for `video_probe::record_is_complete`, so a
+    /// half-written pair would make the NULL duration permanent. The trigger
+    /// makes the duration write fail deterministically.
+    #[tokio::test]
+    async fn persist_capability_and_duration_rolls_back_the_patch_with_the_duration() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-atomic");
+        let mut photo = create_test_photo_with_date(&hash, "atomic.mp4", Utc::now());
+        photo.metadata = json!({ "camera": { "make": "Canon" } });
+        photo.create(&pool).await.expect("create");
+
+        sqlx::query(
+            "CREATE TRIGGER fail_duration_update BEFORE UPDATE OF duration ON photos \
+             BEGIN SELECT RAISE(ABORT, 'duration write refused'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("create failing trigger");
+
+        let result = Photo::persist_capability_and_duration(
+            &pool,
+            &hash,
+            &json!({ "video": { "capability_version": 1, "codec": "h264" } }),
+            Some(12.5),
+        )
+        .await;
+        assert!(result.is_err(), "the failing duration write must surface");
+
+        let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
+        assert_eq!(stored.metadata["camera"]["make"], "Canon");
+        assert!(
+            stored.metadata.get("video").is_none(),
+            "the patch must roll back with the duration (result: {result:?})"
+        );
+        assert_eq!(stored.duration, None);
     }
 }

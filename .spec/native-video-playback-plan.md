@@ -46,7 +46,7 @@ Failure modes the spec implies whose tests are not obvious; each line names the 
 | File | Responsibility | Task |
 |---|---|---|
 | `src/video_probe.rs` **(new)** | Derive missing capability facts from the file, persist them, return a resolved record. | 1 |
-| `src/db.rs` **(modify)** | `Photo::persist_metadata_patch` (RFC 7396 `json_patch`) + `Photo::persist_duration_if_missing`. | 1 |
+| `src/db.rs` **(modify)** | `Photo::persist_capability_and_duration` (RFC 7396 `json_patch` plus the conditional duration fill, in ONE transaction). | 1 |
 | `src/video_capability.rs` **(modify)** | Container families, client codec set incl. audio, `plan()` decision engine. | 1, 3 |
 | `src/video_stream.rs` **(new)** | ffmpeg fMP4 argument builder, permit-queued spawn, supervising task, output MIME table. | 2 |
 | `src/video_processor.rs` **(modify)** | Whole-file transcode args: first-track mapping + audio handling; reusable spawn helper; `ffmpeg_available()` test helper. | 1, 5 |
@@ -88,8 +88,7 @@ Ground rules:
   - `pub async fn resolve(pool: &DbPool, photo: &Photo) -> ResolvedCapabilities`
   - `pub(crate) fn parse_capabilities_from_ffprobe(parsed: &serde_json::Value) -> CapabilityPatch`
   - `pub const CAPABILITY_VERSION: u64 = 1;`
-  - `Photo::persist_metadata_patch(pool, hash, patch) -> Result<(), sqlx::Error>`
-  - `Photo::persist_duration_if_missing(pool, hash, duration_secs) -> Result<(), sqlx::Error>`
+  - `Photo::persist_capability_and_duration(pool, hash, patch, duration_secs: Option<f64>) -> Result<(), sqlx::Error>`
   - `ContainerFamily::{from_record, has_moov_layout}`
 
 - [ ] **Step 1: Add `ContainerFamily` to `src/video_capability.rs`**
@@ -243,6 +242,9 @@ pub const CAPABILITY_VERSION: u64 = 1;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct CapabilityPatch {
+    /// False for audio-only / cover-art-only containers: the probe succeeded but
+    /// found no non-attached video stream.
+    pub has_video_stream: bool,
     pub codec: Option<String>,
     pub container: Option<String>,
     pub bit_depth: Option<u32>,
@@ -263,17 +265,29 @@ pub struct ResolvedCapabilities {
     pub probed: bool,
 }
 
-/// Complete = a previous probe/scan wrote the version marker and a codec.
+/// Complete = a previous probe/scan wrote the version marker plus either a codec
+/// or the explicit "probed, no video stream" marker.
 /// An absent `moov_at_start` key is "never probed", NOT "true".
 pub fn record_is_complete(photo: &Photo) -> bool {
     let Some(video) = photo.metadata.get("video") else {
         return false;
     };
-    video.get("capability_version").and_then(Value::as_u64) == Some(CAPABILITY_VERSION)
-        && video
-            .get("codec")
-            .and_then(Value::as_str)
-            .is_some_and(|c| !c.is_empty())
+    if video.get("capability_version").and_then(Value::as_u64) != Some(CAPABILITY_VERSION) {
+        return false;
+    }
+    video
+        .get("codec")
+        .and_then(Value::as_str)
+        .is_some_and(|c| !c.is_empty())
+        || video.get("no_video_stream").and_then(Value::as_bool) == Some(true)
+}
+
+/// First stream of `kind` that is not an attached cover picture.
+fn first_stream<'a>(parsed: &'a Value, kind: &str) -> Option<&'a Value> {
+    parsed["streams"].as_array()?.iter().find(|s| {
+        s["codec_type"].as_str() == Some(kind)
+            && s["disposition"]["attached_pic"].as_i64() != Some(1)
+    })
 }
 
 /// First non-attached video stream and first non-attached audio stream — the
@@ -281,18 +295,13 @@ pub fn record_is_complete(photo: &Photo) -> bool {
 /// track only).
 pub(crate) fn parse_capabilities_from_ffprobe(parsed: &Value) -> CapabilityPatch {
     let stream_field = |kind: &str, field: &str| {
-        parsed["streams"]
-            .as_array()?
-            .iter()
-            .find(|s| {
-                s["codec_type"].as_str() == Some(kind)
-                    && s["disposition"]["attached_pic"].as_i64() != Some(1)
-            })
+        first_stream(parsed, kind)
             .and_then(|s| s[field].as_str())
             .map(str::to_string)
     };
 
     CapabilityPatch {
+        has_video_stream: first_stream(parsed, "video").is_some(),
         codec: stream_field("video", "codec_name"),
         container: container_from_format_name(parsed),
         bit_depth: parse_pix_fmt_bit_depth(stream_field("video", "pix_fmt").as_deref()),
@@ -349,10 +358,22 @@ impl ResolvedCapabilities {
             .clone()
             .or_else(|| photo.container().map(str::to_string));
         Self {
-            codec: patch
-                .codec
-                .clone()
-                .unwrap_or_else(|| photo.video_codec().unwrap_or_default().to_string()),
+            // A probe that established there is no non-attached video stream
+            // resolves to NO video codec: the stored record may still hold the
+            // cover picture's codec (dropped above, but the in-memory `photo`
+            // snapshot cannot see that write), and answering with it would
+            // contradict the probe's own finding. A probe that DID find a video
+            // stream but reported no `codec_name` keeps the fallback — the
+            // record then carries no codec key at all, so it stays incomplete
+            // and is probed again rather than being trusted.
+            codec: if patch.has_video_stream {
+                patch
+                    .codec
+                    .clone()
+                    .unwrap_or_else(|| photo.video_codec().unwrap_or_default().to_string())
+            } else {
+                String::new()
+            },
             family: ContainerFamily::from_record(container.as_deref(), &photo.filename),
             container,
             bit_depth: patch.bit_depth.or_else(|| photo.bit_depth()),
@@ -393,6 +414,19 @@ pub async fn resolve(pool: &SqlitePool, photo: &Photo) -> ResolvedCapabilities {
 
     let mut video = serde_json::Map::new();
     video.insert("capability_version".to_string(), json!(CAPABILITY_VERSION));
+    if !patch.has_video_stream {
+        // The probe succeeded and found no non-attached video stream (audio-only
+        // or cover-art-only container). Persist that as a complete fact so the
+        // record is not re-probed on every request, and DELETE any stale `codec`
+        // with a null member (RFC 7396, exactly like `audio_codec` below): a row
+        // indexed before the attached-pic filter existed carries the cover
+        // picture's codec (`mjpeg`/`png`) in `metadata.video.codec`, and a patch
+        // that omits the key leaves it in place, so `merged` would keep
+        // preferring that stale string over the probe's own finding and the
+        // no-mappable-stream guard would never fire.
+        video.insert("no_video_stream".to_string(), json!(true));
+        video.insert("codec".to_string(), Value::Null);
+    }
     if let Some(codec) = &patch.codec {
         video.insert("codec".to_string(), json!(codec));
     }
@@ -407,58 +441,59 @@ pub async fn resolve(pool: &SqlitePool, photo: &Photo) -> ResolvedCapabilities {
     video.insert("audio_codec".to_string(), json!(patch.audio_codec));
     video.insert("moov_at_start".to_string(), json!(moov_at_start));
 
-    if let Err(e) =
-        Photo::persist_metadata_patch(pool, &photo.hash_sha256, &json!({ "video": video })).await
+    if let Err(e) = Photo::persist_capability_and_duration(
+        pool,
+        &photo.hash_sha256,
+        &json!({ "video": video }),
+        patch.duration_secs,
+    )
+    .await
     {
         log::warn!("Persisting derived video capabilities failed: {e}");
-    }
-    if let Some(duration) = patch.duration_secs {
-        if let Err(e) =
-            Photo::persist_duration_if_missing(pool, &photo.hash_sha256, duration).await
-        {
-            log::warn!("Persisting derived video duration failed: {e}");
-        }
     }
 
     ResolvedCapabilities::merged(photo, &patch, moov_at_start)
 }
 ```
 
-- [ ] **Step 5: Add the persistence methods to `impl Photo` in `src/db.rs`**
+- [ ] **Step 5: Add the persistence method to `impl Photo` in `src/db.rs`**
 
 ```rust
-    /// Merge-patch the stored `photos.metadata` JSON in one statement (SQLite
-    /// `json_patch` implements RFC 7396), so concurrent capability writes
-    /// cannot tear each other's metadata and unrelated keys survive untouched.
-    pub async fn persist_metadata_patch(
+    /// Merge-patch the stored `photos.metadata` JSON and fill in a duration the
+    /// indexer never captured, in ONE transaction: a capability record is
+    /// either fully written or not written at all, and the patch must not
+    /// survive a failed duration write — the record it writes is COMPLETE
+    /// (`capability_version` plus `codec` or `no_video_stream`), so a patch left
+    /// behind by a failed duration write satisfies
+    /// `video_probe::record_is_complete` and the probe short-circuits forever
+    /// after.
+    /// The patch is merge-patched in one statement (SQLite `json_patch`
+    /// implements RFC 7396), so concurrent capability writes cannot tear each
+    /// other's metadata and unrelated keys survive untouched.
+    pub async fn persist_capability_and_duration(
         pool: &DbPool,
         hash: &str,
         patch: &serde_json::Value,
+        duration_secs: Option<f64>,
     ) -> Result<(), sqlx::Error> {
         let patch = patch.to_string();
+        let mut tx = pool.begin().await?;
         sqlx::query("UPDATE photos SET metadata = json_patch(metadata, ?1) WHERE hash_sha256 = ?2")
-            .bind(patch)
+            .bind(&patch)
             .bind(hash)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(())
-    }
-
-    /// Fill in a duration the indexer never captured; never overwrites a
-    /// positive stored value.
-    pub async fn persist_duration_if_missing(
-        pool: &DbPool,
-        hash: &str,
-        duration_secs: f64,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE photos SET duration = ?1 \
-             WHERE hash_sha256 = ?2 AND (duration IS NULL OR duration <= 0)",
-        )
-        .bind(duration_secs)
-        .bind(hash)
-        .execute(pool)
-        .await?;
+        if let Some(duration_secs) = duration_secs {
+            sqlx::query(
+                "UPDATE photos SET duration = ?1 \
+                 WHERE hash_sha256 = ?2 AND (duration IS NULL OR duration <= 0)",
+            )
+            .bind(duration_secs)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 ```
@@ -467,16 +502,17 @@ Test in `src/db.rs`'s test module (build the `Photo` literal inline like `handle
 
 ```rust
     #[tokio::test]
-    async fn persist_metadata_patch_merges_without_clobbering() {
+    async fn persist_capability_and_duration_merges_without_clobbering() {
         let pool = create_in_memory_pool().await.expect("pool");
         let mut photo = test_photo("hash-patch");
         photo.metadata = json!({ "camera": { "make": "Canon" } });
         photo.create(&pool).await.expect("create");
 
-        Photo::persist_metadata_patch(
+        Photo::persist_capability_and_duration(
             &pool,
             "hash-patch",
             &json!({ "video": { "capability_version": 1, "codec": "h264" } }),
+            Some(12.5),
         )
         .await
         .expect("patch");
@@ -573,7 +609,7 @@ pub(crate) fn ffmpeg_available() -> bool {
 
 - [ ] **Step 7: Run the tests**
 
-Run: `cargo test --lib video_probe && cargo test --lib persist_metadata_patch && cargo test --lib video_capability`
+Run: `cargo test --lib video_probe && cargo test --lib persist_capability_and_duration && cargo test --lib video_capability`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
@@ -643,7 +679,7 @@ mod tests {
         assert!(joined.contains("-preset veryfast"));
         assert!(joined.contains("-g 48"));
         assert!(joined.contains("-c:a aac"));
-        assert!(joined.contains("-map 0:v:0 -map 0:a:0?"));
+        assert!(joined.contains("-map 0:V:0? -map 0:a:0?"));
         assert!(joined.contains("-movflags frag_keyframe+empty_moov+default_base_moof"));
         assert!(joined.contains("-frag_duration 1000000"));
         assert!(joined.ends_with("-f mp4 pipe:1"));
@@ -784,7 +820,7 @@ pub fn build_args(mode: StreamMode, input: &Path, start_secs: f64) -> Vec<String
         args.extend(["-ss".into(), format!("{start_secs:.3}")]);
     }
     args.extend(["-i".into(), input.to_string_lossy().into_owned()]);
-    args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a:0?".into()]);
+    args.extend(["-map".into(), "0:V:0?".into(), "-map".into(), "0:a:0?".into()]);
     match mode {
         StreamMode::Transcode => args.extend(
             [
@@ -1700,10 +1736,10 @@ Also update the `?metadata=true` unchanged branch (it stays as-is) and delete th
 
 - [ ] **Step 6: Update the handler tests for the new decision JSON**
 
-Rewrite `decision_endpoint_reports_direct_and_transcode_actions` (`src/handlers_video.rs:955-1026`) to assert:
+Rewrite `decision_endpoint_reports_direct_and_stream_actions` in `src/handlers_video.rs` (currently line 1590) to assert:
 - h264/mp4/8-bit/moov-start with `?client=h264-8,aac` → `{"action":"direct","url":"/api/photos/<hash>/video?client=h264-8%2Caac"}`.
 - Same file with `?client=h264-8,hevc` but a record without `capability_version` → the handler probes; keep the fake ffprobe returning an mp4 container so the derived record still decides `direct`.
-- mpeg4/avi with `?client=h264-8` → `{"action":"stream","mode":"transcode","mime":"video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\"","url": ".../video/stream?client=...&start=0"}`.
+- mpeg4/avi with `?client=h264-8` → `{"action":"stream","mode":"transcode","mime":"video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\"","url": ".../video/stream?client=..."}`.
 - hevc/mp4/moov-start with `?client=hevc,aac` → `direct`; with `?client=h264-8,aac` → `stream`/`transcode`.
 - h264/mp4/moov-end → `stream`/`remux`.
 - ac3 audio + `?client=h264-8,aac` → `stream`/`audio`.
@@ -1715,7 +1751,7 @@ Use the existing `setup_test_video_with_content` helper plus a new module-level 
     /// contract) so the handler decides without probing the filesystem.
     async fn set_video_record(db_pool: &DbPool, hash: &str, video: serde_json::Value) {
         let patch = json!({ "video": video });
-        Photo::persist_metadata_patch(db_pool, hash, &patch)
+        Photo::persist_capability_and_duration(db_pool, hash, &patch, None)
             .await
             .expect("capability patch");
     }
@@ -2406,11 +2442,11 @@ git commit -m "feat(video): keep saturated conversion requests waiting instead o
 - Test: `src/handlers_video.rs` tests, `tests/e2e/specs/video-streaming.e2e.spec.js`
 
 **Interfaces:**
-- Consumes: Task 3's `plan`/decision JSON, `get_transcoded_path_versioned`, `claim_transcode`, `transcode_codec_to_h264_with_progress`.
+- Consumes: Task 3's `plan`/decision JSON, `get_transcoded_path_versioned`, `claim_transcode`, `convert_video_with_progress`.
 - Produces:
   - Decision returns `{"action":"direct","url":"/api/photos/{hash}/video?transcode=true&client=…","cached":true}` when a completed whole-file artifact exists.
-  - `fn spawn_cache_fill(mode: StreamMode, photo: &Photo)` (in `handlers_video.rs`) — after a successful full stream (`start == 0`), produce the artifact that matches what the user actually watched, so the cached copy is never worse than the stream it replaces: `StreamTranscode` → the whole-file libx264+AAC conversion (bounded by `claim_transcode`); `StreamAudio` → a whole-file `-c:v copy -c:a aac` conversion; `StreamRemux` → the lossless faststart sidecar via `ensure_progressive_mp4` (never a re-encode). Superseded-by-ruling text: "the whole-file conversion" was mode-blind and would serve a lossy re-encode to later opens of an audio/remux source (FR-001).
-  - Whole-file transcode ffmpeg args map `0:v:0` / `0:a:0?` and pick `-c:a copy` only for AAC/MP3 audio, else `-c:a aac -b:a 160k -ac 2`.
+  - `fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>)` (in `handlers_video.rs`) — after a successful full stream (`start <= FULL_RUN_MAX_START_SECS`, i.e. within half a second of the head — `src/video_stream.rs:42`), produce the artifact that matches what the user actually watched, so the cached copy is never worse than the stream it replaces: `StreamTranscode` → the whole-file libx264+AAC conversion (bounded by `claim_transcode`); `StreamAudio` → a whole-file `-c:v copy -c:a aac` conversion; `StreamRemux` → the lossless faststart sidecar via the unconditional `remux_to_faststart_mp4` (never a re-encode; the fill does not re-probe the source for a moov atom, because a finished remux run already proved the remux was needed). `codecs` are the codecs the run that just finished copied, as the resolver reported them — they pick the copy's codec tags and whether its audio is copied or converted. Superseded-by-ruling text: "the whole-file conversion" was mode-blind and would serve a lossy re-encode to later opens of an audio/remux source (FR-001).
+  - Whole-file transcode ffmpeg args map `0:V:0?` / `0:a:0?` (capital `V` excludes the attached cover pictures `video_probe` skips; the trailing `?` lets a video-less source still convert) and pick `-c:a copy` only for AAC/MP3 audio, else `-c:a aac -b:a 160k -ac 2`.
 
 - [ ] **Step 1: Write the failing cache-hit test**
 
@@ -2477,13 +2513,10 @@ In the decision branch of `get_video_file` (Task 3 Step 5), before building the 
             photo.file_size,
             photo.date_modified.timestamp_millis(),
         );
-        // A completed artifact is only trusted when its status is not a stale
-        // failure (same rule as the serve path, src/handlers_video.rs:499-509).
-        let cached_ok = cached_path.exists()
-            && !matches!(
-                get_transcode_status(&photo.hash_sha256).map(|s| s.state),
-                Some(TranscodeState::Failed | TranscodeState::Timeout)
-            );
+        // Existence is the whole test (same rule as the serve path,
+        // src/handlers_video.rs:241-256): the per-hash conversion status is
+        // shared by every artifact namespace, so it must never gate serving.
+        let cached_ok = cached_path.exists();
 ```
 
 and use it in the `Delivery::Direct` arm as well as the streaming arms:
@@ -2508,13 +2541,25 @@ The stream handler's supervising task knows when a `start == 0` run finished cle
 ```rust
     if start <= 0.5 {
         let photo_for_fill = photo.clone();
-        let db_for_fill = db_pool.clone();
+        let video_codec = caps.codec.clone();
+        let audio_codec = caps.audio_codec.clone();
         tokio::spawn(async move {
-            match supervise(child, stderr).await {
-                Ok(()) => spawn_cache_fill(&db_for_fill, &photo_for_fill).await,
+            let outcome = supervise(child, stderr).await;
+            // The stream's own slot is released before the fill asks for one of
+            // its own: a full run that sat on a permit while the fill waited
+            // would halve the pool for every other conversion.
+            drop(permit);
+            match outcome {
+                Ok(()) => spawn_cache_fill(
+                    &photo_for_fill,
+                    mode,
+                    SourceCodecs {
+                        video: (!video_codec.is_empty()).then_some(video_codec.as_str()),
+                        audio: audio_codec.as_deref(),
+                    },
+                ),
                 Err(reason) => log::warn!("Stream failed for {hash} ({}): {reason}", mode.as_str()),
             }
-            drop(permit);
         });
     } else {
         tokio::spawn(async move { /* supervise + log only */ drop(permit); });
@@ -2527,23 +2572,86 @@ The stream handler's supervising task knows when a `start == 0` run finished cle
 /// Fill the whole-file cache after a successful full playthrough so the next
 /// open starts like a native play (FR-010). Bounded by the same claim/pool as
 /// every other conversion, so this cannot spawn a second encoder for a hash
-/// that is already being converted.
-async fn spawn_cache_fill(db_pool: &DbPool, photo: &Photo) {
+/// that is already being converted. `codecs` are the codecs the finished run
+/// copied, as the resolver reported them: they pick the copy's codec tags and
+/// whether the audio is copied or converted (see `build_conversion_args`).
+fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
     let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
         .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-    let output = get_transcoded_path_versioned(
-        Path::new(&cache_dir),
-        &photo.hash_sha256,
-        photo.file_size,
-        photo.date_modified.timestamp_millis(),
-    );
+
+    if mode == StreamMode::Remux {
+        let sidecar = remux_sidecar_path(
+            &cache_dir,
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        if sidecar.exists() {
+            return;
+        }
+        // The unconditional remux: a finished remux run already proved the
+        // source cannot be played as it is, and its sidecar is the whole point.
+        // The core re-checks existence under the remux semaphore and atomically
+        // renames a unique temp file into place, so concurrent fills cannot
+        // interleave.
+        let source = PathBuf::from(&photo.file_path);
+        let hash = photo.hash_sha256.clone();
+        let cache_root = PathBuf::from(&cache_dir);
+        let sidecar_keep = sidecar.clone();
+        // The source's first video track, from the resolver (`codecs` is the
+        // record for the stream that just finished). The sidecar is served as
+        // `action: direct` bytes and played natively, so it must carry the same
+        // sample entry the stream the client just watched carried — a copied
+        // HEVC track out of Matroska is tagged `hev1` by default.
+        let video_codec = codecs.video.map(str::to_string);
+        tokio::spawn(async move {
+            match remux_to_faststart_mp4(&source, &sidecar, video_codec.as_deref()).await {
+                Ok(()) => {
+                    log::info!("Remux cache ready for {hash}");
+                    // An in-place edit versions the sidecar name; drop the stale ones.
+                    purge_old_transcode_versions(&cache_root, &hash, &sidecar_keep);
+                }
+                Err(e) => log::warn!("Remux cache fill failed for {hash}: {e}"),
+            }
+        });
+        return;
+    }
+
+    // Only start on a free slot: a background fill must never become the job
+    // the next user-facing conversion waits behind.
+    if crate::video_processor::transcode_semaphore().available_permits() == 0 {
+        return;
+    }
+    // `StreamRemux` returned above and `Direct` never streams, so the remaining
+    // modes are the two whole-file kinds — and each writes into its OWN
+    // namespace, so a copy can never be served to a client that planned a full
+    // transcode.
+    let conversion = match mode {
+        StreamMode::Audio => FileConversion::VideoCopy,
+        StreamMode::Transcode | StreamMode::Remux => FileConversion::Reencode,
+    };
+    let output = match conversion {
+        FileConversion::VideoCopy => get_copied_path_versioned(
+            Path::new(&cache_dir),
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        ),
+        FileConversion::Reencode => get_transcoded_path_versioned(
+            Path::new(&cache_dir),
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        ),
+    };
     if output.exists() {
+        // Cached already (or cached while this playthrough ran).
         return;
     }
-    if !matches!(claim_transcode(&photo.hash_sha256), TranscodeClaim::Started) {
+    if claim_transcode(&photo.hash_sha256) != TranscodeClaim::Started {
         return;
     }
-    spawn_whole_file_transcode(db_pool.clone(), photo.clone(), output);
+    spawn_whole_file_transcode(photo, output, PathBuf::from(&cache_dir), conversion, codecs);
 }
 ```
 
@@ -2562,22 +2670,31 @@ In `src/video_processor.rs:922-947`, replace the fixed `-c:a copy` args with a m
         };
 ```
 
-`transcode_codec_to_h264_with_timeout_and_path` needs the input audio codec: probe it once with `extract_video_metadata`-style ffprobe, or accept it as a parameter from the caller (which already resolved capabilities). Prefer the parameter: add `audio_codec: Option<String>` to `transcode_codec_to_h264_with_progress` / the inner fns and pass `caps.audio_codec` from `spawn_whole_file_transcode`. Add `-map 0:v:0 -map 0:a:0?` to the same args.
+`convert_attempt` needs the input audio codec: probe it once with `extract_video_metadata`-style ffprobe, or accept it as a parameter from the caller (which already resolved capabilities). Prefer the parameter: the codec set travels as `SourceCodecs { video, audio }` through `convert_video_with_progress` / the inner fns, passed from `spawn_whole_file_transcode`. Add `-map 0:V:0? -map 0:a:0?` to the same args.
 
 Test (fake ffmpeg, existing pattern `test_transcode_happy_path`, `src/video_processor.rs:1816`):
 
 ```rust
     #[test]
-    fn transcode_args_keep_aac_but_convert_ac3() {
-        let keep = build_transcode_args_for_test("aac");           // helper returning the Vec<String>
-        assert!(keep.join(" ").contains("-c:a copy"));
-        let convert = build_transcode_args_for_test("ac3");
-        assert!(convert.join(" ").contains("-c:a aac"));
-        assert!(convert.join(" ").contains("-map 0:v:0 -map 0:a:0?"));
+    fn conversion_args_follow_the_conversion_mode() {
+        let args = |audio: Option<&str>| {
+            build_conversion_args(
+                Path::new("/photos/source.mkv"),
+                Path::new("/cache/out.mp4.tmp"),
+                FileConversion::Reencode,
+                SourceCodecs { video: Some("hevc"), audio },
+                false,
+                None,
+            )
+            .join(" ")
+        };
+        assert!(args(Some("aac")).contains("-c:a copy"));
+        assert!(args(Some("ac3")).contains("-c:a aac"));
+        assert!(args(Some("ac3")).contains("-map 0:V:0? -map 0:a:0?"));
     }
 ```
 
-Refactor the ffmpeg arg construction into `fn build_transcode_args(input: &Path, output: &Path, audio_codec: Option<&str>, with_progress: bool) -> Vec<String>` so both the production path and the test use the same builder.
+Refactor the ffmpeg arg construction into `fn build_conversion_args(input: &Path, output: &Path, conversion: FileConversion, codecs: SourceCodecs<'_>, with_progress: bool, plan: Option<&HwPlan>) -> Vec<String>` so both the production path and the test use the same builder.
 
 - [ ] **Step 6: Write the failing E2E test for reuse**
 

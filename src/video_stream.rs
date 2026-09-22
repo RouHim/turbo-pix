@@ -108,10 +108,20 @@ pub fn stream_queue_wait_secs() -> u64 {
 /// Fragmented output flushes `ftyp`+`moov` before the first frame, so the
 /// client can create its SourceBuffer immediately; `-frag_duration 1000000`
 /// keeps fragments at ≤1 s even for stream copies whose keyframes are far
-/// apart. `-map 0:V:0?` and `-map 0:a:0?` tolerate sources with no video track
+/// apart. `-map 0:V:0?` and `-map 0:a:0?` tolerate a source with no video track
 /// (audio-only or cover-art-only containers, which the capability resolver
-/// records as `no_video_stream` and which do reach this path) and no audio
-/// track; without the trailing `?` the missing stream aborts the run.
+/// records as `no_video_stream`) and a source with no audio track; without the
+/// trailing `?` the missing stream aborts the run. The `?` only forgives a
+/// track that is absent while ANOTHER spec still maps something: when both
+/// match nothing (neither a non-attached video track nor an audio track)
+/// ffmpeg re-enables automatic stream selection, so it either muxes an attached
+/// cover picture the MP4 muxer then rejects ("Could not find tag for codec h264
+/// in stream #0 … Nothing was written into output file", exit 234) or finds
+/// nothing to map at all ("Output file does not contain any stream") — either
+/// way it refuses before writing a byte. Such a source never reaches this
+/// builder: `stream_video` refuses it up front, before a permit is taken (see
+/// `has_no_mappable_stream`), so the `?`s are a tolerance for the mixed case,
+/// not a licence to run an empty conversion.
 ///
 /// The capital `V` is load-bearing, not cosmetic: plain `v` matches *every*
 /// video stream, attached cover pictures included, while `video_probe`'s
@@ -1231,16 +1241,25 @@ mod tests {
             return;
         }
 
-        let mut handle = start_stream(StreamMode::Transcode, fixture, 0.2, "h264")
-            .await
-            .expect("a seek near the end must still start");
-        let head = read_head(&mut handle.stdout, b"ftyp").await;
+        // A starved machine can kill the run before it emits a single byte (the
+        // first-bytes gate gives it 10 s), so one empty head is not evidence of
+        // a regression: retry once, then fail.
+        let mut head = Vec::new();
+        for _ in 0..2 {
+            let mut handle = start_stream(StreamMode::Transcode, fixture, 0.2, "h264")
+                .await
+                .expect("a seek near the end must still start");
+            head = read_head(&mut handle.stdout, b"ftyp").await;
+            drop(handle.stdout);
+            let _ = supervise(handle.child, handle.stderr, handle.progress).await;
+            if !head.is_empty() {
+                break;
+            }
+        }
         assert!(
             !head.is_empty(),
             "boundary seeks must produce a valid stream head"
         );
-        drop(handle.stdout);
-        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
     }
 
     #[tokio::test]

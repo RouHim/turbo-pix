@@ -67,7 +67,8 @@
   // proxied, and nothing renders from it.
   let streamPlayer = null;
   // Single-flight timer for retrying a stream run the server refused because
-  // every conversion slot was taken. Plain field, torn down with the player.
+  // every conversion slot was taken. Plain field, torn down with the player and
+  // by any newer run or user seek (see `disarmStreamRetry`).
   let streamRetryTimer = null;
 
   // Collage
@@ -853,6 +854,15 @@
   ) {
     if (!videoEl) return;
     destroyStreamPlayer();
+    // The stream path owns this element's failures now: `setVideoSource`
+    // installs an `onerror` *property* handler (the whole-file path's retry or
+    // its global toast), while msePlayer registers its own `error` listener, so
+    // a leftover property handler would deliver every media error twice —
+    // raising a spurious global "conversion failed" toast next to the ladder's
+    // own notice, or tearing the running ladder down to start a whole-file
+    // conversion behind its back. The stream run states its own failures; the
+    // escape hatch re-arms the property handler when the user asks for it.
+    videoEl.onerror = null;
     hasUserChosenOriginal = false;
     // Every run states its own answer, so a starting run claims nothing: the
     // failed rung's encoder must not survive into the escalated one (a remux
@@ -868,6 +878,13 @@
     // server-authorized mode the player may only escalate.
     const streamUrl = `${decision.url}${separator}mode=${mode}`;
     if (!keepWaitingNotice) {
+      // The notice leaves the waiting state here, so the flag that renders the
+      // escape hatch leaves with it: the waiting text *is* the escape hatch's
+      // trigger, and a flag left behind under the "preparing" notice would
+      // offer "play original anyway" for a run that no longer claims
+      // saturation (an escalated rung that failed before its first chunk
+      // replaces the waiting notice without going through `streamWaiting`).
+      streamWaiting = false;
       showTranscodeToast(
         get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })
       );
@@ -888,18 +905,62 @@
             })
           );
         } else if (state === 'buffering') {
-          // Bytes are flowing: the slot wait is over.
+          // Bytes are flowing: the slot wait is over — and so is its notice.
+          // Every notice that was up before this point (the saturation retry's
+          // "waiting for a free slot", the runner's own slow-start timer) has
+          // stopped being true, and the waiting text also *is* the escape
+          // hatch's trigger: leaving it up would strand a run that buffers
+          // slowly, or stalls after its first chunk, on a false "pool is
+          // saturated" claim with no way out.
           streamWaiting = false;
+          showTranscodeToast(
+            get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })
+          );
         } else if (state === 'playing' || state === 'ended') {
           hideTranscodeToast();
         }
       },
       onError: (error) => handleStreamFailure(photo, decision, mode, error),
+      // Every run this player begins — the one asked for here and the one it
+      // restarts for a seek inside itself — makes a retry armed for an earlier
+      // refusal obsolete; see disarmStreamRetry.
+      onRunStart: disarmStreamRetry,
+      // A position the user picked on the element itself is the other move that
+      // leaves a refused offset behind: either this seek starts a run for the
+      // new target (which supersedes the refused one and, if that run is
+      // refused too, arms its own retry at the newest offset), or the element
+      // already holds the target and no run is needed at all, so the refused
+      // offset is moot. Either way the armed retry must not outlive the move —
+      // it would tear down the media the user moved to and drag them back (see
+      // disarmStreamRetry). The element's own position cannot stand in for
+      // this signal: the player parks it on a run's offset, so the element
+      // standing at 10 s says nothing about a run refused at 25 s.
+      onUserSeek: disarmStreamRetry,
       onEncoder: (encoder) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
         activeEncoder = encoder;
       },
     });
+    // The element must not stand in for the photo with the previous video's
+    // last frame: its own source only arrives with the stream response — and a
+    // refused run never assigns one at all, so a saturation retry leaves the
+    // element untouched for its whole 1.5-10 s delay. `setVideoSource` is the
+    // only other path that clears this, so the stale source would stay up for
+    // the entire setup, and the Space handler's `photoHash` guard (which exists
+    // to stop playback of the wrong video) would pass while that stale source
+    // is the one `play()` would resume.
+    //
+    // The attribute goes rather than being set to '': `videoEl.src = ''` leaves
+    // the element resolving the empty string as a URL, and Chromium answers
+    // that with a `MEDIA_ERR_SRC_NOT_SUPPORTED` `error` event (measured: the
+    // event fires ~1-6 ms later and is not cancelled by the next `src`
+    // assignment). msePlayer listens for `error` on this element to detect
+    // undecodable delivered bytes, so that event can arrive after the stream
+    // run attached its listeners and escalate the ladder on a healthy run.
+    // With no `src` attribute the element simply goes to NETWORK_EMPTY: no
+    // error, no frame, nothing left to play.
+    videoEl.removeAttribute('src');
+    videoEl.load();
     videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.style.display = 'block';
     videoEl.classList.add('loaded');
@@ -916,8 +977,10 @@
    * A refused conversion slot is not a playback failure: the pool is simply
    * full, so keep the waiting notice (with "play original anyway" still
    * reachable, in case the wait is a permanent pool of 0) and retry the same
-   * run until the viewer moves on — retries cannot stack (single-flight timer)
-   * and they stop with the viewer. Every other error is a real one.
+   * run until the user moves on — a newer run replaces it, and a user seek that
+   * starts no run drops it outright (see `disarmStreamRetry`). Retries cannot
+   * stack (one timer, and the newest refusal replaces it). Every other error is
+   * a real one.
    *
    * `attemptedMode` is the mode the failed run actually asked for, and the
    * retry stays on it: a refusal says nothing about the mode.
@@ -936,6 +999,16 @@
     const startAt = Number.isFinite(error.startAt) ? error.startAt : 0;
     scheduleStreamRetry(() => {
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
+      // Resume the offset the refused run itself asked for: it is still the
+      // position the user last picked, because every move away from it has
+      // already disarmed this retry — a newer run through `onRunStart` and a
+      // user seek through `onUserSeek` (which the element's own `seeking` is
+      // not enough to tell apart from the player's `currentTime` assignment).
+      // Reading the element's position instead would follow the player's own
+      // setup, not the user: a run parks the element on ITS offset, so a
+      // follow-up run refused at the newest target (25 s) finds the element
+      // standing on the previous run's parked offset (10 s) and would resume
+      // there — discarding the seek this retry exists to resume.
       playStream(photo, decision, attemptedMode, { keepWaitingNotice: true, startAt });
     }, streamRetryDelayMs(error));
   }
@@ -953,11 +1026,48 @@
   }
 
   /**
+   * Drop the pending saturation retry. A retry is armed for a run the server
+   * refused, and it runs `playStream(..., { startAt })`: firing it once a newer
+   * run exists would abort that run and drag playback back to the offset the
+   * user has already left, so it must never outlive the run it was armed for.
+   * Every newer run disarms it the moment it begins — including a run msePlayer
+   * restarts for a seek inside its own player, which is why the player reports
+   * every run through `onRunStart` instead of only the states it reaches: a
+   * refused run can be held by the server for the whole
+   * `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s by default) before it answers, and
+   * until that signal nothing in the viewer can tell that a newer run exists.
+   *
+   * A user seek is the second signal, and it is not derivable from the first:
+   * a target the element can serve from its buffer restarts no run, so the
+   * viewer would never learn that the offset it armed for is one the user has
+   * left — which is why every user seek reaches the viewer through `onUserSeek`
+   * and disarms the retry here too. Between the two, no retry can outlive the
+   * position it was armed for, which is what lets its firing path resume at
+   * that position instead of reading the element (see `handleStreamFailure`).
+   */
+  function disarmStreamRetry() {
+    if (streamRetryTimer === null) return;
+    clearTimeout(streamRetryTimer);
+    streamRetryTimer = null;
+  }
+
+  /**
    * Arm the one pending saturation retry. `destroyStreamPlayer` disarms it, so
-   * a closed viewer or a new photo never leaves a retry running.
+   * a closed viewer or a new photo never leaves a retry running, and both a
+   * newer run (`onRunStart`) and a user seek (`onUserSeek`) do.
+   *
+   * The newest request wins: a retry is armed for the run that was just
+   * refused, and an older one still pending belongs to an offset the user has
+   * already left (the newest refused seek is the position they picked last).
+   * The offset it is armed for is the position it resumes, not a command that
+   * overrides a later move: disarming on that move is what keeps the two
+   * consistent. Replacing it cannot let retries stack — there is one timer, and
+   * arming never leaves two — and it cannot starve playback either: a refusal
+   * that keeps arriving is a request that keeps being made, each of which fires
+   * its own retry within [STREAM_RETRY_DELAY_MS, STREAM_RETRY_DELAY_MAX_MS].
    */
   function scheduleStreamRetry(callback, delayMs) {
-    if (streamRetryTimer !== null) return;
+    disarmStreamRetry();
     streamRetryTimer = setTimeout(() => {
       streamRetryTimer = null;
       callback();
@@ -965,10 +1075,7 @@
   }
 
   function destroyStreamPlayer() {
-    if (streamRetryTimer !== null) {
-      clearTimeout(streamRetryTimer);
-      streamRetryTimer = null;
-    }
+    disarmStreamRetry();
     if (!streamPlayer) return;
     streamPlayer.destroy();
     streamPlayer = null;

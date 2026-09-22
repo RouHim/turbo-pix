@@ -918,12 +918,26 @@ pub async fn convert_video_with_progress(
 
 /// ffmpeg arguments for a whole-file conversion (see [`FileConversion`]).
 ///
-/// `-map 0:v:0` takes the first video track and nothing else: without an
+/// `-map 0:V:0?` takes the first video track and nothing else: without an
 /// explicit map ffmpeg muxes everything it can into the MP4 (a second audio
 /// track, an attached cover image, a subtitle track) and aborts the whole run
 /// on the first stream the muxer cannot carry. `-map 0:a:0?` keeps the first
 /// audio track; the trailing `?` is what makes a silent source convert instead
-/// of failing with "Stream map '0:a:0' matches no streams".
+/// of failing with "Stream map '0:a:0' matches no streams". The video map is
+/// optional for the mirror-image reason: a container that stores no video at
+/// all (audio-only or cover-art-only `.mp4`/`.mov`/`.mkv`, which the capability
+/// resolver records as `no_video_stream` and which still reach this conversion
+/// path) would otherwise fail every attempt with "Stream map '0:V:0' matches no
+/// streams" and never produce an artifact.
+///
+/// The capital `V` is load-bearing, not cosmetic: plain `v` also matches
+/// attached cover pictures, which [`crate::video_probe`]'s resolver skips when
+/// it builds the record this conversion is driven by. Mapping with `v` would
+/// put a video track into an artifact the record says has none (and, for a
+/// [`FileConversion::VideoCopy`] of a source whose cover precedes the real
+/// video, tag that cover `hvc1`), so the file the client keeps would contradict
+/// the capabilities it was served. `V` selects exactly the streams the resolver
+/// counted.
 ///
 /// Audio is copied only when the run re-encodes the video and the source
 /// already carries a codec every browser decodes (AAC, MP3). Anything else —
@@ -938,8 +952,9 @@ pub async fn convert_video_with_progress(
 ///
 /// `plan` is the hardware encoder the startup probe selected, or `None` for
 /// the software path. It only ever replaces the video encoder block of a
-/// [`FileConversion::Reencode`] — a copy passes frames through untouched, and
-/// `None` reproduces the historical libx264 invocation exactly (spec FR-009).
+/// [`FileConversion::Reencode`] — a copy passes frames through untouched — and
+/// the software block itself pins 8-bit 4:2:0 Main so the artifact's bit depth
+/// never depends on the source's.
 pub fn build_conversion_args(
     input: &Path,
     output: &Path,
@@ -949,7 +964,7 @@ pub fn build_conversion_args(
     plan: Option<&HwPlan>,
 ) -> Vec<String> {
     let input_path = input.to_string_lossy().into_owned();
-    let mut args: Vec<String> = ["-i", &input_path, "-map", "0:v:0", "-map", "0:a:0?"]
+    let mut args: Vec<String> = ["-i", &input_path, "-map", "0:V:0?", "-map", "0:a:0?"]
         .iter()
         .map(|arg| arg.to_string())
         .collect();
@@ -971,15 +986,31 @@ pub fn build_conversion_args(
                     args.extend(plan.video_args());
                     log::info!("Converting with hardware encoder {}", plan.label());
                 }
-                None => args.extend(
-                    [
-                        "-c:v", "libx264", // More widely available than libopenh264
-                        "-preset", "fast", // Good for real-time transcoding
-                        "-crf", "23", // 18-28, lower = better quality
-                    ]
-                    .iter()
-                    .map(|arg| arg.to_string()),
-                ),
+                None => {
+                    args.extend(
+                        [
+                            "-c:v", "libx264", // More widely available than libopenh264
+                            "-preset", "fast", // Good for real-time transcoding
+                            "-crf", "23", // 18-28, lower = better quality
+                        ]
+                        .iter()
+                        .map(|arg| arg.to_string()),
+                    );
+                    // The x264 wrapper keeps the SOURCE bit depth, so without an
+                    // explicit format a 10-bit source comes out as H.264 High
+                    // 10 — a profile the decision only believes a client
+                    // decodes when it declared `h264-10`, which is exactly the
+                    // gate every source routed here failed. Pinning the 8-bit
+                    // 4:2:0 Main pair the streaming rung's software branch uses
+                    // keeps the cached artifact on the same rung as the stream
+                    // it replaces instead of becoming undecodable on the second
+                    // open.
+                    args.extend(
+                        ["-pix_fmt", "yuv420p", "-profile:v", "main"]
+                            .iter()
+                            .map(|arg| arg.to_string()),
+                    );
+                }
             }
         }
         // The client plays this video already: copying it keeps the artifact
@@ -2468,11 +2499,21 @@ pub(crate) mod tests {
 
         let aac = args(FileConversion::Reencode, Some("hevc"), Some("aac"), false);
         assert!(aac.contains("-c:v libx264 -preset fast -crf 23"), "{aac}");
+        assert!(
+            aac.contains("-pix_fmt yuv420p -profile:v main"),
+            "the software re-encode must pin 8-bit 4:2:0 Main: x264 otherwise \
+             inherits the SOURCE bit depth, so a 10-bit source comes out as \
+             H.264 High 10 — the very profile the decision's `h264-10` gate \
+             says every client routed here cannot decode: {aac}"
+        );
         assert!(aac.contains("-c:a copy"), "AAC must be copied: {aac}");
         assert!(aac.contains("-hwaccel auto"), "{aac}");
         assert!(
-            aac.contains("-map 0:v:0 -map 0:a:0?"),
-            "only the first video and audio track are mapped: {aac}"
+            aac.contains("-map 0:V:0? -map 0:a:0?"),
+            "only the first video and audio track are mapped (`V` excludes attached cover \
+             pictures, which the capability record skips too), and the video map must be \
+             optional so an audio-only source (recorded as `no_video_stream`) converts \
+             instead of failing: {aac}"
         );
         assert!(
             aac.contains("-movflags +faststart") && aac.contains("-f mp4"),
@@ -2508,6 +2549,11 @@ pub(crate) mod tests {
             unknown.contains("-c:a aac"),
             "an unknown source audio codec must be converted, never copied: {unknown}"
         );
+        assert!(
+            unknown.contains("-map 0:V:0?"),
+            "a source with no video stream (the resolver records `no_video_stream`, and \
+             the plan still routes it here) must map video optionally: {unknown}"
+        );
 
         // A source whose video the client already plays keeps its video track
         // bit-for-bit — re-encoding it would add a generation of loss to every
@@ -2523,12 +2569,18 @@ pub(crate) mod tests {
             "the undecodable audio still becomes AAC: {copy}"
         );
         assert!(
-            copy.contains("-map 0:v:0 -map 0:a:0?"),
-            "the copied video still needs mapping: {copy}"
+            copy.contains("-map 0:V:0? -map 0:a:0?"),
+            "the copied video still needs an optional map: {copy}"
         );
         assert!(
             !copy.contains("-hwaccel"),
             "a copy decodes nothing, so no hardware acceleration is requested: {copy}"
+        );
+        assert!(
+            !copy.contains("-pix_fmt"),
+            "a copy must not ask ffmpeg to convert anything: the source's own \
+             bit depth is what the client that was routed here already \
+             declared: {copy}"
         );
         assert!(
             !copy.contains("-tag:v"),
@@ -2553,8 +2605,13 @@ pub(crate) mod tests {
     }
 
     /// A copy never encodes, and the software path is what a GPU-less host
-    /// runs, so a planless build has to produce the historical invocation
-    /// byte-for-byte (spec FR-009).
+    /// runs, so a planless build has to stay the historical invocation — with
+    /// two deliberate exceptions: the optional video map, without which a
+    /// source that stores no video stream can never be converted, and the
+    /// pinned 8-bit Main video format, without which a 10-bit source comes out
+    /// as H.264 High 10 (x264 inherits the source bit depth) and every client
+    /// the decision sent here — by definition one that never declared
+    /// `h264-10` — fails to decode the cached artifact.
     #[test]
     fn reencode_args_are_unchanged_without_a_plan() {
         // GIVEN the software path (no plan, exactly what a GPU-less host uses)
@@ -2571,11 +2628,67 @@ pub(crate) mod tests {
         )
         .join(" ");
 
-        // THEN the ffmpeg invocation is byte-for-byte the historical one
+        // THEN the ffmpeg invocation is the historical one bar those two
+        // documented additions
         assert_eq!(
             args,
-            "-hwaccel auto -i /in.mp4 -map 0:v:0 -map 0:a:0? -c:v libx264 -preset fast -crf 23 \
-             -c:a copy -movflags +faststart -y -f mp4 /out.mp4",
+            "-hwaccel auto -i /in.mp4 -map 0:V:0? -map 0:a:0? -c:v libx264 -preset fast -crf 23 \
+             -pix_fmt yuv420p -profile:v main -c:a copy -movflags +faststart -y -f mp4 /out.mp4",
+        );
+    }
+
+    /// The cached whole-file artifact is re-served on every later open (and by
+    /// the `?transcode=true` escape hatch), so the software re-encode must not
+    /// inherit the source's bit depth: x264 would emit H.264 High 10 for a
+    /// 10-bit source — a profile the decision's own `h264-10` gate says the
+    /// client routed here cannot decode. Asserted against the artifact ffprobe
+    /// reports, not against the argument vector.
+    #[tokio::test]
+    async fn software_reencode_flattens_a_10_bit_source_to_8_bit_main() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let fixture = Path::new("test-data/test_video_10bit.mp4");
+        if !fixture.exists() || !ffmpeg_available() {
+            eprintln!("skipping: fixture or ffmpeg unavailable");
+            return;
+        }
+        // GIVEN a source whose video track is 10-bit High 10
+        assert_eq!(
+            video_stream_field(fixture, "pix_fmt"),
+            "yuv420p10le",
+            "the fixture must stay 10-bit for this test to mean anything"
+        );
+
+        // WHEN the software (planless) re-encode — the shape a GPU-less host
+        // caches and serves — runs over it
+        let output = temp.path().join("out.mp4.tmp");
+        let status = Command::new(get_ffmpeg_path())
+            .args(build_conversion_args(
+                fixture,
+                &output,
+                FileConversion::Reencode,
+                SourceCodecs {
+                    video: Some("h264"),
+                    audio: None,
+                },
+                false,
+                None,
+            ))
+            .status()
+            .expect("ffmpeg must run");
+        assert!(status.success(), "the conversion must succeed");
+
+        // THEN the artifact is 8-bit 4:2:0 Main, which a client declaring
+        // `h264-8` and nothing higher decodes
+        assert_eq!(
+            video_stream_field(&output, "pix_fmt"),
+            "yuv420p",
+            "the artifact must not keep the source's 10-bit format"
+        );
+        assert_eq!(
+            video_stream_field(&output, "profile"),
+            "Main",
+            "the artifact must not keep the source's High 10 profile"
         );
     }
 

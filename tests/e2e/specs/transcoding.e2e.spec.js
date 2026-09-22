@@ -77,7 +77,9 @@ test.describe('Transcoding', () => {
   test('should hint which encoder serves a converting video, and none for direct play', async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    // Generous on purpose: the fill wait below is the slow part on a small
+    // runner, and it must report its own assertion rather than a test timeout.
+    test.setTimeout(180_000);
     const hint = page.locator('[data-testid="viewer-encoder-hint"]');
 
     // GIVEN a video the client cannot play (the server converts it)
@@ -111,6 +113,20 @@ test.describe('Transcoding', () => {
       /\((?:libx264|h264_nvenc|h264_vaapi|h264_qsv|h264_amf|h264_videotoolbox)\)$/
     );
 
+    // AND the run is left to FINISH before the viewer moves on: a client that
+    // navigates away aborts the stream, and the handler fills the cache only
+    // from a run that completed (`outcome.is_ok(...)`) — an aborted run's
+    // output is a prefix of the file, so it proves nothing about the rest. The
+    // fact waited for here is the one the phase after the switch needs; the
+    // 2 s clip ends on its own, so this is bounded by the fill, not playback.
+    const decisionUrl = `/api/photos/${hevcPhoto.hash_sha256}/video?decision&client=h264-8%2Caac`;
+    const cachedDelivery = async () => (await page.request.get(decisionUrl)).json();
+    await expect.poll(cachedDelivery, { timeout: 90_000 }).toMatchObject({
+      action: 'direct',
+      cached: true,
+      encoder: expect.any(String),
+    });
+
     // WHEN the viewer moves to a natively playable video without being closed
     await page.evaluate(() => window.history.back());
     await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(h264Photo.hash_sha256);
@@ -126,28 +142,14 @@ test.describe('Transcoding', () => {
     //
     // The delivery really is the cached file, and its decision names the
     // encoder — the carrier the viewer has to pass through for this phase to
-    // show anything at all — so that IS the fact this phase waits for. The
-    // conversion status is not a stand-in for it: the store holds one entry
-    // per hash and outlives the cache wipe, so a `Completed` left by the
-    // playthrough before this one can be read before this playthrough's fill
-    // has published anything — the decision then answers `stream`/`cached:
-    // false`, which is what a still-cold cache means. Polling the decision
-    // waits for the artifact itself.
-    await expect
-      .poll(
-        async () =>
-          (
-            await page.request.get(
-              `/api/photos/${hevcPhoto.hash_sha256}/video?decision&client=h264-8%2Caac`
-            )
-          ).json(),
-        { timeout: 60_000 }
-      )
-      .toMatchObject({
-        action: 'direct',
-        cached: true,
-        encoder: expect.any(String),
-      });
+    // show anything at all. The artifact was waited for above: the run that
+    // produced it had to finish before the viewer could leave, so this state
+    // is asserted rather than polled.
+    expect(await cachedDelivery()).toMatchObject({
+      action: 'direct',
+      cached: true,
+      encoder: expect.any(String),
+    });
 
     await page.evaluate(() => window.history.forward());
     await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(hevcPhoto.hash_sha256);

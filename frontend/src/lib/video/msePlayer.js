@@ -17,6 +17,11 @@ export function mseSupported(mime) {
  * conversion slot right now" — a saturated worker pool the viewer answers by
  * waiting and retrying — while anything else is a real playback failure.
  *
+ * `permanent` marks the one `503` no retry can clear: the server's conversion
+ * pool is disabled (`TURBO_PIX_MAX_TRANSCODES=0`), which it names in the
+ * refusal body. Waiting for a slot that will never free is a lie the viewer
+ * must not tell, so it keys on this instead of on the status alone.
+ *
  * The refusal carries the server's `Retry-After` pacing hint when it sent one,
  * and deliberately nothing about the offset this run asked for: the viewer
  * keeps its own newest-intent offset and resumes the position the user picked,
@@ -25,13 +30,14 @@ export function mseSupported(mime) {
 export class StreamHttpError extends Error {
   /**
    * @param {number} status
-   * @param {{retryAfterMs?: number|null}} [details]
+   * @param {{retryAfterMs?: number|null, permanent?: boolean}} [details]
    */
-  constructor(status, { retryAfterMs = null } = {}) {
+  constructor(status, { retryAfterMs = null, permanent = false } = {}) {
     super(`stream HTTP ${status}`);
     this.name = 'StreamHttpError';
     this.status = status;
     this.retryAfterMs = retryAfterMs;
+    this.permanent = permanent;
   }
 }
 
@@ -49,6 +55,30 @@ function retryAfterMs(response) {
   const seconds = Number(String(raw).trim());
   if (!Number.isFinite(seconds) || seconds < 0) return null;
   return seconds * 1000;
+}
+
+/**
+ * Whether a refusal is one no retry can clear.
+ *
+ * `503` covers two facts on the stream endpoint: the worker pool is *saturated*
+ * (every worker busy — wait for a free slot, the `Retry-After` paces when) and
+ * the pool is *disabled* (`TURBO_PIX_MAX_TRANSCODES=0`, no worker will ever
+ * exist). Both answer the same status and both send a `Retry-After`, and the
+ * body is the only carrier that tells them apart — the disabled arm names
+ * itself there (`{"error": "conversion disabled"}`). Anything unreadable or
+ * unrecognised counts as saturation, which is the answer the viewer already
+ * had.
+ *
+ * @param {Response} response
+ * @returns {Promise<boolean>}
+ */
+async function refusesPermanently(response) {
+  try {
+    const body = await response.json();
+    return body?.error === 'conversion disabled';
+  } catch {
+    return false;
+  }
 }
 
 function once(target, event) {
@@ -110,6 +140,21 @@ export function createStreamPlayer(
   let startedPlaying = false;
   // Tears down the current run's media-error listeners.
   let detachRunErrors = null;
+  // The signal of the run that is pumping right now, or null when no pump loop
+  // is alive. A pump parked on the look-ahead window still counts: its own loop
+  // trims the played-out media as it resumes, so a playhead move does not have
+  // to (and must not, on that same buffer, at the same time).
+  let pumpSignal = null;
+  // The run whose media is attached to the element. A playhead move after that
+  // run's pump has ended is what trims its media the rest of the way out (see
+  // `onPlayheadMoved`); the signal tells the trim whether the run is still the
+  // live one.
+  let liveBuffer = null;
+  let liveSignal = null;
+  // The pumps parked on the look-ahead window. They are woken by the element's
+  // own playhead moving and by this player going away — never by a timer: a
+  // parked pump must cost nothing while the viewer sits still.
+  const lookAheadWaiters = new Set();
 
   // The declared duration of the SOURCE, when the server knows it. The media
   // source grows its own duration to the end of the media appended to it, so a
@@ -130,6 +175,26 @@ export function createStreamPlayer(
   // Evict once this much played-out media has accumulated, rather than issuing
   // a SourceBuffer update per appended chunk.
   const EVICT_STEP_SECONDS = 10;
+  // How far ahead of the playhead the pump may read the body — the mirror of
+  // BUFFER_WINDOW_SECONDS on the read side. The server sends a run unpaced (no
+  // `-re`) and Chromium frees nothing by itself, so a pump that reads as fast
+  // as it can retains `duration x (1 - 1/speed)`: the whole file for a remux
+  // delivered in seconds, which is the growth the append failures above come
+  // from. Reading stops while this much media sits buffered ahead of the viewer
+  // and resumes when playback has drained it, which bounds the retained bytes
+  // whatever the delivery speed.
+  //
+  // Not reading has a server-side consequence, and it is deliberate: the run's
+  // pipe backs up, and `video_stream.rs`'s watchdog kills any run that hands
+  // out no chunk for `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` (default 300 s) — the
+  // doc comment there names "a client that stopped reading so the pipe backs
+  // up" as exactly this case. A viewer paused for longer than that therefore
+  // loses its run: the body ends before the declared duration, which this
+  // module reports as the ordinary truncation failure (never a silent stop),
+  // and the viewer's ladder takes over from there. A parked pump must
+  // consequently never swallow a body that ended — see `waitForLookAhead` —
+  // or a killed run would wedge the player instead of recovering.
+  const LOOK_AHEAD_SECONDS = 30;
 
   const state = (value) => {
     if (!destroyed) onState?.(value);
@@ -244,6 +309,73 @@ export function createStreamPlayer(
   }
 
   /**
+   * How far the write head runs ahead of the viewer, in seconds: the media the
+   * run has buffered past the element's current position. Zero while nothing is
+   * buffered, negative once playback has run past what is buffered.
+   */
+  function bufferedAhead(buffer) {
+    if (buffer.buffered.length === 0) return 0;
+    return buffer.buffered.end(buffer.buffered.length - 1) - videoEl.currentTime;
+  }
+
+  /**
+   * The element's playhead moving once, or an immediate resolve when this
+   * player is going away — `destroy()`, or a run that supersedes the parked one
+   * — so that no pump is ever left parked on an element nothing will move
+   * again.
+   */
+  function playheadMoved() {
+    if (destroyed) return Promise.resolve();
+    return new Promise((resolve) => {
+      lookAheadWaiters.add(resolve);
+    });
+  }
+
+  /**
+   * Wake every parked pump. A wake is not a claim that the window has drained:
+   * each pump re-checks its own window, `destroyed` and its run's signal.
+   */
+  function wakeLookAheadWaiters() {
+    for (const resolve of lookAheadWaiters) resolve();
+    lookAheadWaiters.clear();
+  }
+
+  /**
+   * Park until the media buffered ahead of the playhead has drained into
+   * `LOOK_AHEAD_SECONDS` — the read-side half of the buffer bound.
+   *
+   * `read` is the body read already in flight. A chunk landing is deliberately
+   * NOT a way out of the wait while the window is full: appending it anyway is
+   * the unbounded growth this bound exists to stop, so it is held instead — one
+   * chunk, never more, because no further read is issued from here. A body that
+   * ENDS is a way out, and has to be: the run is over (the server killed it, or
+   * it delivered everything), the caller has to act on that — the truncation
+   * report for the killed run included — and a pump parked on an element that
+   * may never move again would never get there.
+   */
+  async function waitForLookAhead(read, buffer, signal) {
+    let ended = false;
+    read.then(
+      ({ done }) => {
+        ended = done;
+        // A body that ends wakes the wait it parked: the flag alone is only
+        // read when the loop comes round again, and nothing else would bring it
+        // round. A chunk landing deliberately does not wake it — the window is
+        // full, so there is nothing to do with it yet.
+        if (done) wakeLookAheadWaiters();
+      },
+      () => {
+        // The read itself failed: the caller's `await read` reports it.
+        ended = true;
+        wakeLookAheadWaiters();
+      }
+    );
+    while (!destroyed && !signal.aborted && !ended && bufferedAhead(buffer) > LOOK_AHEAD_SECONDS) {
+      await playheadMoved();
+    }
+  }
+
+  /**
    * Drop the media `BUFFER_WINDOW_SECONDS` behind the playhead, so a long run
    * cannot hold everything it ever appended.
    *
@@ -257,11 +389,28 @@ export function createStreamPlayer(
    * buffer the replacement has taken over. A buffer that cannot evict (no
    * `remove` method at all, as the MSE spec allows for some types) keeps its
    * media rather than failing the run: growth is the lesser fault.
+   *
+   * Also driven from the element's playhead once a run's pump has ended (see
+   * `onPlayheadMoved`): a run that delivered in full leaves the media behind the
+   * viewer in the buffer, and nothing else would ever drop it.
    */
   async function evictPlayedOut(buffer, signal) {
-    if (typeof buffer.remove !== 'function' || buffer.buffered.length === 0) return;
-    const start = buffer.buffered.start(0);
-    const end = buffer.buffered.end(buffer.buffered.length - 1);
+    if (typeof buffer.remove !== 'function') return;
+    // A buffer whose media source is gone — the element moved to a newer run's
+    // source, the viewer closed — answers `buffered` with a throw ("This
+    // SourceBuffer has been removed from the parent media source") rather than
+    // an empty range. It holds nothing to evict, and a trim is never worth
+    // failing a run over, so it is treated exactly like a buffer that cannot
+    // evict at all.
+    let start;
+    let end;
+    try {
+      if (buffer.buffered.length === 0) return;
+      start = buffer.buffered.start(0);
+      end = buffer.buffered.end(buffer.buffered.length - 1);
+    } catch {
+      return;
+    }
     const cutoff = Math.min(videoEl.currentTime - BUFFER_WINDOW_SECONDS, end);
     // Nothing played out yet (or not enough of it to be worth an update of its
     // own): the next chunks widen the span.
@@ -284,10 +433,17 @@ export function createStreamPlayer(
    * stream ends or the run is superseded (`signal` aborted by a newer run or
    * by `destroy()`). Without the signal check a superseded pump would keep
    * appending the previous photo's/offset's media into the new buffer.
+   *
+   * The pump reads at most `LOOK_AHEAD_SECONDS` ahead of the playhead (see the
+   * constant): the read is issued before the wait and held unappended until the
+   * window drains, so the body's end stays observable from inside the wait.
    */
   async function pump({ reader, buffer, source, signal }) {
     for (;;) {
-      const { done, value } = await reader.read();
+      const read = reader.read();
+      await waitForLookAhead(read, buffer, signal);
+      if (destroyed || signal.aborted) return;
+      const { done, value } = await read;
       if (destroyed || signal.aborted) return;
       if (done) {
         // The chunked body ends cleanly even when the run did not: the server
@@ -395,6 +551,15 @@ export function createStreamPlayer(
     controller?.abort();
     controller = new AbortController();
     const signal = controller.signal;
+    // The run this one supersedes may be parked on the look-ahead window, and
+    // nothing in the element would wake it before its own body ends: wake it
+    // here so the run being replaced releases its body and exits at once. Its
+    // buffer stops being the live one at the same moment: this run detaches the
+    // old source below, and until this run has attached its own, a playhead move
+    // would trim a buffer that is no longer the element's.
+    wakeLookAheadWaiters();
+    liveBuffer = null;
+    liveSignal = null;
     // The run about to be attached owns the failures from here on: whatever the
     // superseded run reports late belongs to a mode the viewer already left.
     detachRunErrors?.();
@@ -428,10 +593,16 @@ export function createStreamPlayer(
       // is only known once the server answers, and a refused (503) run must not
       // leave a half-built source behind for the viewer's retry to trip over.
       const response = await fetch(urlFor(seconds), { signal });
-      if (!response.ok || !response.body) {
+      if (!response.ok) {
+        // The refusal body is what tells a saturated pool from a disabled one
+        // (see `refusesPermanently`), and it is the only carrier that does.
         throw new StreamHttpError(response.status, {
           retryAfterMs: retryAfterMs(response),
+          permanent: await refusesPermanently(response),
         });
+      }
+      if (!response.body) {
+        throw new StreamHttpError(response.status, { retryAfterMs: retryAfterMs(response) });
       }
 
       // Each run's SourceBuffer is typed from the MIME the server advertises
@@ -471,6 +642,9 @@ export function createStreamPlayer(
       // The run's own buffer: `isBuffered` (and therefore the seek restart)
       // asks about the media source that is actually attached to the element.
       sourceBuffer = buffer;
+      // And what a playhead move trims once this run's pump has ended.
+      liveBuffer = buffer;
+      liveSignal = signal;
 
       // The delivered bytes can turn out to be undecodable (a remux the
       // browser cannot actually play). Chromium reports that on the
@@ -573,9 +747,15 @@ export function createStreamPlayer(
     // returned. The pump then feeds the rest of the chunks in the background,
     // bailing out as soon as this run is superseded.
     try {
+      pumpSignal = signal;
       await pump({ reader, buffer, source: mediaSource, signal });
     } catch (error) {
       if (error.name !== 'AbortError') reportError(signal, error);
+    } finally {
+      // Only this run's own pump clears the flag: a superseded pump returning
+      // after its replacement has started must not unlock the playhead-driven
+      // trim for the replacement's buffer.
+      if (pumpSignal === signal) pumpSignal = null;
     }
   }
 
@@ -594,8 +774,26 @@ export function createStreamPlayer(
   const onWaiting = () => {
     if (startedPlaying) state('buffering');
   };
-  const onSeeked = () => {
+  // The element moved its playhead: playback progressed, or a seek landed. Two
+  // things follow, and both belong here rather than in the pump loop —
+  // `timeupdate` is the only event that keeps firing once a run is over, and a
+  // seek can move the playhead while no pump is running at all.
+  //
+  //   - a pump parked on the look-ahead window re-checks its window: the media
+  //     it was waiting to drain is now playable;
+  //   - a run whose pump has ended gets its played-out media dropped. A run
+  //     that delivered everything before the viewer watched it (the whole of a
+  //     short source) would otherwise hold that media in the renderer for the
+  //     rest of playback, with nothing left to evict it.
+  //
+  // The trim stands down while a pump is alive: that pump evicts after every
+  // append on the same buffer, and this player never issues two buffer updates
+  // from two places at once for one run. `seeked` carries the playhead moves
+  // that are not playback, and it is also what retires the own-seek guard.
+  const onPlayheadMoved = () => {
     expectedSeek = null;
+    wakeLookAheadWaiters();
+    if (pumpSignal === null && liveBuffer !== null) evictPlayedOut(liveBuffer, liveSignal);
   };
 
   // Seeking outside the buffered range restarts the stream at the target.
@@ -639,7 +837,8 @@ export function createStreamPlayer(
     start(target).catch((error) => reportError(controller?.signal, error));
   };
   videoEl.addEventListener('seeking', onSeeking);
-  videoEl.addEventListener('seeked', onSeeked);
+  videoEl.addEventListener('seeked', onPlayheadMoved);
+  videoEl.addEventListener('timeupdate', onPlayheadMoved);
   videoEl.addEventListener('playing', onPlaying);
   videoEl.addEventListener('waiting', onWaiting);
 
@@ -647,10 +846,16 @@ export function createStreamPlayer(
     destroyed = true;
     pendingSeek = null;
     controller?.abort();
+    // Release every parked pump: it re-checks `destroyed` and returns, instead
+    // of holding its body open behind a viewer that is gone.
+    wakeLookAheadWaiters();
+    liveBuffer = null;
+    liveSignal = null;
     detachRunErrors?.();
     detachRunErrors = null;
     videoEl.removeEventListener('seeking', onSeeking);
-    videoEl.removeEventListener('seeked', onSeeked);
+    videoEl.removeEventListener('seeked', onPlayheadMoved);
+    videoEl.removeEventListener('timeupdate', onPlayheadMoved);
     videoEl.removeEventListener('playing', onPlaying);
     videoEl.removeEventListener('waiting', onWaiting);
     try {

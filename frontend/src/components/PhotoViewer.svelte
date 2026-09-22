@@ -994,17 +994,25 @@
   /**
    * A refused conversion slot is not a playback failure: the pool is simply
    * full, so keep the waiting notice (with "play original anyway" still
-   * reachable, in case the wait is a permanent pool of 0) and retry the same
-   * run until the user moves on — a newer run replaces it, and a user seek that
-   * starts no run drops it outright (see `disarmStreamRetry`). Retries cannot
-   * stack (one timer, and the newest refusal replaces it). Every other error is
-   * a real one.
+   * reachable, in case the wait is a long one) and retry the same run until the
+   * user moves on — a newer run replaces it, and a user seek that starts no run
+   * drops it outright (see `disarmStreamRetry`). Retries cannot stack (one
+   * timer, and the newest refusal replaces it). Every other error is a real
+   * one.
+   *
+   * A `503` the player marked `permanent` is one of those real ones, not a
+   * wait: it is the server's own answer for a conversion pool that is disabled
+   * (`TURBO_PIX_MAX_TRANSCODES=0`), where no slot will ever free. Waiting for
+   * one would re-request forever and leave the viewer on a notice that names a
+   * pool which does not exist (see `refusesPermanently` in msePlayer). It takes
+   * the error path instead: the ladder runs its bounded rungs and the notice
+   * ends on the conversion failure, with the escape hatch as the way out.
    *
    * `attemptedMode` is the mode the failed run actually asked for, and the
    * retry stays on it: a refusal says nothing about the mode.
    */
   function handleStreamFailure(photo, decision, attemptedMode, error) {
-    if (error?.status !== 503) {
+    if (error?.status !== 503 || error?.permanent) {
       onStreamError(photo, decision, attemptedMode, error);
       return;
     }

@@ -271,6 +271,41 @@ test.describe('On-the-fly streaming playback', () => {
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
+  test('a permanently disabled conversion pool is named, not waited for', async ({ page }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    // A disabled pool is only observable while the decisions say "stream": a
+    // cached artifact is served as a file, with no stream request to refuse.
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+
+    // The server's own answer for `TURBO_PIX_MAX_TRANSCODES=0`: the same 503 a
+    // saturated pool sends, with the refusal body that names the pool as
+    // disabled (src/handlers_video.rs, `StreamStartError::Disabled`). No slot
+    // will ever free, so waiting for one re-requests forever and leaves the
+    // notice naming a pool that does not exist. The refusal is a failure the
+    // viewer ends on: the ladder climbs its bounded rungs and the escape hatch
+    // is offered.
+    const requestedModes = [];
+    await page.route('**/video/stream*', async (route) => {
+      requestedModes.push(new URL(route.request().url()).searchParams.get('mode'));
+      await route.fulfill({
+        status: 503,
+        headers: { 'retry-after': '5', 'content-type': 'application/json' },
+        body: JSON.stringify({ error: 'conversion disabled' }),
+      });
+    });
+
+    await openVideo(page, mkv);
+    await expect(page.locator('.transcode-toast')).toContainText('Video conversion failed', {
+      timeout: 30_000,
+    });
+    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
+    // One request per rung of the ladder, and no more: a client that read this
+    // refusal as saturation would keep re-requesting the same mode for as long
+    // as the viewer stays open on the photo.
+    expect(requestedModes).toEqual(['remux', 'audio', 'transcode']);
+  });
+
   test('a previously converted video starts without a blocking conversion', async ({ page }) => {
     test.setTimeout(120_000);
     const hevc = await findVideoByFilename(page, 'test_video_hevc.mp4');
@@ -438,18 +473,22 @@ test.describe('On-the-fly streaming playback', () => {
     // Seek to 15 s the moment playback starts, while the target is still
     // unbuffered: the player answers by restarting the stream there.
     //
-    // The restart is what is reported, not the assignment: resolving on the
-    // `currentTime` write reported true as soon as the guard conditions held, so
-    // a regression that dropped the seek restart entirely — no second run, no
-    // `start=15` request — still read as restarted, and only failed 30 s later
-    // at the `ended` wait below, whose symptom points at the duration bounds
-    // instead. The element only completes the seek once the restarted run has
-    // put media at the target, so that is what the poll waits for.
+    // The restart is what is reported, not the media at the target. The run
+    // this test waits on is the one already delivering the 0-20.02 s remux, and
+    // its own bytes reach 15 s on their own (the throttle below puts them there
+    // in ~9 s), so every condition that only asks about buffered media is
+    // satisfied by a regression that dropped the seek restart entirely — no
+    // second run, no `start=15` request, no replacement media source. The
+    // restart itself is observable: `msePlayer` gives every run its own
+    // `MediaSource` behind a fresh blob URL, so `currentSrc` changing is the
+    // new run attaching. The media conditions stay: together they say the new
+    // run is delivering AT the target, not merely that a source was swapped.
     const restarted = await video.evaluate(
       () =>
         new Promise((resolve) => {
           const el = document.querySelector('#viewer-video');
           let seeked = false;
+          let srcBefore = null;
           const timer = setInterval(() => {
             if (!el || el.buffered.length === 0) return;
             const end = el.buffered.end(el.buffered.length - 1);
@@ -457,9 +496,11 @@ test.describe('On-the-fly streaming playback', () => {
               if (end >= 15) return;
               if (el.currentTime <= 0) return;
               seeked = true;
+              srcBefore = el.currentSrc;
               el.currentTime = 15;
               return;
             }
+            if (el.currentSrc === srcBefore) return;
             if (el.seeking) return;
             if (el.currentTime < 15) return;
             if (end < 15) return;

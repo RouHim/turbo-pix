@@ -32,6 +32,24 @@ async function settle(turns = 5) {
 }
 
 /**
+ * Settle until `value` stops changing, bounded. A pump that is waiting for the
+ * viewer has no further progress to make, while one that is not keeps going —
+ * so "the delivery has come to rest" is the observation that tells a bounded
+ * pump from an unbounded one, and it cannot be expressed as a fixed number of
+ * turns.
+ */
+async function settleUntilStable(value, quietTurns = 5, turns = 500) {
+  let last = value();
+  let quiet = 0;
+  for (let i = 0; i < turns && quiet < quietTurns; i += 1) {
+    await settle(1);
+    const now = value();
+    quiet = now === last ? quiet + 1 : 0;
+    last = now;
+  }
+}
+
+/**
  * SourceBuffer stand-in with Chromium's `updating` contract:
  *  - `timestampOffset` and `appendBuffer` throw `InvalidStateError` while an
  *    update is in flight (Chromium: "The timestamp offset may not be set while
@@ -386,15 +404,21 @@ function stalledBodyFetch() {
  * keeps close to the buffered end; the short `fakeFetch` cases above pin what a
  * run does with a handful of chunks, this one what the player does with a run
  * long enough to have to bound.
+ *
+ * `reads()` is how many times the body was read: the count a parked pump stops
+ * growing (it is the pump's only consumer), so it is what tells "the pump is
+ * waiting for the viewer" apart from "the pump is busy".
  */
 function longRunFetch(advance, chunks) {
   const calls = [];
+  let readCount = 0;
   const fetchImpl = (url) => {
     calls.push(url);
     let reads = 0;
     const reader = {
       read() {
         reads += 1;
+        readCount += 1;
         if (reads <= chunks) advance(reads);
         return Promise.resolve(
           reads <= chunks ? { done: false, value: new Uint8Array([0, 0, 0, 24]) } : { done: true }
@@ -408,7 +432,7 @@ function longRunFetch(advance, chunks) {
       body: { getReader: () => reader },
     });
   };
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, reads: () => readCount };
 }
 
 function createPlayer(video, options = {}) {
@@ -785,9 +809,12 @@ test('played-out media is evicted so a long run cannot grow without limit', asyn
 
 test('media ahead of the playhead is never evicted', async () => {
   const video = fakeVideo();
-  const { fetchImpl, calls } = longRunFetch(() => {}, 60);
+  // A run shorter than the look-ahead window, so it is delivered in full while
+  // the element sits at 0 s: a viewer that never plays cannot drain a window, so
+  // a longer run would (correctly) stop being read.
+  const { fetchImpl, calls } = longRunFetch(() => {}, 20);
   globalThis.fetch = fetchImpl;
-  const player = createPlayer(video, { duration: 60 });
+  const player = createPlayer(video, { duration: 20 });
 
   await player.start(0);
   await settle(10);
@@ -796,13 +823,13 @@ test('media ahead of the playhead is never evicted', async () => {
   assert.deepEqual(buffer.removals, [], 'nothing has played out, so nothing may be dropped');
   assert.deepEqual(
     [buffer.buffered.start(0), buffer.buffered.end(0)],
-    [0, 59],
+    [0, 19],
     'the whole run stays buffered while the element sits at 0 s'
   );
 
   // AND a seek forward into that media is served from the buffer: dropping
   // ahead of the playhead would re-convert what has already streamed.
-  video._currentTime = 30;
+  video._currentTime = 10;
   video.dispatch('seeking');
   await settle(5);
   assert.equal(calls.length, 1, 'a buffered target must start no stream run');
@@ -835,6 +862,226 @@ test('a buffer that cannot evict keeps its media instead of failing the run', as
     [0, 59],
     'the media it cannot evict stays'
   );
+
+  player.destroy();
+});
+
+test('delivery that outruns the clock is held to the look-ahead window', async () => {
+  const video = fakeVideo();
+  // 4x delivery: the fake clock advances a quarter second per delivered
+  // fragment. That is the normal shape of this endpoint — the server pipes the
+  // run out unpaced, so a remux arrives in seconds — and it is the case the
+  // played-out eviction alone cannot bound: the write head runs away from the
+  // viewer, and everything it has written is ahead of the playhead.
+  const { fetchImpl, reads } = longRunFetch((chunk) => {
+    video._currentTime = (chunk - 1) / 4;
+  }, 120);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, { duration: 120 });
+
+  // Not awaited: the run is still parked on its window, and `start()` only
+  // settles once its pump returns (see the destroy below).
+  const run = player.start(0);
+  await settle(5);
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  // Let the delivery come to rest: the pump either waits for the viewer here or
+  // consumes the whole body, and the count of reads is what says which.
+  await settleUntilStable(reads);
+
+  const end = buffer.buffered.end(0);
+  assert.ok(
+    end - video._currentTime <= 31,
+    `no more than the look-ahead window may be held ahead of the playhead (held ${end - video._currentTime} s)`
+  );
+  // AND the pump stopped reading rather than consuming everything it was
+  // handed: the window is what it stopped at, not the end of the body.
+  assert.ok(reads() < 121, `the run must not consume its whole body (${reads()} reads)`);
+
+  player.destroy();
+  await run;
+});
+
+test('a paused viewer is neither polled nor buffered past the window', async () => {
+  const video = fakeVideo();
+  // The element never moves: playback has not started (or the viewer paused),
+  // so nothing drains the window the pump fills.
+  const { fetchImpl, reads } = longRunFetch(() => {}, 120);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, { duration: 120 });
+
+  const run = player.start(0);
+  await settle(5);
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  // The pump parks one read past its window: the chunk it holds back is the read
+  // that keeps a body ending under the wait observable. Waiting for the reads to
+  // come to rest is what lets the measurement below be about the parked state.
+  await settleUntilStable(reads);
+
+  const appendedWhileParked = buffer.appended.length;
+  const readsWhileParked = reads();
+  assert.ok(
+    appendedWhileParked <= 33,
+    `a viewer that plays nothing must not accumulate media (appended ${appendedWhileParked})`
+  );
+
+  // Waiting on the element is not polling it: with the viewer still, the pump
+  // must consume nothing at all, however many turns pass.
+  await settle(50);
+  assert.equal(buffer.appended.length, appendedWhileParked, 'a parked pump appends nothing');
+  assert.equal(reads(), readsWhileParked, 'a parked pump reads nothing');
+
+  player.destroy();
+  await run;
+});
+
+test('a window the viewer drains resumes the pump and the run finishes', async () => {
+  const video = fakeVideo();
+  const states = [];
+  const errors = [];
+  const { fetchImpl, reads } = longRunFetch(() => {}, 120);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, {
+    duration: 120,
+    onState: (state) => states.push(state),
+    onError: (error) => errors.push(error),
+  });
+
+  const run = player.start(0);
+  await settle(5);
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  // The delivery comes to rest at the window, with the viewer still: that is
+  // the state the drain below is about.
+  await settleUntilStable(reads);
+  const parkedEnd = buffer.buffered.end(0);
+  assert.ok(parkedEnd < 119, `the pump must wait for the viewer (buffered to ${parkedEnd} s)`);
+
+  // The viewer plays what the run delivered: each move of its playhead lets the
+  // pump top the window back up, until the body ends and the run is over.
+  for (let i = 0; i < 60 && reads() <= 120; i += 1) {
+    video._currentTime = Math.min(video._currentTime + 5, 119);
+    video.dispatch('timeupdate');
+    await settle(3);
+  }
+  await settle(5);
+
+  assert.equal(reads(), 121, 'the pump read the run to its end');
+  assert.equal(buffer.buffered.end(0), 119, 'the whole run is buffered');
+  assert.ok(states.includes('ended'), 'the completed run reports its end');
+  assert.deepEqual(errors, [], 'nothing about this run is a failure');
+
+  player.destroy();
+  await run;
+});
+
+test('a body that ends while the pump waits still reports the truncation', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  const states = [];
+  // The body ends while the parked pump is holding its window full: that is the
+  // server's stall watchdog killing a run whose client stopped reading, which
+  // closes the response before the declared duration. The pump is waiting on the
+  // element rather than reading, so the end of the body has to reach it from
+  // inside that wait — a wait that only watched the playhead would park here
+  // forever and never report anything. 32 fragments is what fills the window
+  // (the element never plays, so nothing drains it) and the read that finds the
+  // body ended is the one issued at that point.
+  const { fetchImpl, reads } = longRunFetch(() => {}, 32);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, {
+    duration: 120,
+    onState: (state) => states.push(state),
+    onError: (error) => errors.push(error),
+  });
+
+  const run = player.start(0);
+  await settleUntilStable(reads);
+
+  assert.equal(errors.length, 1, 'the killed run must be reported, never swallowed');
+  assert.match(errors[0].message, /ended early/);
+  assert.ok(!states.includes('ended'), 'a body short of the declared duration is not a clean end');
+
+  player.destroy();
+  await run;
+});
+
+test('a run that has ended still gets its played-out media trimmed', async () => {
+  const video = fakeVideo();
+  // A run the viewer never played during: it arrives in full, ends, and leaves
+  // its media in the buffer with the append loop gone.
+  const { fetchImpl } = longRunFetch(() => {}, 20);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, { duration: 20 });
+
+  await player.start(0);
+  await settle(10);
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  assert.deepEqual(buffer.removals, [], 'the element has played nothing out yet');
+
+  // The element's clock standing past the media of a finished run (a seek out
+  // of the buffered range is what leaves it there). Nothing but the playhead
+  // can drop the media the viewer has passed now, and it has to: the renderer
+  // would otherwise hold it for the rest of the playback.
+  video._currentTime = 45;
+  video.dispatch('timeupdate');
+  await settle(5);
+
+  assert.ok(buffer.removals.length > 0, 'the played-out media must go without the pump');
+  assert.equal(buffer.buffered.start(0), 15, 'the head beyond the window is what goes');
+  assert.equal(buffer.buffered.end(0), 19, 'nothing ahead of the playhead is touched');
+
+  player.destroy();
+});
+
+test('a permanently disabled conversion pool is not a slot wait', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  // The server's own answer for `TURBO_PIX_MAX_TRANSCODES=0`: the same 503 and
+  // the same `Retry-After` a saturated pool sends, with the refusal body that
+  // names it as disabled (src/handlers_video.rs, `StreamStartError::Disabled`).
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: false,
+      status: 503,
+      headers: new Headers({ 'retry-after': '5' }),
+      json: () => Promise.resolve({ error: 'conversion disabled' }),
+    });
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(errors.length, 1, 'the refusal reaches the viewer');
+  assert.equal(errors[0].status, 503, 'it is still a 503 the viewer can read');
+  assert.equal(
+    errors[0].permanent,
+    true,
+    'no slot will ever free, so waiting for one must not be the answer'
+  );
+  assert.equal(errors[0].retryAfterMs, 5000, "the server's hint still survives");
+
+  player.destroy();
+});
+
+test('a saturated pool is still a wait the viewer paces', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  // The other 503 the endpoint sends: workers are busy, a slot comes free.
+  globalThis.fetch = () =>
+    Promise.resolve({
+      ok: false,
+      status: 503,
+      headers: new Headers({ 'retry-after': '2' }),
+      json: () => Promise.resolve({ error: 'no conversion slot available' }),
+    });
+  const player = createPlayer(video, { onError: (error) => errors.push(error) });
+
+  await player.start(0);
+  await settle();
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].status, 503);
+  assert.equal(errors[0].permanent, false, 'a busy pool must keep its waiting notice');
+  assert.equal(errors[0].retryAfterMs, 2000);
 
   player.destroy();
 });

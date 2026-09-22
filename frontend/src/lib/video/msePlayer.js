@@ -56,12 +56,28 @@ function once(target, event) {
 }
 
 /**
+ * `onRunStart` reports every run the player begins, with the offset it plays
+ * from, at the very top of the run — before its request is issued and before
+ * anything it awaits. It covers the run a caller asked for *and* the run the
+ * player restarts for a seek inside itself, which a caller that armed
+ * something for the previous run (the viewer's saturation retry) cannot
+ * otherwise observe until that run delivers its first bytes.
+ *
+ * `onUserSeek` reports the position the user picked on the element itself, for
+ * every `seeking` event that is not the assignment this player makes: the ones
+ * that reach the pending-seek store or the buffered-range check. A target the
+ * element can already serve starts no run, so it is invisible to the run
+ * reports — and it is exactly the move that tells a caller the offset its arming
+ * waited for is one the user has left. It never fires for the player's own
+ * `currentTime` assignment, which a caller reading as intent would act on for
+ * every run.
+ *
  * @param {HTMLVideoElement} videoEl
- * @param {{streamUrl: string, mime: string, duration: number|null, onState: (state: string) => void, onError: (error: Error) => void, onEncoder: (encoder: string|null) => void}} options
+ * @param {{streamUrl: string, mime: string, duration: number|null, onState: (state: string) => void, onError: (error: Error) => void, onEncoder: (encoder: string|null) => void, onRunStart: (seconds: number) => void, onUserSeek: (seconds: number) => void}} options
  */
 export function createStreamPlayer(
   videoEl,
-  { streamUrl, mime, duration, onState, onError, onEncoder }
+  { streamUrl, mime, duration, onState, onError, onEncoder, onRunStart, onUserSeek }
 ) {
   let mediaSource = null;
   let sourceBuffer = null;
@@ -80,12 +96,19 @@ export function createStreamPlayer(
   let pendingSeek = null;
   // The position this player assigned itself. The element fires `seeking` for
   // that assignment too; treating it as user intent would restart the stream
-  // in a loop and leave the element paused at 0.
+  // in a loop and leave the element paused at 0. It is armed together with the
+  // assignment (a run that moves nothing arms nothing) and retired by the first
+  // `seeking` that arrives, whether or not it matches (see `onSeeking`).
   let expectedSeek = null;
   // One failure report per run: a bad delivery raises `error` on both the
   // SourceBuffer and the element, and each report would otherwise advance the
   // viewer's escalation ladder a step.
   let failureReported = false;
+  // Whether the element has actually started playing the current run. The
+  // element's `waiting` is what reports a genuine re-entry into buffering — and
+  // it also fires while a run sets up, where "no data yet" is simply the normal
+  // state, so only a `waiting` after playback is a stall.
+  let startedPlaying = false;
   // Tears down the current run's media-error listeners.
   let detachRunErrors = null;
 
@@ -243,7 +266,6 @@ export function createStreamPlayer(
       }
       await appendWhenReady(buffer, value);
       if (destroyed || signal.aborted) return;
-      if (buffer.buffered.length > 0) state('buffering');
     }
   }
 
@@ -262,6 +284,40 @@ export function createStreamPlayer(
   async function start(seconds) {
     if (destroyed || starting) return;
     starting = true;
+    // Whatever target is stored at this point was seen by a run that has
+    // already ended: a run's setup is serialized by the `starting` latch, and
+    // only the run that stored a target reads it back — `takePendingSeek`, at
+    // the hand-off after it has attached. A run that fails before that
+    // hand-off (a refused request, a zero-byte body, a rejected `fetch`) leaves
+    // its target behind, and the viewer keeps this same player alive through a
+    // 503 retry — so the stale target would outlive its run and, at the next
+    // run's hand-off, differ from the offset that run attached by more than the
+    // tolerance: `start(stale)` would supersede the run the user just asked for
+    // and park the element on an offset they have already left. Dropping it
+    // here cannot touch a legitimate hand-off, which reads the target it stored
+    // before the latch was ever released; `starting` keeps any other run from
+    // beginning in the meantime.
+    pendingSeek = null;
+    // Every run this player begins supersedes the last one, and the caller has
+    // to hear about the replacement before this run can be awaited on: a
+    // viewer that armed a retry for an earlier, refused run must not have that
+    // retry fire into this run and drag playback back to the older offset.
+    //
+    // The report is the only foreign code in this prologue, so it is the only
+    // one that can throw at it — and it has to leave the run latch released
+    // when it does, exactly like the run's own failure path below: a rejected
+    // `start()` that kept `starting` would make every later `start()` and every
+    // seek restart a silent no-op, freezing the element on its last frame with
+    // `destroy()` as the only way out. The throw reaches the caller as this
+    // run's rejection (nothing was started, so nothing is reported as a run
+    // failure); the callback stays ahead of the request, as the ordering
+    // contract requires.
+    try {
+      onRunStart?.(seconds);
+    } catch (error) {
+      starting = false;
+      throw error;
+    }
     controller?.abort();
     controller = new AbortController();
     const signal = controller.signal;
@@ -270,6 +326,9 @@ export function createStreamPlayer(
     detachRunErrors?.();
     detachRunErrors = null;
     failureReported = false;
+    // A run that has only just been attached has not produced a playable frame:
+    // a `waiting` from the element now is the normal no-data state, not a stall.
+    startedPlaying = false;
     clearTimeout(restartTimer);
     try {
       mediaSource?.endOfStream?.();
@@ -306,8 +365,17 @@ export function createStreamPlayer(
       const encoderHeader = response.headers.get('x-turbopix-encoder');
       onEncoder?.(encoderHeader && encoderHeader.trim() !== '' ? encoderHeader.trim() : null);
 
+      // Every seek outside the buffered range starts a new run, and each one
+      // attaches a fresh MediaSource behind a fresh blob URL. The URL being
+      // replaced is released as it is replaced: nothing else can free it (the
+      // MediaSource, its SourceBuffer and its entry in the document's blob-URL
+      // store would otherwise stay alive for the document's lifetime), and
+      // `destroy()` only ever gets to revoke the element's *current* URL.
+      if (destroyed) return;
+      const previousSrc = videoEl.src;
       mediaSource = new MediaSource();
       videoEl.src = URL.createObjectURL(mediaSource);
+      if (previousSrc.startsWith('blob:')) URL.revokeObjectURL(previousSrc);
       await once(mediaSource, 'sourceopen');
       if (destroyed) return;
 
@@ -352,13 +420,28 @@ export function createStreamPlayer(
         reportError(signal, new Error('the stream delivered no media'));
         return;
       }
+      // The run's first bytes are in: the viewer's notice changes from
+      // "waiting for a slot" to "preparing playback". This is the run's only
+      // `buffering` — a chunk landing is not news (the notice is hidden by
+      // `playing`, and re-reporting it after every append would put "video is
+      // being prepared" back on top of a video that is already playing, with no
+      // auto-hide to take it away). A stall mid-run still surfaces: the element
+      // reports it with `waiting`, which `onWaiting` maps back onto this state.
       state('buffering');
       await appendWhenReady(buffer, first.value);
       // Position the element on the real timeline (each run starts at 0) and
       // remember it, so the `seeking` event this assignment causes is not
-      // mistaken for a user seek.
-      expectedSeek = seconds;
-      if (seconds > 0) videoEl.currentTime = seconds;
+      // mistaken for a user seek. The guard belongs to the assignment: only a
+      // position the element does not already hold moves it, and only a move
+      // fires the `seeking` event that consumes the guard. A run attached where
+      // the element already stands (the standard run at 0) moves nothing, so no
+      // guard is armed for it — an armed one could never be consumed, and would
+      // swallow the first user seek to land inside its window, which is exactly
+      // the seek this guard exists to protect.
+      if (videoEl.currentTime !== seconds) {
+        expectedSeek = seconds;
+        videoEl.currentTime = seconds;
+      }
       videoEl.play().catch((error) => {
         // AbortError: this play() was superseded by another source. Anything
         // else (e.g. a refused autoplay) is a real failure, not a silent one.
@@ -393,7 +476,18 @@ export function createStreamPlayer(
   // The element reports real playback (data decoded and the clock running);
   // the viewer hides its conversion notice on this, so it must not be
   // optimistic.
-  const onPlaying = () => state('playing');
+  const onPlaying = () => {
+    startedPlaying = true;
+    state('playing');
+  };
+  // Playback stalled: the clock was running and the element ran out of media.
+  // That is a genuine entry into buffering — the viewer's notice is hidden
+  // while the clock runs, so nothing else can surface the wait — and it is the
+  // only re-report of the state; the per-chunk report that used to stand here
+  // fired exactly when a chunk had just landed, i.e. when data was flowing.
+  const onWaiting = () => {
+    if (startedPlaying) state('buffering');
+  };
   const onSeeked = () => {
     expectedSeek = null;
   };
@@ -402,8 +496,32 @@ export function createStreamPlayer(
   const onSeeking = () => {
     if (destroyed) return;
     const target = videoEl.currentTime;
-    // The player's own `currentTime` assignment is not user intent.
-    if (expectedSeek !== null && Math.abs(target - expectedSeek) <= 0.25) return;
+    // The player's own `currentTime` assignment is not user intent: one
+    // assignment fires at most one `seeking`, whose target is the offset the
+    // guard holds, so a matching event is the player's own seek and is dropped.
+    // Any OTHER event is the user's — and it retires the arm it did not
+    // consume, so a guard is never left armed across an event: a stale arm
+    // (the user coalesced their move with the assignment's own event, or moved
+    // to a different offset) would otherwise swallow the next user seek to land
+    // inside its 0.25 s window.
+    //
+    // The match is tried before the `starting` branch on purpose. The run that
+    // hands off to a stored `pendingSeek` has already cued its own `seeking`
+    // when the replacement run starts, so that event legitimately arrives while
+    // `starting` is true; read as a user target it would send the element back
+    // to the offset the run asked for, and the two offsets would keep bouncing.
+    // Within the window, a target this close is the run's own assignment.
+    if (expectedSeek !== null && Math.abs(target - expectedSeek) <= 0.25) {
+      expectedSeek = null;
+      return;
+    }
+    expectedSeek = null;
+    // Everything past the guard is the user's own move — whether it starts a
+    // run (an unbuffered target), needs none (a buffered one) or is stored for
+    // the run in flight (a seek during setup). The caller hears about all
+    // three: a move to a position is the user leaving whatever offset an
+    // arming of theirs was waiting for.
+    onUserSeek?.(target);
     if (starting) {
       // The run in flight will position the element on its own offset, so this
       // target is remembered rather than dropped: it is honoured as soon as
@@ -417,6 +535,7 @@ export function createStreamPlayer(
   videoEl.addEventListener('seeking', onSeeking);
   videoEl.addEventListener('seeked', onSeeked);
   videoEl.addEventListener('playing', onPlaying);
+  videoEl.addEventListener('waiting', onWaiting);
 
   function destroy() {
     destroyed = true;
@@ -428,6 +547,7 @@ export function createStreamPlayer(
     videoEl.removeEventListener('seeking', onSeeking);
     videoEl.removeEventListener('seeked', onSeeked);
     videoEl.removeEventListener('playing', onPlaying);
+    videoEl.removeEventListener('waiting', onWaiting);
     try {
       mediaSource?.endOfStream?.();
     } catch {

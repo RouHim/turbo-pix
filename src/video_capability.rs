@@ -101,6 +101,31 @@ fn copyable_into_mp4(codec: &str) -> bool {
     matches!(codec, "h264" | "hevc" | "av1" | "vp9")
 }
 
+/// Audio codecs a copied MP4 track can carry *and* the client can decode from
+/// it. `None`/`""` is a source with no audio track at all — nothing to carry.
+///
+/// Deliberately narrower than the client's declaration, which is a *decode*
+/// claim: the shipped client derives its `vorbis` token from an
+/// `audio/webm; codecs="vorbis"` probe, and a WebM probe licenses nothing about
+/// MP4. Vorbis can be muxed into MP4 (ffmpeg writes it into an `mp4a`/ESDS
+/// sample entry) but no Chromium MP4 path decodes it, so copying it hands the
+/// client an init segment whose audio track contradicts the MIME it created its
+/// SourceBuffer for. Such a track goes to [`Delivery::StreamAudio`] instead,
+/// which copies the video and re-encodes the audio to AAC.
+fn copyable_audio_into_mp4(codec: Option<&str>) -> bool {
+    matches!(
+        codec,
+        None | Some("")
+            | Some("aac")
+            | Some("opus")
+            | Some("mp3")
+            | Some("ac3")
+            | Some("eac3")
+            | Some("dts")
+            | Some("flac")
+    )
+}
+
 fn video_supported(codec: &str, bit_depth: Option<u32>, client: &ClientCodecs) -> bool {
     match codec {
         "h264" => {
@@ -137,6 +162,12 @@ fn audio_supported(codec: Option<&str>, client: &ClientCodecs) -> bool {
 pub fn plan(caps: &ResolvedCapabilities, client: &ClientCodecs) -> Delivery {
     let video_ok = video_supported(&caps.codec, caps.bit_depth, client);
     let audio_ok = audio_supported(caps.audio_codec.as_deref(), client);
+    // A copy muxes both tracks into MP4, so the audio track has to be carryable
+    // there independently of the client declaring it. Both copy branches below
+    // are gated on this: the client's `vorbis` token comes from a WebM probe, so
+    // a declared Vorbis track is exactly the case where a copy would promise an
+    // MP4 sample entry the client cannot decode.
+    let audio_copyable = copyable_audio_into_mp4(caps.audio_codec.as_deref());
 
     if video_ok && audio_ok {
         // Same container class the browser understands, and — for MP4-family —
@@ -145,13 +176,13 @@ pub fn plan(caps: &ResolvedCapabilities, client: &ClientCodecs) -> Delivery {
         if direct_container_ok(caps.family) && layout_ok {
             return Delivery::Direct;
         }
-        if copyable_into_mp4(&caps.codec) {
+        if copyable_into_mp4(&caps.codec) && audio_copyable {
             return Delivery::StreamRemux;
         }
     }
     if video_ok && copyable_into_mp4(&caps.codec) {
         // Video is fine; the container or the audio track is not.
-        return if audio_ok {
+        return if audio_ok && audio_copyable {
             Delivery::StreamRemux
         } else {
             Delivery::StreamAudio
@@ -311,6 +342,40 @@ mod tests {
                 &web_client()
             ),
             Delivery::StreamRemux
+        );
+    }
+
+    #[test]
+    fn a_vorbis_track_is_reencoded_instead_of_copied_into_mp4() {
+        // GIVEN the classic h264 + Vorbis Matroska and a client whose `vorbis`
+        // token comes from an `audio/webm` probe (the shipped declaration)
+        let vorbis = caps("h264", "matroska", Some(8), Some("vorbis"), true);
+        assert!(
+            web_client().audio.vorbis,
+            "the premise: a WebM probe does declare Vorbis"
+        );
+
+        // THEN the audio track is NOT copied into MP4 — no Chromium MP4 path
+        // decodes a Vorbis sample entry — while the video is still passed
+        // through instead of being re-encoded
+        assert_eq!(plan(&vorbis, &web_client()), Delivery::StreamAudio);
+        assert_eq!(plan(&vorbis, &client_all()), Delivery::StreamAudio);
+
+        // AND the same file with an MP4-carryable track still copies losslessly
+        assert_eq!(
+            plan(
+                &caps("h264", "matroska", Some(8), Some("aac"), true),
+                &web_client()
+            ),
+            Delivery::StreamRemux
+        );
+        assert_eq!(
+            plan(
+                &caps("h264", "matroska", Some(8), Some("ac3"), true),
+                &web_client()
+            ),
+            Delivery::StreamAudio,
+            "an undeclared AC-3 track re-encodes for the same reason"
         );
     }
 

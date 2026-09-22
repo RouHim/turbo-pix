@@ -688,36 +688,15 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
     Ok(())
 }
 
-/// Serve-time streamability fix: remux an MP4 with the moov atom moved to the
-/// front via a fast `-c copy -movflags +faststart` pass, so browsers can start
-/// progressive playback immediately. This is a cheap stream copy (no re-encode,
-/// no decoder), separate from the full HEVC transcode path. No-op (returns
-/// `Ok(())`) when the input already has moov at the start or the sidecar
-/// already exists.
-pub async fn ensure_progressive_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
-    // `has_moov_at_start` runs a blocking ffprobe; offload it so it cannot
-    // stall a tokio worker thread.
-    let probe_input = input_path.to_path_buf();
-    let moov_at_start = tokio::task::spawn_blocking(move || has_moov_at_start(&probe_input))
-        .await
-        .map_err(|e| CacheError::VideoProcessingError(format!("ffprobe task panicked: {e}")))??;
-    if moov_at_start {
-        return Ok(());
-    }
-
-    remux_to_faststart_mp4(input_path, output_path).await
-}
-
 /// Copy `input` into `output` as a faststart MP4 without re-encoding.
 ///
-/// Unlike [`ensure_progressive_mp4`] this does not second-guess the caller: a
-/// remux stream that just finished is proof that the remux was needed. That
-/// matters for sources whose container never had a moov atom to move (Matroska
-/// answers the moov probe with "nothing to fix") and whose sidecar is the only
-/// way to cache the work the finished run already paid for. No-op when the
-/// sidecar exists. Writes to a unique temp file then atomically renames into
-/// place, so concurrent requests for the same sidecar cannot interleave into a
-/// corrupt output.
+/// This does not second-guess the caller: a remux stream that just finished is
+/// proof that the remux was needed. That matters for sources whose container
+/// never had a moov atom to move (Matroska answers the moov probe with "nothing
+/// to fix") and whose sidecar is the only way to cache the work the finished
+/// run already paid for. No-op when the sidecar exists. Writes to a unique temp
+/// file then atomically renames into place, so concurrent requests for the same
+/// sidecar cannot interleave into a corrupt output.
 pub async fn remux_to_faststart_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
     // Bound the remux by the remux semaphore so a burst of requests cannot
     // spawn unbounded blocking ffmpeg processes on the async runtime.
@@ -1386,14 +1365,30 @@ async fn convert_with_fallback(
     }
 }
 
-/// Get the path for a transcoded video in the cache
-pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
-    let base = if cache_dir.file_name().is_some_and(|n| n == "transcoded") {
+/// The namespaces a transcode artifact can be written into, as they appear
+/// beneath the transcode cache root (see [`namespace_dir`]).
+const TRANSCODE_NAMESPACES: [&str; 3] = ["transcoded", "copied", "remux"];
+
+/// Resolves the directory of one transcode namespace beneath `cache_dir`.
+///
+/// A cache dir whose last component already IS the namespace is the namespace
+/// itself: `main.rs` defaults `TRANSCODE_CACHE_DIR` to
+/// `{data_path}/cache/transcoded`, so the shipped configuration points
+/// straight at the `transcoded/` directory and joining a second `transcoded`
+/// names a path that never exists. Both the path builders and the two cleanup
+/// sweeps below resolve through here, so the layout they write and the layout
+/// they scan cannot drift apart again.
+fn namespace_dir(cache_dir: &Path, ns: &str) -> PathBuf {
+    if cache_dir.file_name().is_some_and(|n| n == ns) {
         cache_dir.to_path_buf()
     } else {
-        cache_dir.join("transcoded")
-    };
-    base.join(format!("{}.mp4", original_hash))
+        cache_dir.join(ns)
+    }
+}
+
+/// Get the path for a transcoded video in the cache
+pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
+    namespace_dir(cache_dir, "transcoded").join(format!("{}.mp4", original_hash))
 }
 
 /// Transcode cache path versioned by the source's content fingerprint (file
@@ -1408,12 +1403,7 @@ pub fn get_transcoded_path_versioned(
     file_size: i64,
     modified_millis: i64,
 ) -> PathBuf {
-    let base = if cache_dir.file_name().is_some_and(|n| n == "transcoded") {
-        cache_dir.to_path_buf()
-    } else {
-        cache_dir.join("transcoded")
-    };
-    base.join(format!(
+    namespace_dir(cache_dir, "transcoded").join(format!(
         "{}_{}_{}.mp4",
         original_hash, file_size, modified_millis
     ))
@@ -1434,12 +1424,7 @@ pub fn get_copied_path_versioned(
     file_size: i64,
     modified_millis: i64,
 ) -> PathBuf {
-    let base = if cache_dir.file_name().is_some_and(|n| n == "copied") {
-        cache_dir.to_path_buf()
-    } else {
-        cache_dir.join("copied")
-    };
-    base.join(format!(
+    namespace_dir(cache_dir, "copied").join(format!(
         "{}_{}_{}.mp4",
         original_hash, file_size, modified_millis
     ))
@@ -1455,7 +1440,7 @@ pub(crate) fn remux_sidecar_path(
     file_size: i64,
     modified_millis: i64,
 ) -> std::path::PathBuf {
-    Path::new(cache_dir).join("remux").join(format!(
+    namespace_dir(Path::new(cache_dir), "remux").join(format!(
         "{}_{}_{}.mp4",
         original_hash, file_size, modified_millis
     ))
@@ -1473,8 +1458,8 @@ pub fn clear_transcode_cache_for_hash(hash: &str) {
         .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
     let root = Path::new(&cache_dir);
     let prefix = format!("{hash}_");
-    for ns in ["transcoded", "copied", "remux"] {
-        let dir = root.join(ns);
+    for ns in TRANSCODE_NAMESPACES {
+        let dir = namespace_dir(root, ns);
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -1497,31 +1482,36 @@ pub fn clear_transcode_cache_for_hash(hash: &str) {
     }
 }
 
-/// Removes stale `{hash}_*.mp4` siblings (and `{hash}_*.tmp` leftovers) in
-/// every transcode namespace except `keep`.
+/// Removes stale `{hash}_*.mp4` siblings in every transcode namespace except
+/// `keep`.
 ///
 /// Cache filenames fold in size+mtime, so an in-place edit produces a NEW
 /// file rather than overwriting — without this the old version stays on disk
 /// forever. The previous code only purged the artifact's own directory; the
 /// other two namespaces (`copied/` vs `transcoded/`, plus `remux/`) kept
 /// their stale copies.
+///
+/// `*.tmp` names are never removed: a temp is not a version, it is a
+/// conversion IN FLIGHT, and one job's purge runs while another job of the
+/// same hash may still be writing its own `{hash}_…tmp` (the remux fill
+/// finishing while the whole-file conversion runs, and the reverse). Crash
+/// debris is the startup sweep's job ([`sweep_transcode_debris`]).
 pub(crate) fn purge_old_transcode_versions(cache_root: &Path, hash: &str, keep: &Path) {
     let keep_name = keep
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     let prefix = format!("{hash}_");
-    for ns in ["transcoded", "copied", "remux"] {
-        let dir = cache_root.join(ns);
+    for ns in TRANSCODE_NAMESPACES {
+        let dir = namespace_dir(cache_root, ns);
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.filter_map(|e| e.ok()) {
-            let is_old_version = entry.file_name().to_str().is_some_and(|n| {
-                n.starts_with(&prefix)
-                    && n != keep_name
-                    && (n.ends_with(".mp4") || n.ends_with(".tmp"))
-            });
+            let is_old_version = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix) && n != keep_name && n.ends_with(".mp4"));
             if is_old_version {
                 let _ = std::fs::remove_file(entry.path());
             }
@@ -1779,7 +1769,7 @@ pub(crate) mod tests {
     }
     // Force a moov-at-end copy of a valid mp4: `-movflags -faststart` DISABLES
     // faststart, leaving the moov atom at the end of the file, which is the
-    // intended "broken" input for the progressive-remux test.
+    // intended "broken" input for the faststart-remux test.
     fn ffmpeg_copy_moov_end(src: &Path, dst: &Path) {
         let output = Command::new(get_ffmpeg_path())
             .args([
@@ -1869,8 +1859,12 @@ pub(crate) mod tests {
         assert_eq!(before, after);
     }
 
+    /// The remux cache fill's core: a moov-at-end MP4 must come out of the
+    /// `-c copy -movflags +faststart` pass with its moov at the front (that is
+    /// what makes the sidecar streamable), and a sidecar that already exists
+    /// must not be remuxed again.
     #[tokio::test]
-    async fn ensure_progressive_mp4_remuxes_moov_to_front() {
+    async fn remux_to_faststart_mp4_moves_moov_to_front() {
         let _lock = acquire_test_env_lock();
         let temp = TempDir::new().unwrap();
         // Real fixture has moov at start already; force a moov-at-end copy.
@@ -1882,14 +1876,21 @@ pub(crate) mod tests {
         ffmpeg_copy_moov_end(src, &moov_end); // local test helper defined below
         assert!(!has_moov_at_start(&moov_end).unwrap());
         let out = temp.path().join("out.mp4");
-        ensure_progressive_mp4(&moov_end, &out).await.unwrap();
+        remux_to_faststart_mp4(&moov_end, &out).await.unwrap();
         assert!(out.exists());
         assert!(
             has_moov_at_start(&out).unwrap(),
             "remux must move moov forward"
         );
-        // second call is idempotent on a start-front file
-        ensure_progressive_mp4(&out, &out).await.unwrap();
+        // Second call short-circuits on the finished sidecar: the remux must
+        // not run twice for one artifact.
+        let remuxed = std::fs::metadata(&out).unwrap().modified().unwrap();
+        remux_to_faststart_mp4(&out, &out).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&out).unwrap().modified().unwrap(),
+            remuxed,
+            "an existing sidecar must not be rewritten"
+        );
     }
 
     /// One field of the first video stream, as ffprobe reports it
@@ -3329,42 +3330,83 @@ pub(crate) mod tests {
         clear_transcode_cache_for_hash(hash);
 
         // THEN every `{hash}_*` file is gone in all three namespaces, the other hash survives
-        assert!(doomed.iter().all(|p| !p.exists()));
+        assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
+        assert!(kept.exists());
+    }
+
+    /// The shipped layout: `main.rs` defaults `TRANSCODE_CACHE_DIR` to
+    /// `{data_path}/cache/transcoded`, so the cache root IS the `transcoded/`
+    /// namespace and the re-encode sits directly in it. A cleanup that joins
+    /// another `transcoded` scans a directory that never exists and silently
+    /// keeps the largest cache file of every deleted photo — which the
+    /// parent-rooted test above cannot see, because there the join is right.
+    #[tokio::test]
+    async fn clear_transcode_cache_for_hash_scans_the_production_cache_root() {
+        // GIVEN `$TRANSCODE_CACHE_DIR` pointing at the `transcoded/` directory
+        // itself, with `copied/` and `remux/` below it, and another hash's file
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("transcoded");
+        std::fs::create_dir_all(&root).unwrap();
+        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", root.to_str().unwrap());
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let other = "2222222222222222222222222222222222222222222222222222222222222222";
+        let mut doomed = vec![
+            root.join(format!("{hash}_100_200.mp4")),
+            root.join(format!("{hash}_100_200.mp4.tmp")),
+        ];
+        for ns in ["copied", "remux"] {
+            let dir = root.join(ns);
+            std::fs::create_dir_all(&dir).unwrap();
+            doomed.push(dir.join(format!("{hash}_100_200.mp4")));
+        }
+        doomed.iter().for_each(|p| std::fs::write(p, b"x").unwrap());
+        let kept = root.join(format!("{other}_100_200.mp4"));
+        std::fs::write(&kept, b"x").unwrap();
+
+        // WHEN the hash's transcode cache is cleared
+        clear_transcode_cache_for_hash(hash);
+
+        // THEN the re-encode in the cache root itself and the two siblings are
+        // gone, and the other hash survives
+        assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
         assert!(kept.exists());
     }
 
     #[test]
     fn purge_old_transcode_versions_keeps_only_new_artifact() {
-        // GIVEN old versions across all namespaces plus a temp and another hash's file
+        // GIVEN old versions across all namespaces plus in-flight temps and another hash's file
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let other = "3333333333333333333333333333333333333333333333333333333333333333";
         let new_path = root.join("transcoded").join(format!("{hash}_300_400.mp4"));
         let mut doomed = Vec::new();
-        for (ns, names) in [
+        let mut in_flight = Vec::new();
+        for (ns, stale, temps) in [
             (
                 "transcoded",
-                vec![
-                    format!("{hash}_100_200.mp4"),
-                    format!("{hash}_100_200.mp4.tmp"),
-                ],
+                vec![format!("{hash}_100_200.mp4")],
+                vec![format!("{hash}_100_200.mp4.tmp")],
             ),
-            ("copied", vec![format!("{hash}_100_200.mp4")]),
+            ("copied", vec![format!("{hash}_100_200.mp4")], Vec::new()),
             (
                 "remux",
-                vec![
-                    format!("{hash}_100_200.mp4"),
-                    format!("{hash}_100_200.9.0.tmp"),
-                ],
+                vec![format!("{hash}_100_200.mp4")],
+                vec![format!("{hash}_100_200.9.0.tmp")],
             ),
         ] {
             let dir = root.join(ns);
             std::fs::create_dir_all(&dir).unwrap();
-            for name in names {
+            for name in stale {
                 let p = dir.join(name);
                 std::fs::write(&p, b"x").unwrap();
                 doomed.push(p);
+            }
+            for name in temps {
+                let p = dir.join(name);
+                std::fs::write(&p, b"x").unwrap();
+                in_flight.push(p);
             }
         }
         std::fs::create_dir_all(root.join("transcoded")).unwrap();
@@ -3375,8 +3417,46 @@ pub(crate) mod tests {
         // WHEN old versions are purged keeping the new artifact
         purge_old_transcode_versions(root, hash, &new_path);
 
-        // THEN only the new artifact and the other hash survive
-        assert!(doomed.iter().all(|p| !p.exists()));
+        // THEN only the new artifact and the other hash survive, and the temps
+        // are left alone: a temp is a conversion in flight (the remux fill of
+        // this very hash can be mid-write), not a stale version
+        assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
+        assert!(in_flight.iter().all(|p| p.exists()), "{in_flight:?}");
+        assert!(new_path.exists());
+        assert!(kept.exists());
+    }
+
+    /// The shipped layout (see the `clear` twin above): with the cache root
+    /// being the `transcoded/` namespace itself, a sweep that joins another
+    /// `transcoded` finds nothing and the "one version file per hash"
+    /// invariant breaks after the first in-place edit.
+    #[test]
+    fn purge_old_transcode_versions_scans_the_production_cache_root() {
+        // GIVEN `$TRANSCODE_CACHE_DIR` itself as the transcoded namespace, with
+        // `copied/` and `remux/` below it, plus another hash's file
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("transcoded");
+        std::fs::create_dir_all(&root).unwrap();
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let other = "4444444444444444444444444444444444444444444444444444444444444444";
+        let new_path = root.join(format!("{hash}_300_400.mp4"));
+        std::fs::write(&new_path, b"new").unwrap();
+        let mut doomed = vec![root.join(format!("{hash}_100_200.mp4"))];
+        for ns in ["copied", "remux"] {
+            let dir = root.join(ns);
+            std::fs::create_dir_all(&dir).unwrap();
+            doomed.push(dir.join(format!("{hash}_100_200.mp4")));
+        }
+        doomed.iter().for_each(|p| std::fs::write(p, b"x").unwrap());
+        let kept = root.join("copied").join(format!("{other}_100_200.mp4"));
+        std::fs::write(&kept, b"x").unwrap();
+
+        // WHEN old versions are purged keeping the new artifact
+        purge_old_transcode_versions(&root, hash, &new_path);
+
+        // THEN the superseded version in the cache root itself and the stale
+        // copies in both siblings are gone, and the other hash survives
+        assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
         assert!(new_path.exists());
         assert!(kept.exists());
     }

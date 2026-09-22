@@ -264,9 +264,20 @@ pub async fn get_video_file(
     // response header the client is able to read: it comes from the retained
     // conversion status instead. An evicted entry simply omits the field, and
     // the hint then stays hidden rather than guessing.
-    let cached_encoder = cached_whole_file
+    //
+    // Only a delivery that plays the RE-ENCODED artifact may report one: the
+    // status store is one entry per hash shared by both artifact namespaces, so
+    // a later re-encode of the same source would otherwise credit the `copied/`
+    // file an audio-only conversion serves — a file whose video track was
+    // passed through untouched (`FileConversion::VideoCopy`, encoder `None`).
+    // An empty video codec means the record found no video track at all, so the
+    // artifact was produced by an audio-only run (`-map 0:V:0?` maps nothing):
+    // there is no video encoding to name, and the viewer renders the field as a
+    // conversion hint.
+    let cached_encoder = matches!(delivery, Delivery::StreamTranscode | Delivery::StreamRemux)
         .then(|| get_transcode_status(&photo.hash_sha256).and_then(|status| status.encoder))
-        .flatten();
+        .flatten()
+        .filter(|_| !caps.codec.is_empty());
 
     // `?decision` (bare or `=true`): don't stream — return the recommended
     // playback action as JSON so the client can pick without probing the
@@ -798,6 +809,14 @@ fn spawn_whole_file_transcode(
                 // file rather than overwriting; the old code only purged the artifact's
                 // own directory).
                 purge_old_transcode_versions(&cache_root, &hash, &output_path);
+                // The poll status is the third carrier of the encoder claim
+                // (alongside the live `x-turbopix-encoder` header and the
+                // cached `?decision` field): `convert_with_fallback` names an
+                // encoder for every re-encode, including the whole-file escape
+                // hatch of a video-less source, whose `-map 0:V:0?` maps no
+                // video at all. Gate it on a source video codec exactly as the
+                // other two do, or the viewer's poll path credits the CPU
+                // encoder for a run that encoded no video.
                 set_transcode_status(
                     &hash,
                     TranscodeStatus {
@@ -806,7 +825,7 @@ fn spawn_whole_file_transcode(
                         started_at: Some(started_at),
                         error: None,
                         percent: Some(100),
-                        encoder: outcome.encoder.clone(),
+                        encoder: outcome.encoder.filter(|_| video_codec.is_some()),
                     },
                 );
             }
@@ -1181,6 +1200,13 @@ pub async fn stream_video(
     // never as a CPU conversion. This is the only place a client can learn a
     // live run's encoder: the media element's own request is unreadable to
     // script, so a missing header has to mean "nothing was encoded".
+    //
+    // A source the resolver recorded as having no video track encodes audio
+    // only (`build_args` maps `-map 0:V:0?`, which matches no stream there), so
+    // the run's own claim does not apply either: reporting the encoder would
+    // render "Converted on the CPU (<video encoder>)" for a pure audio
+    // conversion. The empty codec is the same signal the MIME uses.
+    let encoder = encoder.filter(|_| !caps.codec.is_empty());
     let response: Box<dyn Reply> = match encoder {
         Some(encoder) => Box::new(warp::reply::with_header(
             response,
@@ -1602,6 +1628,257 @@ mod tests {
             decision["mime"],
             "video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\""
         );
+    }
+
+    /// A source the resolver recorded as having no video stream arrives with an
+    /// empty video codec, and the transcode rung maps the video track
+    /// optionally (`-map 0:V:0?`): the run emits an audio-only init segment, so
+    /// no video codec — and no video encoder — may be advertised. The stream
+    /// response and the `?decision` payload must agree, because the player types
+    /// its SourceBuffer from whichever the run sent — an init segment that
+    /// contradicts the declared type is rejected with
+    /// `CHUNK_DEMUXER_ERROR_APPEND_FAILED`.
+    #[tokio::test]
+    async fn a_source_without_a_video_track_advertises_no_video_codec() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // The record `video_probe::resolve` persists for an audio-only
+        // container: no `codec` key, the explicit no-video-stream marker.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "no_video_stream": true, "container": "mp4",
+                "audio_codec": "opus", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nprintf '\\000\\000\\000\\030ftypiso5'\n",
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let decision = decision_for(&db_pool, hash, "opus").await;
+        assert_eq!(decision["action"], "stream");
+        let mime = decision["mime"]
+            .as_str()
+            .expect("a stream decision carries a MIME")
+            .to_string();
+        assert_eq!(
+            mime, "audio/mp4; codecs=\"mp4a.40.2\"",
+            "a source with no video stream must not be advertised as a video buffer"
+        );
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: None,
+                mode: None,
+                client: Some("opus".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let header = response.headers()["x-turbopix-mime"]
+            .to_str()
+            .expect("the MIME header must be readable")
+            .to_string();
+        assert_eq!(
+            header, mime,
+            "the run's MIME and the decision's MIME must agree"
+        );
+        // The run encodes audio only, so it must not claim a video encoder
+        // either: the header means "a video encoding happened here" and the
+        // viewer renders it as a conversion hint.
+        assert!(
+            response.headers().get("x-turbopix-encoder").is_none(),
+            "an audio-only transcode must not report a video encoder, got {:?}",
+            response.headers().get("x-turbopix-encoder")
+        );
+        let _ = collect_response_body(response).await;
+    }
+
+    /// The cached mirror of `a_source_without_a_video_track_advertises_no_video_codec`:
+    /// an audio-only source whose artifact is already cached is served as a file
+    /// and takes its encoder from the retained conversion status, which is one
+    /// entry per hash shared with the re-encoded namespace. Without the codec
+    /// gate, the audio-only artifact would be credited with the video encoding
+    /// that produced a different artifact.
+    #[tokio::test]
+    async fn a_cached_audio_only_artifact_is_never_credited_with_a_video_encoder() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // The record `video_probe::resolve` persists for an audio-only
+        // container: no `codec` key, the explicit no-video-stream marker.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "no_video_stream": true, "container": "mp4",
+                "audio_codec": "opus", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let cached = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        std::fs::create_dir_all(cached.parent().unwrap()).expect("failed to create cache dir");
+        std::fs::write(&cached, b"audio-only-transcode").expect("failed to write the artifact");
+
+        // A video re-encode of this same hash ran later — the other namespace's
+        // artifact, or the cache fill: its status names a video encoder.
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::Completed,
+                hash: hash.to_string(),
+                started_at: Some(Utc::now()),
+                error: None,
+                percent: None,
+                encoder: Some("libx264".to_string()),
+            },
+        );
+
+        let decision = decision_for(&db_pool, hash, "opus").await;
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["cached"], true);
+        assert!(
+            decision["encoder"].is_null(),
+            "a cached artifact of an audio-only source must not name a video encoder, \
+             got {:?}",
+            decision["encoder"]
+        );
+        clear_transcode_status(hash);
+    }
+
+    /// The third carrier of the encoder claim: the poll status a whole-file run
+    /// stores. `convert_with_fallback` names an encoder for EVERY re-encode,
+    /// including the whole-file escape hatch of a video-less source (whose
+    /// `-map 0:V:0?` maps no video stream), and `get_video_status` serialises
+    /// the stored status verbatim. The viewer's poll path takes that value as
+    /// the current encoder, so an ungated store publishes "Converted on the CPU
+    /// (libx264)" for a run that encoded no video.
+    #[tokio::test]
+    async fn audio_only_whole_file_conversion_stores_no_video_encoder() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nprintf '{\"format\":{\"duration\":\"1.0\"}}'\n",
+        );
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            "#!/usr/bin/env sh\nfor last; do :; done\nprintf 'converted' > \"$last\"\n",
+        );
+
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        // A video-less source: its whole-file escape hatch re-encodes audio
+        // under a video map that selects nothing, yet the conversion names the
+        // software encoder.
+        let audio_only = "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e";
+        clear_transcode_status(audio_only);
+        setup_test_video(&db_pool, &temp_dir, audio_only).await;
+        let photo = Photo::find_by_hash(&db_pool, audio_only)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        spawn_cache_fill(
+            &photo,
+            StreamMode::Transcode,
+            SourceCodecs {
+                video: None,
+                audio: Some("opus"),
+            },
+        );
+        wait_for_completed_transcode(audio_only).await;
+        assert!(
+            get_transcode_status(audio_only)
+                .expect("status should be set")
+                .encoder
+                .is_none(),
+            "a conversion of a video-less source must not store a video encoder"
+        );
+
+        let body = collect_response_body(
+            get_video_status(audio_only.to_string())
+                .await
+                .expect("status should return")
+                .into_response(),
+        )
+        .await;
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("status response should be JSON");
+        assert!(
+            json["encoder"].is_null(),
+            "the poll status of an audio-only run must not publish an encoder, got {:?}",
+            json["encoder"]
+        );
+
+        // Positive control: the same path still records the encoder when the
+        // source does have a video track, so the gate drops only the false
+        // claim rather than every claim.
+        let with_video = "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f";
+        // A second temp dir: the photo rows are keyed on `file_path`, and the
+        // first fixture already claimed `video.mp4` under the first one.
+        let temp_dir_video = TempDir::new().expect("failed to create temp dir");
+        clear_transcode_status(with_video);
+        setup_test_video(&db_pool, &temp_dir_video, with_video).await;
+        let photo = Photo::find_by_hash(&db_pool, with_video)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        spawn_cache_fill(
+            &photo,
+            StreamMode::Transcode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: Some("mp3"),
+            },
+        );
+        wait_for_completed_transcode(with_video).await;
+        assert_eq!(
+            get_transcode_status(with_video)
+                .expect("status should be set")
+                .encoder
+                .as_deref(),
+            Some(crate::video_encoder::SOFTWARE_ENCODER),
+            "a run that did encode video must still name its encoder"
+        );
+
+        clear_transcode_status(audio_only);
+        clear_transcode_status(with_video);
     }
 
     #[tokio::test]
@@ -2534,6 +2811,88 @@ mod tests {
         let plain_client = decision_for(&db_pool, hash, "h264-8").await;
         assert_eq!(plain_client["action"], "direct");
         assert_eq!(plain_client["cached"], true);
+        clear_transcode_status(hash);
+    }
+
+    /// The `copied/` artifact an audio-only delivery plays passes its video
+    /// track through untouched (`FileConversion::VideoCopy` records
+    /// `encoder: None`), while the conversion status the decision reads is one
+    /// entry per hash shared by every artifact namespace. A re-encode of the
+    /// same source that ran for another client must not credit this file with a
+    /// video encoding it never had.
+    #[tokio::test]
+    async fn a_copied_artifact_is_never_credited_with_an_encoder() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // A source whose video this client decodes and whose audio it does not:
+        // its delivery is the video-copy artifact, never a re-encode.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "hevc", "container": "mp4", "bit_depth": 8,
+                "audio_codec": "ac3", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let copied = get_copied_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        let transcoded = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        std::fs::create_dir_all(copied.parent().unwrap()).expect("failed to create cache dir");
+        std::fs::write(&copied, b"hevc-video-copy").expect("failed to write the copy");
+
+        // A re-encode of this same source ran later (the other client's
+        // playthrough, or the cache fill): the retained status names its
+        // encoder and says nothing about the copied artifact.
+        set_transcode_status(
+            hash,
+            TranscodeStatus {
+                state: TranscodeState::Completed,
+                hash: hash.to_string(),
+                started_at: Some(Utc::now()),
+                error: None,
+                percent: None,
+                encoder: Some("h264_vaapi".to_string()),
+            },
+        );
+
+        let audio_client = decision_for(&db_pool, hash, "hevc,aac").await;
+        assert_eq!(audio_client["action"], "direct");
+        assert_eq!(audio_client["cached"], true);
+        assert!(
+            audio_client["encoder"].is_null(),
+            "a file whose video track was copied must not be credited with a video \
+             encoding, got encoder={:?}",
+            audio_client["encoder"]
+        );
+
+        // The client served the re-encoded artifact still learns its encoder:
+        // the field follows the artifact, it is not simply dropped.
+        std::fs::create_dir_all(transcoded.parent().unwrap()).expect("failed to create cache dir");
+        std::fs::write(&transcoded, b"h264-reencode").expect("failed to write the re-encode");
+        let plain_client = decision_for(&db_pool, hash, "h264-8").await;
+        assert_eq!(plain_client["action"], "direct");
+        assert_eq!(plain_client["cached"], true);
+        assert_eq!(plain_client["encoder"], "h264_vaapi");
         clear_transcode_status(hash);
     }
 

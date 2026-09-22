@@ -8,7 +8,7 @@ import { TestHelpers } from '../setup/test-helpers.js';
  *   test_video_hevc.mp4     2 s hevc
  *   test_video_10bit.mp4    10 s h264 High 10 (yuv420p10le)
  *   test_video_noaudio.mp4  10 s h264, no audio track
- *   test_video_multitrack.mp4 20 s h264 + aac + ac3
+ *   test_video_multitrack.mp4 20 s h264 + aac + ac3, seeded progressive
  *   test_video_moov_end.mp4 20 s h264+aac with moov at the end
  *   test_video_legacy.avi   10 s mpeg4 + mp3
  */
@@ -204,13 +204,31 @@ test.describe('On-the-fly streaming playback', () => {
 
     // Answer the first two stream requests with 503 + Retry-After, then let the
     // real request through: this is exactly what a full worker pool looks like.
+    // Every request is counted and stamped with the moment it arrived, refused
+    // or not: the assertions at the end are about the client's pacing, and a
+    // counter that only grew while refusing could not tell "two refused attempts
+    // and one paced retry" from a client that ignores `Retry-After` and hammers
+    // the endpoint — the refusal budget fixes the count at three either way, so
+    // only the gap between the second refusal and the request that follows it
+    // separates a paced client from an immediate one.
+    //
+    // The hint is deliberately above the viewer's own floor: PhotoViewer clamps
+    // `Retry-After` into [1500 ms, 10 s], so a hint of one second would be
+    // raised to 1500 ms and an unpaced client — which waits that same local
+    // default — would be indistinguishable in the gap as well. Three seconds
+    // survives the clamp, so the wait the client actually performed is the
+    // server's number and shows up in the timestamps.
+    let streamRequests = 0;
     let refusals = 0;
+    const streamRequestTimes = [];
     await page.route('**/video/stream*', async (route) => {
+      streamRequests += 1;
+      streamRequestTimes.push(Date.now());
       if (refusals < 2) {
         refusals += 1;
         await route.fulfill({
           status: 503,
-          headers: { 'retry-after': '1', 'content-type': 'application/json' },
+          headers: { 'retry-after': '3', 'content-type': 'application/json' },
           body: JSON.stringify({ error: 'no conversion slot available' }),
         });
         return;
@@ -237,7 +255,19 @@ test.describe('On-the-fly streaming playback', () => {
       null,
       { timeout: 30_000 }
     );
-    expect(refusals).toBe(2);
+    // Exactly two refused attempts plus the single retry that follows them: the
+    // refused run waits out its `Retry-After` pacing and re-requests once, so
+    // any further stream request fails here.
+    expect(streamRequests).toBe(3);
+    // The count alone proves nothing about the pacing: the route refuses
+    // exactly twice, so an immediate hammering client also lands on three. The
+    // gap between the second refusal and the third request is the client's own
+    // wait, and `Retry-After: 3` must show up in it — an unpaced retry would
+    // leave a gap of milliseconds and fail here. The 500 ms of slack absorbs
+    // scheduling and route-interception overhead, and the test's own 60 s
+    // timeout keeps the wait bounded.
+    const pacedRetryGapMs = streamRequestTimes[2] - streamRequestTimes[1];
+    expect(pacedRetryGapMs, 'the retry must wait out Retry-After: 3').toBeGreaterThanOrEqual(2500);
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
@@ -352,7 +382,22 @@ test.describe('On-the-fly streaming playback', () => {
     // attempts, never a fourth.
     expect(requestedModes).toEqual(['remux', 'audio', 'transcode']);
     // The escape hatch is offered instead of a dead end.
-    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
+    const playOriginal = page.locator('.transcode-toast [data-action="play-original"]');
+    await expect(playOriginal).toBeVisible();
+
+    // AND it actually hands the original over instead of merely rendering: the
+    // notice goes away with the ladder, and the element is pointed at the file
+    // itself rather than at another conversion. The fixture's container is one
+    // Chromium cannot present, so "decoded frames" is not available here — what
+    // the hatch promises for this file is the original's URL, which is exactly
+    // what a hatch that no-ops (or that re-requests a conversion) would change.
+    await playOriginal.click();
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+    const video = videoHandle(page);
+    await expect(video).toHaveAttribute('src', new RegExp(`/api/photos/${mkv.hash_sha256}/video`));
+    // Containment alone is satisfied by a conversion request as well, so the
+    // file claim needs its own negative.
+    await expect(video).not.toHaveAttribute('src', /transcode=true/);
   });
 
   test('a seek restart keeps the declared duration', async ({ page }) => {
@@ -555,9 +600,10 @@ test.describe('On-the-fly streaming playback', () => {
         photo.hash_sha256,
         { timeout: 30_000 }
       );
-      // The multi-track source plays its first (AAC) track — the second (AC-3)
-      // one must not be picked — and the silent source has no track to pick:
-      // neither may fail the media element with an audio error.
+      // The multi-track source carries three streams (h264 + aac + ac3) and the
+      // browser plays its first (AAC) track — the second (AC-3) one must not be
+      // picked — while the silent source has no track to pick: neither may fail
+      // the media element with an audio error.
       const error = await videoHandle(page).evaluate((el) => el.error?.code ?? null);
       expect(error).toBeNull();
       await TestHelpers.closeViewer(page);

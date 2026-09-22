@@ -49,9 +49,9 @@
   const encoderIsHardware = $derived(isHardwareEncoder(activeEncoder));
   const encoderHintLabel = $derived(
     activeEncoder
-      ? get(t)(encoderIsHardware ? 'video.encoder.gpu' : 'video.encoder.cpu', {
-          values: { encoder: activeEncoder },
-        })
+      ? encoderIsHardware
+        ? get(t)('video.encoder.gpu', { values: { encoder: activeEncoder } })
+        : get(t)('video.encoder.cpu', { values: { encoder: activeEncoder } })
       : ''
   );
   // A stream run is waiting for a free conversion slot (503): not an error, but
@@ -70,6 +70,14 @@
   // every conversion slot was taken. Plain field, torn down with the player and
   // by any newer run or user seek (see `disarmStreamRetry`).
   let streamRetryTimer = null;
+  // The newest position the user asked for, in seconds: the offset of every run
+  // the player begins (`onRunStart`) and every position picked on the element
+  // itself (`onUserSeek`), whichever came last. A refusal re-arms the retry
+  // here rather than at the refused run's own offset, because a run can be held
+  // by the server for its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s) while
+  // the user scrubs somewhere else, and that seek reaches the viewer only
+  // through these callbacks (see `rememberStreamIntent`).
+  let streamIntentOffset = 0;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -808,8 +816,11 @@
 
   /**
    * How long a refused (503) stream run waits before retrying when the server
-   * sent no `Retry-After`. The server answers immediately when the pool is
-   * full, so the viewer owns the pacing; the server's own hint wins inside
+   * sent no `Retry-After`. A saturated pool does not answer immediately: the
+   * endpoint can hold the request for its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS`
+   * (20 s by default) before it refuses, and that hold is covered by the
+   * player's own slot-wait notice. This delay paces only the retry that follows
+   * the refusal; the server's own hint wins inside
    * [STREAM_RETRY_DELAY_MS, STREAM_RETRY_DELAY_MAX_MS].
    */
   const STREAM_RETRY_DELAY_MS = 1500;
@@ -923,8 +934,10 @@
       onError: (error) => handleStreamFailure(photo, decision, mode, error),
       // Every run this player begins — the one asked for here and the one it
       // restarts for a seek inside itself — makes a retry armed for an earlier
-      // refusal obsolete; see disarmStreamRetry.
-      onRunStart: disarmStreamRetry,
+      // refusal obsolete, and states the offset this run plays from, which is
+      // the newest start intent as long as nothing newer lands; see
+      // rememberStreamIntent.
+      onRunStart: rememberStreamIntent,
       // A position the user picked on the element itself is the other move that
       // leaves a refused offset behind: either this seek starts a run for the
       // new target (which supersedes the refused one and, if that run is
@@ -935,7 +948,12 @@
       // disarmStreamRetry). The element's own position cannot stand in for
       // this signal: the player parks it on a run's offset, so the element
       // standing at 10 s says nothing about a run refused at 25 s.
-      onUserSeek: disarmStreamRetry,
+      //
+      // The target it carries is also the newest start intent: it is newer than
+      // the offset of a run still in flight (the server can hold that run for
+      // its whole queue wait), so a refusal that arrives afterwards must resume
+      // here and not at the offset the user has left.
+      onUserSeek: rememberStreamIntent,
       onEncoder: (encoder) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
         activeEncoder = encoder;
@@ -996,19 +1014,22 @@
       get(t)('video.stream.waiting', { default: 'Waiting for a free conversion slot…' })
     );
     const photoHash = photo.hash_sha256;
-    const startAt = Number.isFinite(error.startAt) ? error.startAt : 0;
+    const startAt = Number.isFinite(streamIntentOffset) ? streamIntentOffset : 0;
     scheduleStreamRetry(() => {
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
-      // Resume the offset the refused run itself asked for: it is still the
-      // position the user last picked, because every move away from it has
-      // already disarmed this retry — a newer run through `onRunStart` and a
-      // user seek through `onUserSeek` (which the element's own `seeking` is
-      // not enough to tell apart from the player's `currentTime` assignment).
-      // Reading the element's position instead would follow the player's own
-      // setup, not the user: a run parks the element on ITS offset, so a
-      // follow-up run refused at the newest target (25 s) finds the element
-      // standing on the previous run's parked offset (10 s) and would resume
-      // there — discarding the seek this retry exists to resume.
+      // Resume the newest position the user asked for, not the offset this run
+      // was refused at: a seek can land while the run is still in flight (the
+      // server may hold it for the whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS`,
+      // 20 s by default) and that seek is newer than the refused offset. Both
+      // signals that carry it — the run's own `onRunStart` and every user seek
+      // through `onUserSeek` — also disarm this retry, so the offset recorded
+      // here is still the user's newest move when it fires: any later move
+      // either disarmed it or armed its own retry at the newer offset. Reading
+      // the element's position instead would follow the player's own setup, not
+      // the user: a run parks the element on ITS offset, so a follow-up run
+      // refused at the newest target (25 s) finds the element standing on the
+      // previous run's parked offset (10 s) and would resume there — discarding
+      // the seek this retry exists to resume.
       playStream(photo, decision, attemptedMode, { keepWaitingNotice: true, startAt });
     }, streamRetryDelayMs(error));
   }
@@ -1029,7 +1050,8 @@
    * Drop the pending saturation retry. A retry is armed for a run the server
    * refused, and it runs `playStream(..., { startAt })`: firing it once a newer
    * run exists would abort that run and drag playback back to the offset the
-   * user has already left, so it must never outlive the run it was armed for.
+   * user has already left, so it must never outlive the position it was armed
+   * for.
    * Every newer run disarms it the moment it begins — including a run msePlayer
    * restarts for a seek inside its own player, which is why the player reports
    * every run through `onRunStart` instead of only the states it reaches: a
@@ -1049,6 +1071,27 @@
     if (streamRetryTimer === null) return;
     clearTimeout(streamRetryTimer);
     streamRetryTimer = null;
+  }
+
+  /**
+   * Record the newest position the user asked for and drop any retry armed for
+   * an older one. Both signals the player reports state it: `onRunStart`, with
+   * the offset every run plays from, and `onUserSeek`, with every position
+   * picked on the element itself. The recorded offset is what
+   * `handleStreamFailure` re-arms the retry for, because a run's own offset is
+   * not necessarily the user's newest move: the server can hold that run for
+   * its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s) before refusing it,
+   * while a seek that lands in that window is reported here and nowhere else
+   * the viewer can see.
+   *
+   * The newest signal wins, in both directions: a deliberate restart at 0
+   * reports its own `onRunStart(0)` after the older seek, and a seek that lands
+   * after a refusal disarms that refusal's retry outright instead of leaving it
+   * to fire at the position the user has left.
+   */
+  function rememberStreamIntent(seconds) {
+    if (Number.isFinite(seconds)) streamIntentOffset = seconds;
+    disarmStreamRetry();
   }
 
   /**

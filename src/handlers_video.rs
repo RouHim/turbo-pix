@@ -252,11 +252,24 @@ pub async fn get_video_file(
     // SOURCE video codec, so only the delivery that implies the client declared
     // that codec (an audio-only conversion) may be handed it; every other
     // delivery plays the universal `transcoded/` re-encode, and a remux delivery
-    // reaches for it only when its own sidecar is missing.
+    // reaches for it only when its own sidecar is missing AND the client
+    // declared the re-encode's codecs (see `client_plays_reencode`).
     let cached_whole_file = !cached_remux
         && match delivery {
             Delivery::StreamAudio => copied_artifact.exists(),
-            Delivery::StreamTranscode | Delivery::StreamRemux => transcoded_artifact.exists(),
+            // The universal re-encode is only playable by a client that
+            // declared its codecs, and a remux client — unlike a transcode one
+            // — declared the SOURCE codecs, which need not include them: the
+            // delivered stream would have carried what the client DID declare.
+            Delivery::StreamRemux => {
+                transcoded_artifact.exists() && client_plays_reencode(&caps, &client)
+            }
+            // Deliberately ungated: this client's plan IS the re-encode, so its
+            // stream rung re-encodes to the very same H.264 + AAC — the
+            // artifact is never worse than what the stream would have
+            // delivered, whereas an ungated remux would have delivered the
+            // source codecs instead.
+            Delivery::StreamTranscode => transcoded_artifact.exists(),
             Delivery::Direct => false,
         };
 
@@ -345,9 +358,10 @@ pub async fn get_video_file(
 
     // Decide which file to serve for a byte request: the original (Direct),
     // a faststart remux sidecar when one is already cached, or the whole-file
-    // conversion escape hatch. `warning` is Some(reason) only when a
-    // conversion attempt failed and we fell back to the original.
-    let (file_to_serve, warning) = match delivery {
+    // conversion escape hatch. No arm here carries a warning: a failed
+    // conversion's `X-Transcode-Warning` is attached by
+    // `serve_whole_file_transcode`, which answers with its own reply.
+    let file_to_serve = match delivery {
         Delivery::Direct => {
             if client_wants_transcode {
                 log::info!(
@@ -355,23 +369,23 @@ pub async fn get_video_file(
                     photo.filename
                 );
             }
-            (video_path.to_path_buf(), None)
+            video_path.to_path_buf()
         }
         Delivery::StreamRemux => {
             // A cached faststart sidecar is a lossless, immediately playable
             // copy — always better than converting the whole file.
             if cached_remux {
-                (remux_sidecar, None)
+                remux_sidecar
             } else if client_wants_transcode {
                 return serve_whole_file_transcode(
                     &photo,
                     &headers,
                     FileConversion::Reencode,
-                    source_codecs(&caps),
+                    &caps,
                 )
                 .await;
             } else {
-                (video_path.to_path_buf(), None)
+                video_path.to_path_buf()
             }
         }
         Delivery::StreamAudio | Delivery::StreamTranscode => {
@@ -384,17 +398,17 @@ pub async fn get_video_file(
                     &photo,
                     &headers,
                     whole_file_kind(delivery),
-                    source_codecs(&caps),
+                    &caps,
                 )
                 .await;
             }
             // A byte request that is not the stream endpoint means the client
             // wants a file; serve the original and let it decide.
-            (video_path.to_path_buf(), None)
+            video_path.to_path_buf()
         }
     };
 
-    serve_video_file(&photo, video_path, file_to_serve, warning, &headers).await
+    serve_video_file(&photo, video_path, file_to_serve, None, &headers).await
 }
 
 /// Serve one video file: its MIME type, range handling, and streamed body,
@@ -557,6 +571,31 @@ fn whole_file_kind(delivery: Delivery) -> FileConversion {
     }
 }
 
+/// True when `client` declared the codecs the whole-file `transcoded/` artifact
+/// carries, i.e. when it may be served that artifact as bytes.
+///
+/// The artifact is always a [`FileConversion::Reencode`]: H.264 8-bit video
+/// plus either the source's own audio when `build_conversion_args` can copy it
+/// into MP4 (AAC and MP3) or an AAC re-encode of it otherwise — and no audio at
+/// all when the source has none. A client that declared none of those codecs
+/// cannot decode the file, and that is exactly the case the remux rung exists
+/// for: the stream the plan chose would have delivered the codecs the client
+/// DID declare, so handing it the artifact instead surfaces a media error (the
+/// viewer's "conversion failed" toast) and — because the fast path also skips
+/// the stream run — never fills the remux sidecar that would answer the next
+/// open.
+fn client_plays_reencode(caps: &ResolvedCapabilities, client: &ClientCodecs) -> bool {
+    client.h264_8
+        && match caps.audio_codec.as_deref() {
+            None | Some("") => true,
+            Some("aac") => client.audio.aac,
+            Some("mp3") => client.audio.mp3,
+            // Every other source audio codec (or an unknown one) is re-encoded
+            // to AAC by `build_conversion_args`.
+            _ => client.audio.aac,
+        }
+}
+
 /// Percent-encode the capability string for a query string.
 ///
 /// Capability tokens are `[a-z0-9,-]`, so escaping the comma is enough to keep
@@ -577,23 +616,54 @@ fn source_codecs(caps: &ResolvedCapabilities) -> SourceCodecs<'_> {
     }
 }
 
+/// True when the RESOLVED capabilities of THIS request attest the source
+/// carries no stream a conversion can map: neither a non-attached video track
+/// nor an audio track (a cover-art-only MP4 without audio, a subtitle-only
+/// MKV). Both the whole-file escape hatch and the stream path consult it.
+///
+/// `caps` is the facts `video_probe::resolve` produced for this request, never
+/// the stored snapshot read at handler entry: `caps.probed` is set only by a
+/// successful probe, so the completeness fact is `caps.probed ||
+/// record_is_complete(photo)` — the record is complete when a previous request
+/// wrote it, and a successful probe is exactly what makes it so on the request
+/// that establishes the fact. Reading the stored snapshot instead would let
+/// the guard never fire on that request, and an incomplete record must never be
+/// read as "there is none": its empty codecs mean "unknown" as well as
+/// "absent", and refusing a real video would be worse than a doomed spawn. A
+/// FAILED probe leaves `caps.probed` false and the record incomplete, so such
+/// a file still claims its slot and answers 202.
+fn has_no_mappable_stream(photo: &Photo, caps: &ResolvedCapabilities) -> bool {
+    (caps.probed || crate::video_probe::record_is_complete(photo))
+        && caps.codec.is_empty()
+        && caps.audio_codec.is_none()
+}
+
 /// Whole-file conversion escape hatch: the legacy `?transcode=true` flow
 /// (claim a conversion slot, spawn the H.264 conversion, answer 202 + poll URL,
 /// or serve the completed cache artifact). The streaming path
 /// (`/video/stream`) is the normal delivery; this remains for clients that
 /// cannot consume the streamed codec and for explicit user retries.
+///
+/// `caps` are the capabilities THIS request resolved (see
+/// [`source_codecs`] and [`has_no_mappable_stream`]) — the stored snapshot
+/// cannot be substituted, because a request that had to probe is the one whose
+/// facts are not in the record yet.
 async fn serve_whole_file_transcode(
     photo: &Photo,
     headers: &HeaderMap,
     conversion: FileConversion,
-    codecs: SourceCodecs<'_>,
+    caps: &ResolvedCapabilities,
 ) -> Result<Box<dyn Reply>, Rejection> {
+    let codecs = source_codecs(caps);
     let video_path = Path::new(&photo.file_path);
-    let record_codec = photo.video_codec().unwrap_or("");
 
+    // The RESOLVED codec, never the stored snapshot the handler entered with:
+    // on the request whose probe established it (a legacy row with no
+    // capability record) that snapshot is empty or stale, while the spawn
+    // re-encodes `caps.codec`. The log has to name the codec the run uses.
     log::info!(
         "Client requested transcode for video (codec: {}): {}",
-        record_codec,
+        caps.codec,
         photo.filename
     );
 
@@ -640,6 +710,27 @@ async fn serve_whole_file_transcode(
 
     // Check if transcoded version exists
     if !transcoded_path.exists() {
+        // A source with no mappable stream cannot convert: `build_conversion_args`
+        // maps `0:V:0?` and `0:a:0?`, so ffmpeg would fall back to automatic
+        // stream selection and the MP4 muxer would abort the run. Serve the
+        // original with the warning a failed conversion produces instead of
+        // claiming a conversion slot for a run that can only fail (and whose
+        // failure the poll endpoint would then report). Placed after the
+        // artifact check so a finished artifact is always served.
+        if has_no_mappable_stream(photo, caps) {
+            log::warn!(
+                "Serving original video; the resolved capabilities list no mappable stream: {}",
+                photo.filename
+            );
+            return serve_video_file(
+                photo,
+                video_path,
+                video_path.to_path_buf(),
+                Some(TRANSCODE_FAILED_WARNING),
+                headers,
+            )
+            .await;
+        }
         // Atomically claim the transcode slot: the claim and the status insert happen under one
         // lock, so two concurrent requests for the same hash cannot both spawn an ffmpeg job
         // (check-then-act race). A previous attempt may have failed/timed out (serve the original
@@ -904,8 +995,14 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         let hash = photo.hash_sha256.clone();
         let cache_root = PathBuf::from(&cache_dir);
         let sidecar_keep = sidecar.clone();
+        // The source's first video track, from the resolver (`codecs` is the
+        // record for the stream that just finished). The sidecar is served as
+        // `action: direct` bytes and played natively, so it must carry the same
+        // sample entry the stream the client just watched carried — a copied
+        // HEVC track out of Matroska is tagged `hev1` by default.
+        let video_codec = codecs.video.map(str::to_string);
         tokio::spawn(async move {
-            match remux_to_faststart_mp4(&source, &sidecar).await {
+            match remux_to_faststart_mp4(&source, &sidecar, video_codec.as_deref()).await {
                 Ok(()) => {
                     log::info!("Remux cache ready for {hash}");
                     // An in-place edit versions the sidecar name; drop the stale ones.
@@ -1109,6 +1206,41 @@ pub async fn stream_video(
     );
     let start = query.start.unwrap_or(0.0).clamp(0.0, MAX_STREAM_START_SECS);
 
+    // A source with neither a mappable video track nor an audio track has
+    // nothing `build_args` can map: `-map 0:V:0?` and `-map 0:a:0?` each
+    // tolerate their own track being absent, but when BOTH match nothing ffmpeg
+    // refuses the output before writing a byte ("Output file does not contain
+    // any stream", exit 234) and the client gets 200 with an empty body — which
+    // `msePlayer` reports as a stream that delivered no media and answers by
+    // climbing its ladder, each rung costing a conversion permit (and, on a
+    // hardware host, a software respawn once the first-bytes gate sees the run
+    // die). The whole-file escape hatch refuses this class too
+    // (`has_no_mappable_stream`); refusing here spawns no ffmpeg and takes no
+    // permit. The same resolved-caps predicate applies: a genuinely unprobed
+    // record (incomplete, and no successful probe this request) is NOT refused.
+    //
+    // 415, not 503: the client's saturation path keys on 503 (it waits and
+    // re-runs the same offset), while any other non-ok status is a real
+    // playback failure that climbs one bounded rung of its ladder. A refusal
+    // from a plan of `StreamTranscode` comes from the ladder's last rung, whose
+    // next step is the viewer's "play original anyway" escape hatch — so the
+    // one refused request is absorbed. The `?decision` endpoint therefore keeps
+    // answering `stream`: no existing action value expresses "cannot be
+    // produced" without misleading the client, and inventing one is out of
+    // scope. The body stays generic (no server paths, no ffmpeg diagnostics),
+    // like every other start failure.
+    if has_no_mappable_stream(&photo, &caps) {
+        log::warn!(
+            "Refusing to stream a source with no mappable stream: {}",
+            photo.filename
+        );
+        let response = warp::reply::with_status(
+            warp::reply::json(&json!({ "error": "source has no playable stream" })),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        );
+        return Ok(Box::new(response));
+    }
+
     let handle = match start_stream(mode, source, start, &caps.codec).await {
         Ok(handle) => handle,
         Err(StreamStartError::Busy) => {
@@ -1134,11 +1266,16 @@ pub async fn stream_video(
             )));
         }
         Err(StreamStartError::Spawn(message)) => {
+            // The message is server diagnostic (it embeds the configured
+            // ffmpeg path, and for a missing binary the instruction to set
+            // FFMPEG_PATH). The client gets the same generic answer the other
+            // arms give; the detail stays in the log.
             log::error!("Stream spawn failed: {message}");
-            return Ok(Box::new(warp::reply::with_status(
-                warp::reply::json(&json!({ "error": message })),
+            let response = warp::reply::with_status(
+                warp::reply::json(&json!({ "error": "conversion could not be started" })),
                 StatusCode::INTERNAL_SERVER_ERROR,
-            )));
+            );
+            return Ok(Box::new(response));
         }
     };
 
@@ -1462,7 +1599,7 @@ mod tests {
     /// contract) so the handler decides without probing the filesystem.
     async fn set_video_record(db_pool: &DbPool, hash: &str, video: serde_json::Value) {
         let patch = json!({ "video": video });
-        Photo::persist_metadata_patch(db_pool, hash, &patch)
+        Photo::persist_capability_and_duration(db_pool, hash, &patch, None)
             .await
             .expect("capability patch");
     }
@@ -1831,7 +1968,13 @@ mod tests {
                 audio: Some("opus"),
             },
         );
-        wait_for_completed_transcode(audio_only).await;
+        let audio_artifact = get_transcoded_path_versioned(
+            temp_dir.path(),
+            audio_only,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        wait_for_cache_artifact(&audio_artifact, audio_only).await;
         assert!(
             get_transcode_status(audio_only)
                 .expect("status should be set")
@@ -1876,7 +2019,16 @@ mod tests {
                 audio: Some("mp3"),
             },
         );
-        wait_for_completed_transcode(with_video).await;
+        // The fill resolves its cache root from `TRANSCODE_CACHE_DIR`, which
+        // this test pinned to the FIRST temp dir, so the artifact lands there
+        // even though the positive control's fixture lives in the second one.
+        let video_artifact = get_transcoded_path_versioned(
+            temp_dir.path(),
+            with_video,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        wait_for_cache_artifact(&video_artifact, with_video).await;
         assert_eq!(
             get_transcode_status(with_video)
                 .expect("status should be set")
@@ -1945,6 +2097,73 @@ mod tests {
         // The shared conversion status neither adds nor removes anything here:
         // `failed_status_does_not_hide_a_completed_transcode` pins that a stale
         // failure still serves the finished artifact.
+        clear_transcode_status(hash);
+    }
+
+    #[tokio::test]
+    async fn cached_transcode_needs_the_client_to_declare_its_codecs() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c";
+        clear_transcode_status(hash);
+        setup_test_video_with_content(&db_pool, &temp_dir, hash, b"original-bytes").await;
+        // VP9 + Opus in an MKV: a client that declares BOTH only needs the
+        // container remuxed, so its plan is `StreamRemux` (never a re-encode).
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "vp9", "container": "mkv", "bit_depth": 8,
+                "audio_codec": "opus", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        // A cache-filling run of an earlier (conservative) client already
+        // produced the whole-file H.264 + AAC re-encode of this source version.
+        let photo = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .expect("find failed")
+            .expect("photo should exist");
+        let cached = get_transcoded_path_versioned(
+            temp_dir.path(),
+            hash,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        );
+        std::fs::create_dir_all(cached.parent().unwrap()).expect("failed to create cache dir");
+        std::fs::write(&cached, b"cached-transcode").expect("failed to write cached transcode");
+
+        // The remux client declared neither H.264 nor AAC, so that artifact is
+        // NOT its remux: the decision must fall through to the stream rung
+        // rather than play bytes the element cannot decode (which would also
+        // short-circuit the run that fills the remux sidecar).
+        let decision = decision_for(&db_pool, hash, "vp9,opus").await;
+        assert_eq!(decision["action"], "stream", "{decision}");
+        assert_eq!(decision["mode"], "remux", "{decision}");
+        assert_eq!(decision["cached"], false, "{decision}");
+
+        // A remux client that ALSO declared the artifact's codecs is served it:
+        // no reason to re-run a conversion it can play.
+        let decision = decision_for(&db_pool, hash, "vp9,opus,h264-8,aac").await;
+        assert_eq!(decision["action"], "direct", "{decision}");
+        assert_eq!(decision["cached"], true, "{decision}");
+        assert!(
+            decision["url"]
+                .as_str()
+                .is_some_and(|url| url.ends_with("transcode=true")),
+            "{decision}"
+        );
+
+        // The transcode arm is untouched: a client whose plan IS the re-encode
+        // is still served its own artifact.
+        let decision = decision_for(&db_pool, hash, "h264-8,aac").await;
+        assert_eq!(decision["action"], "direct", "{decision}");
+        assert_eq!(decision["cached"], true, "{decision}");
+
         clear_transcode_status(hash);
     }
 
@@ -2139,6 +2358,349 @@ mod tests {
         clear_transcode_status(hash);
     }
 
+    /// A source the record attests carries neither a video nor an audio stream
+    /// (cover-art-only MP4 without audio, subtitle-only MKV) has nothing a
+    /// conversion could map: both `-map` specs select nothing, ffmpeg falls
+    /// back to automatic stream selection and the MP4 muxer aborts. The escape
+    /// hatch must answer with the original and the failure warning instead of
+    /// claiming a slot for a run that can only fail.
+    #[tokio::test]
+    async fn a_source_with_no_mappable_stream_is_served_instead_of_converted() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // The record `video_probe::resolve` persists for a cover-art-only
+        // container with no audio track: the no-video marker, no codec, and an
+        // `audio_codec` the RFC 7396 merge drops again (a null member deletes
+        // the key rather than storing a null).
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "no_video_stream": true, "container": "mp4",
+                "audio_codec": null, "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let ffmpeg_calls = temp_dir.path().join("ffmpeg_calls");
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            &format!(
+                "#!/usr/bin/env sh\nprintf 'x\\n' >> '{calls}'\nfor last; do :; done\nmkdir -p \"$(dirname \"$last\")\"\ntouch \"$last\"\n",
+                calls = ffmpeg_calls.display()
+            ),
+        );
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: Some("true".to_string()),
+                client_codecs: Some("h264-8,aac".to_string()),
+                decision: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("handler should return")
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the original must be served, not a 202 for a run that cannot succeed"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-transcode-warning")
+                .and_then(|value| value.to_str().ok()),
+            Some(TRANSCODE_FAILED_WARNING)
+        );
+        assert!(
+            !ffmpeg_calls.exists(),
+            "no conversion may be spawned for a source with no mappable stream"
+        );
+        assert!(
+            get_transcode_status(hash).is_none(),
+            "no conversion slot may be claimed for a source with no mappable stream"
+        );
+        let _ = collect_response_body(response).await;
+    }
+
+    /// The F4 guard must judge the class from the facts THIS request resolved,
+    /// not from the `photo` snapshot read before `video_probe::resolve` ran: a
+    /// cover-art-only MP4 on a row with no capability record is exactly the case
+    /// where the snapshot is empty and the request's own successful probe is the
+    /// only source of truth (it persists `no_video_stream`). Reading the stored
+    /// record made the guard unable to fire on the request that establishes the
+    /// fact, so the handler claimed a slot and spawned an ffmpeg run whose argv
+    /// (-map 0:V:0?/-map 0:a:0?) maps nothing; the reviewer reproduced that run
+    /// exiting 234 with "Output file #0 does not contain any stream".
+    #[tokio::test]
+    async fn a_record_less_source_resolved_this_request_is_served_instead_of_converted() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
+        clear_transcode_status(hash);
+        // No capability record at all: the request below has to probe.
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        // A cover-art-only MP4 with no audio track: `first_stream` skips the
+        // attached picture, so the probe's patch records neither a video nor an
+        // audio stream. The second invocation (the moov trace) finds no atom in
+        // the empty stderr and reads as moov-at-start.
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nprintf '%s' '{\"format\":{\"format_name\":\"mov,mp4,m4a,3gp,3g2,mj2\"},\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"mjpeg\",\"pix_fmt\":\"yuvj420p\",\"disposition\":{\"attached_pic\":1}}]}'\n",
+        );
+        let ffmpeg_calls = temp_dir.path().join("ffmpeg_calls");
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            &format!(
+                "#!/usr/bin/env sh\nprintf 'x\\n' >> '{calls}'\nfor last; do :; done\nmkdir -p \"$(dirname \"$last\")\"\ntouch \"$last\"\n",
+                calls = ffmpeg_calls.display()
+            ),
+        );
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: None,
+                transcode: Some("true".to_string()),
+                client_codecs: Some("h264-8,aac".to_string()),
+                decision: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("handler should return")
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the original must be served, not a 202 for a run that cannot succeed"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-transcode-warning")
+                .and_then(|value| value.to_str().ok()),
+            Some(TRANSCODE_FAILED_WARNING)
+        );
+        assert!(
+            !ffmpeg_calls.exists(),
+            "no conversion may be spawned for a source the probe found no stream in"
+        );
+        assert!(
+            get_transcode_status(hash).is_none(),
+            "no conversion slot may be claimed for a source with no mappable stream"
+        );
+        let _ = collect_response_body(response).await;
+    }
+
+    /// F18: the stream path must refuse a source with no mappable stream BEFORE
+    /// `start_stream`, so no conversion permit is taken and no ffmpeg is spawned.
+    /// Verified against ffmpeg 9.0.1, the exact argv `build_args` produces prints
+    /// "Output file does not contain any stream", exits 234 and leaves stdout
+    /// empty — the client would read that 200 as a stream that delivered no media
+    /// and spend ladder rungs (and permits) on it. The status is 415, never 503:
+    /// `msePlayer`'s saturation path keys on 503 and re-runs the same offset.
+    #[tokio::test]
+    async fn stream_refuses_a_source_with_no_mappable_stream_without_spawning() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        // The same cover-art-only probe: a successful probe that finds neither a
+        // non-attached video nor an audio stream, resolved in this request.
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nprintf '%s' '{\"format\":{\"format_name\":\"mov,mp4,m4a,3gp,3g2,mj2\"},\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"mjpeg\",\"pix_fmt\":\"yuvj420p\",\"disposition\":{\"attached_pic\":1}}]}'\n",
+        );
+        let ffmpeg_calls = temp_dir.path().join("ffmpeg_calls");
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            &format!(
+                "#!/usr/bin/env sh\nprintf 'x\\n' >> '{calls}'\nprintf '\\000\\000\\000\\030ftypiso5'\nprintf '\\000\\000\\000\\010moov'\n",
+                calls = ffmpeg_calls.display()
+            ),
+        );
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: None,
+                client: Some("h264-8,aac".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "a source with no mappable stream must be refused, not run"
+        );
+        let body = collect_response_body(response).await;
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("the refusal body is JSON");
+        assert_eq!(parsed["error"], "source has no playable stream");
+        assert!(
+            !String::from_utf8_lossy(&body).contains(ffmpeg_script.to_str().unwrap()),
+            "the refusal must not disclose server paths: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(
+            !ffmpeg_calls.exists(),
+            "no ffmpeg may be spawned for a source with no mappable stream"
+        );
+    }
+
+    /// The mirror of the refusal: a record that is neither complete nor
+    /// successfully probed is UNKNOWN, not "no stream" — a failed probe must
+    /// still reach the run, exactly like the `test_video_202` case. The empty
+    /// codecs of an incomplete record mean "unknown", so refusing them would
+    /// break a real video whose first probe was unreadable.
+    #[tokio::test]
+    async fn stream_runs_for_a_source_that_is_neither_resolved_nor_refused() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        // Unparseable ffprobe output: `probe_file` returns `None`, `resolve`
+        // persists nothing and reports `probed: false`, and the record stays
+        // incomplete.
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\\n'\n");
+        let ffmpeg_calls = temp_dir.path().join("ffmpeg_calls");
+        let ffmpeg_script = temp_dir.path().join("fake_ffmpeg.sh");
+        create_script(
+            &ffmpeg_script,
+            &format!(
+                "#!/usr/bin/env sh\nprintf 'x\\n' >> '{calls}'\nprintf '\\000\\000\\000\\030ftypiso5'\nprintf '\\000\\000\\000\\010moov'\n",
+                calls = ffmpeg_calls.display()
+            ),
+        );
+        let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+        let _cache_guard =
+            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: None,
+                client: Some("h264-8,aac".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "an unprobed source must still be attempted, not refused"
+        );
+        // Drive the run to the end: the script's marker write happens before the
+        // init bytes it prints, so a completed body read proves the spawn.
+        let body = collect_response_body(response).await;
+        assert!(
+            ffmpeg_calls.exists(),
+            "the run must have been spawned for a source that is merely unknown"
+        );
+        assert!(
+            body.windows(4).any(|w| w == b"ftyp"),
+            "the run's bytes must reach the client"
+        );
+    }
+
+    /// The `Spawn` message is server diagnostic: `format_binary_error` embeds
+    /// the configured ffmpeg path and, for a missing binary, the instruction to
+    /// set FFMPEG_PATH. The client gets the same generic answer the other
+    /// stream-start failures give; the detail belongs in the log.
+    #[tokio::test]
+    async fn a_stream_spawn_failure_answers_without_leaking_the_ffmpeg_path() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d";
+        clear_transcode_status(hash);
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+        // An HEVC source for a client that declares no HEVC support: the plan
+        // needs a transcode run, which cannot start without an ffmpeg binary.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "hevc", "container": "mp4", "bit_depth": 8,
+                "audio_codec": "aac", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+
+        let missing_ffmpeg = temp_dir.path().join("not-an-ffmpeg");
+        let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", missing_ffmpeg.to_str().unwrap());
+
+        let response = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: None,
+                mode: None,
+                client: Some("h264-8".to_string()),
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("stream should reply")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = collect_response_body(response).await;
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("the failure body is JSON");
+        assert_eq!(parsed["error"], "conversion could not be started");
+        assert!(
+            !String::from_utf8_lossy(&body).contains(missing_ffmpeg.to_str().unwrap()),
+            "the response must not disclose the configured ffmpeg path: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
     #[tokio::test]
     async fn test_video_status_poll() {
         let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -2301,19 +2863,29 @@ mod tests {
         );
     }
 
-    /// Poll the transcode status until the background fill reports Completed;
-    /// `spawn_cache_fill` spawns its work, so the test cannot await the task.
-    async fn wait_for_completed_transcode(hash: &str) {
-        for _ in 0..200 {
-            if matches!(
-                get_transcode_status(hash).map(|status| status.state),
-                Some(TranscodeState::Completed)
-            ) {
-                return;
+    /// Poll until a detached cache fill lands its artifact at `path`.
+    ///
+    /// The artifact is the fill's durable product; the per-hash conversion
+    /// status is NOT a usable success signal here — its store is capped and
+    /// evicts settled entries under the pressure a full `cargo test` run puts on
+    /// it (many tests publish statuses), so a finished fill can read as `None`
+    /// while its artifact is already on disk. The wait stays bounded so a real
+    /// regression still fails, and says what it saw when it gives up.
+    async fn wait_for_cache_artifact(path: &Path, hash: &str) {
+        const BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + BUDGET;
+        while !path.exists() {
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "the cache fill for {hash} never produced {} within {BUDGET:?}: last status {:?}, \
+                     free conversion slots {} (0 means the fill skipped itself)",
+                    path.display(),
+                    get_transcode_status(hash).map(|status| status.state),
+                    crate::video_processor::transcode_semaphore().available_permits(),
+                );
             }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        panic!("transcode for {hash} never completed");
     }
 
     #[tokio::test]
@@ -2354,15 +2926,28 @@ mod tests {
         );
         assert!(!cached.exists(), "nothing is cached before the fill");
 
-        spawn_cache_fill(
-            &photo,
-            StreamMode::Transcode,
-            SourceCodecs {
-                video: None,
-                audio: Some("mp3"),
-            },
-        );
-        wait_for_completed_transcode(hash).await;
+        // `spawn_cache_fill` does NOTHING while every conversion slot is taken
+        // — a deliberate production rule (a background fill must never become
+        // the job the next user-facing conversion waits behind) — and another
+        // test's detached run can hold a slot at this instant, which is how this
+        // test used to fail under load. Re-triggering is idempotent: the
+        // artifact check and `claim_transcode` make every call after the first
+        // started one a no-op, so retry until a fill is actually under way
+        // (a status exists) and only then wait it out.
+        let mut attempts = 0;
+        while get_transcode_status(hash).is_none() && !cached.exists() && attempts < 20 {
+            spawn_cache_fill(
+                &photo,
+                StreamMode::Transcode,
+                SourceCodecs {
+                    video: None,
+                    audio: Some("mp3"),
+                },
+            );
+            attempts += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        wait_for_cache_artifact(&cached, hash).await;
 
         assert_eq!(
             std::fs::read_to_string(&cached).expect("fill must land in the cache"),
@@ -2489,7 +3074,6 @@ mod tests {
         .into_response();
         let _ = collect_response_body(response).await;
 
-        wait_for_completed_transcode(hash).await;
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
@@ -2500,6 +3084,7 @@ mod tests {
             photo.file_size,
             photo.date_modified.timestamp_millis(),
         );
+        wait_for_cache_artifact(&cached, hash).await;
         assert_eq!(
             std::fs::read_to_string(&cached).expect("the fill must land in copied/"),
             "converted"
@@ -3931,7 +4516,7 @@ mod tests {
         let body = collect_response_body(response).await;
         assert!(body.windows(4).any(|w| w == b"ftyp"));
 
-        wait_for_completed_transcode(hash).await;
+        wait_for_cache_artifact(&cached, hash).await;
         assert_eq!(
             std::fs::read_to_string(&cached).expect("the playthrough must fill the cache"),
             "converted"

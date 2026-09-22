@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -588,6 +588,87 @@ pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
     Ok(codec == "hevc" || codec == "h265")
 }
 
+/// How often [`run_bounded`] checks whether its child has exited. Small enough
+/// that a killed probe stops within a few tens of milliseconds of its deadline,
+/// large enough that waiting is not a busy loop.
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// How long [`run_bounded`] waits for a pipe reader to hand back what it read
+/// once the child is gone. A reaped child's pipes are at EOF, so this only ever
+/// elapses when a stray grandchild inherited the pipe (a shell wrapper around
+/// ffprobe rather than ffprobe itself) and would otherwise hold the deadline's
+/// caller open forever — the exact failure the deadline exists to prevent.
+const CHILD_DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// Runs `command` to completion, killing the child once `timeout` has elapsed.
+///
+/// `Command::output()` cannot be interrupted — it blocks until the child exits —
+/// so a hung ffprobe (corrupt/truncated file, a path on a stale network mount, a
+/// FIFO) parks its caller forever and, on the serve path, holds a probe permit
+/// with it. This spawns the child with piped stdio, drains both pipes on their
+/// own threads, and polls for exit until the deadline, killing the child on
+/// expiry. The pipes are drained concurrently because a child that fills a pipe
+/// buffer blocks until someone reads it: the `-v trace` moov pass writes far
+/// more than one buffer on a large file, so waiting for exit before reading
+/// would deadlock and turn a healthy probe into a timeout kill.
+///
+/// `None` when the child cannot be spawned or had to be killed; callers treat
+/// both as "this pass produced no verdict".
+pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let stdout = child.stdout.take().map(drain_pipe);
+    let stderr = child.stderr.take().map(drain_pipe);
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(CHILD_POLL_INTERVAL),
+            // The deadline passed, or the child cannot be reaped at all; either
+            // way it must not be left running.
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+
+    Some(Output {
+        status,
+        stdout: collect_drained(stdout),
+        stderr: collect_drained(stderr),
+    })
+}
+
+/// Reads one child pipe to EOF on its own thread and hands the bytes back over a
+/// channel, so neither a full pipe buffer nor a pipe some other process still
+/// holds can block the waiting caller.
+fn drain_pipe(mut pipe: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        let _ = sender.send(buf);
+    });
+    receiver
+}
+
+/// Collects one [`drain_pipe`] result, bounded by [`CHILD_DRAIN_GRACE`]; a pipe
+/// that never closes reads as no output, exactly like a pass that printed
+/// nothing.
+fn collect_drained(receiver: Option<std::sync::mpsc::Receiver<Vec<u8>>>) -> Vec<u8> {
+    receiver
+        .and_then(|receiver| receiver.recv_timeout(CHILD_DRAIN_GRACE).ok())
+        .unwrap_or_default()
+}
+
 fn parse_root_atom_offset(trace: &str, atom: &str) -> Option<u64> {
     let marker = format!("type:'{}' parent:'root'", atom);
 
@@ -618,17 +699,59 @@ pub fn has_moov_at_start(path: &Path) -> CacheResult<bool> {
         )));
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let moov_offset = parse_root_atom_offset(&stderr, "moov");
-    let mdat_offset = parse_root_atom_offset(&stderr, "mdat");
+    Ok(moov_at_start_from_trace(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
+}
 
-    let is_at_start = match (moov_offset, mdat_offset) {
+/// The moov-layout verdict from one `-v trace` stderr dump: the moov atom is
+/// "at start" when it precedes the mdat atom, or when it sits within the first
+/// 1000 bytes (a faststart file with no mdat in front of it). A file with no
+/// moov atom at all reads as "at start": there is nothing to move before it can
+/// stream.
+fn moov_at_start_from_trace(trace: &str) -> bool {
+    let moov_offset = parse_root_atom_offset(trace, "moov");
+    let mdat_offset = parse_root_atom_offset(trace, "mdat");
+
+    match (moov_offset, mdat_offset) {
         (Some(moov), Some(mdat)) => moov < mdat || moov < 1000,
         (Some(moov), None) => moov < 1000,
         (None, _) => true,
-    };
+    }
+}
 
-    Ok(is_at_start)
+/// [`has_moov_at_start`] with a deadline: the trace pass is killed once `timeout`
+/// elapses instead of parking the caller on a hung ffprobe. Same verdicts and the
+/// same error contract as [`has_moov_at_start`] — a killed pass is one more way
+/// for the trace verdict to be unavailable, which the serve-time capability probe
+/// already handles by deciding without it. Scan-time callers keep the unbounded
+/// form: a rescan may legitimately take as long as it takes, a serve request may
+/// not.
+pub(crate) fn has_moov_at_start_within(path: &Path, timeout: Duration) -> CacheResult<bool> {
+    let ffprobe_path = get_ffprobe_path();
+    let output = run_bounded(
+        Command::new(&ffprobe_path).args(["-v", "trace", path.to_string_lossy().as_ref()]),
+        timeout,
+    )
+    .ok_or_else(|| {
+        CacheError::VideoProcessingError(format!(
+            "ffprobe trace pass for {} could not be run or did not finish within {:?}",
+            path.display(),
+            timeout
+        ))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffprobe exited with status {}. stderr: {}",
+            output.status, stderr
+        )));
+    }
+
+    Ok(moov_at_start_from_trace(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
 }
 
 pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
@@ -697,7 +820,37 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
 /// run already paid for. No-op when the sidecar exists. Writes to a unique temp
 /// file then atomically renames into place, so concurrent requests for the same
 /// sidecar cannot interleave into a corrupt output.
-pub async fn remux_to_faststart_mp4(input_path: &Path, output_path: &Path) -> CacheResult<()> {
+///
+/// `video_codec` is the source's first video track, the same fact
+/// [`build_conversion_args`] uses to tag a [`FileConversion::VideoCopy`]: the
+/// copy paths are interchangeable for the client, and Matroska — the source
+/// this function exists for — carries no MP4 sample entry, so an untagged HEVC
+/// copy comes out of the muxer as `hev1` while the stream the client just
+/// watched advertised and carried `hvc1`. Both cache artifacts must agree with
+/// what was streamed, or a decoder that requires `hvc1` for HEVC-in-MP4 cannot
+/// open the file the stream played. `None` means the caller does not know the
+/// codec; an `hvc1` tag for anything but HEVC makes the muxer abort the whole
+/// run, so it is never inferred.
+///
+/// The stream maps are explicit for the same reason
+/// [`build_conversion_args`] spells them out: with no `-map`, ffmpeg's
+/// automatic stream selection picks the sidecar's tracks, and it prefers the
+/// audio stream flagged `default` — which need not be the first one. The
+/// capability record, the client's declared codecs and the `StreamRemux` gate
+/// are all derived from the FIRST non-attached audio track, and this sidecar is
+/// served back to that same client as its native `<video>` source
+/// (`cached_remux` → `action: direct`, short-circuiting the stream rung for
+/// every later open), so a copy that silently carried a different track would
+/// play without the audio it was promised. The trailing `?` keeps a source with
+/// no video track (or no audio track) remuxing rather than failing with
+/// "Stream map '0:V:0' matches no streams"; only a source that reaches this
+/// cache fill has already proven it has a mappable stream, because the remux
+/// run that filled it ran the same maps.
+pub async fn remux_to_faststart_mp4(
+    input_path: &Path,
+    output_path: &Path,
+    video_codec: Option<&str>,
+) -> CacheResult<()> {
     // Bound the remux by the remux semaphore so a burst of requests cannot
     // spawn unbounded blocking ffmpeg processes on the async runtime.
     let _permit = get_remox_semaphore().acquire().await.map_err(|e| {
@@ -734,8 +887,27 @@ pub async fn remux_to_faststart_mp4(input_path: &Path, output_path: &Path) -> Ca
         "-y",
         "-i",
         input_path.to_string_lossy().as_ref(),
+        // The same optional maps `build_conversion_args` and
+        // `video_stream::build_args` spell out, for the same reason: without
+        // them ffmpeg's automatic stream selection decides what the sidecar
+        // carries. See the doc comment above.
+        "-map",
+        "0:V:0?",
+        "-map",
+        "0:a:0?",
         "-c",
         "copy",
+    ]);
+    // The muxer tags a copied HEVC track `hev1` unless the source already
+    // carried `hvc1` — and the Matroska sources this path exists for carry no
+    // sample entry at all — while the stream the client watched was advertised
+    // and tagged `hvc1` (see `video_stream::build_args` and
+    // `build_conversion_args`). Only a copy can be HEVC here, and the muxer
+    // rejects the tag for every other codec, so it is emitted for HEVC alone.
+    if video_codec == Some("hevc") {
+        command.args(["-tag:v", "hvc1"]);
+    }
+    command.args([
         "-movflags",
         "+faststart",
         // Force the muxer explicitly: the temp path ends in `.tmp`, so ffmpeg
@@ -951,6 +1123,19 @@ pub async fn convert_video_with_progress(
 /// resolver records as `no_video_stream` and which still reach this conversion
 /// path) would otherwise fail every attempt with "Stream map '0:V:0' matches no
 /// streams" and never produce an artifact.
+///
+/// What the optional maps promise is bounded, and the bound is worth stating
+/// exactly: they convert every source that carries AT LEAST ONE mappable
+/// stream. A source with neither a video nor an audio stream — a cover-art-only
+/// MP4 without audio, a subtitle-only MKV — leaves both maps selecting nothing,
+/// and ffmpeg then re-enables automatic stream selection, which the MP4 muxer
+/// aborts ("Output file does not contain any stream", or "Could not find tag
+/// for codec … in stream #0"). No argument vector can convert such a source:
+/// there is no track to write into the artifact. Skipping it is a decision for
+/// a caller that holds a RESOLVED capability record (the
+/// `record_is_complete` markers) and can therefore tell "probed, there is none"
+/// apart from "never probed" — `SourceCodecs`' `None`s mean both, so this
+/// function can only answer the argument-vector question.
 ///
 /// The capital `V` is load-bearing, not cosmetic: plain `v` also matches
 /// attached cover pictures, which [`crate::video_probe`]'s resolver skips when
@@ -1517,21 +1702,46 @@ pub(crate) fn remux_sidecar_path(
 /// a deleted photo's conversions stay on disk forever. The `{hash}_` prefix
 /// uses the full 64-hex path hash, so no other photo's files can match.
 pub fn clear_transcode_cache_for_hash(hash: &str) {
+    let prefix = format!("{hash}_");
+    clear_transcode_cache_matching(|name| name.starts_with(&prefix));
+}
+
+/// [`clear_transcode_cache_for_hash`] for many hashes at once: every namespace
+/// directory is listed ONCE and each entry is unlinked when its `{hash}_` prefix
+/// names a hash in `hashes`.
+///
+/// The orphan sweep can drop thousands of rows in one run (a photo root removed
+/// from the config, or a mounted library that comes back empty while other roots
+/// still hold files), and the per-hash form re-lists all three namespaces per
+/// call: K orphan rows over N cached artifacts cost 3K listings and O(K x N)
+/// prefix comparisons while blocking the worker running the indexer. One pass per
+/// namespace is O(N + K). The per-hash form stays for the single-photo
+/// delete/rotate paths, where one listing is the whole job.
+pub fn clear_transcode_cache_for_hashes(hashes: &HashSet<String>) {
+    if hashes.is_empty() {
+        return;
+    }
+    clear_transcode_cache_matching(|name| {
+        name.split_once('_')
+            .is_some_and(|(hash, _)| hashes.contains(hash))
+    });
+}
+
+/// Removes every cache file in all three namespaces whose file name satisfies
+/// `matches`; the two entry points above differ only in that predicate. Keeps
+/// the shared error-logging contract: a failed unlink is a warning, never a
+/// propagated error, so one unreadable entry cannot abort a sweep.
+fn clear_transcode_cache_matching(matches: impl Fn(&str) -> bool) {
     let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
         .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
     let root = Path::new(&cache_dir);
-    let prefix = format!("{hash}_");
     for ns in TRANSCODE_NAMESPACES {
         let dir = namespace_dir(root, ns);
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.filter_map(|e| e.ok()) {
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with(&prefix))
-            {
+            if entry.file_name().to_str().is_some_and(&matches) {
                 let path = entry.path();
                 if let Err(e) = std::fs::remove_file(&path) {
                     log::warn!(
@@ -1939,7 +2149,9 @@ pub(crate) mod tests {
         ffmpeg_copy_moov_end(src, &moov_end); // local test helper defined below
         assert!(!has_moov_at_start(&moov_end).unwrap());
         let out = temp.path().join("out.mp4");
-        remux_to_faststart_mp4(&moov_end, &out).await.unwrap();
+        remux_to_faststart_mp4(&moov_end, &out, Some("h264"))
+            .await
+            .unwrap();
         assert!(out.exists());
         assert!(
             has_moov_at_start(&out).unwrap(),
@@ -1948,11 +2160,133 @@ pub(crate) mod tests {
         // Second call short-circuits on the finished sidecar: the remux must
         // not run twice for one artifact.
         let remuxed = std::fs::metadata(&out).unwrap().modified().unwrap();
-        remux_to_faststart_mp4(&out, &out).await.unwrap();
+        remux_to_faststart_mp4(&out, &out, Some("h264"))
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::metadata(&out).unwrap().modified().unwrap(),
             remuxed,
             "an existing sidecar must not be rewritten"
+        );
+    }
+
+    /// The sidecar is served as `action: direct` bytes and played natively, so
+    /// it has to carry the sample entry the stream the client just watched
+    /// carried. A copied HEVC track out of Matroska (no MP4 sample entry at
+    /// all) comes out of the muxer tagged `hev1` unless it is tagged
+    /// explicitly, and a decoder that requires `hvc1` for HEVC-in-MP4 would
+    /// then refuse the file the stream played. Tagging is conditional: the
+    /// muxer rejects `hvc1` for H.264 and aborts the whole run. Pinned with a
+    /// recording fake ffmpeg, so the assertion covers the argv itself.
+    #[tokio::test]
+    async fn remux_tags_a_copied_hevc_track_hvc1_and_leaves_other_codecs_alone() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let args_file = temp.path().join("args.txt");
+        let ffmpeg_script = temp.path().join("fake_ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg_script,
+            format!(
+                "#!/usr/bin/env sh\nfor last; do :; done\nprintf '%s\\n' \"$@\" > '{}'\ntouch \"$last\"\nexit 0\n",
+                args_file.display()
+            ),
+        )
+        .unwrap();
+        make_executable(&ffmpeg_script);
+        let _guard = TestEnvGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
+
+        let input = temp.path().join("source.mkv");
+        std::fs::write(&input, b"not-a-real-video").unwrap();
+
+        let hevc_out = temp.path().join("hevc.mp4");
+        remux_to_faststart_mp4(&input, &hevc_out, Some("hevc"))
+            .await
+            .unwrap();
+        let args = std::fs::read_to_string(&args_file).unwrap();
+        let joined = args.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            joined.contains("-map 0:V:0? -map 0:a:0? -c copy"),
+            "the remux must map the same optional tracks the stream rung mapped \
+             (`video_stream::build_args`): with no `-map`, automatic stream \
+             selection prefers the audio track flagged `default`, which need not \
+             be the first, so the sidecar could carry audio other than the one \
+             the capability record and the client's declared codecs were derived \
+             from: {args}"
+        );
+        assert!(
+            args.contains("-tag:v\nhvc1\n"),
+            "a copied HEVC track must be tagged hvc1 so the sidecar's sample \
+             entry matches the stream (and MIME) the client was served: {args}"
+        );
+
+        let h264_out = temp.path().join("h264.mp4");
+        remux_to_faststart_mp4(&input, &h264_out, Some("h264"))
+            .await
+            .unwrap();
+        let args = std::fs::read_to_string(&args_file).unwrap();
+        assert!(
+            !args.contains("-tag:v"),
+            "only HEVC may carry hvc1 — the muxer rejects the tag for any other \
+             codec and fails the run: {args}"
+        );
+
+        // A caller that does not know the codec must not guess the tag.
+        let unknown_out = temp.path().join("unknown.mp4");
+        remux_to_faststart_mp4(&input, &unknown_out, None)
+            .await
+            .unwrap();
+        let args = std::fs::read_to_string(&args_file).unwrap();
+        assert!(!args.contains("-tag:v"), "{args}");
+    }
+
+    /// The same fact measured on a real artifact: a Matroska source carries no
+    /// MP4 sample entry, so the muxer's `-c copy` default for its HEVC track is
+    /// `hev1` — the sidecar is later served as `action: direct` bytes and
+    /// played natively, and a decoder that requires `hvc1` for HEVC-in-MP4
+    /// could not open the file the stream just played.
+    #[tokio::test]
+    async fn remux_of_a_matroska_hevc_source_keeps_the_hvc1_sample_entry() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let fixture = Path::new("test-data/test_video_hevc.mp4");
+        if !fixture.exists() || !ffmpeg_available() {
+            eprintln!("skipping: fixture or ffmpeg unavailable");
+            return;
+        }
+
+        let source = temp.path().join("hevc_source.mkv");
+        let status = Command::new(get_ffmpeg_path())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(fixture)
+            .args(["-map", "0:v:0", "-c", "copy", "-f", "matroska"])
+            .arg(&source)
+            .status()
+            .expect("ffmpeg must run to build the Matroska source");
+        assert!(
+            status.success(),
+            "building the Matroska source must succeed"
+        );
+        assert_eq!(
+            video_codec_tag(fixture),
+            "hvc1",
+            "the fixture carries the sample entry the client was promised"
+        );
+        assert_eq!(
+            video_codec_tag(&source),
+            "[0][0][0][0]",
+            "Matroska stores no MP4 sample entry — the shape that makes the \
+             muxer default to hev1"
+        );
+
+        let out = temp.path().join("sidecar.mp4");
+        remux_to_faststart_mp4(&source, &out, Some("hevc"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            video_codec_tag(&out),
+            "hvc1",
+            "the cached sidecar must carry the same sample entry the stream did"
         );
     }
 
@@ -3673,6 +4007,58 @@ pub(crate) mod tests {
         // gone, and the other hash survives
         assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
         assert!(kept.exists());
+    }
+
+    /// The orphan sweep can drop a whole photo root's rows in one run, so it
+    /// clears many hashes at once: the batched form must reach every namespace
+    /// for every hash and take the multi-version artifacts (old versions and
+    /// temps) with it, while leaving a neighbouring hash alone.
+    #[tokio::test]
+    async fn clear_transcode_cache_for_hashes_sweeps_every_hash_in_one_pass() {
+        // GIVEN three doomed hashes with several versioned artifacts each in all
+        // three namespaces, plus a neighbour whose name extends one of them
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", temp.path().to_str().unwrap());
+        let doomed_hashes = [
+            format!("{:0<64}", "a"),
+            format!("{:0<64}", "b"),
+            format!("{:0<64}", "c"),
+        ];
+        let neighbour = format!("{:0<64}", "a1");
+        let mut doomed = Vec::new();
+        for ns in ["transcoded", "copied", "remux"] {
+            let dir = temp.path().join(ns);
+            std::fs::create_dir_all(&dir).unwrap();
+            for hash in &doomed_hashes {
+                for name in [
+                    format!("{hash}_100_200.mp4"),
+                    format!("{hash}_300_400.mp4"),
+                    format!("{hash}_100_200.mp4.tmp"),
+                ] {
+                    let p = dir.join(name);
+                    std::fs::write(&p, b"x").unwrap();
+                    doomed.push(p);
+                }
+            }
+        }
+        let kept = [
+            temp.path()
+                .join("transcoded")
+                .join(format!("{neighbour}_100_200.mp4")),
+            temp.path()
+                .join("remux")
+                .join(format!("{neighbour}_300_400.mp4")),
+        ];
+        kept.iter().for_each(|p| std::fs::write(p, b"x").unwrap());
+
+        // WHEN all three hashes are cleared in one pass
+        clear_transcode_cache_for_hashes(&doomed_hashes.iter().cloned().collect());
+
+        // THEN every artifact of every doomed hash is gone in every namespace...
+        assert!(doomed.iter().all(|p| !p.exists()), "{doomed:?}");
+        // AND the neighbouring hash survives: a match is a whole hash, not a prefix
+        assert!(kept.iter().all(|p| p.exists()), "{kept:?}");
     }
 
     #[test]

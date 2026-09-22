@@ -19,7 +19,7 @@
 - **Decode side is untouched:** the existing `-hwaccel auto` stays exactly as it is in both paths. Only the *encoder* decision changes, which is why the probe only has to prove the encode shape.
 - **The shared flags are empirically compatible with `h264_vaapi`** (verified with this project's ffmpeg 9.0.1 against a real 1080p HEVC source): `-profile:v main -g 48 -keyint_min 48 -sc_threshold 0` together with `-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -pix_fmt yuv420p` and the fragmented-output `-movflags`/`-frag_duration` produce a valid fMP4 (H.264 Main + AAC) with `rc=0`. Do not "defensively" drop them: a backend that refuses one of them fails the probe and is never selected, which is the designed behaviour.
 - **Timings:** probe timeout 2 s per ffmpeg call; stream first-byte gate timeout 10 s (a silent-but-alive run is left to the existing stall watchdog, never killed by the gate).
-- **`None` plan means byte-identical behaviour to today** — same ffmpeg argument vector, same logs, same status transitions (spec FR-009). This is asserted by a regression test in both argument builders.
+- **A `None` plan adds nothing to the software path** — no hardware flag, same logs, same status transitions (spec FR-009). This is pinned in both argument builders by `reencode_args_are_unchanged_without_a_plan` (`src/video_processor.rs`) and `transcode_args_are_unchanged_without_a_plan` (`src/video_stream.rs`); the processor test asserts the historical software vector PLUS the two deliberate later corrections `-map 0:V:0?` and `-pix_fmt yuv420p -profile:v main`, so those must not be read as regressions.
 - **Zero warnings:** `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` must pass before each commit. No dead code: helpers that only tests use are `#[cfg(test)]`.
 - **No test may call `video_encoder::init()`** except the one caching test that resolves it to `None` — `ACTIVE_PLAN` is process-global and would leak into every other test in the binary.
 - Measured on this host (Intel renderD129 via VAAPI, 5 s of 1080p30 HEVC source): software `-preset fast -crf 23` = 2.3 s / 3.1 MB / SSIM 0.9583; VAAPI `-qp 23` = 0.7 s / 4.4 MB / SSIM 0.9580. Hardware is ~3× faster at equal SSIM and ~40 % larger files — the size growth is the accepted cost, the quality is not negotiable.
@@ -33,7 +33,7 @@ Ordered by how likely each is to bite a real user; the test that pins it is name
 3. **Progress going backwards when the software retry restarts the encode from frame zero** — the poller would show the bar jumping back to a low percent. Pinned by `progress_never_goes_backwards_across_a_fallback` (Task 3).
 4. **The first bytes of a hardware-planned stream being lost or duplicated by the gate** — the client would fail to build its SourceBuffer (`VP9`/`ftyp`/`moov` box missing from the front of the stream). Pinned by `first_bytes_are_preserved_for_the_body` (Task 4).
 5. **A probed-and-passing encoder that a *later* job cannot open, on the streaming path, in the middle of a response** — after bytes have been sent the run cannot be replaced, so the gate must trigger only before the first byte and must never swallow a genuine spawn error. Pinned by `planless_stream_returns_the_childs_bytes_verbatim` and `spawn_error_still_maps_to_start_error` (Task 4).
-6. **A hint that outlives the playback it describes** (viewer advances to the next video while open, viewer closes, or the run fell back to software after the response headers were sent) — the user would read a GPU claim about a video that is not running on the GPU, or no claim at all. Pinned by `a_respawned_stream_run_reports_the_software_encoder` (Task 4), the per-playback resets with the `onEncoder` staleness guard (Task 5), and the E2E "cleared after switching to a direct-play video" assertion (Task 5 Step 1).
+6. **A hint that outlives the playback it describes** (viewer advances to the next video while open, viewer closes, or the run fell back to software after the response headers were sent) — the user would read a GPU claim about a video that is not running on the GPU, or no claim at all. Pinned by `immediate_hardware_failure_respawns_in_software` (`src/video_stream.rs:1443`) and `a_hardware_stream_run_reports_the_hardware_encoder` (`src/video_stream.rs:1499`) (Task 4), the per-playback resets with the `onEncoder` staleness guard (Task 5), and the E2E "cleared after switching to a direct-play video" assertion (Task 5 Step 1).
 
 ## File Structure
 
@@ -957,13 +957,14 @@ Expected: 18 tests pass (10 from Task 1 + 8 here).
 
 - [ ] **Step 5: Wire the verdict into startup**
 
-In `src/main.rs`, add `use turbo_pix::video_encoder;` to the `use turbo_pix::…` block (keep alphabetical order — after `video_processor`), and insert this block after the `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` defaulting and before the non-loopback warning:
+In `src/main.rs`, add `use turbo_pix::video_encoder;` to the `use turbo_pix::…` block (keep alphabetical order — after `video_processor`), and insert this block after `check_port` and `video_processor::sweep_transcode_debris` (a second instance that cannot bind must not pay for an encode):
 
 ```rust
     // Decide the hardware H.264 encoder once, before any job runs. The probe is
     // a real encode rather than ffmpeg's encoder listing, which is what keeps a
     // listed-but-unusable encoder from burning a conversion attempt later.
-    // Skipped when transcoding is disabled: nothing would ever ask for it.
+    // Skipped when transcoding is disabled: nothing would ever ask for it. Also
+    // after the port check: a doomed instance's encode is pure waste.
     if video_processor::transcode_max_pool() > 0 {
         video_encoder::init().await;
     }
@@ -1025,11 +1026,12 @@ Add to `src/video_processor.rs`'s `mod tests` (add `use crate::video_encoder::Hw
         )
         .join(" ");
 
-        // THEN the ffmpeg invocation is byte-for-byte the historical one
+        // THEN the ffmpeg invocation is the historical one bar those two
+        // documented additions
         assert_eq!(
             args,
-            "-hwaccel auto -i /in.mp4 -map 0:v:0 -map 0:a:0? -c:v libx264 -preset fast -crf 23 \
-             -c:a copy -movflags +faststart -y -f mp4 /out.mp4",
+            "-hwaccel auto -i /in.mp4 -map 0:V:0? -map 0:a:0? -c:v libx264 -preset fast -crf 23 \
+             -pix_fmt yuv420p -profile:v main -c:a copy -movflags +faststart -y -f mp4 /out.mp4",
         );
     }
 

@@ -159,9 +159,14 @@ impl PhotoProcessor {
             if let Err(e) = cache_manager.clear_for_hash(hash).await {
                 error!("Failed to clear cache for {}: {}", hash, e);
             }
-            // Conversions are keyed by the same hash; orphan rows must not leave them behind.
-            crate::video_processor::clear_transcode_cache_for_hash(hash);
         }
+        // Conversions are keyed by the same hash; orphan rows must not leave them
+        // behind. Cleared in one pass per namespace for the whole batch, not once
+        // per orphan: the per-hash form re-lists all three namespace directories,
+        // and a run that drops a whole photo root has thousands of orphans.
+        let deleted_hashes: std::collections::HashSet<String> =
+            deleted_paths.iter().map(|(_, hash)| hash.clone()).collect();
+        crate::video_processor::clear_transcode_cache_for_hashes(&deleted_hashes);
 
         // Step 4: Process all files found on disk (with pre-check for unchanged files)
         // Process with controlled concurrency: phase-1 tasks fully decode

@@ -894,8 +894,8 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         if sidecar.exists() {
             return;
         }
-        // The unconditional remux, not `ensure_progressive_mp4`: a finished
-        // remux run already proved the source cannot be played as it is (a
+        // The unconditional remux: a finished remux run already proved the
+        // source cannot be played as it is (a
         // Matroska has no moov for the serve-time probe to find, and its sidecar
         // is the whole point). The core re-checks existence under the remux
         // semaphore and atomically renames a unique temp file into place, so
@@ -2018,9 +2018,9 @@ mod tests {
     async fn remux_short_circuits_on_already_progressive_serves_original() {
         // A photo whose record says moov_at_start: false but whose backing file
         // is already progressive (index-time moov fix failed, then the file was
-        // fixed/replaced on disk): ensure_progressive_mp4 no-ops without writing
-        // the sidecar, so the handler must serve the playable ORIGINAL instead
-        // of a nonexistent remux path (which would 404).
+        // fixed/replaced on disk): no sidecar is ever written for it, so the
+        // handler must serve the playable ORIGINAL instead of a nonexistent
+        // remux path (which would 404).
         let fixture = Path::new("test-data/test_video.mp4");
         if !fixture.exists() {
             eprintln!("skipping: test_video.mp4 fixture missing");

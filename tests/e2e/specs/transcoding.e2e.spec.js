@@ -122,27 +122,32 @@ test.describe('Transcoding', () => {
     await expect(hint).toHaveCount(0);
 
     // WHEN the viewer returns to the converted video, now served from the
-    // cached whole-file artifact instead of a stream
+    // cached whole-file artifact instead of a stream.
+    //
+    // The delivery really is the cached file, and its decision names the
+    // encoder — the carrier the viewer has to pass through for this phase to
+    // show anything at all — so that IS the fact this phase waits for. The
+    // conversion status is not a stand-in for it: the store holds one entry
+    // per hash and outlives the cache wipe, so a `Completed` left by the
+    // playthrough before this one can be read before this playthrough's fill
+    // has published anything — the decision then answers `stream`/`cached:
+    // false`, which is what a still-cold cache means. Polling the decision
+    // waits for the artifact itself.
     await expect
       .poll(
         async () =>
-          (await page.request.get(`/api/photos/${hevcPhoto.hash_sha256}/video/status`)).json(),
-        { timeout: 30_000 }
+          (
+            await page.request.get(
+              `/api/photos/${hevcPhoto.hash_sha256}/video?decision&client=h264-8%2Caac`
+            )
+          ).json(),
+        { timeout: 60_000 }
       )
-      .toMatchObject({ state: 'Completed' });
-    // The delivery really is the cached file, and its decision names the
-    // encoder — the carrier the viewer has to pass through for this phase to
-    // show anything at all.
-    const cachedDecision = await (
-      await page.request.get(
-        `/api/photos/${hevcPhoto.hash_sha256}/video?decision&client=h264-8%2Caac`
-      )
-    ).json();
-    expect(cachedDecision).toMatchObject({
-      action: 'direct',
-      cached: true,
-      encoder: expect.any(String),
-    });
+      .toMatchObject({
+        action: 'direct',
+        cached: true,
+        encoder: expect.any(String),
+      });
 
     await page.evaluate(() => window.history.forward());
     await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(hevcPhoto.hash_sha256);

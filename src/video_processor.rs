@@ -1892,8 +1892,10 @@ pub(crate) mod tests {
         ensure_progressive_mp4(&out, &out).await.unwrap();
     }
 
-    /// The first video stream's MP4 sample-entry tag, as the decoder sees it.
-    fn video_codec_tag(path: &Path) -> String {
+    /// One field of the first video stream, as ffprobe reports it
+    /// (`codec_tag_string`, `profile`, `pix_fmt` …) — the properties a decoder
+    /// actually sees in the file.
+    fn video_stream_field(path: &Path, entry: &str) -> String {
         let output = Command::new("ffprobe")
             .args([
                 "-v",
@@ -1901,7 +1903,7 @@ pub(crate) mod tests {
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=codec_tag_string",
+                &format!("stream={entry}"),
                 "-of",
                 "csv=p=0",
             ])
@@ -1914,6 +1916,11 @@ pub(crate) mod tests {
             path.display()
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The first video stream's MP4 sample-entry tag, as the decoder sees it.
+    fn video_codec_tag(path: &Path) -> String {
+        video_stream_field(path, "codec_tag_string")
     }
 
     /// The whole-file copy is what a client that declared the source's video

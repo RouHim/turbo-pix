@@ -8,9 +8,11 @@
 //! and returns the resolved facts.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 use crate::db::Photo;
 use crate::metadata_extractor::container_from_format_name;
@@ -20,6 +22,23 @@ use crate::video_processor::{get_ffprobe_path, has_moov_at_start};
 /// Bumped whenever the set of persisted capability facts changes; its presence
 /// is the "record complete, never probe again" marker.
 pub const CAPABILITY_VERSION: u64 = 1;
+
+/// How many serve-time capability probes may run at once. Four is the bound the
+/// remux path has always used (`video_processor`'s remux semaphore), and the
+/// probe is the same class of work: a short-lived blocking child process that
+/// must not be spawned per request without limit.
+const PROBE_BOUND: usize = 4;
+
+/// Bounds concurrent capability probes. Each probe spawns one blocking ffprobe
+/// plus, for MP4-family sources, the `-v trace` moov pass whose entire stderr
+/// `Command::output()` buffers in memory. The dominant case is a legacy library
+/// (records indexed before the capability extractor existed) whose first visit
+/// asks for every video at once: unbounded, that fans one ffprobe pair per
+/// request into tokio's blocking pool — 512 threads by default — where the
+/// bound admits [`PROBE_BOUND`]. Distinct from the remux and transcode
+/// semaphores for the same reason those two are distinct from each other: a
+/// probe never waits behind a slow re-encode.
+static PROBE_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(PROBE_BOUND));
 
 #[derive(Debug, Default, PartialEq)]
 pub struct CapabilityPatch {
@@ -176,6 +195,14 @@ pub async fn resolve(pool: &SqlitePool, photo: &Photo) -> ResolvedCapabilities {
         return ResolvedCapabilities::from_record(photo);
     }
 
+    // Acquired only for an incomplete record — a complete one must never queue
+    // behind other requests' probes — and held for the whole blocking probe
+    // (both the facts pass and the moov pass), so at most [`PROBE_BOUND`]
+    // ffprobe pairs exist at once no matter how many first hits arrive
+    // together. The permit is released when this function returns. Acquisition
+    // fails only if the semaphore is closed, which nothing does: the probe then
+    // runs unbounded rather than failing a request that could still succeed.
+    let _permit = PROBE_SEMAPHORE.acquire().await.ok();
     let path = Path::new(&photo.file_path).to_path_buf();
     let probed = tokio::task::spawn_blocking(move || probe_file(&path))
         .await
@@ -495,6 +522,131 @@ mod tests {
         assert!(
             !record_is_complete(&stored),
             "a failed probe must stay incomplete so it is retried later"
+        );
+    }
+
+    /// Fake ffprobe that parks one `marker.<pid>` file while it runs and holds
+    /// the call open for `hold` seconds, so a test can watch how many probes
+    /// are in flight at the same time. Prints an audio-only matroska record, so
+    /// each probe is a single ffprobe call (no moov pass).
+    #[cfg(unix)]
+    fn slow_fake_ffprobe(dir: &Path, hold_secs: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("slow_ffprobe.sh");
+        // The marker name must expand `$$` to the child's own pid, so the paths
+        // are double-quoted (single quotes would make every probe touch the
+        // literal `marker.$$` and hide the concurrency this test measures).
+        std::fs::write(
+            &script,
+            format!(
+                "#!/usr/bin/env sh\n\
+                 touch \"{dir}/marker.$$\"\n\
+                 sleep {hold_secs}\n\
+                 rm -f \"{dir}/marker.$$\"\n\
+                 printf '%s' '{{\"format\":{{\"format_name\":\"matroska,webm\"}},\
+                 \"streams\":[{{\"codec_type\":\"audio\",\"codec_name\":\"opus\",\
+                 \"disposition\":{{\"attached_pic\":0}}}}]}}'\n",
+                dir = dir.display(),
+            ),
+        )
+        .expect("write slow fake ffprobe");
+        let mut perms = std::fs::metadata(&script)
+            .expect("stat slow fake ffprobe")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("chmod slow fake ffprobe");
+        script
+    }
+
+    /// How many probes are running right now, counted by their marker files.
+    #[cfg(unix)]
+    fn probes_in_flight(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .expect("read marker dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("marker."))
+            })
+            .count()
+    }
+
+    /// A legacy library's first visit asks for every video at once, and each
+    /// incomplete record costs an ffprobe (plus the moov pass for MP4-family
+    /// sources) on the blocking pool. The probe semaphore is what keeps that
+    /// burst from fanning out one child process per request: with more requests
+    /// than permits, only `PROBE_BOUND` probes may be in flight simultaneously.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_probes_stay_within_the_probe_bound() {
+        const REQUESTS: usize = 8;
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        // Long enough that the queued requests pile up while the first batch is
+        // parked, so the observed peak is the bound itself and not a race.
+        let script = slow_fake_ffprobe(temp_dir.path(), "1");
+        let _guard = crate::video_processor::tests::TestEnvGuard::set(
+            "FFPROBE_PATH",
+            script.to_str().unwrap(),
+        );
+
+        let pool = crate::db::create_in_memory_pool().await.expect("pool");
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..REQUESTS {
+            let hash = format!("{:0<64}", format!("hash-probe-bound-{index}"));
+            let mut photo = test_photo(&hash);
+            photo.file_path = temp_dir
+                .path()
+                .join(format!("video-{index}.mkv"))
+                .to_string_lossy()
+                .into_owned();
+            photo.filename = format!("video-{index}.mkv");
+            photo.create(&pool).await.expect("create");
+            let pool = pool.clone();
+            tasks.spawn(async move { resolve(&pool, &photo).await });
+        }
+
+        // WHEN the burst is in flight, sample how many probes run at once
+        let markers_dir = temp_dir.path().to_path_buf();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while probes_in_flight(&markers_dir) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the first probes must start");
+        let mut peak = 0;
+        for _ in 0..20 {
+            peak = peak.max(probes_in_flight(&markers_dir));
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        // THEN the bound held (and was actually exercised — a probe path that
+        // serialized or fanned out would peak at 1 or at all 8 requests)
+        assert_eq!(
+            peak, PROBE_BOUND,
+            "{REQUESTS} concurrent requests must run exactly PROBE_BOUND \
+             ({PROBE_BOUND}) probes at once, not {peak}"
+        );
+
+        // AND every request still completes and is probed
+        let resolved = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let mut probed = 0;
+            while let Some(joined) = tasks.join_next().await {
+                assert!(joined.expect("probe task must not panic").probed);
+                probed += 1;
+            }
+            probed
+        })
+        .await
+        .expect("every probe must finish");
+        assert_eq!(resolved, REQUESTS);
+        assert_eq!(
+            probes_in_flight(&markers_dir),
+            0,
+            "every probe released its marker (and its permit) when it finished"
         );
     }
 }

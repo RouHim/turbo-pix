@@ -437,16 +437,33 @@ test.describe('On-the-fly streaming playback', () => {
 
     // Seek to 15 s the moment playback starts, while the target is still
     // unbuffered: the player answers by restarting the stream there.
+    //
+    // The restart is what is reported, not the assignment: resolving on the
+    // `currentTime` write reported true as soon as the guard conditions held, so
+    // a regression that dropped the seek restart entirely — no second run, no
+    // `start=15` request — still read as restarted, and only failed 30 s later
+    // at the `ended` wait below, whose symptom points at the duration bounds
+    // instead. The element only completes the seek once the restarted run has
+    // put media at the target, so that is what the poll waits for.
     const restarted = await video.evaluate(
       () =>
         new Promise((resolve) => {
           const el = document.querySelector('#viewer-video');
+          let seeked = false;
           const timer = setInterval(() => {
             if (!el || el.buffered.length === 0) return;
-            if (el.buffered.end(el.buffered.length - 1) >= 15) return;
-            if (el.currentTime <= 0) return;
+            const end = el.buffered.end(el.buffered.length - 1);
+            if (!seeked) {
+              if (end >= 15) return;
+              if (el.currentTime <= 0) return;
+              seeked = true;
+              el.currentTime = 15;
+              return;
+            }
+            if (el.seeking) return;
+            if (el.currentTime < 15) return;
+            if (end < 15) return;
             clearInterval(timer);
-            el.currentTime = 15;
             resolve(true);
           }, 10);
           setTimeout(() => {

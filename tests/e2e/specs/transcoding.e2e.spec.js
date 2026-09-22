@@ -6,6 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
+// The encoder hint is fed by the `x-turbopix-encoder` header of the stream run,
+// and that header does not exist until the run has produced bytes: the server
+// awaits them for up to 10 s (`FIRST_BYTES_TIMEOUT` in `video_stream.rs`) and a
+// failed hardware attempt pays that attempt's own time before the software
+// respawn. Playwright's default 5 s expect timeout sits below that gate, so a
+// slow-but-successful run on a host with a hardware encoder reads as "hint not
+// found" — an environment-dependent flake CI cannot surface.
+const ENCODER_HINT_TIMEOUT = 20_000;
+
 async function findVideoByFilename(page, filename) {
   const response = await page.request.get('/api/photos?q=type:video&limit=200');
   expect(response.ok()).toBeTruthy();
@@ -32,8 +41,30 @@ test.describe('Transcoding', () => {
     await page.locator(TestHelpers.selectors.photoCard(h264Photo.hash_sha256)).click();
     await TestHelpers.verifyViewerOpen(page);
 
-    await expect(page.locator('.transcode-toast')).not.toBeVisible({ timeout: 3000 });
-    await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
+    // The native-first premise, asserted on the element's own source: the
+    // viewer hands the file to the media element, so neither a transcode
+    // request nor a MediaSource blob may appear. The conversion notice cannot
+    // carry this guard — `verifyViewerOpen` resolves on the viewer's `.active`
+    // class, which `open()` sets before the `?decision` fetch `displayPhoto`
+    // issues has answered, and a notice only renders once `playStream` sets
+    // `transcodeMessage` from that response. Playwright passes
+    // `not.toBeVisible` immediately when the locator matches no node, so the old
+    // assertion held before anything could appear; the MSE/stream path also
+    // makes `#viewer-video` visible, so visibility does not distinguish it
+    // either. Waiting for the source is waiting for the decision to have been
+    // made and applied.
+    const video = page.locator(TestHelpers.selectors.viewerVideo);
+    await expect(video).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => video.getAttribute('src'), { timeout: 30_000 }).toBeTruthy();
+    const src = await video.getAttribute('src');
+    expect(src, 'a natively playable video must not be converted').not.toContain('transcode=true');
+    expect(src, 'a natively playable video must not be streamed through a blob').not.toMatch(
+      /^blob:/
+    );
+    expect(src).toContain(`/api/photos/${h264Photo.hash_sha256}/video`);
+
+    // AND, the decision now made, no conversion notice is up
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
   test('should stream and play hevc video while converting', async ({ page }) => {
@@ -105,12 +136,15 @@ test.describe('Transcoding', () => {
     await TestHelpers.verifyViewerOpen(page);
 
     // THEN exactly one hint is visible, and its accessible label names the
-    // encoder that is serving the playback
-    await expect(hint).toHaveCount(1);
-    await expect(hint).toBeVisible();
+    // encoder that is serving the playback. The timeout outwaits the server's
+    // first-byte gate: the header this hint reads does not exist before the run
+    // has produced bytes.
+    await expect(hint).toHaveCount(1, { timeout: ENCODER_HINT_TIMEOUT });
+    await expect(hint).toBeVisible({ timeout: ENCODER_HINT_TIMEOUT });
     await expect(hint).toHaveAttribute(
       'aria-label',
-      /\((?:libx264|h264_nvenc|h264_vaapi|h264_qsv|h264_amf|h264_videotoolbox)\)$/
+      /\((?:libx264|h264_nvenc|h264_vaapi|h264_qsv|h264_amf|h264_videotoolbox)\)$/,
+      { timeout: ENCODER_HINT_TIMEOUT }
     );
 
     // AND the run is left to FINISH before the viewer moves on: a client that

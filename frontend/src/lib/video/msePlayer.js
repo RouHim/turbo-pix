@@ -118,6 +118,19 @@ export function createStreamPlayer(
   const declaredDuration =
     typeof duration === 'number' && Number.isFinite(duration) && duration > 0 ? duration : null;
 
+  // How much already-played media to keep behind the playhead. Chromium frees
+  // nothing by itself, and the server pipes the whole run out at ffmpeg speed:
+  // without eviction a 20-minute 1080p source leaves ~450 MB of coded frames
+  // held by the renderer, and on a client that caps MSE memory the appends
+  // start failing — reported as a failed playback, complete with the viewer's
+  // ladder and "play original anyway", for a video that was streaming fine.
+  // Media this far back is a whole run to replace (the player restarts the
+  // stream for any seek the buffer no longer covers).
+  const BUFFER_WINDOW_SECONDS = 30;
+  // Evict once this much played-out media has accumulated, rather than issuing
+  // a SourceBuffer update per appended chunk.
+  const EVICT_STEP_SECONDS = 10;
+
   const state = (value) => {
     if (!destroyed) onState?.(value);
   };
@@ -231,6 +244,42 @@ export function createStreamPlayer(
   }
 
   /**
+   * Drop the media `BUFFER_WINDOW_SECONDS` behind the playhead, so a long run
+   * cannot hold everything it ever appended.
+   *
+   * Runs where the appends do, i.e. serialized with them: a `remove` issued
+   * while an update is in flight throws, and the element's own seek can start
+   * an internal update between the check and the call, so `InvalidStateError`
+   * is retried exactly as `appendWhenReady` retries it. Never removes ahead of
+   * `currentTime` — a seek forward into buffered media starts no new run, and
+   * dropping that media would make an ordinary scrub re-convert what the
+   * viewer has already streamed — and never while this run is superseded, whose
+   * buffer the replacement has taken over. A buffer that cannot evict (no
+   * `remove` method at all, as the MSE spec allows for some types) keeps its
+   * media rather than failing the run: growth is the lesser fault.
+   */
+  async function evictPlayedOut(buffer, signal) {
+    if (typeof buffer.remove !== 'function' || buffer.buffered.length === 0) return;
+    const start = buffer.buffered.start(0);
+    const end = buffer.buffered.end(buffer.buffered.length - 1);
+    const cutoff = Math.min(videoEl.currentTime - BUFFER_WINDOW_SECONDS, end);
+    // Nothing played out yet (or not enough of it to be worth an update of its
+    // own): the next chunks widen the span.
+    if (!Number.isFinite(cutoff) || cutoff - start < EVICT_STEP_SECONDS) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      while (buffer.updating) await once(buffer, 'updateend');
+      if (destroyed || signal.aborted) return;
+      try {
+        buffer.remove(start, cutoff);
+      } catch (error) {
+        if (error.name === 'InvalidStateError') continue;
+        return;
+      }
+      return;
+    }
+  }
+
+  /**
    * Feed one stream run's chunks into that run's own SourceBuffer, until the
    * stream ends or the run is superseded (`signal` aborted by a newer run or
    * by `destroy()`). Without the signal check a superseded pump would keep
@@ -288,6 +337,8 @@ export function createStreamPlayer(
         return;
       }
       await appendWhenReady(buffer, value);
+      if (destroyed || signal.aborted) return;
+      await evictPlayedOut(buffer, signal);
       if (destroyed || signal.aborted) return;
     }
   }

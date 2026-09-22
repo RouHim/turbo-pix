@@ -308,8 +308,8 @@
     "conversion_reason": "Could not convert this video: {reason}",
     "play_original": "Play original anyway",
     "encoder": {
-      "gpu": "Conversion is running on the GPU ({encoder})",
-      "cpu": "Conversion is running on the CPU ({encoder})"
+      "gpu": "Converted on the GPU ({encoder})",
+      "cpu": "Converted on the CPU ({encoder})"
     }
   }
 }

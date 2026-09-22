@@ -1071,7 +1071,16 @@ pub async fn stream_video(
     };
 
     let source = Path::new(&photo.file_path);
-    let source_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+    // A missing backing file → 404 (same intent as the byte endpoint): a
+    // stale row must fail the run once instead of taking the 0-byte branch,
+    // which the player reads as "the stream delivered no media" and escalates
+    // through every mode before giving up.
+    let Ok(metadata) = std::fs::metadata(source) else {
+        return Err(reject::custom(NotFoundError));
+    };
+    let source_size = metadata.len();
+    // A file that exists but is genuinely empty (a sync app's `.pending-*`
+    // temp) keeps the empty-warning branch (FR-014).
     if source_size == 0 {
         let response = warp::reply::with_status(Vec::<u8>::new(), StatusCode::OK);
         let response = warp::reply::with_header(response, "content-length", "0");
@@ -3743,6 +3752,41 @@ mod tests {
             );
             let _ = collect_response_body(response).await;
         }
+    }
+
+    #[tokio::test]
+    async fn stream_video_reports_a_missing_backing_file_as_not_found() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f";
+        let video_path = setup_test_video(&db_pool, &temp_dir, hash).await;
+        // An orphaned row: the file is gone while the row survives (e.g. removed
+        // outside the app before the nightly cleanup catches up).
+        std::fs::remove_file(&video_path).expect("failed to remove the backing file");
+
+        let result = stream_video(
+            hash.to_string(),
+            StreamQuery {
+                start: None,
+                mode: None,
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await;
+
+        // The 0-byte branch would answer `content-length: 0`, which the player
+        // reads as "the stream delivered no media" and escalates through every
+        // mode before failing; a 404 fails the run once and keeps the
+        // "play original anyway" fallback meaningful.
+        let Err(rejection) = result else {
+            panic!("a missing backing file must not be streamed");
+        };
+        assert!(
+            rejection.find::<NotFoundError>().is_some(),
+            "expected NotFoundError rejection for a missing backing file"
+        );
     }
 
     /// Take every conversion permit and keep holding them, so the transcode pool

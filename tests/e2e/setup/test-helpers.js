@@ -1,12 +1,30 @@
 import { execSync } from 'child_process';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /** The E2E server's SQLite file, relative to the runner's cwd (repo root). */
 const TEST_DB_PATH = 'test-e2e-data/database/turbo-pix.db';
 
 // Per-run test data directory; must match `tests/e2e/setup/global-setup.js`.
 const TEST_DATA_DIR = 'test-e2e-data';
+
+// Conversion-cache namespaces; must match the server's TRANSCODE_NAMESPACES.
+const CACHE_NAMESPACES = ['transcoded', 'copied', 'remux'];
+
+// A cache entry is either a finished artifact (`{hash}_{size}_{mtime}.mp4`) or
+// a conversion still in flight (`.mp4.tmp` of a whole-file job, `.{pid}.{seq}.tmp`
+// of a remux fill). Existence of the finished name is what every cache-hit
+// check looks at, so only those may be removed.
+const FINISHED_ARTIFACT = /^\d+_\d+\.mp4$/;
+
+// How long the cache must look quiet — no `InProgress` status, no temp, no
+// artifact — before the wipe may call it cold.
+const CACHE_QUIET_MS = 1500;
+const CACHE_POLL_MS = 250;
+// Whole-run budget for the settle. Exhausting it fails the test: a conversion
+// that never settles must not be papered over with a warm cache.
+const CACHE_SETTLE_TIMEOUT_MS = 30_000;
 
 export class TestHelpers {
   /**
@@ -364,30 +382,174 @@ export class TestHelpers {
   }
 
   /**
-   * Delete the conversion artifacts produced for `hash` earlier in this run.
+   * Clear the finished conversion artifacts of `hash`, and do not return until
+   * the cache is COLD: nothing left for the server to serve, and no conversion
+   * still running that could publish one moments later.
    *
    * The transcode cache lasts for the whole run (global-setup wipes it once)
    * and a full playthrough fills it, so a fixture an earlier test played
    * through is legitimately served as `direct`/`cached` from then on. Tests
    * asserting the *cold* first-play behaviour (a `stream`/`remux` decision, a
-   * visible conversion notice) clear it first.
+   * visible conversion notice) clear it first — and that assertion only means
+   * something if nothing survives the call that the server can serve from, so
+   * this waits out conversions that are already running instead of racing
+   * them.
    *
    * Every cache namespace matters: the universal H.264 re-encodes live in
    * `transcoded/`, video copies (source video codec, converted audio) in
    * `copied/` and the lossless faststart sidecars of remux playthroughs in
-   * `remux/`. A missing subdirectory is not an error (nothing was cached yet).
+   * `remux/`. Only a *missing* subdirectory is benign (nothing was cached
+   * yet): a namespace that cannot be listed throws, because a cache that did
+   * not answer cannot be read as empty (see `conversionCacheEntries`).
+   *
+   * Only the versioned artifact itself (`{hash}_{size}_{mtime}.mp4`) is
+   * removed — never a `*.tmp`. A conversion writes its temp first and renames
+   * it into place on success, and the temps carry the same `{hash}_` prefix:
+   * the deterministic `{hash}_{size}_{mtime}.mp4.tmp` of a whole-file job and
+   * the unique `{hash}_{size}_{mtime}.{pid}.{seq}.tmp` a remux fill writes.
+   * Deleting one out from under its writer makes the job's final rename fail,
+   * which poisons the retry: the conversion settles as failed, the next
+   * whole-file request answers `PreviouslyFailedOrTimedOut` (the original with
+   * status 200 instead of the expected 202) and the `video/status` poll can
+   * never reach `Completed`. Leaving temps behind is safe: every cache-hit
+   * check looks at the finished path, and the writer cleans up after itself.
+   *
+   * Outlasting a conversion that is already running is what keeps the callers'
+   * cold premise true across Playwright retries, which re-run this wipe while
+   * the previous attempt's conversion — or the background fill its stream
+   * started — is very possibly still alive. Three things can overtake a wipe
+   * that just deletes and returns, and each is checked before the cache is
+   * called cold:
+   * - a whole-file job or fill that already claimed the hash renames its
+   *   artifact moments later. `claim_transcode` registers `InProgress` before
+   *   the job runs and the artifact is renamed into place before the status
+   *   settles, so waiting for the status to leave `InProgress` guarantees the
+   *   delete below sees that artifact;
+   * - a remux fill registers no status at all, but it holds a `{hash}_…tmp` in
+   *   `remux/` for the whole copy: a temp is a conversion in flight, so the
+   *   wipe keeps waiting for it;
+   * - a publish that lands while this helper is running. Deleting an artifact
+   *   is activity, so after it the cache must stay quiet — no status, no temp,
+   *   no artifact — for one settle window (`CACHE_QUIET_MS`, a second or two)
+   *   before the caller is told it is cold.
+   *
+   * The wait is bounded by `CACHE_SETTLE_TIMEOUT_MS`, and exhausting it throws
+   * instead of returning: a caller left to assert a cache that is not cold
+   * fails later with a warm-cache symptom (a `direct`/`cached` decision, a
+   * missing conversion notice) that points nowhere near the conversion still
+   * running.
+   *
+   * For the same reason a `/video/status` probe that does not answer throws
+   * (`conversionState`) instead of counting as "no conversion in flight": the
+   * probe is the only thing that can rule out a job that already claimed the
+   * hash, so a probe that never produced a response leaves the premise
+   * unestablished rather than true.
+   *
+   * The listing of the cache namespaces is the wipe's other observation, and
+   * it is held to the same rule: a namespace that could not be listed (EACCES,
+   * EIO, ENOTDIR when a namespace path is not a directory) throws instead of
+   * counting as empty. Reading a failed listing as "nothing was cached"
+   * swallows a `{hash}_…tmp` that is still in flight — the exact warm cache
+   * this helper exists to rule out.
    */
-  static async clearCachedConversions(hash) {
-    // Same per-run cache global-setup hands the server via TRANSCODE_CACHE_DIR.
-    const cacheDir = path.join(TEST_DATA_DIR, 'transcode-cache');
-    for (const kind of ['transcoded', 'copied', 'remux']) {
-      const dir = path.join(cacheDir, kind);
-      const entries = await readdir(dir).catch(() => []);
+  static async clearCachedConversions(page, hash) {
+    const deadline = Date.now() + CACHE_SETTLE_TIMEOUT_MS;
+    let quietSince = Date.now();
+    for (;;) {
+      // The per-hash conversion status. A whole-file job (user-facing or the
+      // background fill of a finished stream run) claims the hash before it
+      // starts and settles the status only after its artifact is renamed into
+      // place; an absent entry (404) and every settled state mean no such job
+      // can publish behind this wipe's back. A probe that failed says neither,
+      // and throws.
+      const state = await this.conversionState(page, hash);
+
+      const entries = await this.conversionCacheEntries(hash);
+      const finished = entries.filter((entry) => entry.finished);
+      const inFlight = entries.filter((entry) => !entry.finished);
       await Promise.all(
-        entries
-          .filter((name) => name.startsWith(`${hash}_`))
-          .map((name) => rm(path.join(dir, name), { force: true }))
+        finished.map((entry) => rm(path.join(entry.dir, entry.name), { force: true }))
       );
+
+      const busy = state === 'InProgress' || inFlight.length > 0 || finished.length > 0;
+      quietSince = busy ? Date.now() : quietSince;
+      if (!busy && Date.now() - quietSince >= CACHE_QUIET_MS) return;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `clearCachedConversions(${hash}): the conversion cache did not go cold within ` +
+            `${CACHE_SETTLE_TIMEOUT_MS} ms — status ${state ?? 'missing'}, ` +
+            `${inFlight.length} in-flight temp file(s). Refusing to let the caller assert ` +
+            `a cold cache that is not cold.`
+        );
+      }
+      await delay(CACHE_POLL_MS);
     }
+  }
+
+  /**
+   * The conversion state the server reports for `hash`, or `null` when it has
+   * no entry for it — the endpoint's 404, its only non-ok answer (a status
+   * entry exists for every claimed job until it settles).
+   *
+   * A probe that fails is NOT `null`. A request that never produced a response
+   * (connection refused, reset, timeout) or a response the server could not
+   * answer the probe from (a 5xx) leaves "no conversion is publishing" unknown,
+   * and reading it as idle would let a job that already claimed the hash
+   * publish behind the caller's wipe. Throws instead, naming the probe, so the
+   * failure is not mistaken for a cold cache.
+   */
+  static async conversionState(page, hash) {
+    const url = `/api/photos/${hash}/video/status`;
+    const response = await page.request.get(url).catch((cause) => {
+      throw new Error(
+        `conversionState(${hash}): the ${url} probe never produced a response ` +
+          `(${cause.message}) — refusing to call the conversion cache cold on a probe ` +
+          `that did not answer.`,
+        { cause }
+      );
+    });
+    if (response.ok()) return (await response.json()).state;
+    const status = response.status();
+    if (status === 404) return null;
+    throw new Error(
+      `conversionState(${hash}): the ${url} probe answered ${status} — refusing to call ` +
+        `the conversion cache cold on a probe that did not answer.`
+    );
+  }
+
+  /**
+   * Every `{hash}_…` entry the conversion cache holds for `hash`, each with the
+   * directory it lives in and whether it is a finished artifact (`false` means
+   * a conversion still in flight).
+   *
+   * Only a missing namespace (`ENOENT` — nothing was cached yet) is read as
+   * empty. Any other listing failure throws: the wipe uses these entries as its
+   * evidence that no artifact and no in-flight temp survive it, so a namespace
+   * that did not list cannot be reported as empty without letting an artifact
+   * or a running conversion slip past the caller's cold-cache premise.
+   */
+  static async conversionCacheEntries(hash) {
+    const perNamespace = await Promise.all(
+      CACHE_NAMESPACES.map(async (namespace) => {
+        const dir = path.join(TEST_DATA_DIR, 'transcode-cache', namespace);
+        const entries = await readdir(dir).catch((cause) => {
+          if (cause.code === 'ENOENT') return [];
+          throw new Error(
+            `conversionCacheEntries(${hash}): the ${dir} cache namespace could not be ` +
+              `listed (${cause.code ?? cause.message}) — refusing to read a namespace ` +
+              `that did not answer as empty.`,
+            { cause }
+          );
+        });
+        return entries
+          .filter((name) => name.startsWith(`${hash}_`))
+          .map((name) => ({
+            dir,
+            name,
+            finished: FINISHED_ARTIFACT.test(name.slice(hash.length + 1)),
+          }));
+      })
+    );
+    return perNamespace.flat();
   }
 }

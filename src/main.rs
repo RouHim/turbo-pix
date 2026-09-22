@@ -73,18 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("{}/cache/transcoded", config.data_path),
         );
     }
-    // Crash-debris sweep BEFORE services start: a SIGKILLed ffmpeg leaves
-    // `{hash}_*.mp4.tmp` / `{stem}.{pid}.{seq}.tmp` / `*.moovfix.*` files that
-    // the lazy per-request cleanup only removes on next access of the same hash
-    // (unique remux/moovfix names: never). Runs before the scheduler's startup
-    // rescan so debris is never indexed.
-    let cache_dir = PathBuf::from(
-        std::env::var("TRANSCODE_CACHE_DIR")
-            .unwrap_or_else(|_| format!("{}/cache/transcoded", config.data_path)),
-    );
-    let sweep_photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
-    video_processor::sweep_transcode_debris(&cache_dir, &sweep_photo_paths);
-
     // Transcode timeout (video_processor reads the env directly); default it
     // from config so a process-wide value is always visible to the status
     // path. Respects an explicit operator override. The transcode pool size
@@ -96,14 +84,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
             config.transcode_timeout_secs.to_string(),
         );
-    }
-
-    // Decide the hardware H.264 encoder once, before any job runs. The probe is
-    // a real encode rather than ffmpeg's encoder listing, which is what keeps a
-    // listed-but-unusable encoder from burning a conversion attempt later.
-    // Skipped when transcoding is disabled: nothing would ever ask for it.
-    if video_processor::transcode_max_pool() > 0 {
-        video_encoder::init().await;
     }
 
     // Non-loopback binds with an empty allowlist have NO DNS-rebinding
@@ -129,6 +109,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check if port is available before initializing services
     if let Some(value) = check_port(&config.host, port) {
         return value;
+    }
+
+    // Crash-debris sweep BEFORE services start: a SIGKILLed ffmpeg leaves
+    // `{hash}_*.mp4.tmp` / `{stem}.{pid}.{seq}.tmp` / `*.moovfix.*` files that
+    // the lazy per-request cleanup only removes on next access of the same hash
+    // (unique remux/moovfix names: never). Runs before the scheduler's startup
+    // rescan so debris is never indexed — and AFTER the port check, because a
+    // second instance that cannot serve must not touch the live instance's
+    // cache: a swept whole-file temp makes the running conversion's rename fail
+    // and blocks that hash for the retry cooldown, and a swept moovfix temp
+    // aborts a running `fix_moov_atom`.
+    let cache_dir = PathBuf::from(
+        std::env::var("TRANSCODE_CACHE_DIR")
+            .unwrap_or_else(|_| format!("{}/cache/transcoded", config.data_path)),
+    );
+    let sweep_photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
+    video_processor::sweep_transcode_debris(&cache_dir, &sweep_photo_paths);
+
+    // Decide the hardware H.264 encoder once, before any job runs. The probe is
+    // a real encode rather than ffmpeg's encoder listing, which is what keeps a
+    // listed-but-unusable encoder from burning a conversion attempt later.
+    // Skipped when transcoding is disabled: nothing would ever ask for it. Also
+    // after the port check: a doomed instance's encode is pure waste.
+    if video_processor::transcode_max_pool() > 0 {
+        video_encoder::init().await;
     }
 
     // Initialize services

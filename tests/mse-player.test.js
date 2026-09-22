@@ -50,6 +50,13 @@ class FakeSourceBuffer {
     this.offsetAssignments = [];
     this.listeners = new Map();
     this._offset = 0;
+    // Left edge of the buffered range on the `timestampOffset` timeline: null
+    // while nothing has been evicted, because the range starts at the run's
+    // offset. A leading eviction moves it up, exactly as Chromium reports the
+    // trim — keep it apart from `_offset`, which stays the run's
+    // `timestampOffset` (the player reads it back to decide whether the run's
+    // own start lies before the end of the source).
+    this._rangeStart = null;
     // Right edge of the buffered range on the `timestampOffset` timeline, or
     // null while nothing is buffered: the run's first chunk is its
     // initialization segment, which carries no coded frames, so appending it
@@ -67,10 +74,12 @@ class FakeSourceBuffer {
    * segment has none.
    */
   get buffered() {
+    const start = this._rangeStart ?? this._offset;
     // A removal that takes the whole range away (the duration clamp dropping a
-    // phantom tail) leaves nothing buffered, not an inverted range.
-    if (this._end === null || this._end <= this._offset) return { length: 0 };
-    return { length: 1, start: () => this._offset, end: () => this._end };
+    // phantom tail, an eviction that leaves nothing) leaves nothing buffered,
+    // not an inverted range.
+    if (this._end === null || this._end <= start) return { length: 0 };
+    return { length: 1, start: () => start, end: () => this._end };
   }
 
   get timestampOffset() {
@@ -115,6 +124,12 @@ class FakeSourceBuffer {
    * Chromium's removal contract: dropping a range takes the buffer offline and
    * refuses to start while an update is already running (which is also why the
    * duration cannot shrink below the buffered end until the tail is gone).
+   *
+   * The media the range covered is gone afterwards, on both sides of the
+   * removal: an eviction trims played-out media off the front (the range then
+   * starts where the removal ended) and the duration clamp drops a phantom tail
+   * (the range then ends where the removal began). Both are what the tests
+   * observe, so the stand-in models them rather than only recording the call.
    */
   remove(start, end) {
     if (this.updating) {
@@ -124,7 +139,15 @@ class FakeSourceBuffer {
       );
     }
     this.removals.push([start, end]);
-    if (this._end !== null) this._end = this._end <= start ? null : Math.min(this._end, start);
+    const rangeStart = this._rangeStart ?? this._offset;
+    if (this._end !== null && end > rangeStart && start < this._end) {
+      if (start <= rangeStart) {
+        this._rangeStart = end;
+        if (this._end <= end) this._end = null;
+      } else {
+        this._end = start;
+      }
+    }
     this.updating = true;
     setImmediate(() => this._completeUpdate());
   }
@@ -354,6 +377,38 @@ function stalledBodyFetch() {
     });
   };
   return { fetchImpl, calls, fail: (index, error) => failures[index](error) };
+}
+
+/**
+ * A long run: `chunks` chunks — an initialization segment plus one 1 s fragment
+ * each — with `advance(chunk)` called before chunk `chunk` is handed over. That
+ * callback is the element's clock, which a viewer watching the stream arrive
+ * keeps close to the buffered end; the short `fakeFetch` cases above pin what a
+ * run does with a handful of chunks, this one what the player does with a run
+ * long enough to have to bound.
+ */
+function longRunFetch(advance, chunks) {
+  const calls = [];
+  const fetchImpl = (url) => {
+    calls.push(url);
+    let reads = 0;
+    const reader = {
+      read() {
+        reads += 1;
+        if (reads <= chunks) advance(reads);
+        return Promise.resolve(
+          reads <= chunks ? { done: false, value: new Uint8Array([0, 0, 0, 24]) } : { done: true }
+        );
+      },
+    };
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: { getReader: () => reader },
+    });
+  };
+  return { fetchImpl, calls };
 }
 
 function createPlayer(video, options = {}) {
@@ -697,6 +752,89 @@ test('appended media cannot inflate the declared duration', async () => {
   assert.deepEqual(buffer.removals, [[2, 3]], 'media past the declared end is dropped');
   assert.equal(buffer.buffered.end(0), 2, 'the buffer no longer runs past the source');
   assert.equal(createdSources.at(-1).duration, 2, 'buffered excess must not grow the timeline');
+
+  player.destroy();
+});
+
+test('played-out media is evicted so a long run cannot grow without limit', async () => {
+  const video = fakeVideo();
+  const { fetchImpl } = longRunFetch((chunk) => {
+    // A viewer playing the run as it arrives: the clock the player evicts
+    // against advances one second per delivered fragment, as it does for a
+    // stream being watched in real time.
+    video._currentTime = chunk - 1;
+  }, 120);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, { duration: 120 });
+
+  await player.start(0);
+  await settle(10);
+
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  const start = buffer.buffered.start(0);
+  const end = buffer.buffered.end(0);
+  assert.equal(end, 119, 'the run delivered all of its media');
+  assert.ok(start > 0, 'the played-out beginning must not be held for the whole run');
+  assert.ok(
+    end - start <= 60,
+    `the buffer must stay bounded behind the playhead, held ${end - start} s of ${end} s`
+  );
+
+  player.destroy();
+});
+
+test('media ahead of the playhead is never evicted', async () => {
+  const video = fakeVideo();
+  const { fetchImpl, calls } = longRunFetch(() => {}, 60);
+  globalThis.fetch = fetchImpl;
+  const player = createPlayer(video, { duration: 60 });
+
+  await player.start(0);
+  await settle(10);
+
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  assert.deepEqual(buffer.removals, [], 'nothing has played out, so nothing may be dropped');
+  assert.deepEqual(
+    [buffer.buffered.start(0), buffer.buffered.end(0)],
+    [0, 59],
+    'the whole run stays buffered while the element sits at 0 s'
+  );
+
+  // AND a seek forward into that media is served from the buffer: dropping
+  // ahead of the playhead would re-convert what has already streamed.
+  video._currentTime = 30;
+  video.dispatch('seeking');
+  await settle(5);
+  assert.equal(calls.length, 1, 'a buffered target must start no stream run');
+
+  player.destroy();
+});
+
+test('a buffer that cannot evict keeps its media instead of failing the run', async () => {
+  const video = fakeVideo();
+  const errors = [];
+  globalThis.fetch = longRunFetch((chunk) => {
+    video._currentTime = chunk - 1;
+  }, 60).fetchImpl;
+  const player = createPlayer(video, { duration: 60, onError: (error) => errors.push(error) });
+
+  // MSE allows a SourceBuffer whose type cannot be evicted: `remove` is not
+  // there at all. The run keeps streaming — growth is the lesser fault, and a
+  // run failed over an unsupported eviction burns the viewer's escalation
+  // ladder for a video that is playing fine.
+  const run = player.start(0);
+  await settle(5);
+  const buffer = createdSources.at(-1).sourceBuffers[0];
+  buffer.remove = undefined;
+  await run;
+  await settle(10);
+
+  assert.deepEqual(errors, [], 'an unavailable eviction is not a run failure');
+  assert.deepEqual(
+    [buffer.buffered.start(0), buffer.buffered.end(0)],
+    [0, 59],
+    'the media it cannot evict stays'
+  );
 
   player.destroy();
 });

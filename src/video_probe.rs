@@ -149,8 +149,11 @@ pub(crate) fn parse_capabilities_from_ffprobe(parsed: &Value) -> CapabilityPatch
 /// Blocking probe: one ffprobe pass plus (MP4-family only) the moov layout
 /// probe, each killed once `timeout` elapses. `None` when ffprobe cannot run,
 /// has to be killed, or emits no JSON — the caller then decides from the stored
-/// record, exactly as it does for a non-zero exit.
-fn probe_file(path: &Path, timeout: Duration) -> Option<(CapabilityPatch, bool)> {
+/// record, exactly as it does for a non-zero exit. The layout verdict is
+/// `None` when the moov pass yielded none: a pass that failed or was killed
+/// proves nothing about the file, so the caller keeps the stored fact instead
+/// of inventing one.
+fn probe_file(path: &Path, timeout: Duration) -> Option<(CapabilityPatch, Option<bool>)> {
     let output = run_bounded(
         std::process::Command::new(get_ffprobe_path())
             .args([
@@ -175,14 +178,21 @@ fn probe_file(path: &Path, timeout: Duration) -> Option<(CapabilityPatch, bool)>
             .and_then(|n| n.to_str())
             .unwrap_or_default(),
     );
-    // A moov pass that is killed or fails reads as "at start" — the fallback a
-    // failed pass has always had. The facts pass already proved the file is
-    // readable, so refusing the whole probe over the layout question would send
-    // a playable file into conversion.
+    // The facts pass already proved the file is readable, so a layout question
+    // the moov pass could not answer must not refuse the whole probe — but it
+    // must not fabricate a verdict either. That pass reads the entire input
+    // (`ffprobe -v trace` buffers a line per packet: hundreds of KB for a 20 s
+    // clip, megabytes for minutes), so a multi-GB non-progressive source on
+    // cold storage outlives this deadline on its first play, and a transient
+    // ffprobe failure lands in the same arm. "At start" is the one answer that
+    // can turn an accurate stored `moov_at_start: false` into a permanent lie;
+    // `resolve_within` falls back to that stored fact instead.
     let moov_at_start = if family.has_moov_layout() {
-        has_moov_at_start_within(path, timeout).unwrap_or(true)
+        has_moov_at_start_within(path, timeout).ok()
     } else {
-        true
+        // No moov layout to probe for: "at start" is a fact for these families,
+        // not a guess, and `plan` never consults the flag for them.
+        Some(true)
     };
     Some((patch, moov_at_start))
 }
@@ -306,7 +316,7 @@ async fn resolve_within(
     .ok()
     .flatten();
 
-    let Some((patch, moov_at_start)) = probed else {
+    let Some((patch, moov_verdict)) = probed else {
         // A FAILED probe — non-zero ffprobe exit, unparseable JSON, or a pass
         // that had to be killed at its deadline — deliberately persists nothing
         // and leaves the record incomplete: a file that is unreadable (or
@@ -318,6 +328,18 @@ async fn resolve_within(
         );
         return ResolvedCapabilities::from_record(photo);
     };
+
+    // A moov pass that yielded no verdict proved nothing, so the record's own
+    // layout is what stands: falling back to "at start" here would overwrite an
+    // accurate stored `moov_at_start: false` with `true` AND complete the
+    // record, after which `record_is_complete` short-circuits `resolve`, `plan`
+    // reads a progressive-looking MP4 and returns `Delivery::Direct`, and
+    // `get_video_file`'s `Direct` arm serves the original moov-at-end file
+    // without re-checking the layout — the browser downloads the whole file
+    // before the first frame instead of taking the remux rung, permanently.
+    // Absent means "never wrote a false value" (`Photo::moov_at_start`), which
+    // is the same default a record fresh from the scanner carries.
+    let moov_at_start = moov_verdict.unwrap_or_else(|| photo.moov_at_start());
 
     let mut video = serde_json::Map::new();
     video.insert("capability_version".to_string(), json!(CAPABILITY_VERSION));
@@ -352,6 +374,10 @@ async fn resolve_within(
     // (the version marker) whose `audio_codec` key is absent — a different fact
     // from "never probed", which is the record without the marker.
     video.insert("audio_codec".to_string(), json!(patch.audio_codec));
+    // The probe's verdict when it has one, the record's own fact when the moov
+    // pass yielded none: either way the record is completed with a layout it
+    // can be trusted for, which is what keeps the failed pass from wedging the
+    // probe (the request is answered and later ones need no probe at all).
     video.insert("moov_at_start".to_string(), json!(moov_at_start));
 
     // One transaction for both writes: a capability record is either fully
@@ -1070,8 +1096,14 @@ mod tests {
 
     /// The moov pass is bounded the same way: a `-v trace` pass that never
     /// returns is killed at the deadline, the facts the probe already has are
-    /// kept (the layout question falls back to "at start", exactly as it does for
-    /// any failed trace pass), and the permit comes back.
+    /// kept, and the permit comes back. The layout is one of those facts: a
+    /// record that already carried `moov_at_start: false` (an incomplete one —
+    /// the row is re-probed because it has no capability marker) must still say
+    /// `false` when the pass yields no verdict. Reading the killed pass as "at
+    /// start" would instead complete the record with the opposite of the truth,
+    /// permanently: `plan` would route this moov-at-end MP4 into `Direct` and
+    /// `get_video_file`'s `Direct` arm never re-checks the layout, so the
+    /// browser would download the whole file before the first frame.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_moov_pass_that_outlives_its_deadline_does_not_wedge_the_probe() {
@@ -1106,6 +1138,11 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         photo.filename = "video.mp4".to_string();
+        // The accurate fact a previous probe wrote before the file's moov was
+        // moved to the end of the file, and no capability marker, so this record
+        // is still probed.
+        photo.metadata = json!({ "video": { "moov_at_start": false } });
+        assert!(!record_is_complete(&photo), "the row must still be probed");
         photo.create(&pool).await.expect("create");
 
         let before = PROBE_SEMAPHORE.available_permits();
@@ -1122,8 +1159,19 @@ mod tests {
         assert!(resolved.probed, "the facts pass succeeded");
         assert_eq!(resolved.codec, "h264");
         assert!(
-            resolved.moov_at_start,
-            "a killed trace pass reads as 'at start'"
+            !resolved.moov_at_start,
+            "a killed trace pass must keep the stored layout, not invent 'at start'"
+        );
+        // AND the decision that reads that fact still sends this file to the
+        // remux rung: the browser cannot seek a moov-at-end MP4, so `Direct`
+        // would make it download the whole file before the first frame.
+        assert_eq!(
+            crate::video_capability::plan(
+                &resolved,
+                &crate::video_capability::ClientCodecs::parse(Some("h264-8,aac"))
+            ),
+            crate::video_capability::Delivery::StreamRemux,
+            "a moov-at-end MP4 must never be decided as direct"
         );
         assert_eq!(
             std::fs::read_to_string(&counter_path)
@@ -1134,9 +1182,14 @@ mod tests {
             "the facts pass and the moov pass both ran"
         );
 
-        // AND the record is complete, so the file is never probed again
+        // AND the record is complete, so the file is never probed again — with
+        // the stored layout, not the guess, so that completeness is not a lie
         let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
         assert_eq!(stored.metadata["video"]["capability_version"], 1);
+        assert_eq!(
+            stored.metadata["video"]["moov_at_start"], false,
+            "the stored layout must survive the failed pass"
+        );
 
         // AND the permit came back
         assert_eq!(PROBE_SEMAPHORE.available_permits(), before);

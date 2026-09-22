@@ -1,3 +1,8 @@
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
@@ -38,7 +43,7 @@ test.describe('Transcoding', () => {
     const hevcPhoto = await findVideoByFilename(page, 'test_video_hevc.mp4');
     // A conversion notice is only shown while the video streams: a playthrough
     // earlier in the run may already have cached the whole file.
-    await TestHelpers.clearCachedConversions(hevcPhoto.hash_sha256);
+    await TestHelpers.clearCachedConversions(page, hevcPhoto.hash_sha256);
 
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);
@@ -77,7 +82,7 @@ test.describe('Transcoding', () => {
 
     // GIVEN a video the client cannot play (the server converts it)
     const hevcPhoto = await findVideoByFilename(page, 'test_video_hevc.mp4');
-    await TestHelpers.clearCachedConversions(hevcPhoto.hash_sha256);
+    await TestHelpers.clearCachedConversions(page, hevcPhoto.hash_sha256);
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);
 
@@ -157,7 +162,7 @@ test.describe('Transcoding', () => {
 
     // GIVEN an AVI/mpeg4 source that always converts (Chromium cannot play it)
     const photo = await findVideoByFilename(page, 'test_video_legacy.avi');
-    await TestHelpers.clearCachedConversions(photo.hash_sha256);
+    await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
 
     // WHEN the conversion is requested and completes
     await TestHelpers.navigateToView(page, 'videos');
@@ -199,5 +204,207 @@ test.describe('Transcoding', () => {
     await page.locator(TestHelpers.selectors.photoCard(photo.hash_sha256)).click();
     await TestHelpers.verifyViewerOpen(page);
     await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
+  });
+});
+
+// The cold-cache premise every caller above asserts is a property of
+// `clearCachedConversions`, so the guard itself is exercised here. A real
+// conversion in flight cannot be timed deterministically from a spec (that is
+// the whole problem: the fill is still alive when the wipe runs), so the fill
+// is simulated: the status reports `InProgress` and the artifact lands after
+// the wipe's own delete. No server and no browser are involved — the helper
+// only ever reads `/video/status` and the cache directory.
+//
+// The cache tree the helper lists is resolved against the working directory
+// (`test-e2e-data`), so a throwaway data directory is how the fixtures below
+// give it a cache of their own: the run's real cache — and the server serving
+// from it — is left untouched.
+async function withThrowawayDataDir(run) {
+  const root = await mkdtemp(path.join(tmpdir(), 'turbo-pix-data-'));
+  const cwd = process.cwd();
+  try {
+    process.chdir(root);
+    return await run();
+  } finally {
+    process.chdir(cwd);
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test.describe('clearCachedConversions', () => {
+  test('outlasts a conversion that publishes after the wipe', async () => {
+    await withThrowawayDataDir(async () => {
+      const hash = 'f'.repeat(64);
+      const namespace = path.join('test-e2e-data', 'transcode-cache', 'transcoded');
+      await mkdir(namespace, { recursive: true });
+      const artifact = path.join(namespace, `${hash}_4096_1700000000000.mp4`);
+
+      // The job began before the wipe: its artifact is not on disk yet, so a
+      // delete-and-return wipe misses it and leaves a warm cache behind.
+      let publishedAt = null;
+      const publishing = (async () => {
+        await delay(300);
+        await writeFile(artifact, 'published by the conversion that was in flight');
+        publishedAt = Date.now();
+      })();
+      let polls = 0;
+      const page = {
+        request: {
+          get: async () => {
+            polls += 1;
+            return {
+              ok: () => true,
+              json: async () => ({ state: polls === 1 ? 'InProgress' : 'Completed' }),
+            };
+          },
+        },
+      };
+
+      await TestHelpers.clearCachedConversions(page, hash);
+      const returnedAt = Date.now();
+      await publishing;
+
+      // The premise every caller asserts: no artifact of the conversion the
+      // wipe raced may survive the call.
+      expect(
+        existsSync(artifact),
+        'the wipe must not leave the raced conversion artifact behind'
+      ).toBe(false);
+      // And it got there by outlasting the fill rather than by returning before
+      // it: the fill published while the wipe was still running.
+      expect(publishedAt, 'the in-flight conversion must have published').not.toBeNull();
+      expect(
+        publishedAt,
+        'the wipe returned before the conversion it raced had published'
+      ).toBeLessThanOrEqual(returnedAt);
+    });
+  });
+
+  // The probe is the wipe's only evidence that no whole-file job claimed the
+  // hash, so a probe that does not answer must not read as "nothing is
+  // publishing": a caller would then assert `stream`/`remux` on a cache a
+  // still-running conversion is about to fill.
+  test('throws when the status probe never produces a response', async () => {
+    const hash = 'e'.repeat(64);
+    const page = {
+      request: {
+        get: async () => {
+          throw new Error('socket hang up');
+        },
+      },
+    };
+
+    await expect(TestHelpers.clearCachedConversions(page, hash)).rejects.toThrow(
+      /probe never produced a response/
+    );
+  });
+
+  test('throws when the status probe cannot be answered from', async () => {
+    const hash = 'd'.repeat(64);
+    const page = {
+      request: {
+        get: async () => ({
+          ok: () => false,
+          status: () => 500,
+        }),
+      },
+    };
+
+    await expect(TestHelpers.clearCachedConversions(page, hash)).rejects.toThrow(
+      /probe answered 500/
+    );
+  });
+
+  // The flip side of the two above: the endpoint's 404 means "this hash has no
+  // conversion", the one non-ok answer that IS evidence of an idle cache — it
+  // must keep returning quietly rather than throw, and "quietly" spans the
+  // settle window, not just the first probe: the first probe cannot already be
+  // `CACHE_QUIET_MS` old, so a wipe that returned on it would leave a publish
+  // that lands moments later unwaited.
+  test('reads the endpoint 404 as no conversion and waits out the settle window', async () => {
+    const hash = 'c'.repeat(64);
+    await withThrowawayDataDir(async () => {
+      // The namespace exists but holds nothing for the hash: the probe's 404
+      // and the empty listing agree that the cache is idle.
+      await mkdir(path.join('test-e2e-data', 'transcode-cache', 'transcoded'), { recursive: true });
+      let probes = 0;
+      const page = {
+        request: {
+          get: async () => {
+            probes += 1;
+            return { ok: () => false, status: () => 404 };
+          },
+        },
+      };
+
+      await TestHelpers.clearCachedConversions(page, hash);
+
+      expect(
+        probes,
+        'the wipe must have polled past its first non-busy probe: one probe means it ' +
+          'returned without waiting out the quiet window'
+      ).toBeGreaterThan(1);
+    });
+  });
+
+  // The namespace listing is the wipe's other observation, and it is evidence
+  // of the same kind: a namespace that could not be listed says nothing about
+  // the hash — ENOTDIR when the path is not a directory, EACCES/EIO when the
+  // listing fails. Reading that as "nothing was cached" would let an artifact,
+  // or an in-flight `{hash}_…tmp`, survive the wipe and warm the cache the
+  // caller is about to assert cold.
+  test('throws when a cache namespace cannot be listed', async () => {
+    const hash = 'b'.repeat(64);
+    const page = {
+      request: {
+        get: async () => ({ ok: () => false, status: () => 404 }),
+      },
+    };
+
+    await withThrowawayDataDir(async () => {
+      const namespace = path.join('test-e2e-data', 'transcode-cache', 'copied');
+      await mkdir(path.dirname(namespace), { recursive: true });
+      await writeFile(namespace, 'a file where a cache namespace is expected');
+
+      // Premise of the fixture, and of the helper's own path resolution: the
+      // namespace path the wipe will list is not a directory.
+      await expect(readdir(namespace)).rejects.toMatchObject({ code: 'ENOTDIR' });
+
+      await expect(TestHelpers.clearCachedConversions(page, hash)).rejects.toThrow(
+        /copied cache namespace could not be listed \(ENOTDIR\)/
+      );
+    });
+  });
+
+  // The flip side: a namespace that is simply not there (nothing was cached
+  // yet) IS an empty cache — the wipe must wait out its window and return, not
+  // throw on the ENOENT.
+  test('treats a missing namespace as an empty cache', async () => {
+    const hash = 'a'.repeat(64);
+    let probes = 0;
+    const page = {
+      request: {
+        get: async () => {
+          probes += 1;
+          return { ok: () => false, status: () => 404 };
+        },
+      },
+    };
+
+    await withThrowawayDataDir(async () => {
+      // No data directory at all: every namespace of the cache answers ENOENT.
+      expect(
+        existsSync(path.join('test-e2e-data', 'transcode-cache')),
+        'the throwaway data directory must not hold a cache'
+      ).toBe(false);
+
+      await TestHelpers.clearCachedConversions(page, hash);
+    });
+
+    expect(
+      probes,
+      'the wipe must have polled past its first non-busy probe: one probe means it ' +
+        'returned without waiting out the quiet window'
+    ).toBeGreaterThan(1);
   });
 });

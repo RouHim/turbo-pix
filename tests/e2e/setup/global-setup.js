@@ -190,12 +190,14 @@ async function seedTestMedia() {
     console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
   }
 
-  // Streaming-playback fixtures (video-streaming.e2e.spec.js): a progressive
-  // 20 s h264+aac MP4, the same content in Matroska (remux case) and an
-  // h264 + AC-3 MP4 (audio-only conversion case). Same pinned date as the
-  // videos above, so nothing here displaces the first video card with the
-  // existing h264 fixtures.
-  for (const fixture of ['test_video_long.mp4', 'test_video_long.mkv', 'test_video_ac3.mp4']) {
+  // Streaming-playback fixtures (video-streaming.e2e.spec.js): the same 20 s
+  // h264+aac content in Matroska (remux case) and as an h264 + AC-3 MP4
+  // (audio-only conversion case). Same pinned date as the videos above, so
+  // nothing here displaces the first video card with the existing h264
+  // fixtures. The progressive MP4 twin of the mkv (test_video_long.mp4) is NOT
+  // seeded: no spec references it, and the matrix's direct-play row for a
+  // progressive h264+aac MP4 is covered by test_video.mp4.
+  for (const fixture of ['test_video_long.mkv', 'test_video_ac3.mp4']) {
     const source = path.join('test-data', fixture);
     const destination = path.join(photosDir, fixture);
     if (existsSync(source)) {
@@ -383,7 +385,6 @@ async function updateTestPhotoDates(baseURL) {
   // themselves, and no video can displace the cluster photos from `photos[0]`.
   const videoTakenAt = [
     ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
-    ['test_video_long.mp4', CLUSTER_DAYS_AGO + 2],
     ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
     ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
     ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],

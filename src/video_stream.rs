@@ -108,9 +108,25 @@ pub fn stream_queue_wait_secs() -> u64 {
 /// Fragmented output flushes `ftyp`+`moov` before the first frame, so the
 /// client can create its SourceBuffer immediately; `-frag_duration 1000000`
 /// keeps fragments at ≤1 s even for stream copies whose keyframes are far
-/// apart. `-map 0:a:0?` tolerates sources with no audio track. `video_codec` is
-/// the source's first video track as the capability record resolved it, and only
-/// matters for the copy modes — see the `-tag:v` note below.
+/// apart. `-map 0:V:0?` and `-map 0:a:0?` tolerate sources with no video track
+/// (audio-only or cover-art-only containers, which the capability resolver
+/// records as `no_video_stream` and which do reach this path) and no audio
+/// track; without the trailing `?` the missing stream aborts the run.
+///
+/// The capital `V` is load-bearing, not cosmetic: plain `v` matches *every*
+/// video stream, attached cover pictures included, while `video_probe`'s
+/// resolver deliberately skips those (`first_stream` filters
+/// `attached_pic != 1`) when it builds the record this argv is driven by.
+/// Mapping with `v` would therefore carry — or re-encode — a cover picture the
+/// record never considered: a cover-art-only source is recorded as
+/// `no_video_stream`, the response advertises `audio/mp4`, and the init segment
+/// that contradicts it is rejected by Chromium with
+/// `CHUNK_DEMUXER_ERROR_APPEND_FAILED`. `V` names exactly the streams the
+/// resolver counted, so the mapped tracks and the advertised MIME agree.
+///
+/// `video_codec` is the source's first video track as the capability record
+/// resolved it, and only matters for the copy modes — see the `-tag:v` note
+/// below.
 ///
 /// `plan` is the probed hardware encoder to run the transcode rung on; `None`
 /// (and every copy mode, which never encodes video) keeps the historical
@@ -139,7 +155,7 @@ pub fn build_args(
     args.extend(["-i".into(), input.to_string_lossy().into_owned()]);
     args.extend([
         "-map".into(),
-        "0:v:0".into(),
+        "0:V:0?".into(),
         "-map".into(),
         "0:a:0?".into(),
     ]);
@@ -246,30 +262,59 @@ pub fn build_args(
 /// SourceBuffer drop exactly the track it declared support for. A silent source
 /// (`-map 0:a:0?` emits no audio track) yields a video-only init segment, so
 /// the MIME must not promise an audio codec the segment does not carry —
-/// Chromium rejects that append with `CHUNK_DEMUXER_ERROR_APPEND_FAILED`.
+/// Chromium rejects that append with `CHUNK_DEMUXER_ERROR_APPEND_FAILED`. The
+/// mirror case is the same rule: a source with no video track
+/// (`-map 0:V:0?`, the resolver's `no_video_stream` rows) emits an audio-only
+/// segment and gets an `audio/mp4` type, and a copy whose codec has no MP4
+/// codec string (Vorbis — see `copyable_audio_into_mp4`) promises no audio
+/// codec rather than the AAC it is not carrying.
 pub fn output_mime(mode: StreamMode, video_codec: &str, audio_codec: Option<&str>) -> String {
     let video = match (mode, video_codec) {
-        (StreamMode::Transcode, _) => "avc1.42E01E",
-        (_, "hevc") => "hvc1.1.6.L93.B0",
-        (_, "av1") => "av01.0.15M.08",
-        (_, "vp9") => "vp09.00.10.08",
-        (_, "vp8") => "vp08.00.10.08",
-        _ => "avc1.42E01E",
+        // No video track at all: none is copied and none is encoded, so the
+        // segment carries none.
+        (_, "") => None,
+        (StreamMode::Transcode, _) => Some("avc1.42E01E"),
+        (_, "hevc") => Some("hvc1.1.6.L93.B0"),
+        (_, "av1") => Some("av01.0.15M.08"),
+        (_, "vp9") => Some("vp09.00.10.08"),
+        (_, "vp8") => Some("vp08.00.10.08"),
+        // A copied H.264 track, whatever profile the source carries.
+        (_, "h264") => Some("avc1.42E01E"),
+        // A copy of a video codec with no known MP4 codec string (the plan
+        // never picks one — `copyable_into_mp4` — so this is only reachable
+        // through a forced `?mode=`): name the codec as the source declares it,
+        // which the client reports unsupported and escalates from, instead of
+        // promising H.264 the init segment does not carry.
+        (_, other) => Some(other),
     };
     let audio = match (mode, audio_codec) {
+        // `-map 0:a:0?` emitted no audio track, so neither do we.
         (_, None | Some("")) => None,
-        (StreamMode::Transcode | StreamMode::Audio, _) | (_, Some("aac")) => Some("mp4a.40.2"),
+        // The re-encoding modes always emit AAC, whatever the source carried.
+        (StreamMode::Transcode | StreamMode::Audio, _) => Some("mp4a.40.2"),
+        // A copy names the codec it really copies, with the token the client
+        // declared it can decode (`ClientCodecs`).
+        (_, Some("aac")) => Some("mp4a.40.2"),
         (_, Some("opus")) => Some("opus"),
         (_, Some("mp3")) => Some("mp4a.6B"),
         (_, Some("ac3")) => Some("ac-3"),
         (_, Some("eac3")) => Some("ec-3"),
         (_, Some("dts")) => Some("dts"),
         (_, Some("flac")) => Some("flac"),
-        (_, Some(_)) => Some("mp4a.40.2"),
+        // A copied codec we cannot name in an MP4 codec string is not promised
+        // as AAC: the ffmpeg muxer writes it into an `mp4a`/ESDS entry, so
+        // `mp4a.40.2` would name a sample entry the init segment does not
+        // carry. `copyable_audio_into_mp4` keeps the plan off a copy for these;
+        // a forced `?mode=remux` advertises its video track alone.
+        (_, Some(_)) => None,
     };
-    match audio {
-        Some(audio) => format!("video/mp4; codecs=\"{video},{audio}\""),
-        None => format!("video/mp4; codecs=\"{video}\""),
+    match (video, audio) {
+        (Some(video), Some(audio)) => format!("video/mp4; codecs=\"{video},{audio}\""),
+        (Some(video), None) => format!("video/mp4; codecs=\"{video}\""),
+        (None, Some(audio)) => format!("audio/mp4; codecs=\"{audio}\""),
+        // Neither track: the container carries nothing playable, so the type
+        // names no codec at all.
+        (None, None) => "video/mp4".to_string(),
     }
 }
 
@@ -692,7 +737,13 @@ mod tests {
         assert!(joined.contains("-preset veryfast"));
         assert!(joined.contains("-g 48"));
         assert!(joined.contains("-c:a aac"));
-        assert!(joined.contains("-map 0:v:0 -map 0:a:0?"));
+        // The video map is optional too: a source with no video stream
+        // (`no_video_stream` in the capability record) must still stream its
+        // audio instead of failing with "Stream map '0:V:0' matches no
+        // streams" on every retry. The capital `V` is required: plain `v` also
+        // matches an attached cover picture, which the capability record the
+        // mode and the MIME were derived from never counted.
+        assert!(joined.contains("-map 0:V:0? -map 0:a:0?"));
         assert!(joined.contains("-frag_duration 1000000"));
         assert!(joined.ends_with("-f mp4 pipe:1"));
         assert!(!joined.contains("-ss"), "start 0 must not emit a seek flag");
@@ -915,6 +966,164 @@ mod tests {
             output_mime(StreamMode::Remux, "h264", Some("")),
             "video/mp4; codecs=\"avc1.42E01E\""
         );
+    }
+
+    /// The invariant the client's SourceBuffer depends on: the advertised codec
+    /// string names only codecs this run's init segment actually carries — an
+    /// init segment that contradicts the declared type is what Chromium rejects
+    /// with `CHUNK_DEMUXER_ERROR_APPEND_FAILED`.
+    #[test]
+    fn output_mime_names_only_codecs_the_run_carries() {
+        // GIVEN a source the resolver recorded as having no video stream: every
+        // mode maps the video track optionally (`-map 0:V:0?`), so the segment
+        // carries audio only and must not be advertised as a video buffer. The
+        // re-encoding rungs emit AAC; the copy rung names the codec it copies.
+        for (mode, expected) in [
+            (StreamMode::Transcode, "audio/mp4; codecs=\"mp4a.40.2\""),
+            (StreamMode::Audio, "audio/mp4; codecs=\"mp4a.40.2\""),
+            (StreamMode::Remux, "audio/mp4; codecs=\"opus\""),
+        ] {
+            assert_eq!(
+                output_mime(mode, "", Some("opus")),
+                expected,
+                "{mode:?} must not name a video codec for a video-less source"
+            );
+        }
+
+        // GIVEN the classic h264 + Vorbis Matroska: a remux would carry the
+        // Vorbis track in an `mp4a`/ESDS entry, so it must not be advertised as
+        // AAC (the plan no longer picks this rung — see
+        // `a_vorbis_track_is_reencoded_instead_of_copied_into_mp4`)...
+        assert_eq!(
+            output_mime(StreamMode::Remux, "h264", Some("vorbis")),
+            "video/mp4; codecs=\"avc1.42E01E\""
+        );
+        // ...while the rung that re-encodes the audio to AAC says so.
+        assert_eq!(
+            output_mime(StreamMode::Audio, "h264", Some("vorbis")),
+            "video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\""
+        );
+
+        // AND a copy of a codec neither side can name in MP4 promises neither
+        // an audio codec nor a video codec it does not carry.
+        assert_eq!(
+            output_mime(StreamMode::Remux, "mpeg4", Some("vorbis")),
+            "video/mp4; codecs=\"mpeg4\""
+        );
+    }
+
+    /// Build an audio-only MP4 carrying an embedded cover picture — the shape
+    /// the capability resolver records as `no_video_stream` (its `first_stream`
+    /// skips `attached_pic`) while ffmpeg's plain `v` specifier still matches
+    /// it. Synthesised rather than committed: it is three cheap lavfi runs, and
+    /// a committed binary would be the only fixture in the tree with a cover.
+    fn build_cover_art_source(dir: &Path) -> std::path::PathBuf {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new(crate::video_processor::get_ffmpeg_path())
+                .args(["-v", "error", "-y"])
+                .args(args)
+                .status()
+                .expect("ffmpeg must run for the test fixture");
+            assert!(status.success(), "building the fixture failed: {args:?}");
+        };
+        let audio = dir.join("cover_art_audio.m4a");
+        let cover = dir.join("cover_art_cover.jpg");
+        let source = dir.join("cover_art.m4a");
+        run(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-c:a",
+            "aac",
+            audio.to_str().expect("utf-8 path"),
+        ]);
+        run(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=320x240:d=1",
+            "-frames:v",
+            "1",
+            cover.to_str().expect("utf-8 path"),
+        ]);
+        run(&[
+            "-i",
+            audio.to_str().expect("utf-8 path"),
+            "-i",
+            cover.to_str().expect("utf-8 path"),
+            "-map",
+            "0:a",
+            "-map",
+            "1:v",
+            "-c:a",
+            "copy",
+            "-c:v",
+            "mjpeg",
+            "-disposition:v:0",
+            "attached_pic",
+            source.to_str().expect("utf-8 path"),
+        ]);
+        source
+    }
+
+    /// The regression the `V` specifier exists for: the capability record skips
+    /// attached cover pictures, so a cover-art-only container is recorded as
+    /// `no_video_stream` and its response advertises `audio/mp4`. Plain
+    /// `-map 0:v:0?` matches the cover anyway and the init segment then carries
+    /// a video track the declared type does not name, which Chromium rejects
+    /// with `CHUNK_DEMUXER_ERROR_APPEND_FAILED` — on every rung of the ladder,
+    /// because they all map the same way.
+    #[tokio::test]
+    async fn a_cover_art_only_source_streams_its_audio_without_the_cover() {
+        let _env_lock = crate::video_processor::tests::acquire_test_env_lock();
+        if !crate::video_processor::ffmpeg_available() {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        }
+        let temp_dir = TempDir::new().unwrap();
+        let source = build_cover_art_source(temp_dir.path());
+
+        // The fixture really is the trigger: ffprobe reports the cover as an
+        // attached picture on a stream of its own, which is what the resolver
+        // skips and what plain `v` would have mapped.
+        let probe = std::process::Command::new(crate::video_processor::get_ffprobe_path())
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type:stream_disposition=attached_pic",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&source)
+            .output()
+            .expect("ffprobe must run");
+        let probe = String::from_utf8_lossy(&probe.stdout);
+        assert!(
+            probe.lines().any(|line| line == "video,1"),
+            "the fixture must carry an attached cover picture, got {probe:?}"
+        );
+
+        // A copy of the source, which is what a client that declared the audio
+        // codec is served: the cover must not ride along.
+        let mut handle = start_stream(StreamMode::Remux, &source, 0.0, "")
+            .await
+            .expect("stream must start");
+        let head = read_head(&mut handle.stdout, b"moov").await;
+        assert!(
+            head.windows(4).any(|w| w == b"soun"),
+            "the audio track must be in the init segment"
+        );
+        assert!(
+            !head.windows(4).any(|w| w == b"vide"),
+            "the attached cover picture must not be mapped into a segment advertised as \
+             audio-only"
+        );
+        // Hang up like a client that got its first fragments, then let the run
+        // finish: a 2 s source would otherwise block ffmpeg on the pipe.
+        drop(handle.stdout);
+        let _ = supervise(handle.child, handle.stderr, handle.progress).await;
     }
 
     #[tokio::test]

@@ -290,16 +290,15 @@ pub async fn detect(ffmpeg: &str, nodes: &[String]) -> Option<HwPlan> {
 
 /// ffmpeg's encoder table, or `None` when ffmpeg cannot be run at all.
 async fn encoder_listing(ffmpeg: &str) -> Option<String> {
-    let output = timeout(
-        PROBE_TIMEOUT,
-        Command::new(ffmpeg)
-            .args(["-hide_banner", "-encoders"])
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let mut command = Command::new(ffmpeg);
+    // `kill_on_drop` is what bounds the run: tokio leaves a dropped child
+    // running otherwise, so a hung ffmpeg would outlive the timeout for the
+    // life of the server (see `probe`, which sets it for the same reason).
+    command
+        .kill_on_drop(true)
+        .args(["-hide_banner", "-encoders"])
+        .stdin(Stdio::null());
+    let output = timeout(PROBE_TIMEOUT, command.output()).await.ok()?.ok()?;
     String::from_utf8(output.stdout).ok()
 }
 
@@ -703,6 +702,54 @@ mod tests {
             "a hanging probe must be cut off, took {:?}",
             started.elapsed()
         );
+    }
+
+    /// The listing runs before every other probe, so a hang there must not
+    /// leave an ffmpeg behind: tokio keeps a dropped `Child` running unless the
+    /// command asked for `kill_on_drop`, and that process would outlive the
+    /// timeout for the life of the server.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_hanging_encoder_listing_is_killed_on_timeout() {
+        // GIVEN an ffmpeg whose `-encoders` listing never returns, reporting the
+        // pid it runs under (the `exec` keeps that pid after the shell is gone)
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("ffmpeg.pid");
+        let ffmpeg = write_fake_ffmpeg(
+            temp.path(),
+            &format!("echo $$ > '{}'\nexec sleep 300\n", pidfile.display()),
+        );
+
+        // WHEN the listing times out
+        assert_eq!(encoder_listing(&ffmpeg).await, None);
+
+        // THEN the timed-out ffmpeg is gone instead of still running
+        let pid: u32 = std::fs::read_to_string(&pidfile)
+            .expect("the fake ffmpeg must have started")
+            .trim()
+            .parse()
+            .expect("a pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while is_live_process(pid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            !is_live_process(pid),
+            "the timed-out listing (pid {pid}) must not survive the timeout"
+        );
+    }
+
+    /// True while `pid` names a running process: a killed-and-reaped one is
+    /// gone from `/proc`, a killed-but-unreaped one sits in state `Z`.
+    #[cfg(target_os = "linux")]
+    fn is_live_process(pid: u32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        // The state is the first field after the (oddly parenthesised) name.
+        stat.rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .is_some_and(|state| !matches!(state, "Z" | "X" | "x"))
     }
 
     #[cfg(unix)]

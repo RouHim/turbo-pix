@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -1350,6 +1350,15 @@ async fn convert_with_fallback(
         };
     };
 
+    // The first attempt's wall clock is charged against the retry: the status
+    // endpoint advertises ONE budget, measured from the claim
+    // (`handlers_video::get_video_status` computes `deadline_ms` from the claim
+    // time), and the viewer stops polling once that countdown plus its grace has
+    // passed. A fresh budget for the retry would let the job outlive the
+    // deadline the client gave up on — a spurious timeout for a conversion that
+    // is still running and will usually finish, caching an artifact nothing
+    // asked for.
+    let started = Instant::now();
     let first = convert_attempt(
         input_path,
         output_path,
@@ -1375,12 +1384,13 @@ async fn convert_with_fallback(
                 message,
                 SOFTWARE_ENCODER
             );
+            let remaining = timeout_duration.saturating_sub(started.elapsed());
             match convert_attempt(
                 input_path,
                 output_path,
                 conversion,
                 codecs,
-                timeout_duration,
+                remaining,
                 ffmpeg_path,
                 progress.wrap(on_progress),
                 None,
@@ -2973,6 +2983,88 @@ pub(crate) mod tests {
             1,
             "a timeout must not trigger a second attempt: {lines}"
         );
+    }
+
+    /// A hardware attempt that fails *late* (a device lost mid-run, an encoder
+    /// that rejects a later frame) must not hand the software retry a fresh
+    /// budget: the status endpoint advertises one deadline from the claim, and
+    /// the viewer stops polling — and reports `video.transcoding.timeout` — once
+    /// that countdown plus its grace has passed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_software_retry_is_charged_against_the_remaining_budget() {
+        // GIVEN an ffmpeg whose hardware attempt fails after 4 s of work while
+        // everything after it (the software retry) needs 4 s more
+        let temp = TempDir::new().unwrap();
+        let log = temp.path().join("args.log");
+        let ffmpeg = temp.path().join("fake-ffmpeg.sh");
+        std::fs::write(
+            &ffmpeg,
+            format!(
+                "#!/usr/bin/env sh\n\
+                 printf '%s\\n' \"$*\" >> '{}'\n\
+                 for last; do :; done\n\
+                 case \"$*\" in\n\
+                 *h264_vaapi*) sleep 4; exit 1 ;;\n\
+                 esac\n\
+                 sleep 4\n\
+                 touch \"$last\"\n\
+                 exit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        crate::video_processor::tests::make_executable(&ffmpeg);
+        let plan = HwPlan::new(HwEncoder::Vaapi, Some("/dev/dri/renderD129".to_string()));
+        let output = temp.path().join("out.mp4");
+
+        // WHEN the conversion runs against a 6 s per-transcode budget
+        let started = Instant::now();
+        let result = convert_with_fallback(
+            Path::new("test-data/test_video_hevc.mp4"),
+            &output,
+            FileConversion::Reencode,
+            SourceCodecs {
+                video: Some("hevc"),
+                audio: None,
+            },
+            Duration::from_secs(6),
+            ffmpeg.to_string_lossy().into_owned(),
+            None,
+            Some(plan),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        // THEN both attempts were made...
+        let lines = std::fs::read_to_string(&log).unwrap();
+        let attempts = lines.lines().filter(|line| !line.is_empty()).count();
+        assert_eq!(attempts, 2, "a plain failure is retried once: {lines}");
+
+        // ...and the retry ran out of the FIRST attempt's remaining ~2 s — not a
+        // fresh 6 s it would have finished inside — so the whole job stays
+        // inside the deadline the status endpoint advertised
+        let err = result.expect_err(
+            "a retry that cannot finish inside the remaining budget must not finish the job",
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("timed out"),
+            "the remaining budget is what ended the retry, got: {message}"
+        );
+        let reported = message
+            .rsplit_once("after ")
+            .and_then(|(_, rest)| rest.trim_end_matches('s').parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("the timeout must name its budget, got: {message}"));
+        assert!(
+            (1..6).contains(&reported),
+            "the retry must be charged the remaining budget, not the full one, got: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(8),
+            "the job outlived its advertised deadline: {elapsed:?}"
+        );
+        assert!(!output.exists(), "no partial artifact may survive");
     }
 
     #[test]

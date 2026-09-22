@@ -2,7 +2,7 @@ use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
 use crate::video_encoder::{self, HwPlan, SOFTWARE_ENCODER};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
@@ -791,19 +791,25 @@ fn remux_temp_path(output_path: &Path) -> PathBuf {
 /// through an atomic temp + rename, so existence means complete.
 pub fn sweep_transcode_debris(cache_dir: &Path, photo_paths: &[PathBuf]) -> usize {
     let mut removed = 0;
+    // One set across the whole sweep, exactly like `FileScanner::scan`: a
+    // directory reachable through two roots (or through a symlink) is swept
+    // once, and a symlink cycle cannot recurse at all.
+    let mut visited_dirs = HashSet::new();
     // The transcode tree only ever holds machine-generated cache files, so
     // any `*.tmp` there is debris. `*.moovfix.*` can also sit here in theory;
     // match it too for symmetry with the source dirs.
     if cache_dir.exists() {
-        removed += sweep_tree(cache_dir, &|n| {
-            n.ends_with(".tmp") || n.contains(".moovfix.")
-        });
+        removed += sweep_tree(
+            cache_dir,
+            &|n| n.ends_with(".tmp") || n.contains(".moovfix."),
+            &mut visited_dirs,
+        );
     }
     // Source dirs hold user files: only the unambiguous moovfix pattern is
     // debris there, never a bare `*.tmp`.
     for dir in photo_paths {
         if dir.exists() {
-            removed += sweep_tree(dir, &|n| n.contains(".moovfix."));
+            removed += sweep_tree(dir, &|n| n.contains(".moovfix."), &mut visited_dirs);
         }
     }
     if removed > 0 {
@@ -812,7 +818,23 @@ pub fn sweep_transcode_debris(cache_dir: &Path, photo_paths: &[PathBuf]) -> usiz
     removed
 }
 
-fn sweep_tree(root: &Path, is_debris: &dyn Fn(&str) -> bool) -> usize {
+/// Recursively remove debris files from `root`.
+///
+/// Cycle-safe: every directory is identified by its canonical path, recorded
+/// in `visited_dirs`, so a symlink loop (`loop -> .`) is swept once and then
+/// skipped. Symlinked directories are still swept (canonicalization makes that
+/// safe). Without the guard the walk runs on the startup path, before
+/// `warp::serve` is ever reached — a loop there never lets the server start.
+fn sweep_tree(
+    root: &Path,
+    is_debris: &dyn Fn(&str) -> bool,
+    visited_dirs: &mut HashSet<PathBuf>,
+) -> usize {
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if !visited_dirs.insert(canonical) {
+        // Already swept through another path — symlink cycle or alias.
+        return 0;
+    }
     let mut removed = 0;
     let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
@@ -820,7 +842,7 @@ fn sweep_tree(root: &Path, is_debris: &dyn Fn(&str) -> bool) -> usize {
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_dir() {
-            removed += sweep_tree(&path, is_debris);
+            removed += sweep_tree(&path, is_debris, visited_dirs);
             continue;
         }
         if entry.file_name().to_str().is_some_and(is_debris) {
@@ -3502,6 +3524,81 @@ pub(crate) mod tests {
         assert!(finished.exists());
         assert!(other_finished.exists());
         assert!(real.exists());
+    }
+
+    /// A `loop -> .` symlink inside a swept tree must not make the traversal
+    /// recurse without bound. The sweep runs on the startup path, before
+    /// `warp::serve` is ever reached, so an unbounded walk there either stalls
+    /// for thousands of redundant levels or overflows the thread stack and
+    /// aborts the process: a library that booted fine can no longer start.
+    /// Modeled on `FileScanner`'s `scan_survives_symlink_cycles`.
+    #[cfg(unix)]
+    #[test]
+    fn sweep_survives_symlink_cycles() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let photos = root.join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        let debris = photos.join("clip.moovfix.12345.mp4");
+        std::fs::write(&debris, b"partial").unwrap();
+        let real = photos.join("clip.mp4");
+        std::fs::write(&real, b"video").unwrap();
+        // A cycle back to the root plus a chain link through it.
+        std::os::unix::fs::symlink(root, root.join("loop")).unwrap();
+        std::os::unix::fs::symlink(root.join("loop"), root.join("loop2")).unwrap();
+
+        // WHEN the sweep runs
+        let removed = sweep_transcode_debris(root, std::slice::from_ref(&photos));
+
+        // THEN it terminates and removes the debris exactly once
+        assert_eq!(removed, 1);
+        assert!(!debris.exists());
+        assert!(real.exists());
+    }
+
+    /// The cycle guard must not degenerate into "never follow a symlink": a
+    /// symlinked subdirectory the scanner would index is swept like any other
+    /// directory.
+    #[cfg(unix)]
+    #[test]
+    fn sweep_follows_legitimate_symlinked_directories() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let debris = target.join("clip.moovfix.99.mp4");
+        std::fs::write(&debris, b"partial").unwrap();
+        let swept = temp.path().join("swept");
+        std::fs::create_dir_all(&swept).unwrap();
+        std::os::unix::fs::symlink(&target, swept.join("linked")).unwrap();
+
+        // WHEN the sweep runs on the root that only reaches the debris through
+        // the symlink
+        let removed = sweep_transcode_debris(&swept, &[]);
+
+        // THEN the symlinked directory was swept
+        assert_eq!(removed, 1);
+        assert!(!debris.exists());
+    }
+
+    /// The fix must not introduce a depth bound: a deep but legitimate tree is
+    /// still swept to its bottom.
+    #[test]
+    fn sweep_reaches_debris_in_deep_legitimate_trees() {
+        let temp = TempDir::new().unwrap();
+        let mut dir = temp.path().to_path_buf();
+        for level in 0..40 {
+            dir = dir.join(format!("level{level}"));
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let debris = dir.join("clip.moovfix.7.mp4");
+        std::fs::write(&debris, b"partial").unwrap();
+
+        // WHEN the sweep runs
+        let removed = sweep_transcode_debris(temp.path(), &[]);
+
+        // THEN the debris 40 levels down is gone
+        assert_eq!(removed, 1);
+        assert!(!debris.exists());
     }
     #[tokio::test]
     async fn clear_transcode_cache_for_hash_removes_all_namespaces() {

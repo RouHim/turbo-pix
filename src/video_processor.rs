@@ -2170,6 +2170,53 @@ pub(crate) mod tests {
         );
     }
 
+    /// The remux rung that `plan` now selects for an MP4-family source whose
+    /// layout is unknown (see `video_capability::plan`) has to survive the
+    /// source it is selected for: a record carrying no layout may well be
+    /// progressive already, so the `-c copy -movflags +faststart` pass must not
+    /// fail or corrupt the delivery. Pinned on the real progressive fixture,
+    /// whose record is exactly that legacy shape whenever the serve-time probe
+    /// could not answer the layout question — the wrong `Direct` this rung
+    /// replaces costs the viewer a whole-file download, a broken remux would
+    /// cost it the playback.
+    #[tokio::test]
+    async fn remux_of_an_already_progressive_source_stays_playable() {
+        let _lock = acquire_test_env_lock();
+        let temp = TempDir::new().unwrap();
+        let source = Path::new("test-data/test_video.mp4");
+        if !source.exists() || !ffmpeg_available() {
+            eprintln!("skipping: fixture or ffmpeg unavailable");
+            return;
+        }
+        // The premise: this source is already progressive, so the remux has no
+        // moov to move and nothing to fix — it is a pure copy.
+        assert!(
+            has_moov_at_start(source).unwrap(),
+            "the fixture must be progressive for this to be the rung under test"
+        );
+
+        let sidecar = temp.path().join("sidecar.mp4");
+        remux_to_faststart_mp4(source, &sidecar, Some("h264"))
+            .await
+            .expect("an already progressive source must remux, not fail");
+
+        assert!(sidecar.exists());
+        assert!(
+            has_moov_at_start(&sidecar).unwrap(),
+            "the sidecar of a progressive source must still be progressive"
+        );
+        // "Must not corrupt the delivery", measured on the artifact the client
+        // would be served: the same video codec, and the whole timeline rather
+        // than a truncated head.
+        assert_eq!(video_stream_field(&sidecar, "codec_name"), "h264");
+        let source_secs = ffprobe_format_duration(source);
+        let sidecar_secs = ffprobe_format_duration(&sidecar);
+        assert!(
+            (sidecar_secs - source_secs).abs() < 0.5,
+            "the sidecar must carry the whole timeline: {source_secs} s vs {sidecar_secs} s"
+        );
+    }
+
     /// The sidecar is served as `action: direct` bytes and played natively, so
     /// it has to carry the sample entry the stream the client just watched
     /// carried. A copied HEVC track out of Matroska (no MP4 sample entry at
@@ -2319,6 +2366,31 @@ pub(crate) mod tests {
     /// The first video stream's MP4 sample-entry tag, as the decoder sees it.
     fn video_codec_tag(path: &Path) -> String {
         video_stream_field(path, "codec_tag_string")
+    }
+
+    /// The container's own duration, in seconds, as ffprobe reports it.
+    fn ffprobe_format_duration(path: &Path) -> f64 {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path)
+            .output()
+            .expect("ffprobe must run");
+        assert!(
+            output.status.success(),
+            "ffprobe failed on {}",
+            path.display()
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .expect("ffprobe must report a duration")
     }
 
     /// The whole-file copy is what a client that declared the source's video

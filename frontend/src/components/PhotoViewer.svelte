@@ -78,6 +78,18 @@
   // the user scrubs somewhere else, and that seek reaches the viewer only
   // through these callbacks (see `rememberStreamIntent`).
   let streamIntentOffset = 0;
+  // How many consecutive stream runs have ended as a LOST run — a delivery
+  // that stopped short of the declared duration (the server's stall watchdog
+  // killing a parked run, a crash, a broken pipe) — and the rung they were
+  // counted for. Such a loss is no evidence that the mode cannot be decoded
+  // (see `claimLostRunRetry`), so the same rung is replayed at the viewer's
+  // own position while this budget lasts; the ladder takes over once it is
+  // spent. `forgetLostRuns` clears the count at every photo, on a user seek
+  // and whenever a run reaches playback — the moves that make the losses
+  // counted so far somebody else's.
+  const LOST_RUN_RETRY_LIMIT = 2;
+  let lostRunRetries = 0;
+  let lostRunMode = null;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -592,6 +604,10 @@
     // idempotent, so the video paths (which also tear down) stay safe.
     destroyStreamPlayer();
     hideTranscodeToast();
+    // The previous photo's losses die with its playback too: a budget is spent
+    // against one photo's runs at one rung, and this photo's playback starts
+    // with a full one (see `claimLostRunRetry`).
+    forgetLostRuns();
     // The previous photo's encoder claim dies with its playback: an image (or
     // any later branch) must never inherit it, and every video path below
     // states its own answer.
@@ -906,6 +922,16 @@
       duration: decision.duration,
       onState: (state) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+        if (state === 'playing') {
+          // The element decoded this run's media and its clock is running, so
+          // the mode demonstrably delivers: the losses counted so far are not a
+          // verdict on it any more, and a later loss starts a fresh count
+          // rather than being the last strike against a rung that works. This
+          // is what keeps a run the stall watchdog kills for a paused viewer
+          // from ever spending the budget — the viewer watched this run before
+          // they paused, which is exactly what `playing` reports.
+          forgetLostRuns();
+        }
         if (state === 'waiting') {
           // The server is holding the request open for a slot: the same wait,
           // so the same escape hatch applies.
@@ -953,7 +979,14 @@
       // the offset of a run still in flight (the server can hold that run for
       // its whole queue wait), so a refusal that arrives afterwards must resume
       // here and not at the offset the user has left.
-      onUserSeek: rememberStreamIntent,
+      //
+      // A user seek is also where the lost-run budget starts over: the losses
+      // counted so far belong to a position the user has just left, and a
+      // replay of one of them would drag them back to it.
+      onUserSeek: (seconds) => {
+        forgetLostRuns();
+        rememberStreamIntent(seconds);
+      },
       onEncoder: (encoder) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
         activeEncoder = encoder;
@@ -998,7 +1031,9 @@
    * user moves on — a newer run replaces it, and a user seek that starts no run
    * drops it outright (see `disarmStreamRetry`). Retries cannot stack (one
    * timer, and the newest refusal replaces it). Every other error is a real
-   * one.
+   * one — a LOST run included: it is no refusal, so it takes the error path,
+   * where the same rung is replayed at the viewer's position before the ladder
+   * is touched (see `onStreamError`).
    *
    * A `503` the player marked `permanent` is one of those real ones, not a
    * wait: it is the server's own answer for a conversion pool that is disabled
@@ -1133,6 +1168,75 @@
   }
 
   /**
+   * Clear the lost-run budget: the losses counted so far belong to a position
+   * or a session the viewer has left, so the next loss starts a fresh count.
+   * The rung the count was spent against stays — a budget is per mode, and only
+   * a mode change (`claimLostRunRetry`) moves it; every other move clears the
+   * count and leaves the rung where it is.
+   */
+  function forgetLostRuns() {
+    lostRunRetries = 0;
+  }
+
+  /**
+   * Whether a lost run may be replayed on its own rung, claiming the retry
+   * when it may.
+   *
+   * A body that ends short of the declared duration is never evidence that the
+   * mode cannot be decoded: the server's stall watchdog kills a run whose
+   * client stopped reading (the parked pump), a crash closes the response, a
+   * broken pipe ends it — and `msePlayer` tags exactly that truncation
+   * `lostRun`. Undecodable bytes report themselves through the element's own
+   * `error` events instead, untagged, and still escalate at once. Burning a
+   * ladder rung for a loss converts a healthy run harder (remux → audio →
+   * transcode) and restarts the video at 0:00, so the same rung is replayed
+   * at the viewer's own position while this budget lasts.
+   *
+   * The budget is bounded and belongs to one rung: a loss on a mode other than
+   * the one being counted starts its own count, and `forgetLostRuns` clears it
+   * at every photo, on a user seek and whenever a run reaches playback. Once
+   * `LOST_RUN_RETRY_LIMIT` consecutive losses are spent, the loss falls
+   * through to the ladder — so a stream that keeps dying still ends on the
+   * ladder's own bounded end, "play original anyway".
+   */
+  function claimLostRunRetry(attemptedMode) {
+    if (attemptedMode !== lostRunMode) {
+      lostRunMode = attemptedMode;
+      lostRunRetries = 0;
+    }
+    if (lostRunRetries >= LOST_RUN_RETRY_LIMIT) return false;
+    lostRunRetries += 1;
+    return true;
+  }
+
+  /**
+   * The offset a run started after a failure plays from: the element's own
+   * position, the only witness of where the viewer actually is.
+   *
+   * `streamIntentOffset` cannot stand in for it: it holds the offset of every
+   * run the player began and of every user seek, so for a video watched
+   * linearly from the start it is still 0 — the reset this exists to avoid.
+   * The element was parked on the failed run's offset and then played from it,
+   * so its position is the position the viewer reached, and a run the server
+   * held for its whole queue wait cannot stand in for it either.
+   *
+   * The position is only usable while the timeline still has media after it: a
+   * run that starts at (or past) the declared duration delivers nothing — the
+   * server still answers with a stream head, its fragment lands past the end,
+   * the player's own `clampDuration` strips it and the pump then reads the
+   * empty buffer as a clean end (msePlayer, the `timestampOffset` guard) — so
+   * a failure that lands there restarts from the beginning of the timeline
+   * instead of parking the viewer on an offset that can only end immediately.
+   */
+  function resumeStreamOffset(decision) {
+    const position = videoEl?.currentTime ?? 0;
+    if (!Number.isFinite(position) || position <= 0) return 0;
+    const duration = decision.duration;
+    if (Number.isFinite(duration) && duration > 0 && position >= duration) return 0;
+    return position;
+  }
+
+  /**
    * A streamed conversion failed for real (spawn error, refused response,
    * undecodable bytes). Self-heal first: climb one rung of the ladder and try
    * the same video again, converted harder. Only when the ladder is exhausted
@@ -1143,6 +1247,14 @@
    * never from `decision.mode`: escalating from the decision would send an
    * `audio` failure back to `remux`, which is the loop the ladder exists to
    * avoid. One step per failure, and the ladder's end bounds the retries.
+   *
+   * A LOST run is not a failure of the mode at all, so it is replayed on the
+   * rung the viewer was watching before the ladder is touched (see
+   * `claimLostRunRetry`). Both restarts play from the viewer's own position
+   * rather than 0:00 (see `resumeStreamOffset`), read here — before the
+   * teardown below and before the next run clears the element (`playStream`
+   * drops its `src`) — because the failed run is the last thing that parked
+   * it.
    */
   function onStreamError(photo, decision, attemptedMode, error) {
     logger?.warn('stream playback failed', error, {
@@ -1151,10 +1263,15 @@
       attemptedMode,
     });
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    const startAt = resumeStreamOffset(decision);
     destroyStreamPlayer();
+    if (error?.lostRun && claimLostRunRetry(attemptedMode)) {
+      playStream(photo, decision, attemptedMode, { startAt });
+      return;
+    }
     const nextMode = nextStreamMode(attemptedMode);
     if (nextMode) {
-      playStream(photo, decision, nextMode);
+      playStream(photo, decision, nextMode, { startAt });
       return;
     }
     // The error toast owns the notice (and its own escape hatch) from here on.

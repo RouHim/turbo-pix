@@ -998,6 +998,11 @@ test('a body that ends while the pump waits still reports the truncation', async
 
   assert.equal(errors.length, 1, 'the killed run must be reported, never swallowed');
   assert.match(errors[0].message, /ended early/);
+  // AND the report says which failure this is: a body that stopped is a LOST
+  // run, not a verdict on the delivered bytes — the viewer replays the same
+  // mode at the viewer's position for it, where a decode failure (reported by
+  // the SourceBuffer's own `error`) escalates at once.
+  assert.equal(errors[0].lostRun, true, 'an early-ended body is a lost run, not a codec failure');
   assert.ok(!states.includes('ended'), 'a body short of the declared duration is not a clean end');
 
   player.destroy();
@@ -1106,6 +1111,10 @@ test('undecodable delivered bytes reach the viewer exactly once', async () => {
   assert.equal(errors.length, 1, 'one failure per run');
   assert.ok(errors[0] instanceof Error, 'the viewer gets a plain playback failure');
   assert.equal(errors[0].status, undefined, 'a decode failure is not a saturation refusal');
+  // The other half of the lost-run distinction: undecodable bytes ARE a
+  // verdict on the mode, so this report carries no lost-run tag and the
+  // viewer's ladder climbs for it instead of replaying the rung.
+  assert.equal(errors[0].lostRun, undefined, 'a decode failure is not a lost run');
 
   player.destroy();
   assert.equal(video.listenerCount('error'), 0, 'destroy detaches the media-error listener');

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { TestHelpers } from '../setup/test-helpers.js';
 
 /**
@@ -34,11 +35,31 @@ function videoHandle(page) {
 }
 
 /**
- * Answer the stream requests for the modes named in `failModes` with bytes the
- * browser cannot decode — the server answered, the delivery is unusable, which
- * is exactly what a remux the client cannot actually play looks like on the
- * wire — and record every mode the app asked for, in request order. The modes
- * not named keep hitting the real server, so a successful rung still plays.
+ * A delivery the browser cannot decode: a real fragmented MP4 whose track does
+ * not match the SourceBuffer's declared type (HEVC bytes into the H.264/AAC
+ * buffer a Matroska remux is typed with). Chromium reports that on the
+ * SourceBuffer and on the element (`MEDIA_ERR_SRC_NOT_SUPPORTED`), which is the
+ * DECODE failure the viewer's ladder answers by climbing one rung at once —
+ * `msePlayer` reports it untagged for exactly that reason.
+ *
+ * Deliberately not a body that merely stops early: Chromium silently ignores
+ * bytes it cannot parse at all (measured: appending `'not-mp4'` or Matroska
+ * bytes to a `video/mp4` buffer fires `updateend` and never `error`), so such a
+ * delivery only ever ends as a truncated run. That is a `lostRun` — the viewer
+ * replays it on its own rung — and it is a different signal from the one the
+ * ladder is for.
+ */
+const UNDECODABLE_MP4 = readFileSync(
+  new URL('../../../test-data/test_video_hevc.mp4', import.meta.url)
+);
+
+/**
+ * Answer the stream requests for the modes named in `failModes` with a delivery
+ * the browser cannot decode (`UNDECODABLE_MP4`) — the server answered, the
+ * delivery is unusable, which is exactly what a remux the client cannot
+ * actually play looks like on the wire — and record every mode the app asked
+ * for, in request order. The modes not named keep hitting the real server, so a
+ * successful rung still plays.
  */
 async function failStreamModes(page, failModes) {
   const requestedModes = [];
@@ -49,13 +70,39 @@ async function failStreamModes(page, failModes) {
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'video/mp4' },
-        body: 'not-mp4',
+        body: UNDECODABLE_MP4,
       });
       return;
     }
     await route.continue();
   });
   return requestedModes;
+}
+
+/**
+ * The byte length of a valid prefix of a fragmented-MP4 delivery: whole
+ * top-level boxes only (`ftyp`, `moov`, `moof` and `mdat` are all
+ * size-prefixed). A cut inside a box hands Chromium a partial box, which is a
+ * parse failure — a DECODE error on the element, the signal the ladder still
+ * answers — where the run under test is one that merely stopped delivering.
+ *
+ * `targetBytes` bounds the prefix; the run's initialization segment
+ * (`ftyp` + `moov`) is always kept whole, so a target of 0 is exactly the
+ * delivery that was killed before its first fragment: the run attaches and
+ * buffers no coded frame at all.
+ */
+function mp4PrefixLength(body, targetBytes) {
+  let offset = 0;
+  let initSegmentEnd = 0;
+  while (offset + 8 <= body.length) {
+    const size = body.readUInt32BE(offset);
+    if (size < 8 || offset + size > body.length) break;
+    const type = body.toString('latin1', offset + 4, offset + 8);
+    if (initSegmentEnd > 0 && offset + size > targetBytes) break;
+    offset += size;
+    if (type === 'moov') initSegmentEnd = offset;
+  }
+  return offset;
 }
 
 test.describe('On-the-fly streaming playback', () => {
@@ -394,8 +441,13 @@ test.describe('On-the-fly streaming playback', () => {
       { timeout: 30_000 }
     );
 
-    // Exactly one rung: the undecodable remux becomes audio, and the ladder
-    // never falls back to the rung that just failed.
+    // Exactly one rung, at once: the undecodable remux becomes audio, and the
+    // ladder never falls back to the rung that just failed. This is the DECODE
+    // signal's behaviour and only its: a run whose body merely stops early is a
+    // LOST run, which the viewer replays on its own rung before the ladder is
+    // touched (see the two lost-run specs below), so a sequence that climbs
+    // here proves the element's own `error` is still read as a verdict on the
+    // mode.
     expect(requestedModes[0]).toBe('remux');
     expect(requestedModes.filter((mode) => mode === 'remux')).toHaveLength(1);
     expect(new Set(requestedModes.slice(1))).toEqual(new Set(['audio']));
@@ -433,6 +485,190 @@ test.describe('On-the-fly streaming playback', () => {
     // Containment alone is satisfied by a conversion request as well, so the
     // file claim needs its own negative.
     await expect(video).not.toHaveAttribute('src', /transcode=true/);
+  });
+
+  test('a lost stream run replays the same mode at the viewer’s position', async ({ page }) => {
+    test.setTimeout(90_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    // The ladder only runs on a stream delivery: a cached artifact would be
+    // played as a file, with no stream request to fail.
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+
+    // Throttle the delivery: the whole 20 s remux otherwise arrives in a few
+    // hundred milliseconds, the seek below lands inside the buffered range
+    // (and so starts no run at all) and the viewer would still be parked at
+    // 0:00 — the one position a resume cannot be told apart from a restart.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 40,
+      downloadThroughput: 150 * 1024,
+      uploadThroughput: 150 * 1024,
+      connectionType: 'cellular3g',
+    });
+
+    // The run the seek starts is served a body that stops after its
+    // initialization segment — what the server's stall watchdog leaves behind
+    // when it kills a run whose client stopped reading (video_stream.rs) — and
+    // never what undecodable bytes look like: those raise `error` on the
+    // element, which is the signal the ladder still answers (see
+    // `failStreamModes`). Every other request reaches the real server, so the
+    // run that follows the loss plays.
+    //
+    // The element's own position is read here, as the replay request goes out:
+    // the element is the only witness of where the viewer ended up — the seek
+    // may be clamped by the buffered range — and `playStream` has already
+    // dropped its `src`, so the highest position it reached is all that is left
+    // of it (the page-side recorder below keeps it).
+    const requested = [];
+    let elementAtLoss = null;
+    await page.route('**/video/stream*', async (route) => {
+      const url = new URL(route.request().url());
+      const start = Number(url.searchParams.get('start'));
+      if (requested.length === 1) {
+        const response = await route.fetch();
+        const body = await response.body();
+        requested.push({ mode: url.searchParams.get('mode'), start });
+        await route.fulfill({ response, body: body.subarray(0, mp4PrefixLength(body, 0)) });
+        return;
+      }
+      if (requested.length === 2) {
+        elementAtLoss = await page.evaluate(() => window.__maxTime);
+      }
+      requested.push({ mode: url.searchParams.get('mode'), start });
+      await route.continue();
+    });
+
+    await openVideo(page, mkv);
+    const video = videoHandle(page);
+    // The viewer has to be somewhere when the delivery stops, or "resumed at
+    // the viewer's position" cannot be told from a restart at 0:00.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.currentTime > 1;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+    // From here on the element's highest position is the position the loss will
+    // land on: a seek the element cannot honour is clamped to its buffered
+    // range, so the target is not what the viewer reaches.
+    await video.evaluate((el) => {
+      window.__maxTime = el.currentTime;
+      window.__maxTimer = setInterval(() => {
+        if (el.currentTime > window.__maxTime) window.__maxTime = el.currentTime;
+      }, 20);
+    });
+    // Seek far outside the buffered range: the player answers with a run at
+    // that offset, and that is the run the watchdog kill lands on.
+    await video.evaluate((el) => {
+      el.currentTime = 15;
+    });
+
+    // The loss has to answer with a third request, and there is no fourth
+    // unless the ladder climbed.
+    const followUp = () => (requested.length >= 3 && elementAtLoss !== null ? requested[2] : null);
+    await expect.poll(followUp, { timeout: 30_000 }).not.toBeNull();
+    await video.evaluate(() => clearInterval(window.__maxTimer));
+
+    expect(requested[0]).toEqual({ mode: 'remux', start: 0 });
+    expect(requested[1].mode, 'the seek must be answered with a run').toBe('remux');
+    const replay = followUp();
+    // A body that stopped is no verdict on the mode: the SAME rung is replayed,
+    // never the next one — climbing would convert a healthy run harder and
+    // restart the video at 0:00, which is the whole defect.
+    expect(replay.mode, 'a lost run must not climb the ladder').toBe('remux');
+    // AND it resumes where the viewer is: the element's own position, never
+    // 0:00 and never the run's own start offset (which is 0 here).
+    expect(elementAtLoss, 'the viewer must be mid-file for this test').toBeGreaterThan(0.5);
+    expect(replay.start, 'the replay must resume at the viewer’s position').toBeCloseTo(
+      elementAtLoss,
+      0
+    );
+    // Nothing heavier was asked for at all.
+    expect(requested.filter((request) => request.mode !== 'remux')).toEqual([]);
+
+    // The replay is a real run, not a dead end: the video plays on from the
+    // position it was resumed at.
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      connectionType: 'none',
+    });
+    await page.waitForFunction(
+      (from) => {
+        const el = document.querySelector('#viewer-video');
+        return el && el.readyState >= 2 && el.currentTime > from + 1;
+      },
+      elementAtLoss,
+      { timeout: 30_000 }
+    );
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
+
+  test('a stream that keeps being lost still ends on the ladder', async ({ page }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+
+    // EVERY run is served a body that stops after its initialization segment:
+    // no coded frame ever reaches the element, so nothing ever plays and the
+    // lost-run budget is never refreshed — the case its bound exists for. The
+    // ladder must still take over, one rung per spent budget, and end at its
+    // own end instead of replaying one mode forever.
+    //
+    // Each mode's initialization segment is captured from its own real run
+    // once and replayed afterwards: it is what types the SourceBuffer the run
+    // attaches (`x-turbopix-mime`), so another rung's bytes would be a MIME
+    // mismatch — a decode failure, not the lost run this test is about.
+    const requestedModes = [];
+    const initSegments = new Map();
+    await page.route('**/video/stream*', async (route) => {
+      const mode = new URL(route.request().url()).searchParams.get('mode');
+      requestedModes.push(mode);
+      const captured = initSegments.get(mode);
+      if (captured) {
+        await route.fulfill({
+          status: 200,
+          headers: {
+            'content-type': 'video/mp4',
+            'x-turbopix-mime': captured.mime,
+          },
+          body: captured.body,
+        });
+        return;
+      }
+      const response = await route.fetch();
+      const body = await response.body();
+      const prefix = body.subarray(0, mp4PrefixLength(body, 0));
+      initSegments.set(mode, { body: prefix, mime: response.headers()['x-turbopix-mime'] });
+      await route.fulfill({ response, body: prefix });
+    });
+
+    await openVideo(page, mkv);
+    await expect(page.locator('.transcode-toast')).toContainText('Video conversion failed', {
+      timeout: 30_000,
+    });
+    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
+
+    // The run itself plus the two replays one budget allows, per rung, and then
+    // the next rung: a mode that keeps losing is never retried a fourth time,
+    // and the ladder's end still terminates.
+    expect(requestedModes).toEqual([
+      'remux',
+      'remux',
+      'remux',
+      'audio',
+      'audio',
+      'audio',
+      'transcode',
+      'transcode',
+      'transcode',
+    ]);
   });
 
   test('a seek restart keeps the declared duration', async ({ page }) => {

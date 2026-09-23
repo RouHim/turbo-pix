@@ -78,6 +78,15 @@
   // the user scrubs somewhere else, and that seek reaches the viewer only
   // through these callbacks (see `rememberStreamIntent`).
   let streamIntentOffset = 0;
+  // The offset the run the player most recently began plays from, as that run
+  // reported it through `onRunStart`. A failure that has to resume reads it
+  // together with the element's own position (see `resumeStreamOffset`): a run
+  // that never attached leaves the element at 0 — `playStream` clears its
+  // source at the start of every run, and only a run past its first append
+  // re-parks it — so this is the only witness of where such a run was asked to
+  // play. Kept apart from `streamIntentOffset`, which every user seek moves
+  // too, and therefore says nothing about the run currently in flight.
+  let streamRunStartOffset = 0;
   // How many consecutive stream runs have ended as a LOST run — a delivery
   // that stopped short of the declared duration (the server's stall watchdog
   // killing a parked run, a crash, a broken pipe) — and the rung they were
@@ -962,8 +971,10 @@
       // restarts for a seek inside itself — makes a retry armed for an earlier
       // refusal obsolete, and states the offset this run plays from, which is
       // the newest start intent as long as nothing newer lands; see
-      // rememberStreamIntent.
-      onRunStart: rememberStreamIntent,
+      // rememberStreamIntent. That offset is also kept as the run's own start
+      // offset, for a failure that has to resume without the element as a
+      // witness; see rememberRunStart.
+      onRunStart: rememberRunStart,
       // A position the user picked on the element itself is the other move that
       // leaves a refused offset behind: either this seek starts a run for the
       // new target (which supersedes the refused one and, if that run is
@@ -1138,6 +1149,21 @@
   }
 
   /**
+   * Record the offset the run the player just began plays from, and keep the
+   * newest-position bookkeeping `onRunStart` has always done.
+   *
+   * The offset goes to a field of its own, not to `streamIntentOffset`: that
+   * one is also moved by every user seek, so it cannot say what the run
+   * currently in flight was asked to play — and it is the failed run's own
+   * start offset that has to survive its failure, because a run that never
+   * attached leaves the element reading 0 (see `resumeStreamOffset`).
+   */
+  function rememberRunStart(seconds) {
+    if (Number.isFinite(seconds)) streamRunStartOffset = seconds;
+    rememberStreamIntent(seconds);
+  }
+
+  /**
    * Arm the one pending saturation retry. `destroyStreamPlayer` disarms it, so
    * a closed viewer or a new photo never leaves a retry running, and both a
    * newer run (`onRunStart`) and a user seek (`onUserSeek`) do.
@@ -1210,30 +1236,51 @@
   }
 
   /**
-   * The offset a run started after a failure plays from: the element's own
-   * position, the only witness of where the viewer actually is.
+   * The offset a run started after a failure plays from: the larger of the
+   * element's own position and the offset the failed run was started at.
    *
-   * `streamIntentOffset` cannot stand in for it: it holds the offset of every
-   * run the player began and of every user seek, so for a video watched
-   * linearly from the start it is still 0 — the reset this exists to avoid.
-   * The element was parked on the failed run's offset and then played from it,
-   * so its position is the position the viewer reached, and a run the server
-   * held for its whole queue wait cannot stand in for it either.
+   * The element's position is the witness of a run that ATTACHED: it was parked
+   * on that run's offset and then played from it, so its position is the
+   * position the viewer reached. `streamIntentOffset` cannot stand in for it —
+   * it holds the offset of every run the player began and of every user seek,
+   * so for a video watched linearly from the start it is still 0, the reset
+   * this exists to avoid — and a run the server held for its whole queue wait
+   * cannot stand in for it either.
    *
-   * The position is only usable while the timeline still has media after it: a
+   * A run that never attached left no such trace: `playStream` clears the
+   * element's source at the start of every run (`removeAttribute('src')` plus
+   * `load()`) and only a run that reaches its first append re-parks it, so the
+   * element still reads 0 while such a run reports its failure — a refused
+   * response, a body that delivered no bytes ("ffmpeg dying before the init
+   * segment looks identical"). The offset that run was asked to play from
+   * (`streamRunStartOffset`, reported by its own `onRunStart`) is then the only
+   * witness, and it is the position the viewer is standing on: it came from the
+   * run that just died there or from the user's own seek. Taking the larger of
+   * the two therefore keeps all three cases — a parked or playing run that died
+   * keeps the position the viewer reached (the element's position wins), a run
+   * that never attached keeps the position its own start offset stands for, and
+   * a run that started at 0 and never attached still restarts at 0.
+   *
+   * The offset is only usable while the timeline still has media after it: a
    * run that starts at (or past) the declared duration delivers nothing — the
    * server still answers with a stream head, its fragment lands past the end,
    * the player's own `clampDuration` strips it and the pump then reads the
    * empty buffer as a clean end (msePlayer, the `timestampOffset` guard) — so
    * a failure that lands there restarts from the beginning of the timeline
    * instead of parking the viewer on an offset that can only end immediately.
+   * The guard belongs to the offset the next run would start at, which is why
+   * it is applied to the winner and not to the element alone.
    */
   function resumeStreamOffset(decision) {
     const position = videoEl?.currentTime ?? 0;
-    if (!Number.isFinite(position) || position <= 0) return 0;
+    const resumed = Math.max(
+      Number.isFinite(position) ? position : 0,
+      Number.isFinite(streamRunStartOffset) ? streamRunStartOffset : 0
+    );
+    if (resumed <= 0) return 0;
     const duration = decision.duration;
-    if (Number.isFinite(duration) && duration > 0 && position >= duration) return 0;
-    return position;
+    if (Number.isFinite(duration) && duration > 0 && resumed >= duration) return 0;
+    return resumed;
   }
 
   /**
@@ -1253,8 +1300,9 @@
    * `claimLostRunRetry`). Both restarts play from the viewer's own position
    * rather than 0:00 (see `resumeStreamOffset`), read here — before the
    * teardown below and before the next run clears the element (`playStream`
-   * drops its `src`) — because the failed run is the last thing that parked
-   * it.
+   * drops its `src`). The element's own position belongs to the run that just
+   * died on it; the offset that run was started at is the witness that
+   * survives a run which never attached at all.
    */
   function onStreamError(photo, decision, attemptedMode, error) {
     logger?.warn('stream playback failed', error, {

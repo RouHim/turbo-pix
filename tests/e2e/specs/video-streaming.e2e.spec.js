@@ -445,13 +445,124 @@ test.describe('On-the-fly streaming playback', () => {
     // ladder never falls back to the rung that just failed. This is the DECODE
     // signal's behaviour and only its: a run whose body merely stops early is a
     // LOST run, which the viewer replays on its own rung before the ladder is
-    // touched (see the two lost-run specs below), so a sequence that climbs
-    // here proves the element's own `error` is still read as a verdict on the
-    // mode.
+    // touched (see the lost-run spec below), so a sequence that climbs here
+    // proves the element's own `error` is still read as a verdict on the mode.
     expect(requestedModes[0]).toBe('remux');
     expect(requestedModes.filter((mode) => mode === 'remux')).toHaveLength(1);
     expect(new Set(requestedModes.slice(1))).toEqual(new Set(['audio']));
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
+  });
+
+  test('a rung that fails before attaching resumes at the position the viewer holds', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    // The ladder only runs on a stream delivery: a cached artifact would be
+    // played as a file, with no stream request to fail.
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+
+    // The seek below must land outside the buffered range, or it starts no run
+    // at all and the restart this test is about never happens: throttle the
+    // delivery so the 20 s remux arrives over seconds instead of at once — the
+    // same reason the seek-restart spec throttles.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 40,
+      downloadThroughput: 150 * 1024,
+      uploadThroughput: 150 * 1024,
+      connectionType: 'cellular3g',
+    });
+
+    // Every stream request the app makes, in request order, with the mode and
+    // the offset it asked for. Recorded from the page rather than from the
+    // route below, because the FIRST one — the run the open starts — is served
+    // by the real server: the viewer has to reach a real position for this test
+    // to have one to lose.
+    const requests = [];
+    page.on('request', (request) => {
+      if (!request.url().includes('/video/stream')) return;
+      const params = new URL(request.url()).searchParams;
+      requests.push({ mode: params.get('mode'), start: Number(params.get('start')) });
+    });
+
+    await openVideo(page, mkv);
+    const video = videoHandle(page);
+    // Play until the element is really rolling, then seek past what the
+    // throttled delivery has reached: the target is unbuffered, so the player
+    // answers with a new run at the offset the user picked.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#viewer-video');
+        return (
+          el &&
+          el.currentTime > 0 &&
+          el.buffered.length > 0 &&
+          el.buffered.end(el.buffered.length - 1) < 15
+        );
+      },
+      null,
+      { timeout: 30_000 }
+    );
+
+    // The rung the seek restarts — and every rung after it — is answered by
+    // this route: the restart with bytes this browser cannot decode (a DECODE
+    // failure, so the ladder climbs one rung at once, like the escalate spec),
+    // the rungs after it with a refusal, which never attaches to the element at
+    // all. Registered only now, so the open's own run reached the real server.
+    await page.route('**/video/stream*', async (route) => {
+      const mode = new URL(route.request().url()).searchParams.get('mode');
+      if (mode === 'remux') {
+        await route.fulfill({
+          status: 200,
+          headers: { 'content-type': 'video/mp4' },
+          body: UNDECODABLE_MP4,
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: 'conversion failed' }),
+      });
+    });
+
+    await video.evaluate((el) => {
+      el.currentTime = 15;
+    });
+    // The seek's own run is what makes the offsets below meaningful: wait for it
+    // before releasing the throttle, so the rungs under test are not racing the
+    // delivery of the run the seek replaced.
+    await expect.poll(() => requests.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      connectionType: 'none',
+    });
+
+    // The ladder ends on its last rung, with the escape hatch: one failure per
+    // rung, three rungs.
+    await expect(page.locator('.transcode-toast')).toContainText('Video conversion failed', {
+      timeout: 30_000,
+    });
+    expect(requests.map((r) => r.mode)).toEqual(['remux', 'remux', 'audio', 'transcode']);
+    // The seek's own run starts where the user put the playhead ...
+    expect(requests[1].start).toBeGreaterThan(10);
+
+    // ... and the rung that failed before attaching must resume THERE. That
+    // audio run never reached its first append, so the element reads 0 when it
+    // reports its refusal (playStream clears the source for every run, and only
+    // a run past its first append re-parks the element); the offset that run was
+    // started at is the only witness of where the viewer is, and dropping it
+    // restarts playback at 0:00 on a heavier conversion — the position the
+    // lost-run replay already preserves for a run that died while playing.
+    expect(requests[2].start).toBeGreaterThan(10);
+    expect(requests[3].start).toBeGreaterThan(10);
+    expect(requests[3].start).toBeLessThan(16);
   });
 
   test('an exhausted ladder shows the error and keeps the original playable', async ({ page }) => {

@@ -91,7 +91,13 @@ pub struct ResolvedCapabilities {
     pub family: ContainerFamily,
     pub bit_depth: Option<u32>,
     pub audio_codec: Option<String>,
-    pub moov_at_start: bool,
+    /// `Some(true)` / `Some(false)` when a pass established the layout (the
+    /// probe's own verdict, or the fact the record already stored), `None` when
+    /// none ever did: the record carries no `moov_at_start` key and the moov
+    /// pass yielded no verdict. Never invented — `plan` reads `None` as "not
+    /// known to be progressive" and takes the remux rung for an MP4-family
+    /// source instead of the whole-file download `Direct` costs.
+    pub moov_at_start: Option<bool>,
     pub duration_secs: Option<f64>,
     /// True when this call had to probe the file (incomplete record).
     pub probed: bool,
@@ -112,6 +118,19 @@ pub fn record_is_complete(photo: &Photo) -> bool {
         .and_then(Value::as_str)
         .is_some_and(|c| !c.is_empty())
         || video.get("no_video_stream").and_then(Value::as_bool) == Some(true)
+}
+
+/// The layout the record itself stores: `Some(true)` / `Some(false)` when the
+/// key is there, `None` when it is absent — the state [`record_is_complete`]
+/// documents as "never probed", NOT "true". `Photo::moov_at_start` cannot
+/// answer this: it reads an absent key as `true`, which is the fact the scanner
+/// never wrote rather than a verdict on the file.
+fn stored_moov_at_start(photo: &Photo) -> Option<bool> {
+    photo
+        .metadata
+        .get("video")
+        .and_then(|video| video.get("moov_at_start"))
+        .and_then(Value::as_bool)
 }
 
 /// First stream of `kind` that is not an attached cover picture.
@@ -205,13 +224,13 @@ impl ResolvedCapabilities {
             family: ContainerFamily::from_record(photo.container(), &photo.filename),
             bit_depth: photo.bit_depth(),
             audio_codec: photo.audio_codec().map(str::to_string),
-            moov_at_start: photo.moov_at_start(),
+            moov_at_start: stored_moov_at_start(photo),
             duration_secs: photo.duration.filter(|d| *d > 0.0),
             probed: false,
         }
     }
 
-    fn merged(photo: &Photo, patch: &CapabilityPatch, moov_at_start: bool) -> Self {
+    fn merged(photo: &Photo, patch: &CapabilityPatch, moov_at_start: Option<bool>) -> Self {
         let container = patch
             .container
             .clone()
@@ -337,9 +356,16 @@ async fn resolve_within(
     // `get_video_file`'s `Direct` arm serves the original moov-at-end file
     // without re-checking the layout — the browser downloads the whole file
     // before the first frame instead of taking the remux rung, permanently.
-    // Absent means "never wrote a false value" (`Photo::moov_at_start`), which
-    // is the same default a record fresh from the scanner carries.
-    let moov_at_start = moov_verdict.unwrap_or_else(|| photo.moov_at_start());
+    //
+    // A record with no key at all has no such fact to stand on, and inventing
+    // "at start" is exactly as wrong there: it is the shape this probe exists
+    // for (every row indexed before the scanner captured the layout, and an
+    // unchanged file never gains a key — `photo_processor`'s unchanged branch
+    // reuses the stored value and `maybe_fix_moov_for_video` runs only for
+    // new/changed files), so a pass killed at `PROBE_PASS_TIMEOUT` on a large
+    // source would complete it with a layout no pass ever established and serve
+    // it as `Direct` for good. The layout stays UNKNOWN instead.
+    let moov_at_start = moov_verdict.or_else(|| stored_moov_at_start(photo));
 
     let mut video = serde_json::Map::new();
     video.insert("capability_version".to_string(), json!(CAPABILITY_VERSION));
@@ -374,11 +400,15 @@ async fn resolve_within(
     // (the version marker) whose `audio_codec` key is absent — a different fact
     // from "never probed", which is the record without the marker.
     video.insert("audio_codec".to_string(), json!(patch.audio_codec));
-    // The probe's verdict when it has one, the record's own fact when the moov
-    // pass yielded none: either way the record is completed with a layout it
-    // can be trusted for, which is what keeps the failed pass from wedging the
-    // probe (the request is answered and later ones need no probe at all).
-    video.insert("moov_at_start".to_string(), json!(moov_at_start));
+    // The probe's verdict when it has one, the record's own stored fact when
+    // the moov pass yielded none — and NOTHING when neither exists, so the key
+    // stays absent and `record_is_complete`'s "never probed" reading stays
+    // true. The record completes either way (the version marker and the facts
+    // above are real), which is what keeps the failed pass from wedging the
+    // probe: the request is answered and later ones need no probe at all.
+    if let Some(moov_at_start) = moov_at_start {
+        video.insert("moov_at_start".to_string(), json!(moov_at_start));
+    }
 
     // One transaction for both writes: a capability record is either fully
     // written or not written at all. Written as two statements, a failed
@@ -525,7 +555,7 @@ mod tests {
         assert_eq!(first.codec, "h264");
         assert_eq!(first.container.as_deref(), Some("mov"));
         assert_eq!(first.bit_depth, Some(8));
-        assert!(first.moov_at_start);
+        assert_eq!(first.moov_at_start, Some(true));
         assert!(first.duration_secs.is_some_and(|d| d > 0.0));
 
         let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
@@ -1158,8 +1188,9 @@ mod tests {
         );
         assert!(resolved.probed, "the facts pass succeeded");
         assert_eq!(resolved.codec, "h264");
-        assert!(
-            !resolved.moov_at_start,
+        assert_eq!(
+            resolved.moov_at_start,
+            Some(false),
             "a killed trace pass must keep the stored layout, not invent 'at start'"
         );
         // AND the decision that reads that fact still sends this file to the
@@ -1189,6 +1220,113 @@ mod tests {
         assert_eq!(
             stored.metadata["video"]["moov_at_start"], false,
             "the stored layout must survive the failed pass"
+        );
+
+        // AND the permit came back
+        assert_eq!(PROBE_SEMAPHORE.available_permits(), before);
+    }
+
+    /// The same killed pass on the record that stores NO layout at all: every
+    /// row indexed before the scanner captured one, which is the shape this
+    /// probe exists for (`record_is_complete` needs `capability_version`, which
+    /// only the probe writes, and an unchanged file never gains a key —
+    /// `photo_processor`'s unchanged branch reuses the stored value and
+    /// `maybe_fix_moov_for_video` runs only for new/changed files). No pass
+    /// established a layout here, so the probe must write none: completing the
+    /// record with an invented `moov_at_start: true` would make `plan` read a
+    /// progressive-looking MP4 and return `Delivery::Direct`, and
+    /// `get_video_file`'s `Direct` arm never re-checks the layout — a
+    /// moov-at-end original would then be downloaded whole before the first
+    /// frame on every later open, permanently, because a completed record is
+    /// never probed again.
+    ///
+    /// The record still completes: the version marker and the derived facts are
+    /// real, and the layout simply stays unknown — which is itself the fact
+    /// `plan` needs to take the remux rung instead.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_killed_moov_pass_writes_no_layout_it_never_established() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let counter_path = temp_dir.path().join("probe_count");
+        let counter = counter_path.display().to_string();
+        // MP4-family facts on the first pass (so the moov pass runs at all) and
+        // a parked moov pass on all later ones.
+        let json = r#"{"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"5.0"},"streams":[{"codec_type":"video","codec_name":"h264","pix_fmt":"yuv420p","disposition":{"attached_pic":0}}]}"#;
+        let script = write_fake_ffprobe(
+            temp_dir.path(),
+            "hanging_moov_ffprobe.sh",
+            &format!(
+                "printf 'x\\n' >> '{counter}'\n\
+                 for arg in \"$@\"; do\n\
+                 if [ \"$arg\" = trace ]; then exec sleep 30; fi\n\
+                 done\n\
+                 printf '%s' '{json}'\n"
+            ),
+        );
+        let _guard = crate::video_processor::tests::TestEnvGuard::set(
+            "FFPROBE_PATH",
+            script.to_str().unwrap(),
+        );
+
+        let pool = crate::db::create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-moov-unknown");
+        let mut photo = test_photo(&hash);
+        photo.file_path = temp_dir
+            .path()
+            .join("video.mp4")
+            .to_string_lossy()
+            .into_owned();
+        photo.filename = "video.mp4".to_string();
+        // The record a legacy row carries: the scanner's own facts, no
+        // `moov_at_start` key and no capability marker, so it is still probed.
+        photo.metadata = json!({ "video": { "codec": "h264", "container": "mp4" } });
+        assert!(!record_is_complete(&photo), "the row must still be probed");
+        photo.create(&pool).await.expect("create");
+
+        let before = PROBE_SEMAPHORE.available_permits();
+        // WHEN the moov pass outlives its deadline
+        let resolved = resolve_within(&pool, &photo, Duration::from_millis(150)).await;
+
+        // THEN no layout is invented for this request either
+        assert!(resolved.probed, "the facts pass succeeded");
+        assert_eq!(resolved.codec, "h264");
+        assert_eq!(
+            resolved.moov_at_start, None,
+            "a killed trace pass establishes nothing about a record that stores nothing"
+        );
+        assert_eq!(
+            crate::video_capability::plan(
+                &resolved,
+                &crate::video_capability::ClientCodecs::parse(Some("h264-8,aac"))
+            ),
+            crate::video_capability::Delivery::StreamRemux,
+            "an MP4 whose layout is unknown must never be decided as direct"
+        );
+
+        // AND the record completed WITHOUT a layout: the facts are real, the
+        // layout stays "never probed"
+        let stored = Photo::find_by_hash(&pool, &hash).await.unwrap().unwrap();
+        assert_eq!(stored.metadata["video"]["capability_version"], 1);
+        assert_eq!(stored.metadata["video"]["codec"], "h264");
+        assert!(
+            stored.metadata["video"].get("moov_at_start").is_none(),
+            "the probe must not persist a layout no pass established: {}",
+            stored.metadata["video"]
+        );
+        assert!(
+            record_is_complete(&stored),
+            "the record must still complete, so the probe is never re-run for it"
+        );
+
+        // AND every later decision — which reads that completed record instead
+        // of probing — still takes the remux rung, so the unknown layout cannot
+        // become a permanent whole-file download either.
+        assert_eq!(
+            crate::video_capability::plan(
+                &ResolvedCapabilities::from_record(&stored),
+                &crate::video_capability::ClientCodecs::parse(Some("h264-8,aac"))
+            ),
+            crate::video_capability::Delivery::StreamRemux,
         );
 
         // AND the permit came back

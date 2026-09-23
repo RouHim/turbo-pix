@@ -171,8 +171,15 @@ pub fn plan(caps: &ResolvedCapabilities, client: &ClientCodecs) -> Delivery {
 
     if video_ok && audio_ok {
         // Same container class the browser understands, and — for MP4-family —
-        // a progressive layout.
-        let layout_ok = !caps.family.has_moov_layout() || caps.moov_at_start;
+        // a layout that is KNOWN to be progressive. An unknown layout is not
+        // one: the record that carries no `moov_at_start` key is exactly the
+        // legacy row whose `-v trace` pass could fail or be killed (see
+        // `video_probe::resolve`), and handing it to the element as `Direct`
+        // makes the browser download the whole file before the first frame when
+        // it turns out to be moov-at-end. The remux rung is a `-c copy`
+        // faststart sidecar — cheap, correct, and already faststart when the
+        // source was.
+        let layout_ok = !caps.family.has_moov_layout() || caps.moov_at_start == Some(true);
         if direct_container_ok(caps.family) && layout_ok {
             return Delivery::Direct;
         }
@@ -291,10 +298,24 @@ mod tests {
             family: ContainerFamily::from_record(Some(container), "video.mp4"),
             bit_depth,
             audio_codec: audio.map(str::to_string),
-            moov_at_start: moov,
+            moov_at_start: Some(moov),
             duration_secs: Some(10.0),
             probed: true,
         }
+    }
+
+    /// The same source with NO established layout: what `plan` sees for an
+    /// MP4-family record that carries no `moov_at_start` key whose moov pass
+    /// yielded no verdict (`video_probe`'s `None`), where the layout is simply
+    /// unknown rather than known to be progressive.
+    fn caps_without_layout(
+        codec: &str,
+        container: &str,
+        audio: Option<&str>,
+    ) -> ResolvedCapabilities {
+        let mut caps = caps(codec, container, Some(8), audio, true);
+        caps.moov_at_start = None;
+        caps
     }
 
     fn client_all() -> ClientCodecs {
@@ -331,6 +352,46 @@ mod tests {
                 &web_client()
             ),
             Delivery::StreamRemux
+        );
+    }
+
+    #[test]
+    fn an_unknown_mp4_layout_takes_the_remux_rung() {
+        // An MP4-family source whose layout no pass ever established — the
+        // legacy record with no `moov_at_start` key whose `-v trace` pass
+        // failed or was killed (see `video_probe::resolve_within`) — must not
+        // be handed to the element as `Direct`: if the file turns out to be
+        // moov-at-end, the browser downloads all of it before the first frame,
+        // permanently, because a completed record is never probed again. The
+        // lossless `-c copy` remux is the cheap and correct rung instead.
+        let unknown = caps_without_layout("h264", "mp4", Some("aac"));
+        assert_eq!(unknown.moov_at_start, None, "the premise: layout unknown");
+        assert_eq!(plan(&unknown, &web_client()), Delivery::StreamRemux);
+
+        // The layout is only consulted for MP4-family containers: a Matroska
+        // source has no moov to be at either end of, so an unknown flag changes
+        // nothing about its (already remuxed) delivery.
+        assert_eq!(
+            plan(
+                &caps_without_layout("h264", "matroska", Some("aac")),
+                &web_client()
+            ),
+            Delivery::StreamRemux
+        );
+        let webm = ResolvedCapabilities {
+            family: ContainerFamily::Webm,
+            ..caps_without_layout("vp9", "webm", Some("opus"))
+        };
+        assert_eq!(plan(&webm, &client_all()), Delivery::Direct);
+
+        // A known-progressive source still plays directly: the conservative
+        // reading is about the unknown layout, not a blanket refusal.
+        assert_eq!(
+            plan(
+                &caps("h264", "mp4", Some(8), Some("aac"), true),
+                &web_client()
+            ),
+            Delivery::Direct
         );
     }
 

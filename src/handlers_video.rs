@@ -4579,4 +4579,50 @@ mod tests {
 
         drop(held);
     }
+
+    /// The body the client's disabled-pool detection keys on. `msePlayer`'s
+    /// `refusesPermanently` reads a 503 whose JSON names the disabled pool, and
+    /// `PhotoViewer` then ends on the ladder's failure notice instead of
+    /// re-requesting a slot that can never free; the wording is what tells it
+    /// apart from the saturation refusal above, which the viewer keeps waiting
+    /// out. Nothing else pins the status or the text, so a silent change to
+    /// either would turn a disabled pool back into an endless wait.
+    #[tokio::test]
+    async fn stream_endpoint_names_a_disabled_pool_instead_of_waiting_for_it() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "cd".repeat(32);
+        setup_test_video(&db_pool, &temp_dir, &hash).await;
+
+        // `acquire_transcode_permit` reads the variable per call and returns
+        // before the semaphore is touched, so the pool is disabled for this
+        // request only and nothing process-wide is locked in. The guard's own
+        // lock keeps the variable off every other test in this binary.
+        let _disabled = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
+
+        let response = stream_video(
+            hash.clone(),
+            StreamQuery {
+                start: Some(0.0),
+                mode: Some("transcode".to_string()),
+                client: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+        )
+        .await
+        .expect("disabled reply")
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a disabled pool is a refusal, not a run"
+        );
+        assert_eq!(response.headers()["retry-after"], "5");
+        let body = collect_response_body(response).await;
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("the refusal body is JSON");
+        assert_eq!(parsed["error"], "conversion disabled");
+    }
 }

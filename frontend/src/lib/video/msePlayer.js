@@ -190,8 +190,9 @@ export function createStreamPlayer(
   // doc comment there names "a client that stopped reading so the pipe backs
   // up" as exactly this case. A viewer paused for longer than that therefore
   // loses its run: the body ends before the declared duration, which this
-  // module reports as the ordinary truncation failure (never a silent stop),
-  // and the viewer's ladder takes over from there. A parked pump must
+  // module reports as the ordinary truncation failure — tagged `lostRun`,
+  // because a run that stopped is not a run that failed to decode — and the
+  // viewer recovers from there. A parked pump must
   // consequently never swallow a body that ended — see `waitForLookAhead` —
   // or a killed run would wedge the player instead of recovering.
   const LOOK_AHEAD_SECONDS = 30;
@@ -480,7 +481,20 @@ export function createStreamPlayer(
         ) {
           const slack = Math.min(2, declaredDuration / 2);
           if (bufferedEnd < declaredDuration - slack) {
-            reportError(signal, new Error('the delivered stream ended early'));
+            // A body that ends short of the declared duration is no verdict on
+            // the bytes it carried: the server's stall watchdog kills a run
+            // whose client stopped reading (a parked pump, the pipe backed
+            // up), a crash and a broken pipe all close the chunked response
+            // exactly like this. Undecodable bytes report themselves through
+            // the SourceBuffer's and the element's own `error` events instead
+            // (see `onMediaError`), which is a different signal. The tag is
+            // what lets the viewer tell the two apart: a LOST run is replayed
+            // on its own mode at the position the viewer reached, never
+            // escalated into a heavier conversion that restarts the video at
+            // 0:00.
+            const lostRun = new Error('the delivered stream ended early');
+            lostRun.lostRun = true;
+            reportError(signal, lostRun);
             return;
           }
         }

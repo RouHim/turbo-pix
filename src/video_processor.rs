@@ -749,9 +749,18 @@ pub(crate) fn has_moov_at_start_within(path: &Path, timeout: Duration) -> CacheR
         )));
     }
 
-    Ok(moov_at_start_from_trace(&String::from_utf8_lossy(
-        &output.stderr,
-    )))
+    let trace = String::from_utf8_lossy(&output.stderr);
+    if trace.trim().is_empty() {
+        // Nothing was collected from this pass (see `collect_drained`), so it
+        // established no layout: an empty trace parses as "no moov atom", which
+        // `moov_at_start_from_trace` reads as "at start".
+        return Err(CacheError::VideoProcessingError(format!(
+            "ffprobe trace pass for {} produced no trace output",
+            path.display()
+        )));
+    }
+
+    Ok(moov_at_start_from_trace(&trace))
 }
 
 pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
@@ -2130,6 +2139,44 @@ pub(crate) mod tests {
         let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
 
         assert_eq!(before, after);
+    }
+
+    /// A `-v trace` pass that collected no stderr established no layout, so it
+    /// must not be read as a verdict. [`run_bounded`]'s drain grace exists for
+    /// the case this pins: a shell wrapper around ffprobe leaves a grandchild
+    /// holding the trace pipe, so the child exits 0 with nothing collected and
+    /// [`moov_at_start_from_trace`] sees an empty trace — whose `(None, _)`
+    /// arm answers "progressive" for a file it never looked at. A pass that
+    /// cannot answer must error (the caller keeps the stored layout, or decides
+    /// without it), never invent `moov_at_start: true` for good.
+    #[cfg(unix)]
+    #[test]
+    fn a_trace_pass_that_collected_nothing_yields_no_verdict() {
+        let _env_lock = acquire_test_env_lock();
+
+        let temp_dir = TempDir::new().unwrap();
+        let ffprobe_script = temp_dir.path().join("fake_ffprobe.sh");
+        // Backgrounding the sleep leaves a grandchild holding both pipes after
+        // this child exits 0, so the drains never see EOF within the grace and
+        // collect nothing — even though the pass "printed" JSON.
+        std::fs::write(
+            &ffprobe_script,
+            "#!/usr/bin/env sh\nsleep 3 &\nprintf '%s\\n' '{\"format\":{\"duration\":\"1.0\"}}'\nexit 0\n",
+        )
+        .unwrap();
+        make_executable(&ffprobe_script);
+        let _guard = TestEnvGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
+
+        let video = temp_dir.path().join("probe-me.mp4");
+        std::fs::write(&video, b"not-a-real-video").unwrap();
+
+        let result = has_moov_at_start_within(&video, Duration::from_secs(5));
+
+        let err = result.expect_err("an empty trace is no verdict, not an invented moov-at-start");
+        assert!(
+            err.to_string().contains("no trace output"),
+            "expected the no-verdict error, got: {err}"
+        );
     }
 
     /// The remux cache fill's core: a moov-at-end MP4 must come out of the

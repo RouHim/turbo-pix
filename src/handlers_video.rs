@@ -2234,12 +2234,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remux_short_circuits_on_already_progressive_serves_original() {
+    async fn remux_byte_request_without_a_sidecar_serves_the_original() {
         // A photo whose record says moov_at_start: false but whose backing file
         // is already progressive (index-time moov fix failed, then the file was
-        // fixed/replaced on disk): no sidecar is ever written for it, so the
-        // handler must serve the playable ORIGINAL instead of a nonexistent
-        // remux path (which would 404).
+        // fixed/replaced on disk): a byte request that finds no remux sidecar
+        // must serve the playable ORIGINAL rather than a nonexistent remux path
+        // (which would 404). Only the byte path is pinned here: a completed
+        // remux playthrough fills the sidecar afterwards (see
+        // `spawn_cache_fill`), so "no sidecar" is a property of this request,
+        // not of the source.
         let fixture = Path::new("test-data/test_video.mp4");
         if !fixture.exists() {
             eprintln!("skipping: test_video.mp4 fixture missing");
@@ -2299,16 +2302,13 @@ mod tests {
             "must serve the ORIGINAL progressive file bytes, got content-range {}",
             cr
         );
-        // The short-circuit must NOT have left a sidecar behind.
-        let remux_path = remux_sidecar_path(
-            temp_dir.path().to_str().unwrap(),
-            &hash,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        );
-        assert!(
-            !remux_path.exists(),
-            "no remux sidecar should be written when the source is already progressive"
+        // The served bytes are the original's, not a remuxed copy's: the first
+        // 1024 bytes of the fixture, byte for byte.
+        let body = collect_response_body(response).await;
+        let expected = &std::fs::read(fixture).unwrap()[..1024];
+        assert_eq!(
+            body, expected,
+            "the byte request must serve the original's bytes"
         );
     }
 

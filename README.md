@@ -120,18 +120,18 @@ Building from source requires the frontend bundle first: `npm install && npm run
 
 All configuration is done via environment variables:
 
-| Name                      | Description                                       | Default value                         | Required |
-| ------------------------- | ------------------------------------------------- | ------------------------------------- | -------- |
-| `TURBO_PIX_PHOTO_PATHS`   | Comma-separated list of photo directories to scan | `./photos`                            | Yes      |
-| `TURBO_PIX_DATA_PATH`     | Data directory for database, cache, and AI models | `./data`                              | No       |
-| `TURBO_PIX_PORT`          | Port on which the application should listen       | `18473`                               | No       |
-| `TURBO_PIX_HOST`          | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access | `127.0.0.1` | No |
-| `TURBO_PIX_ALLOWED_HOSTS` | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | *(loopback names)* | No       |
-| `TURBO_PIX_LOCALE`        | Default UI locale (`en`, `de`)                    | `en`                                  | No       |
-| `TURBO_PIX_NOMINATIM_URL` | Base URL for the Nominatim geocoding service      | `https://nominatim.openstreetmap.org` | No       |
-| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After` | `20` | No |
-| `TURBO_PIX_TILE_URL`      | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
-| `RUST_LOG`                | Log level (trace, debug, info, warn, error)       | `info`                                | No       |
+| Name                               | Description                                                                                                                                                                                    | Default value                                    | Required |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------- |
+| `TURBO_PIX_PHOTO_PATHS`            | Comma-separated list of photo directories to scan                                                                                                                                              | `./photos`                                       | Yes      |
+| `TURBO_PIX_DATA_PATH`              | Data directory for database, cache, and AI models                                                                                                                                              | `./data`                                         | No       |
+| `TURBO_PIX_PORT`                   | Port on which the application should listen                                                                                                                                                    | `18473`                                          | No       |
+| `TURBO_PIX_HOST`                   | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access                                                                                                                      | `127.0.0.1`                                      | No       |
+| `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | _(loopback names)_                               | No       |
+| `TURBO_PIX_LOCALE`                 | Default UI locale (`en`, `de`)                                                                                                                                                                 | `en`                                             | No       |
+| `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                   | `https://nominatim.openstreetmap.org`            | No       |
+| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                      | `20`                                             | No       |
+| `TURBO_PIX_TILE_URL`               | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view                                                                                                                         | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
+| `RUST_LOG`                         | Log level (trace, debug, info, warn, error)                                                                                                                                                    | `info`                                           | No       |
 
 ### Derived Paths
 

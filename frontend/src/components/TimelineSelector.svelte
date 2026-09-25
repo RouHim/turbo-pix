@@ -85,6 +85,8 @@
     periodName,
     rangeTemplate: (start, end) =>
       $t('ui.timeline_range_label', { values: { start, end }, default: '{start} – {end}' }),
+    decadeLabel: (year) =>
+      $t('ui.timeline_decade_label', { values: { start: String(year) }, default: '{start}s' }),
   });
 
   // Rendered text is a hair wider than canvas text, hence the safety margin the

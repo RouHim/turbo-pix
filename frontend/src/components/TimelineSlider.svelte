@@ -45,6 +45,12 @@
       periodName: (index) => formatPeriodName(index, monthName),
       rangeTemplate: (start, end) =>
         $t('ui.timeline_range_label', { values: { start, end }, default: '{start} – {end}' }),
+      decadeLabel: (year) =>
+        $t('ui.timeline_decade_label', {
+          locale: activeLocale,
+          values: { start: String(year) },
+          default: '{start}s',
+        }),
     });
   });
 

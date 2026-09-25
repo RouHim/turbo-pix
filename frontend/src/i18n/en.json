@@ -33,6 +33,7 @@
     "timeline_no_photos_month": "No photos",
     "timeline_overview_label": "Timeline overview",
     "timeline_fit_all": "Fit all",
+    "timeline_decade_label": "{start}s",
     "timeline_range_start": "Range start",
     "timeline_range_end": "Range end",
     "timeline_range_label": "{start} – {end}",

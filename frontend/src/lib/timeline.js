@@ -95,15 +95,27 @@ export const formatPeriodName = (index, monthName) => {
 };
 
 /**
- * `All Dates`, `2012`, `March 2012`, `2012 – 2015` or
+ * `All Dates`, `2012`, `March 2012`, `1960s`, `2012 – 2015` or
  * `March 2012 – August 2015` — a full-year range collapses to bare years,
- * because a range covering January through December *is* the year filter.
+ * because a range covering January through December *is* the year filter, and a
+ * grid-aligned ten-year span *is* the decade the ruler labels.
  */
 export const formatSelectionLabel = (selection, format) => {
   if (!selection) return format.allDates;
   const start = fromMonthIndex(selection.startIndex);
   const end = fromMonthIndex(selection.endIndex);
   const wholeYears = start.month === 1 && end.month === 12;
+
+  // A grid-aligned ten-year span *is* the decade the ruler labels "1960s", and
+  // the route writes it back unchanged: read it as the period it represents,
+  // never as its clipped bounds.
+  if (
+    wholeYears &&
+    selection.startIndex % MONTHS_PER_DECADE === 0 &&
+    selection.endIndex - selection.startIndex === MONTHS_PER_DECADE - 1
+  ) {
+    return format.decadeLabel(start.year);
+  }
 
   if (wholeYears && start.year === end.year) return String(start.year);
   if (wholeYears) {

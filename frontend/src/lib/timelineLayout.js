@@ -216,3 +216,49 @@ export const ensureSelectionVisible = (selection, view, width, model) => {
   else if (endX > width) origin = selection.endIndex + 1 - width / scale;
   return { scale, origin: clampOrigin(origin, { width, scale, model }) };
 };
+
+/** Clamp a period's span into the band that renders `unit`. */
+const clampSpanToUnit = (span, unit, width) =>
+  Math.min(Math.max(span, unitMinSpan(unit, width)), unitWindow(unit, width));
+
+/** A view holding `span` months centred on `centre`, pinned to the model. */
+const viewAround = (span, centre, width, model) => {
+  const scale = clampScale(width / span, width, model);
+  return { scale, origin: clampOrigin(centre - width / (2 * scale), { width, scale, model }) };
+};
+
+/**
+ * FR-002/FR-003: frame `range` at `unit` so the new view renders exactly that
+ * unit — the activation drill, one granularity level into the activated period.
+ * The span is clamped into the unit's band, so a lane too narrow for the period
+ * keeps the unit (showing part of it) and an ultra-wide lane does not refine
+ * past it.
+ */
+export const zoomToUnitRange = (range, unit, width, model) =>
+  viewAround(
+    clampSpanToUnit(range.endIndex - range.startIndex + 1, unit, width),
+    (range.startIndex + range.endIndex + 1) / 2,
+    width,
+    model
+  );
+
+/**
+ * FR-007: a granularity control frames the active filter when that filter fits
+ * the level's window, and otherwise a window around the current view centre —
+ * it never writes a filter, so it takes no `onchange`. Returns `view` unchanged
+ * when the lane cannot render the level at all (a no-op, like every other
+ * unrenderable level).
+ */
+export const frameUnit = (unit, { selection, view, width, model }) => {
+  if (!canRenderUnit(unit, width, model)) return view;
+  const window = Math.min(unitWindow(unit, width), model.length);
+  if (selection !== null && selection.endIndex - selection.startIndex + 1 <= window) {
+    return viewAround(
+      clampSpanToUnit(selection.endIndex - selection.startIndex + 1, unit, width),
+      (selection.startIndex + selection.endIndex + 1) / 2,
+      width,
+      model
+    );
+  }
+  return viewAround(window, view.origin + width / (2 * view.scale), width, model);
+};

@@ -5,6 +5,20 @@ import { clampSelectionToModel, fromMonthIndex, toMonthIndex } from './timeline.
 
 export const EMPTY_DATE_FILTER = { year: null, month: null, to_year: null, to_month: null };
 
+/**
+ * A filter naming a whole grid-aligned decade (`1960-01 … 1969-12`), the shape
+ * an activation of a decade column writes. Normalised filters use `null` for
+ * the January start and the December end, so the check is on that canonical
+ * form only.
+ */
+export const isDecadeFilter = (filter) =>
+  Boolean(filter) &&
+  filter.year !== null &&
+  filter.month === null &&
+  filter.year % 10 === 0 &&
+  filter.to_year === filter.year + 9 &&
+  filter.to_month === null;
+
 const parseYear = (value) => (Number.isInteger(value) && value >= 1 ? value : null);
 const parseMonth = (value) => (Number.isInteger(value) && value >= 1 && value <= 12 ? value : null);
 
@@ -74,7 +88,18 @@ export const selectionFromFilter = (filter, model) => {
       ? toMonthIndex(filter.year, filter.month ?? 12)
       : toMonthIndex(toYear, filter.to_month ?? 12);
 
-  if (toYear !== null) return clampSelectionToModel({ startIndex, endIndex }, model);
+  if (toYear !== null) {
+    // A decade is a *period*, not a range: keep its own boundaries so the label
+    // names the decade and the round trip through `filterFromSelection` is
+    // stable, exactly as the bare-period branch below does. Only a period the
+    // library has nothing in at all clears the filter.
+    if (isDecadeFilter(filter)) {
+      return endIndex < model.minIndex || startIndex > model.maxIndex
+        ? null
+        : { startIndex, endIndex };
+    }
+    return clampSelectionToModel({ startIndex, endIndex }, model);
+  }
 
   // A bare period keeps both of its own boundaries, so `filterFromSelection`
   // gives the same filter back; only a period the library has nothing in at

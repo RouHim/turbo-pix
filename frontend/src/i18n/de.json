@@ -33,6 +33,7 @@
     "timeline_no_photos_month": "Keine Fotos",
     "timeline_overview_label": "Zeitleisten-Übersicht",
     "timeline_fit_all": "Alle anzeigen",
+    "timeline_decade_label": "{start}er",
     "timeline_range_start": "Bereichsanfang",
     "timeline_range_end": "Bereichsende",
     "timeline_range_label": "{start} – {end}",

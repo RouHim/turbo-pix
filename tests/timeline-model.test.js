@@ -17,6 +17,7 @@ import {
 
 const format = {
   allDates: 'All Dates',
+  decadeLabel: (year) => `${year}s`,
   rangeTemplate: (start, end) => `${start} – ${end}`,
   monthName: (month) =>
     [
@@ -119,4 +120,34 @@ test('selection labels name the period or both bounds', () => {
 test('period labels name the month and year', () => {
   assert.equal(formatPeriodName(toMonthIndex(1998, 3), format.monthName), 'March 1998');
   assert.equal(formatPeriodName(toMonthIndex(2012, 12), format.monthName), 'December 2012');
+});
+
+test('a grid-aligned decade is labelled as the decade', () => {
+  const sixties = { startIndex: toMonthIndex(1960, 1), endIndex: toMonthIndex(1969, 12) };
+  assert.equal(formatSelectionLabel(sixties, format), '1960s');
+
+  // Clipped at the library's first bucket (March 1962) it is no longer a
+  // decade-shaped selection and keeps the explicit range wording.
+  const clipped = { startIndex: toMonthIndex(1962, 3), endIndex: toMonthIndex(1969, 12) };
+  assert.equal(formatSelectionLabel(clipped, format), 'March 1962 – December 1969');
+
+  // A ten-year span that is not grid-aligned is an ordinary range.
+  const shifted = { startIndex: toMonthIndex(1963, 1), endIndex: toMonthIndex(1972, 12) };
+  assert.equal(formatSelectionLabel(shifted, format), '1963 – 1972');
+
+  // Single periods and whole years are unaffected.
+  assert.equal(
+    formatSelectionLabel(
+      { startIndex: toMonthIndex(2012, 1), endIndex: toMonthIndex(2012, 12) },
+      format
+    ),
+    '2012'
+  );
+  assert.equal(
+    formatSelectionLabel(
+      { startIndex: toMonthIndex(2012, 3), endIndex: toMonthIndex(2012, 3) },
+      format
+    ),
+    'March 2012'
+  );
 });

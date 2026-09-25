@@ -44,7 +44,11 @@ const monthName = (month) =>
     'November',
     'December',
   ][month - 1];
-const format = { monthName, periodName: (index) => formatPeriodName(index, monthName) };
+const format = {
+  decadeLabel: (year) => `${year}s`,
+  monthName,
+  periodName: (index) => formatPeriodName(index, monthName),
+};
 
 // A 60-year span with 240 populated months (every third month).
 const denseModel = {
@@ -460,4 +464,20 @@ test('a level control frames a filter that fits and a window around the view cen
   // A level the lane cannot render leaves the view untouched.
   const shortModel = { minIndex: 0, maxIndex: 119, length: 120 };
   assert.deepEqual(frameUnit(120, { selection: null, view, width, model: shortModel }), view);
+});
+
+test('a decade column label comes from the injected decade template', () => {
+  // The ruler's decade labels must localise ("1960s" / "1960er"), so the
+  // hardcoded `s` suffix is gone: `formatColumnLabel` asks the format object.
+  const german = { ...format, decadeLabel: (year) => `${year}er` };
+  const view = createView(1200, denseModel);
+  const columns = buildColumns({
+    unit: 120,
+    view,
+    width: 1200,
+    model: denseModel,
+    format: german,
+    countInRange,
+  });
+  assert.equal(columns[0].label, '0er');
 });

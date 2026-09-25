@@ -128,7 +128,7 @@ export const canRenderUnit = (unit, width, model) => {
 
 const formatColumnLabel = (unit, gridStart, format) => {
   const { year } = fromMonthIndex(gridStart);
-  if (unit === MONTHS_PER_DECADE) return `${year - (year % 10)}s`;
+  if (unit === MONTHS_PER_DECADE) return format.decadeLabel(year - (year % 10));
   if (unit === MONTHS_PER_YEAR) return String(year);
   return format.periodName(gridStart);
 };

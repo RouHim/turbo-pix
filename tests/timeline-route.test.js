@@ -4,6 +4,7 @@ import {
   EMPTY_DATE_FILTER,
   filterEquals,
   filterFromSelection,
+  isDecadeFilter,
   normalizeDateFilter,
   selectionFromFilter,
 } from '../frontend/src/lib/timelineRoute.js';
@@ -202,4 +203,54 @@ test('filterEquality is structural', () => {
       { year: 2012, month: 3, to_year: 2015, to_month: 9 }
     )
   );
+});
+
+test('a grid-aligned decade is a period and keeps its own bounds', () => {
+  // March 1962 … September 1974: the 1960s reach left of the library.
+  const legacyModel = buildTimelineModel([
+    { year: 1962, month: 3, count: 1 },
+    { year: 1969, month: 12, count: 1 },
+    { year: 1974, month: 9, count: 1 },
+  ]);
+
+  const decade = normalizeDateFilter({ year: 1960, month: null, to_year: 1969, to_month: null });
+  assert.ok(isDecadeFilter(decade));
+  assert.deepEqual(selectionFromFilter(decade, legacyModel), {
+    startIndex: toMonthIndex(1960, 1),
+    endIndex: toMonthIndex(1969, 12),
+  });
+  assert.deepEqual(
+    filterFromSelection(selectionFromFilter(decade, legacyModel)),
+    decade,
+    'the round trip is the identity, so the clamp effect leaves the URL alone'
+  );
+
+  // Only a *grid-aligned* ten-year range is a period; a shifted one keeps
+  // clamping to the library.
+  const shifted = normalizeDateFilter({ year: 1963, month: null, to_year: 1972, to_month: null });
+  assert.ok(!isDecadeFilter(shifted));
+  assert.deepEqual(selectionFromFilter(shifted, legacyModel), {
+    startIndex: toMonthIndex(1963, 1),
+    endIndex: toMonthIndex(1972, 12),
+  });
+
+  // …and a range reaching left of the library still clamps to its oldest bucket.
+  const early = normalizeDateFilter({ year: 1955, month: 3, to_year: 1972, to_month: 12 });
+  assert.ok(!isDecadeFilter(early));
+  assert.deepEqual(selectionFromFilter(early, legacyModel), {
+    startIndex: legacyModel.minIndex,
+    endIndex: toMonthIndex(1972, 12),
+  });
+
+  // A decade the library has nothing in still clears the filter.
+  const nineties = normalizeDateFilter({ year: 1990, month: null, to_year: 1999, to_month: null });
+  assert.ok(isDecadeFilter(nineties));
+  assert.equal(selectionFromFilter(nineties, legacyModel), null);
+
+  // A decade-shaped *non* range (an explicit end month) is not a decade period.
+  assert.ok(
+    !isDecadeFilter(normalizeDateFilter({ year: 1960, month: 3, to_year: 1969, to_month: 12 }))
+  );
+  assert.ok(!isDecadeFilter(EMPTY_DATE_FILTER));
+  assert.ok(!isDecadeFilter({ year: 1961, month: null, to_year: 1970, to_month: null }));
 });

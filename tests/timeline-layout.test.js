@@ -4,17 +4,23 @@ import {
   HANDLE_HIT_PX,
   MIN_COLUMN_PX,
   buildColumns,
+  canRenderUnit,
   chooseUnit,
   clampBound,
   clampView,
   createView,
   ensureSelectionVisible,
+  finerUnit,
   fitAllScale,
   indexFromX,
   panView,
   placeLabels,
   selectionZoneAtX,
   translateSelection,
+  unitMinSpan,
+  unitScaleMax,
+  unitScaleMin,
+  unitWindow,
   xFromIndex,
   zoomToRange,
   zoomView,
@@ -318,4 +324,46 @@ test('a single-month library has one zoom level', () => {
   assert.equal(columns.length, 1);
   assert.equal(columns[0].startIndex, 100);
   assert.equal(columns[0].endIndex, 100);
+});
+
+test('the level bands sit strictly inside the unit thresholds', () => {
+  // Every scale the drill and the level controls clamp to must render exactly
+  // the requested unit: a band edge landing on `chooseUnit`'s threshold would
+  // silently drill into the wrong granularity (months after a decade click at a
+  // 4K width) or fall back to a coarser one on a narrow lane.
+  for (const width of [300, 640, 769, 1024, 1200, 1920, 2560, 4000]) {
+    for (const unit of [1, 12, 120]) {
+      assert.ok(unitScaleMin(unit) <= unitScaleMax(unit), `${unit}: empty band`);
+      assert.equal(chooseUnit(unitScaleMin(unit)), unit, `${unit}: band floor`);
+      assert.equal(chooseUnit(unitScaleMax(unit)), unit, `${unit}: band ceiling`);
+      assert.equal(chooseUnit(width / unitWindow(unit, width)), unit, `${unit}: widest window`);
+      assert.equal(chooseUnit(width / unitMinSpan(unit, width)), unit, `${unit}: narrowest span`);
+    }
+  }
+  assert.equal(finerUnit(120), 12);
+  assert.equal(finerUnit(12), 1);
+  assert.equal(finerUnit(1), null);
+});
+
+test('a window holds about width / MIN_COLUMN_PX month columns', () => {
+  for (const width of [640, 1200, 1920]) {
+    const months = unitWindow(1, width);
+    assert.ok(Math.abs(months - width / MIN_COLUMN_PX) < (width / MIN_COLUMN_PX) * 0.01);
+    assert.ok(unitWindow(12, width) > months && unitWindow(120, width) > unitWindow(12, width));
+  }
+  assert.equal(unitMinSpan(1, 1200), 0, 'months are the finest unit: no lower bound');
+});
+
+test('a level is renderable exactly when the model reaches into its band', () => {
+  const long = { length: 771 };
+  const short = { length: 120 };
+  const tiny = { length: 20 };
+  assert.equal(canRenderUnit(1, 1200, long), true);
+  assert.equal(canRenderUnit(12, 1200, long), true);
+  assert.equal(canRenderUnit(120, 1200, long), true);
+  assert.equal(canRenderUnit(120, 1200, short), false, 'a ten-year library has no decade view');
+  assert.equal(canRenderUnit(12, 1200, tiny), false);
+  assert.equal(canRenderUnit(1, 1200, { length: 0 }), false, 'an empty model renders nothing');
+  assert.equal(canRenderUnit(1, 0, long), false, 'a hidden lane renders nothing');
+  assert.equal(canRenderUnit(1, 20, long), false, 'a lane thinner than one month column');
 });

@@ -87,6 +87,45 @@ export const indexFromX = (x, view) => Math.floor(view.origin + x / view.scale);
 export const chooseUnit = (scale) =>
   UNITS.find((unit) => unit * scale >= MIN_COLUMN_PX) ?? UNITS[UNITS.length - 1];
 
+/**
+ * Relative margin keeping a clamped scale off both edges of its unit's band.
+ * `chooseUnit` compares with `>=`, so a band edge that landed exactly on a
+ * threshold would render the next finer unit; the margin makes
+ * `chooseUnit(unitScaleMin(u)) === u` and `chooseUnit(unitScaleMax(u)) === u`
+ * hold even after floating-point rounding (0.1% is ~0.028px on a 28px column).
+ */
+const BAND_MARGIN = 1e-3;
+
+/** The next finer column unit, or null for the finest (a single month). */
+export const finerUnit = (unit) =>
+  unit === MONTHS_PER_DECADE ? MONTHS_PER_YEAR : unit === MONTHS_PER_YEAR ? 1 : null;
+
+/** Narrowest scale that renders `unit`, just above `chooseUnit`'s threshold. */
+export const unitScaleMin = (unit) => (MIN_COLUMN_PX * (1 + BAND_MARGIN)) / unit;
+
+/** Widest scale that renders `unit`, just below the finer unit's threshold. */
+export const unitScaleMax = (unit) => {
+  const finer = finerUnit(unit);
+  return finer === null ? Number.POSITIVE_INFINITY : (MIN_COLUMN_PX * (1 - BAND_MARGIN)) / finer;
+};
+
+/** Widest span (months) the lane can show at `unit`. */
+export const unitWindow = (unit, width) => width / unitScaleMin(unit);
+
+/** Narrowest span (months) that still renders `unit`; 0 for months. */
+export const unitMinSpan = (unit, width) => width / unitScaleMax(unit);
+
+/**
+ * Whether the lane can render `unit` at all: a model span must fall inside the
+ * unit's band. A ten-year library has no decade view, a lane thinner than one
+ * month column has no month view, and both are no-ops rather than clamps.
+ */
+export const canRenderUnit = (unit, width, model) => {
+  if (width <= 0 || model.length === 0) return false;
+  const window = Math.min(unitWindow(unit, width), model.length);
+  return window >= 1 && window > unitMinSpan(unit, width);
+};
+
 const formatColumnLabel = (unit, gridStart, format) => {
   const { year } = fromMonthIndex(gridStart);
   if (unit === MONTHS_PER_DECADE) return `${year - (year % 10)}s`;

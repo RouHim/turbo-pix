@@ -87,9 +87,48 @@ export const indexFromX = (x, view) => Math.floor(view.origin + x / view.scale);
 export const chooseUnit = (scale) =>
   UNITS.find((unit) => unit * scale >= MIN_COLUMN_PX) ?? UNITS[UNITS.length - 1];
 
+/**
+ * Relative margin keeping a clamped scale off both edges of its unit's band.
+ * `chooseUnit` compares with `>=`, so a band edge that landed exactly on a
+ * threshold would render the next finer unit; the margin makes
+ * `chooseUnit(unitScaleMin(u)) === u` and `chooseUnit(unitScaleMax(u)) === u`
+ * hold even after floating-point rounding (0.1% is ~0.028px on a 28px column).
+ */
+const BAND_MARGIN = 1e-3;
+
+/** The next finer column unit, or null for the finest (a single month). */
+export const finerUnit = (unit) =>
+  unit === MONTHS_PER_DECADE ? MONTHS_PER_YEAR : unit === MONTHS_PER_YEAR ? 1 : null;
+
+/** Narrowest scale that renders `unit`, just above `chooseUnit`'s threshold. */
+export const unitScaleMin = (unit) => (MIN_COLUMN_PX * (1 + BAND_MARGIN)) / unit;
+
+/** Widest scale that renders `unit`, just below the finer unit's threshold. */
+export const unitScaleMax = (unit) => {
+  const finer = finerUnit(unit);
+  return finer === null ? Number.POSITIVE_INFINITY : (MIN_COLUMN_PX * (1 - BAND_MARGIN)) / finer;
+};
+
+/** Widest span (months) the lane can show at `unit`. */
+export const unitWindow = (unit, width) => width / unitScaleMin(unit);
+
+/** Narrowest span (months) that still renders `unit`; 0 for months. */
+export const unitMinSpan = (unit, width) => width / unitScaleMax(unit);
+
+/**
+ * Whether the lane can render `unit` at all: a model span must fall inside the
+ * unit's band. A ten-year library has no decade view, a lane thinner than one
+ * month column has no month view, and both are no-ops rather than clamps.
+ */
+export const canRenderUnit = (unit, width, model) => {
+  if (width <= 0 || model.length === 0) return false;
+  const window = Math.min(unitWindow(unit, width), model.length);
+  return window >= 1 && window > unitMinSpan(unit, width);
+};
+
 const formatColumnLabel = (unit, gridStart, format) => {
   const { year } = fromMonthIndex(gridStart);
-  if (unit === MONTHS_PER_DECADE) return `${year - (year % 10)}s`;
+  if (unit === MONTHS_PER_DECADE) return format.decadeLabel(year - (year % 10));
   if (unit === MONTHS_PER_YEAR) return String(year);
   return format.periodName(gridStart);
 };
@@ -176,4 +215,50 @@ export const ensureSelectionVisible = (selection, view, width, model) => {
   if (startX < 0) origin = selection.startIndex;
   else if (endX > width) origin = selection.endIndex + 1 - width / scale;
   return { scale, origin: clampOrigin(origin, { width, scale, model }) };
+};
+
+/** Clamp a period's span into the band that renders `unit`. */
+const clampSpanToUnit = (span, unit, width) =>
+  Math.min(Math.max(span, unitMinSpan(unit, width)), unitWindow(unit, width));
+
+/** A view holding `span` months centred on `centre`, pinned to the model. */
+const viewAround = (span, centre, width, model) => {
+  const scale = clampScale(width / span, width, model);
+  return { scale, origin: clampOrigin(centre - width / (2 * scale), { width, scale, model }) };
+};
+
+/**
+ * FR-002/FR-003: frame `range` at `unit` so the new view renders exactly that
+ * unit — the activation drill, one granularity level into the activated period.
+ * The span is clamped into the unit's band, so a lane too narrow for the period
+ * keeps the unit (showing part of it) and an ultra-wide lane does not refine
+ * past it.
+ */
+export const zoomToUnitRange = (range, unit, width, model) =>
+  viewAround(
+    clampSpanToUnit(range.endIndex - range.startIndex + 1, unit, width),
+    (range.startIndex + range.endIndex + 1) / 2,
+    width,
+    model
+  );
+
+/**
+ * FR-007: a granularity control frames the active filter when that filter fits
+ * the level's window, and otherwise a window around the current view centre —
+ * it never writes a filter, so it takes no `onchange`. Returns `view` unchanged
+ * when the lane cannot render the level at all (a no-op, like every other
+ * unrenderable level).
+ */
+export const frameUnit = (unit, { selection, view, width, model }) => {
+  if (!canRenderUnit(unit, width, model)) return view;
+  const window = Math.min(unitWindow(unit, width), model.length);
+  if (selection !== null && selection.endIndex - selection.startIndex + 1 <= window) {
+    return viewAround(
+      clampSpanToUnit(selection.endIndex - selection.startIndex + 1, unit, width),
+      (selection.startIndex + selection.endIndex + 1) / 2,
+      width,
+      model
+    );
+  }
+  return viewAround(window, view.origin + width / (2 * view.scale), width, model);
 };

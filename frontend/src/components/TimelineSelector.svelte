@@ -12,6 +12,8 @@
     clampView,
     createView,
     ensureSelectionVisible,
+    finerUnit,
+    frameUnit,
     indexFromX,
     panView,
     placeLabels,
@@ -19,6 +21,7 @@
     translateSelection,
     xFromIndex,
     zoomToRange,
+    zoomToUnitRange,
     zoomView,
   } from '../lib/timelineLayout.js';
   import {
@@ -85,6 +88,8 @@
     periodName,
     rangeTemplate: (start, end) =>
       $t('ui.timeline_range_label', { values: { start, end }, default: '{start} – {end}' }),
+    decadeLabel: (year) =>
+      $t('ui.timeline_decade_label', { values: { start: String(year) }, default: '{start}s' }),
   });
 
   // Rendered text is a hair wider than canvas text, hence the safety margin the
@@ -97,6 +102,15 @@
   };
 
   const unit = $derived(chooseUnit(view?.scale ?? 1));
+
+  // FR-006: the three granularity controls, coarsest first. Their `key` fields
+  // are i18n dot-paths the integrity guard scans (tests/i18n-integrity.test.js).
+  const LEVELS = [
+    { unit: MONTHS_PER_DECADE, key: 'ui.timeline_level_decade', fallback: 'Decade' },
+    { unit: MONTHS_PER_YEAR, key: 'ui.timeline_level_year', fallback: 'Year' },
+    { unit: 1, key: 'ui.timeline_level_month', fallback: 'Month' },
+  ];
+
   const columns = $derived(
     view === null ? [] : buildColumns({ unit, view, width, model, format, countInRange })
   );
@@ -426,42 +440,29 @@
     }
     if (column.count === 0 || view === null || model.length === 0) return;
 
-    if (unit === MONTHS_PER_DECADE) {
-      reframeSuppressed = true;
-      view = zoomToRange(
-        { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_DECADE - 1 },
-        width,
-        model
-      );
-      return;
-    }
-
-    // FR-007: one activation applies a single period — a year, or a year plus a
-    // month. A *year* column commits the grid-aligned year, not the column's
-    // clipped bounds: `buildColumns` clips a column to the model, so at the
-    // library's first and last year the clip removes whole months
-    // (1962-03…1962-12), which is not a single period — and the mobile year
-    // dropdown writes the bare year for that same choice. A *month* column
-    // (`unit === 1`, which a year drill-in or any zoom past the
-    // one-month-per-column floor produces) commits its own single month: the
-    // grid-aligned shape there would be a twelve-month range starting at that
-    // month, which is neither the period the column shows nor what the mobile
-    // month dropdown writes.
+    // FR-001: every activation applies exactly the period the column shows, as
+    // one filter write. A *decade* commits its grid-aligned ten years and a
+    // *year* its grid-aligned calendar year — never the column's clipped
+    // bounds, which are not a single period at the library's first and last
+    // year (the 1962 column is March–December) and would disagree with what the
+    // mobile dropdowns write for the same choice. A *month* column (`unit === 1`,
+    // what a year drill-in or any zoom past the one-month-per-column floor
+    // produces) commits its own single month.
     const period =
-      unit === MONTHS_PER_YEAR
-        ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_YEAR - 1 }
-        : { startIndex: column.startIndex, endIndex: column.endIndex };
+      unit === MONTHS_PER_DECADE
+        ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_DECADE - 1 }
+        : unit === MONTHS_PER_YEAR
+          ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_YEAR - 1 }
+          : { startIndex: column.startIndex, endIndex: column.endIndex };
     onchange(period, { commit: true });
-    if (unit === MONTHS_PER_YEAR) {
-      // Drill in so months become reachable in three interactions. The view
-      // frames the months that exist, so it keeps the clipped bounds.
-      reframeSuppressed = true;
-      view = zoomToRange(
-        { startIndex: column.startIndex, endIndex: column.endIndex },
-        width,
-        model
-      );
-    }
+
+    // FR-002/FR-003: the same activation zooms one level in — a decade shows its
+    // year columns, a year its month columns, and a month the month itself at
+    // one month per lane width — so the view is never left coarser than the
+    // activated period. The drill is this gesture's own view change: the
+    // selection-following effect must not re-frame it away.
+    reframeSuppressed = true;
+    view = zoomToUnitRange(period, finerUnit(unit) ?? unit, width, model);
   };
 
   // The `unit`-aligned grid the roving focus moves along. A period is addressed
@@ -626,6 +627,19 @@
       width,
       model,
     });
+  };
+
+  // FR-006/FR-007: a granularity control changes only the view. It frames the
+  // active filter — or, when that filter is wider than the level's window, a
+  // window around the current view centre — and never writes a filter. The
+  // rendered unit IS the pressed control, so activating the level already in
+  // effect (or one the lane cannot render at this width) is a no-op.
+  const activateLevel = (levelUnit) => {
+    if (unit === levelUnit || view === null || width <= 0 || model.length === 0) return;
+    const next = frameUnit(levelUnit, { selection, view, width, model });
+    if (next.scale === view.scale && next.origin === view.origin) return;
+    reframeSuppressed = true;
+    view = next;
   };
 
   const zoomIn = () => {
@@ -871,6 +885,23 @@
   <div class="timeline-footer">
     <div class="timeline-status" role="status" aria-live="polite">{statusText}</div>
     <div class="timeline-controls">
+      <div
+        class="timeline-levels"
+        role="group"
+        aria-label={$t('ui.timeline_granularity', { default: 'Granularity' })}
+      >
+        {#each LEVELS as level (level.unit)}
+          <button
+            type="button"
+            class="timeline-level"
+            data-level={level.unit}
+            aria-pressed={unit === level.unit}
+            onclick={() => activateLevel(level.unit)}
+          >
+            {$t(level.key, { default: level.fallback })}
+          </button>
+        {/each}
+      </div>
       <button
         type="button"
         class="timeline-control timeline-zoom-out"
@@ -1034,6 +1065,47 @@
     margin-left: auto;
   }
 
+  .timeline-levels {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  /* Pills, matching the control row's 32px target: the level name is the
+     accessible name, so the pressed state is the only extra signal. */
+  .timeline-level {
+    height: var(--space-8);
+    min-width: var(--space-8);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-xs);
+    cursor: pointer;
+    transition:
+      border-color var(--transition-fast),
+      color var(--transition-fast),
+      background-color var(--transition-fast);
+  }
+
+  .timeline-level:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+  }
+
+  .timeline-level[aria-pressed='true'] {
+    border-color: var(--primary-color);
+    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
+    color: var(--primary-dark);
+  }
+
+  .timeline-level:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
   /* Measurement helper: it must keep the ruler labels' font, but a laid-out
      box would otherwise show up in the label geometry (its static position is
      the selector's content edge, on top of the first label). */
@@ -1081,7 +1153,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .timeline-control {
+    .timeline-control,
+    .timeline-level {
       transition: none;
     }
   }

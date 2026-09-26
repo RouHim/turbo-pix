@@ -34,6 +34,15 @@
   );
   const selection = $derived(selectionFromFilter(filter, model));
 
+  // A decade filter names a year the library has no bucket in (1960 while the
+  // oldest bucket is March 1962); without it the select would fall back to
+  // "All Years" while the grid stays filtered.
+  const dropdownYears = $derived(
+    filter.year === null || model.years.includes(filter.year)
+      ? model.years
+      : [filter.year, ...model.years].sort((a, b) => b - a)
+  );
+
   const labelText = $derived.by(() => {
     const monthName = (month) => {
       const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
@@ -45,6 +54,12 @@
       periodName: (index) => formatPeriodName(index, monthName),
       rangeTemplate: (start, end) =>
         $t('ui.timeline_range_label', { values: { start, end }, default: '{start} – {end}' }),
+      decadeLabel: (year) =>
+        $t('ui.timeline_decade_label', {
+          locale: activeLocale,
+          values: { start: String(year) },
+          default: '{start}s',
+        }),
     });
   });
 
@@ -66,7 +81,14 @@
         liveTimer = null;
         pendingLive = null;
       }
-      pushState(filterFromSelection(next));
+      const nextFilter = filterFromSelection(next);
+      // FR-010: re-activating the period that is already the filter — or ending
+      // a gesture exactly where it started — is not a state change, and a
+      // duplicate history entry would make Back appear to do nothing. `filter`
+      // is the canonical route filter, so a non-canonical restored URL is still
+      // left to the canonicalising effect below instead of being rewritten here.
+      if (filterEquals(nextFilter, filter)) return;
+      pushState(nextFilter);
       return;
     }
     pendingLive = next;
@@ -166,7 +188,7 @@
           onchange={handleDropdownChange}
         >
           <option value="">{$t('ui.all_years', { default: 'All Years' })}</option>
-          {#each model.years as year (year)}
+          {#each dropdownYears as year (year)}
             <option value={String(year)}>{year}</option>
           {/each}
         </select>

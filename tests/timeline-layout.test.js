@@ -4,19 +4,27 @@ import {
   HANDLE_HIT_PX,
   MIN_COLUMN_PX,
   buildColumns,
+  canRenderUnit,
   chooseUnit,
   clampBound,
   clampView,
   createView,
   ensureSelectionVisible,
+  finerUnit,
   fitAllScale,
+  frameUnit,
   indexFromX,
   panView,
   placeLabels,
   selectionZoneAtX,
   translateSelection,
+  unitMinSpan,
+  unitScaleMax,
+  unitScaleMin,
+  unitWindow,
   xFromIndex,
   zoomToRange,
+  zoomToUnitRange,
   zoomView,
 } from '../frontend/src/lib/timelineLayout.js';
 import { formatPeriodName, toMonthIndex } from '../frontend/src/lib/timeline.js';
@@ -36,7 +44,11 @@ const monthName = (month) =>
     'November',
     'December',
   ][month - 1];
-const format = { monthName, periodName: (index) => formatPeriodName(index, monthName) };
+const format = {
+  decadeLabel: (year) => `${year}s`,
+  monthName,
+  periodName: (index) => formatPeriodName(index, monthName),
+};
 
 // A 60-year span with 240 populated months (every third month).
 const denseModel = {
@@ -318,4 +330,154 @@ test('a single-month library has one zoom level', () => {
   assert.equal(columns.length, 1);
   assert.equal(columns[0].startIndex, 100);
   assert.equal(columns[0].endIndex, 100);
+});
+
+test('the level bands sit strictly inside the unit thresholds', () => {
+  // Every scale the drill and the level controls clamp to must render exactly
+  // the requested unit: a band edge landing on `chooseUnit`'s threshold would
+  // silently drill into the wrong granularity (months after a decade click at a
+  // 4K width) or fall back to a coarser one on a narrow lane.
+  for (const width of [300, 640, 769, 1024, 1200, 1920, 2560, 4000]) {
+    for (const unit of [1, 12, 120]) {
+      assert.ok(unitScaleMin(unit) <= unitScaleMax(unit), `${unit}: empty band`);
+      assert.equal(chooseUnit(unitScaleMin(unit)), unit, `${unit}: band floor`);
+      assert.equal(chooseUnit(unitScaleMax(unit)), unit, `${unit}: band ceiling`);
+      assert.equal(chooseUnit(width / unitWindow(unit, width)), unit, `${unit}: widest window`);
+      assert.equal(chooseUnit(width / unitMinSpan(unit, width)), unit, `${unit}: narrowest span`);
+    }
+  }
+  assert.equal(finerUnit(120), 12);
+  assert.equal(finerUnit(12), 1);
+  assert.equal(finerUnit(1), null);
+});
+
+test('a window holds about width / MIN_COLUMN_PX month columns', () => {
+  for (const width of [640, 1200, 1920]) {
+    const months = unitWindow(1, width);
+    assert.ok(Math.abs(months - width / MIN_COLUMN_PX) < (width / MIN_COLUMN_PX) * 0.01);
+    assert.ok(unitWindow(12, width) > months && unitWindow(120, width) > unitWindow(12, width));
+  }
+  assert.equal(unitMinSpan(1, 1200), 0, 'months are the finest unit: no lower bound');
+});
+
+test('a level is renderable exactly when the model reaches into its band', () => {
+  const long = { length: 771 };
+  const short = { length: 120 };
+  const tiny = { length: 20 };
+  assert.equal(canRenderUnit(1, 1200, long), true);
+  assert.equal(canRenderUnit(12, 1200, long), true);
+  assert.equal(canRenderUnit(120, 1200, long), true);
+  assert.equal(canRenderUnit(120, 1200, short), false, 'a ten-year library has no decade view');
+  assert.equal(canRenderUnit(12, 1200, tiny), false);
+  assert.equal(canRenderUnit(1, 1200, { length: 0 }), false, 'an empty model renders nothing');
+  assert.equal(canRenderUnit(1, 0, long), false, 'a hidden lane renders nothing');
+  assert.equal(canRenderUnit(1, 20, long), false, 'a lane thinner than one month column');
+});
+
+// The fixture library: March 1962 … January 2026, like the E2E seeds.
+const legacyModel = (() => {
+  const minIndex = toMonthIndex(1962, 3);
+  const maxIndex = toMonthIndex(2026, 1);
+  return { minIndex, maxIndex, length: maxIndex - minIndex + 1 };
+})();
+
+test('a drill frames the activated period at the next finer unit', () => {
+  const width = 1400;
+  const decade = { startIndex: toMonthIndex(1960, 1), endIndex: toMonthIndex(1969, 12) };
+  const drilled = zoomToUnitRange(decade, 12, width, legacyModel);
+  assert.equal(chooseUnit(drilled.scale), 12, 'a decade shows its year columns');
+  // The decade reaches two years left of the data, so its origin clamps to the
+  // library's first bucket: the data starts at the lane edge and the decade's
+  // remaining 94 months still fit the lane.
+  assert.equal(
+    Math.round(xFromIndex(legacyModel.minIndex, drilled)),
+    0,
+    'the data start pins the lane edge'
+  );
+  assert.ok(
+    xFromIndex(decade.endIndex + 1, drilled) <= width,
+    'a decade clipped at its start still fits the lane'
+  );
+
+  const eighties = { startIndex: toMonthIndex(1980, 1), endIndex: toMonthIndex(1989, 12) };
+  const framed = zoomToUnitRange(eighties, 12, width, legacyModel);
+  assert.equal(Math.round(xFromIndex(eighties.startIndex, framed)), 0);
+  assert.equal(Math.round(xFromIndex(eighties.endIndex + 1, framed)), width);
+
+  const year = { startIndex: toMonthIndex(2012, 1), endIndex: toMonthIndex(2012, 12) };
+  const months = zoomToUnitRange(year, 1, width, legacyModel);
+  assert.equal(chooseUnit(months.scale), 1, 'a year shows its month columns');
+  assert.equal(Math.round(xFromIndex(year.startIndex, months)), 0);
+  assert.equal(Math.round(xFromIndex(year.endIndex + 1, months)), width);
+
+  const march = { startIndex: toMonthIndex(2012, 3), endIndex: toMonthIndex(2012, 3) };
+  assert.equal(
+    zoomToUnitRange(march, 1, width, legacyModel).scale,
+    width,
+    'one month fills the lane'
+  );
+
+  // FR-003 on a lane too narrow for the finer unit: the unit is kept and the
+  // period shows partially instead of falling back to a coarser granularity.
+  for (const narrow of [200, 300]) {
+    assert.equal(chooseUnit(zoomToUnitRange(decade, 12, narrow, legacyModel).scale), 12);
+    assert.equal(chooseUnit(zoomToUnitRange(year, 1, narrow, legacyModel).scale), 1);
+  }
+  // The mirror image at an ultra-wide lane: the drill caps at the finer unit's
+  // ceiling instead of over-refining into months.
+  assert.equal(chooseUnit(zoomToUnitRange(decade, 12, 4000, legacyModel).scale), 12);
+});
+
+test('a level control frames a filter that fits and a window around the view centre otherwise', () => {
+  const width = 1200;
+  const view = createView(width, legacyModel);
+  const year2012 = { startIndex: toMonthIndex(2012, 1), endIndex: toMonthIndex(2012, 12) };
+
+  // Month level: the year fits the month window, so it fills the lane.
+  const months = frameUnit(1, { selection: year2012, view, width, model: legacyModel });
+  assert.equal(chooseUnit(months.scale), 1);
+  assert.equal(Math.round(xFromIndex(year2012.startIndex, months)), 0);
+  assert.equal(Math.round(xFromIndex(year2012.endIndex + 1, months)), width);
+
+  // Year level: a one-year filter is narrower than the year band's floor, so the
+  // lane keeps year columns and centres the filter inside a wider window.
+  const years = frameUnit(12, { selection: year2012, view, width, model: legacyModel });
+  assert.equal(chooseUnit(years.scale), 12);
+  assert.ok(xFromIndex(year2012.startIndex, years) >= 0);
+  assert.ok(xFromIndex(year2012.endIndex + 1, years) <= width);
+
+  // Decade level without a filter: the widest window the level can render, which
+  // for a 64-year library is the whole span.
+  const decades = frameUnit(120, { selection: null, view, width, model: legacyModel });
+  assert.equal(chooseUnit(decades.scale), 120);
+  assert.deepEqual(decades, createView(width, legacyModel));
+
+  // A filter wider than the level's window frames around the current view
+  // centre instead (FR-007), never around the filter's own centre.
+  const wide = { startIndex: toMonthIndex(1960, 1), endIndex: toMonthIndex(1979, 12) };
+  const windowed = frameUnit(1, { selection: wide, view, width, model: legacyModel });
+  assert.equal(chooseUnit(windowed.scale), 1);
+  const viewCentre = view.origin + width / (2 * view.scale);
+  const windowCentre = windowed.origin + width / (2 * windowed.scale);
+  assert.ok(Math.abs(windowCentre - viewCentre) < 0.001, 'the window stays on the view centre');
+
+  // A level the lane cannot render leaves the view untouched.
+  const shortModel = { minIndex: 0, maxIndex: 119, length: 120 };
+  assert.deepEqual(frameUnit(120, { selection: null, view, width, model: shortModel }), view);
+});
+
+test('a decade column label comes from the injected decade template', () => {
+  // The ruler's decade labels must localise ("1960s" / "1960er"), so the
+  // hardcoded `s` suffix is gone: `formatColumnLabel` asks the format object.
+  const german = { ...format, decadeLabel: (year) => `${year}er` };
+  const view = createView(1200, denseModel);
+  const columns = buildColumns({
+    unit: 120,
+    view,
+    width: 1200,
+    model: denseModel,
+    format: german,
+    countInRange,
+  });
+  assert.equal(columns[0].label, '0er');
 });

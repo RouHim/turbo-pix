@@ -145,10 +145,14 @@ test('i18n key integrity', () => {
       for (const key of keys) use(key, rel, line);
     }
 
-    // 3) Map-defined keys: Sidebar.svelte + SortControls.svelte `key:` fields,
-    //    and App.svelte titleKeys values (used via $t(view.key) / $t(opt.key)
-    //    / $t(titleKeys[route.view])).
-    if (file.endsWith('Sidebar.svelte') || file.endsWith('SortControls.svelte')) {
+    // 3) Map-defined keys: Sidebar.svelte + SortControls.svelte + TimelineSelector.svelte
+    //    `key:` fields, and App.svelte titleKeys values (used via $t(view.key) /
+    //    $t(opt.key) / $t(level.key) / $t(titleKeys[route.view])).
+    if (
+      file.endsWith('Sidebar.svelte') ||
+      file.endsWith('SortControls.svelte') ||
+      file.endsWith('TimelineSelector.svelte')
+    ) {
       for (const match of text.matchAll(/\bkey:\s*'([^']+)'/g)) {
         use(match[1], rel, lineOf(text, match.index));
       }

@@ -12,6 +12,7 @@
     clampView,
     createView,
     ensureSelectionVisible,
+    finerUnit,
     indexFromX,
     panView,
     placeLabels,
@@ -19,6 +20,7 @@
     translateSelection,
     xFromIndex,
     zoomToRange,
+    zoomToUnitRange,
     zoomView,
   } from '../lib/timelineLayout.js';
   import {
@@ -428,42 +430,29 @@
     }
     if (column.count === 0 || view === null || model.length === 0) return;
 
-    if (unit === MONTHS_PER_DECADE) {
-      reframeSuppressed = true;
-      view = zoomToRange(
-        { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_DECADE - 1 },
-        width,
-        model
-      );
-      return;
-    }
-
-    // FR-007: one activation applies a single period — a year, or a year plus a
-    // month. A *year* column commits the grid-aligned year, not the column's
-    // clipped bounds: `buildColumns` clips a column to the model, so at the
-    // library's first and last year the clip removes whole months
-    // (1962-03…1962-12), which is not a single period — and the mobile year
-    // dropdown writes the bare year for that same choice. A *month* column
-    // (`unit === 1`, which a year drill-in or any zoom past the
-    // one-month-per-column floor produces) commits its own single month: the
-    // grid-aligned shape there would be a twelve-month range starting at that
-    // month, which is neither the period the column shows nor what the mobile
-    // month dropdown writes.
+    // FR-001: every activation applies exactly the period the column shows, as
+    // one filter write. A *decade* commits its grid-aligned ten years and a
+    // *year* its grid-aligned calendar year — never the column's clipped
+    // bounds, which are not a single period at the library's first and last
+    // year (the 1962 column is March–December) and would disagree with what the
+    // mobile dropdowns write for the same choice. A *month* column (`unit === 1`,
+    // what a year drill-in or any zoom past the one-month-per-column floor
+    // produces) commits its own single month.
     const period =
-      unit === MONTHS_PER_YEAR
-        ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_YEAR - 1 }
-        : { startIndex: column.startIndex, endIndex: column.endIndex };
+      unit === MONTHS_PER_DECADE
+        ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_DECADE - 1 }
+        : unit === MONTHS_PER_YEAR
+          ? { startIndex: column.gridStart, endIndex: column.gridStart + MONTHS_PER_YEAR - 1 }
+          : { startIndex: column.startIndex, endIndex: column.endIndex };
     onchange(period, { commit: true });
-    if (unit === MONTHS_PER_YEAR) {
-      // Drill in so months become reachable in three interactions. The view
-      // frames the months that exist, so it keeps the clipped bounds.
-      reframeSuppressed = true;
-      view = zoomToRange(
-        { startIndex: column.startIndex, endIndex: column.endIndex },
-        width,
-        model
-      );
-    }
+
+    // FR-002/FR-003: the same activation zooms one level in — a decade shows its
+    // year columns, a year its month columns, and a month the month itself at
+    // one month per lane width — so the view is never left coarser than the
+    // activated period. The drill is this gesture's own view change: the
+    // selection-following effect must not re-frame it away.
+    reframeSuppressed = true;
+    view = zoomToUnitRange(period, finerUnit(unit) ?? unit, width, model);
   };
 
   // The `unit`-aligned grid the roving focus moves along. A period is addressed

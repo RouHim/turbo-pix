@@ -1258,4 +1258,48 @@ test.describe('Timeline', () => {
     await expect(page.locator('.timeline-levels')).toHaveAttribute('role', 'group');
     await expect(page.locator('.timeline-levels')).toHaveAttribute('aria-label', /.+/);
   });
+
+  test('should re-activate the active decade without a history entry or a coarser view', async ({
+    page,
+  }) => {
+    // GIVEN: the 1960s filter, framed at the decade level so its column exists
+    await page.goto('/?year=1960&to_year=1969');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator('.timeline-level[data-level="120"]').click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+    const historyLength = await page.evaluate(() => history.length);
+
+    // WHEN: the active decade column is activated again
+    await page.locator('.timeline-column[data-period-start="23520"]').click();
+
+    // THEN: the filter is unchanged, no history entry was added (otherwise Back
+    // would appear to do nothing), and the view only ever gets finer
+    await expect(page).toHaveURL(/[?&]year=1960&to_year=1969(&|$)/);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+
+    // AND: Back leaves the state, because the re-activation never entered history
+    await page.goBack();
+    await expect(page).not.toHaveURL(/year=/);
+  });
+
+  test('should show a decade filter in the mobile dropdowns', async ({ page }) => {
+    // GIVEN: a decade filter, whose start year (1960) the library has no bucket
+    // in — the oldest bucket is March 1962
+    await page.goto('/?year=1960&to_year=1969');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // WHEN: the viewport drops below the desktop breakpoint
+    await TestHelpers.setMobileViewport(page);
+
+    // THEN: exactly one experience is on screen and the dropdowns report the
+    // active filter instead of falling back to "All Years"
+    await expect(page.locator('#timeline-year-select')).toBeVisible();
+    await expect(page.locator('.timeline-selector')).toBeHidden();
+    await expect(page.locator('#timeline-year-select')).toHaveValue('1960');
+    await expect(page.locator('#timeline-month-select')).toHaveValue('');
+
+    // AND: the grid is still the decade's
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
 });

@@ -921,6 +921,15 @@ test.describe('Timeline', () => {
       const shadow = await control.evaluate((el) => getComputedStyle(el).boxShadow);
       expect(shadow).not.toBe('none');
     }
+
+    // The level pills are text buttons: their accessible name is their content
+    // (an aria-label would shadow it), and the ring comes from the same rule.
+    for (const level of ['120', '12', '1']) {
+      const control = page.locator(`.timeline-level[data-level="${level}"]`);
+      await expect(control).toHaveText(/.+/);
+      await control.focus();
+      expect(await control.evaluate((el) => getComputedStyle(el).boxShadow)).not.toBe('none');
+    }
   });
 
   test('should refuse to select a zero-photo single period by keyboard or brush', async ({
@@ -1141,5 +1150,112 @@ test.describe('Timeline', () => {
     await page.goForward();
     await TestHelpers.waitForUrlParam(page, 'year', '1962');
     await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1962');
+  });
+
+  test('should switch granularity with the level controls without touching the filter', async ({
+    page,
+  }) => {
+    // GIVEN: an active year filter, which the deep link frames at months
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+    const filteredState = TestHelpers.getUrlState(page);
+
+    // WHEN: the Year control is activated
+    await page.locator('.timeline-level[data-level="12"]').click();
+
+    // THEN: the lane renders year columns, the pressed control is the rendered
+    // level, and the filter — URL included — is untouched
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    await expect(page.locator('.timeline-level[data-level="12"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expect(page.locator('.timeline-level[data-level="1"]')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(TestHelpers.getUrlState(page)).toEqual(filteredState);
+    // AND: the filter's own year column is inside the window the control framed
+    await expect(page.locator('.timeline-column[data-period-start="24144"]')).toBeVisible();
+
+    // WHEN: the Month control is activated
+    await page.locator('.timeline-level[data-level="1"]').click();
+
+    // THEN: that filter's months fill the lane in one action (SC-003) and the
+    // filter is byte-identical
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute(
+      'data-period-start',
+      '24144'
+    );
+    expect(TestHelpers.getUrlState(page)).toEqual(filteredState);
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
+
+  test('should frame a level window when no filter fits it', async ({ page }) => {
+    // GIVEN: no filter at all, and the decade view at fit-all
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+
+    // WHEN: the Month control is activated
+    await page.locator('.timeline-level[data-level="1"]').click();
+
+    // THEN: a month-column window appears, no filter is written and the control
+    // is pressed
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+    expect(await page.locator('.timeline-column').count()).toBeGreaterThan(30);
+    await expect(page).not.toHaveURL(/year=/);
+    await expect(page.locator('.timeline-level[data-level="1"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+
+    // WHEN: a filter wider than the month window is active and the Month control
+    // is activated again, from a state whose level is a decade
+    await page.goto('/?year=1960&to_year=1969');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator('.timeline-level[data-level="120"]').click();
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+    await page.locator('.timeline-level[data-level="1"]').click();
+
+    // THEN: the window is narrower than the filter, the columns stay months and
+    // the filter is unchanged
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+    expect(await page.locator('.timeline-column').count()).toBeGreaterThan(30);
+    expect(TestHelpers.getUrlState(page)).toMatchObject({ year: 1960, toYear: 1969 });
+
+    // AND: activating the level already in effect is a no-op — the view does not
+    // move and the filter does not change (Scenario 2 acceptance 3)
+    const before = await page.evaluate(() => ({
+      start: document.querySelector('.timeline-column').dataset.periodStart,
+      left: Math.round(document.querySelector('.timeline-column').getBoundingClientRect().left),
+      search: location.search,
+    }));
+    await page.locator('.timeline-level[data-level="1"]').click();
+    const after = await page.evaluate(() => ({
+      start: document.querySelector('.timeline-column').dataset.periodStart,
+      left: Math.round(document.querySelector('.timeline-column').getBoundingClientRect().left),
+      search: location.search,
+    }));
+    expect(after).toEqual(before);
+  });
+
+  test('should activate a level control by keyboard with a visible focus ring', async ({
+    page,
+  }) => {
+    const yearControl = page.locator('.timeline-level[data-level="12"]');
+    await yearControl.focus();
+    const shadow = await yearControl.evaluate((el) => getComputedStyle(el).boxShadow);
+    expect(shadow).not.toBe('none');
+
+    // WHEN: the control is activated by keyboard
+    await page.keyboard.press('Enter');
+
+    // THEN: it behaves exactly like the pointer path and announces its state
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    await expect(yearControl).toHaveAttribute('aria-pressed', 'true');
+    // AND: the group names the level family for a screen reader
+    await expect(page.locator('.timeline-levels')).toHaveAttribute('role', 'group');
+    await expect(page.locator('.timeline-levels')).toHaveAttribute('aria-label', /.+/);
   });
 });

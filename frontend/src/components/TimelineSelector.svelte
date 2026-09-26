@@ -13,6 +13,7 @@
     createView,
     ensureSelectionVisible,
     finerUnit,
+    frameUnit,
     indexFromX,
     panView,
     placeLabels,
@@ -101,6 +102,15 @@
   };
 
   const unit = $derived(chooseUnit(view?.scale ?? 1));
+
+  // FR-006: the three granularity controls, coarsest first. Their `key` fields
+  // are i18n dot-paths the integrity guard scans (tests/i18n-integrity.test.js).
+  const LEVELS = [
+    { unit: MONTHS_PER_DECADE, key: 'ui.timeline_level_decade', fallback: 'Decade' },
+    { unit: MONTHS_PER_YEAR, key: 'ui.timeline_level_year', fallback: 'Year' },
+    { unit: 1, key: 'ui.timeline_level_month', fallback: 'Month' },
+  ];
+
   const columns = $derived(
     view === null ? [] : buildColumns({ unit, view, width, model, format, countInRange })
   );
@@ -619,6 +629,19 @@
     });
   };
 
+  // FR-006/FR-007: a granularity control changes only the view. It frames the
+  // active filter — or, when that filter is wider than the level's window, a
+  // window around the current view centre — and never writes a filter. The
+  // rendered unit IS the pressed control, so activating the level already in
+  // effect (or one the lane cannot render at this width) is a no-op.
+  const activateLevel = (levelUnit) => {
+    if (unit === levelUnit || view === null || width <= 0 || model.length === 0) return;
+    const next = frameUnit(levelUnit, { selection, view, width, model });
+    if (next.scale === view.scale && next.origin === view.origin) return;
+    reframeSuppressed = true;
+    view = next;
+  };
+
   const zoomIn = () => {
     if (view === null || model.length === 0) return;
     reframeSuppressed = true;
@@ -862,6 +885,23 @@
   <div class="timeline-footer">
     <div class="timeline-status" role="status" aria-live="polite">{statusText}</div>
     <div class="timeline-controls">
+      <div
+        class="timeline-levels"
+        role="group"
+        aria-label={$t('ui.timeline_granularity', { default: 'Granularity' })}
+      >
+        {#each LEVELS as level (level.unit)}
+          <button
+            type="button"
+            class="timeline-level"
+            data-level={level.unit}
+            aria-pressed={unit === level.unit}
+            onclick={() => activateLevel(level.unit)}
+          >
+            {$t(level.key, { default: level.fallback })}
+          </button>
+        {/each}
+      </div>
       <button
         type="button"
         class="timeline-control timeline-zoom-out"
@@ -1025,6 +1065,47 @@
     margin-left: auto;
   }
 
+  .timeline-levels {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  /* Pills, matching the control row's 32px target: the level name is the
+     accessible name, so the pressed state is the only extra signal. */
+  .timeline-level {
+    height: var(--space-8);
+    min-width: var(--space-8);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-xs);
+    cursor: pointer;
+    transition:
+      border-color var(--transition-fast),
+      color var(--transition-fast),
+      background-color var(--transition-fast);
+  }
+
+  .timeline-level:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+  }
+
+  .timeline-level[aria-pressed='true'] {
+    border-color: var(--primary-color);
+    background: color-mix(in oklch, var(--primary-color) 12%, transparent);
+    color: var(--primary-dark);
+  }
+
+  .timeline-level:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
   /* Measurement helper: it must keep the ruler labels' font, but a laid-out
      box would otherwise show up in the label geometry (its static position is
      the selector's content edge, on top of the first label). */
@@ -1072,7 +1153,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .timeline-control {
+    .timeline-control,
+    .timeline-level {
       transition: none;
     }
   }

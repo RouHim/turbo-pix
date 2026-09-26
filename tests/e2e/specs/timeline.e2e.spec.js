@@ -464,9 +464,17 @@ test.describe('Timeline', () => {
     // WHEN: drilling into the 1960s by activating the decade column
     await page.locator('.timeline-column[data-period-start="23520"]').click();
 
-    // THEN: years appear and nothing is filtered yet
+    // THEN: years appear, and the decade is the filter now — activating a period
+    // selects that period (FR-001), and a grid-aligned decade commits the whole
+    // ten years even though the library starts in March 1962
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
-    expect(TestHelpers.getUrlState(page).year).toBeNull();
+    await TestHelpers.waitForUrlParam(page, 'to_year', '1969');
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 1960,
+      month: null,
+      toYear: 1969,
+      toMonth: null,
+    });
 
     // WHEN: activating 1962 (23544 === 1962 * 12)
     await page.locator('.timeline-column[data-period-start="23544"]').click();
@@ -971,5 +979,167 @@ test.describe('Timeline', () => {
       toYear: 2012,
       toMonth: 4,
     });
+  });
+
+  test('should select a grid-aligned decade, drill into its years and keep the drill', async ({
+    page,
+  }) => {
+    // GIVEN: the cleared full span, where the columns are decades
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+
+    // WHEN: the 1960s column is activated (23520 === 1960 * 12). The library's
+    // oldest bucket is March 1962, so the decade reaches left of the data.
+    await page.locator('.timeline-column[data-period-start="23520"]').click();
+    await TestHelpers.waitForUrlParam(page, 'to_year', '1969');
+
+    // THEN: exactly that decade is the filter, in the canonical range form
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 1960,
+      month: null,
+      toYear: 1969,
+      toMonth: null,
+    });
+
+    // AND: the label names the decade, not its clipped March 1962 bounds
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1960s');
+
+    // AND: the view drilled one level in — the lane renders the decade's year
+    // columns, starting at the library's first year and reaching to 1972 for a
+    // 120-month span whose origin is pinned to the data start
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute(
+      'data-period-start',
+      '23544'
+    );
+    await expect(page.locator('.timeline-column').last()).toHaveAttribute(
+      'data-period-start',
+      '23664'
+    );
+
+    // AND: FR-013 — nothing re-frames the drill away. Re-assert after a full
+    // animation frame budget: a revert would land on fit-all's decades.
+    await page.waitForTimeout(250);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+
+    // AND: the grid holds the decade's photos only — legacy_01, March 1962
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+  });
+
+  test('should refuse an empty decade and announce it', async ({ page }) => {
+    // GIVEN: the decade view, whose 1990s column is empty (the fixture skips the
+    // decade: legacy_03 is 1985, legacy_04 is 2004)
+    const nineties = page.locator('.timeline-column[data-period-start="23880"]');
+    await expect(nineties).toHaveAttribute('aria-disabled', 'true');
+    await expect(nineties).toHaveAttribute('aria-label', /^1990s, No photos$/);
+
+    // AND: hovering announces the period and its emptiness before activation
+    await nineties.hover();
+    await expect(page.locator('.timeline-status')).toHaveText('1990s, No photos');
+
+    // WHEN: the period is activated — a raw input click, because `aria-disabled`
+    // columns are intentionally not DOM-disabled and Playwright's actionability
+    // gate would refuse `locator.click()`
+    const box = await nineties.boundingBox();
+    const before = await page.locator('.timeline-column').first().getAttribute('data-period-start');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+    // THEN: neither the filter nor the view moved
+    await expect(page).not.toHaveURL(/year=/);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute(
+      'data-period-start',
+      before
+    );
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
+  });
+
+  test('should keep an activated month filling the lane and stop at the deepest zoom', async ({
+    page,
+  }) => {
+    // GIVEN: the 2012 year view, where the columns are months
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
+
+    // WHEN: March 2012 (24146) is activated
+    await page.locator('.timeline-column[data-period-start="24146"]').click();
+    await TestHelpers.waitForUrlParam(page, 'month', '3');
+
+    // THEN: one month fills the lane — the finest level (FR-002/FR-009)
+    const month = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    expect(month.width).toBeGreaterThanOrEqual(lane.width - 1);
+
+    // AND: further zoom input has no effect on the view
+    await page.click('.timeline-zoom-in');
+    const after = await page.locator('.timeline-column[data-period-start="24146"]').boundingBox();
+    expect(Math.round(after.width)).toBe(Math.round(month.width));
+    expect(Math.round(after.x)).toBe(Math.round(month.x));
+
+    // AND: the filter is still that single month, not an end-bounded range
+    expect(TestHelpers.getUrlState(page)).toMatchObject({
+      year: 2012,
+      month: 3,
+      toYear: null,
+      toMonth: null,
+    });
+  });
+
+  test('should not activate the column beneath a drag that starts on the selected decade', async ({
+    page,
+  }) => {
+    // GIVEN: the 1960s selected and drilled, so its selection covers the lane
+    await page.locator('.timeline-column[data-period-start="23520"]').click();
+    await TestHelpers.waitForUrlParam(page, 'to_year', '1969');
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+
+    // WHEN: a drag starts inside the selection (the 1964 column) and ends three
+    // whole year columns later (the 1967 column) — a range translation, not a
+    // press on a period
+    const lane = await page.locator('.timeline-lane').boundingBox();
+    const from = await page.locator('.timeline-column[data-period-start="23568"]').boundingBox();
+    const to = await page.locator('.timeline-column[data-period-start="23604"]').boundingBox();
+    await page.mouse.move(from.x + from.width / 2, lane.y + lane.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, lane.y + lane.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    // THEN: only the drag's own result stands — the decade translated by three
+    // years — and 1964 was never activated (that would have written ?year=1964)
+    const state = TestHelpers.getUrlState(page);
+    expect(state.year).toBe(1963);
+    expect(state.month).toBeNull();
+    expect(state.toYear).toBe(1972);
+    expect(state.toMonth).toBeNull();
+  });
+
+  test('should restore a decade filter and its year view after a reload and history navigation', async ({
+    page,
+  }) => {
+    // GIVEN: a decade deep link
+    await page.goto('/?year=1960&to_year=1969');
+    await TestHelpers.waitForPhotosToLoad(page);
+
+    // THEN: the filter survives untouched (no canonicalisation rewrite) and the
+    // view frames the decade at year granularity
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1960s');
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+    await expect(page).toHaveURL(/[?&]year=1960&to_year=1969(&|$)/);
+
+    // WHEN: the user drills into 1962 and then goes back
+    await page.locator('.timeline-column[data-period-start="23544"]').click();
+    await TestHelpers.waitForUrlParam(page, 'year', '1962');
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1962');
+    await page.goBack();
+
+    // THEN: the decade filter and its year view are back
+    await expect(page).toHaveURL(/[?&]year=1960&to_year=1969(&|$)/);
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1960s');
+    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
+
+    // AND: forward restores the year
+    await page.goForward();
+    await TestHelpers.waitForUrlParam(page, 'year', '1962');
+    await expect(page.locator('.timeline-header .timeline-label')).toHaveText('1962');
   });
 });

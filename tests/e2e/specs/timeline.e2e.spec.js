@@ -1175,6 +1175,8 @@ test.describe('Timeline', () => {
       'aria-pressed',
       'false'
     );
+    // AND: exactly one pill is pressed — the pressed control is the rendered level
+    await expect(page.locator('.timeline-level[aria-pressed="true"]')).toHaveCount(1);
     expect(TestHelpers.getUrlState(page)).toEqual(filteredState);
     // AND: the filter's own year column is inside the window the control framed
     await expect(page.locator('.timeline-column[data-period-start="24144"]')).toBeVisible();
@@ -1225,7 +1227,22 @@ test.describe('Timeline', () => {
     expect(TestHelpers.getUrlState(page)).toMatchObject({ year: 1960, toYear: 1969 });
 
     // AND: activating the level already in effect is a no-op — the view does not
-    // move and the filter does not change (Scenario 2 acceptance 3)
+    // move and the filter does not change (Scenario 2 acceptance 3). This has to
+    // be measured on a state where the selection FITS the level's window: on the
+    // wider-than-window branch above, `frameUnit` is a pure function of the
+    // current view and its `clampOrigin` is idempotent, so the assertion would
+    // hold even with the `unit === levelUnit` short-circuit deleted.
+    await page.goto('/?year=2012');
+    await TestHelpers.waitForPhotosToLoad(page);
+    // The Month pill is the rendered level here, and two zoom steps — anchored on
+    // the lane centre and pinned by `reframeSuppressed`, so the selection is not
+    // followed back — leave the lane no longer framed on the 12-month selection.
+    await page.locator('.timeline-zoom-in').click();
+    await page.locator('.timeline-zoom-in').click();
+    await expect(page.locator('.timeline-column').first()).not.toHaveAttribute(
+      'data-period-start',
+      '24144'
+    );
     const before = await page.evaluate(() => ({
       start: document.querySelector('.timeline-column').dataset.periodStart,
       left: Math.round(document.querySelector('.timeline-column').getBoundingClientRect().left),

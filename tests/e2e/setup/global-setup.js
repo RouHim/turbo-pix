@@ -1,7 +1,7 @@
 import { exec, execFileSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { copyFile, mkdir, readlink, rm, utimes, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, renameSync, rmSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -130,6 +130,11 @@ async function setupTestDataDirectory() {
 function seedMultitrackFixture(source, destination) {
   const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
   const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
+  // Mux into a per-process staging sibling and rename it into place: two runs
+  // sharing this worktree (a re-run racing its predecessor, a sibling spec run)
+  // would otherwise write the same destination, and one of them would probe the
+  // other's half-written file — "moov atom not found" on a fixture that is fine.
+  const staging = `${destination}.${process.pid}.tmp`;
   try {
     execFileSync(
       ffmpeg,
@@ -145,11 +150,17 @@ function seedMultitrackFixture(source, destination) {
         'copy',
         '-movflags',
         '+faststart',
-        destination,
+        // The staging name carries no media extension, so name the muxer: it
+        // also keeps a leaked staging file from looking like indexable media.
+        '-f',
+        'mp4',
+        staging,
       ],
       { stdio: ['ignore', 'ignore', 'pipe'] }
     );
+    renameSync(staging, destination);
   } catch (error) {
+    rmSync(staging, { force: true });
     throw new Error(
       `Failed to seed ${destination} from ${source} with ${ffmpeg}: ` +
         `${error.stderr?.toString().trim() || error.message}`

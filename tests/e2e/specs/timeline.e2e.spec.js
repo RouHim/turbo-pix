@@ -1264,8 +1264,11 @@ test.describe('Timeline', () => {
   test('should activate a level control by keyboard with a visible focus ring', async ({
     page,
   }) => {
-    // WHEN: each granularity control is focused and activated by keyboard
-    for (const level of ['120', '12', '1']) {
+    // WHEN: each granularity control is focused and activated by keyboard.
+    // The order matters: every press must MOVE the rendered unit, so a pill
+    // whose handler did nothing cannot pass. Fit-all already renders decades,
+    // so Decade comes last (month window -> year window -> fit all).
+    for (const level of ['1', '12', '120']) {
       const control = page.locator(`.timeline-level[data-level="${level}"]`);
       await control.focus();
       const shadow = await control.evaluate((el) => getComputedStyle(el).boxShadow);

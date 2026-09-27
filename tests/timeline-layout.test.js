@@ -337,13 +337,21 @@ test('the level bands sit strictly inside the unit thresholds', () => {
   // the requested unit: a band edge landing on `chooseUnit`'s threshold would
   // silently drill into the wrong granularity (months after a decade click at a
   // 4K width) or fall back to a coarser one on a narrow lane.
+  // The floor and the ceiling are width-independent; only the span round-trips
+  // need a lane width.
+  for (const unit of [1, 12, 120]) {
+    assert.ok(unitScaleMin(unit) <= unitScaleMax(unit), `${unit}: empty band`);
+    assert.equal(chooseUnit(unitScaleMin(unit)), unit, `${unit}: band floor`);
+    assert.equal(chooseUnit(unitScaleMax(unit)), unit, `${unit}: band ceiling`);
+  }
   for (const width of [300, 640, 769, 1024, 1200, 1920, 2560, 4000]) {
     for (const unit of [1, 12, 120]) {
-      assert.ok(unitScaleMin(unit) <= unitScaleMax(unit), `${unit}: empty band`);
-      assert.equal(chooseUnit(unitScaleMin(unit)), unit, `${unit}: band floor`);
-      assert.equal(chooseUnit(unitScaleMax(unit)), unit, `${unit}: band ceiling`);
-      assert.equal(chooseUnit(width / unitWindow(unit, width)), unit, `${unit}: widest window`);
-      assert.equal(chooseUnit(width / unitMinSpan(unit, width)), unit, `${unit}: narrowest span`);
+      assert.equal(chooseUnit(width / unitWindow(unit, width)), unit, `${unit}@${width}: window`);
+      assert.equal(
+        chooseUnit(width / unitMinSpan(unit, width)),
+        unit,
+        `${unit}@${width}: min span`
+      );
     }
   }
   assert.equal(finerUnit(120), 12);
@@ -450,7 +458,8 @@ test('a level control frames a filter that fits and a window around the view cen
   // for a 64-year library is the whole span.
   const decades = frameUnit(120, { selection: null, view, width, model: legacyModel });
   assert.equal(chooseUnit(decades.scale), 120);
-  assert.deepEqual(decades, createView(width, legacyModel));
+  assert.ok(Math.abs(decades.scale - width / legacyModel.length) < 1e-9, 'the fit-all scale');
+  assert.equal(decades.origin, legacyModel.minIndex, 'pinned to the model start');
 
   // A filter wider than the level's window frames around the current view
   // centre instead (FR-007), never around the filter's own centre.

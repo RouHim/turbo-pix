@@ -1052,6 +1052,10 @@ test.describe('Timeline', () => {
     const box = await nineties.boundingBox();
     const before = await page.locator('.timeline-column').first().getAttribute('data-period-start');
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    // The click must be proven to have reached the button: without this, a
+    // press that lands on the lane (or on a handle) leaves all the assertions
+    // below true and the test would pass with the `count === 0` guard deleted.
+    await expect(nineties).toBeFocused();
 
     // THEN: neither the filter nor the view moved
     await expect(page).not.toHaveURL(/year=/);
@@ -1260,17 +1264,22 @@ test.describe('Timeline', () => {
   test('should activate a level control by keyboard with a visible focus ring', async ({
     page,
   }) => {
-    const yearControl = page.locator('.timeline-level[data-level="12"]');
-    await yearControl.focus();
-    const shadow = await yearControl.evaluate((el) => getComputedStyle(el).boxShadow);
-    expect(shadow).not.toBe('none');
+    // WHEN: each granularity control is focused and activated by keyboard
+    for (const level of ['120', '12', '1']) {
+      const control = page.locator(`.timeline-level[data-level="${level}"]`);
+      await control.focus();
+      const shadow = await control.evaluate((el) => getComputedStyle(el).boxShadow);
+      expect(shadow).not.toBe('none');
 
-    // WHEN: the control is activated by keyboard
-    await page.keyboard.press('Enter');
+      await page.keyboard.press('Enter');
 
-    // THEN: it behaves exactly like the pointer path and announces its state
-    await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
-    await expect(yearControl).toHaveAttribute('aria-pressed', 'true');
+      // THEN: it behaves exactly like the pointer path — the lane renders that
+      // level and exactly that pill is pressed
+      await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', level);
+      await expect(control).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('.timeline-level[aria-pressed="true"]')).toHaveCount(1);
+    }
+
     // AND: the group names the level family for a screen reader
     await expect(page.locator('.timeline-levels')).toHaveAttribute('role', 'group');
     await expect(page.locator('.timeline-levels')).toHaveAttribute('aria-label', /.+/);

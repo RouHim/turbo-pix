@@ -1,3 +1,21 @@
+# [2.44.0](https://github.com/RouHim/turbo-pix/compare/2.43.3...2.44.0) (2026-09-27)
+
+
+### Bug Fixes
+
+* **timeline:** skip identical filter commits and list a decade's year ([629fa01](https://github.com/RouHim/turbo-pix/commit/629fa019f05cf7b1424d2bb161e2ae4ec1708dce))
+* **timeline:** skip identical filter commits and list a decade's year ([69332cf](https://github.com/RouHim/turbo-pix/commit/69332cf9c728f8e042f467d2ea8afa3515b24c26))
+
+
+### Features
+
+* **timeline:** add decade, year and month granularity controls ([1776c62](https://github.com/RouHim/turbo-pix/commit/1776c6229eee32c7d6d5df05111f06d8bb0de78d))
+* **timeline:** add the granularity band arithmetic ([d7e26a5](https://github.com/RouHim/turbo-pix/commit/d7e26a59272448761dddf969ac6a907a37e1c61a))
+* **timeline:** frame a period or a filter at a granularity level ([9376216](https://github.com/RouHim/turbo-pix/commit/93762167a17017d01c74687cc0573b52e3cc1b03))
+* **timeline:** label a grid-aligned decade as the decade ([ad7a9d1](https://github.com/RouHim/turbo-pix/commit/ad7a9d18815316530ec05e3c852730bcd67eaa39))
+* **timeline:** select the activated period and drill one level in ([918e960](https://github.com/RouHim/turbo-pix/commit/918e960c5fc62aa497b0a08258561880ab18b7e4))
+* **timeline:** treat a grid-aligned decade as a period ([b9743df](https://github.com/RouHim/turbo-pix/commit/b9743df0ab8e068a614da5b78efc690b7d76d857))
+
 ## [2.43.3](https://github.com/RouHim/turbo-pix/compare/2.43.2...2.43.3) (2026-09-26)
 
 ## [2.43.2](https://github.com/RouHim/turbo-pix/compare/2.43.1...2.43.2) (2026-09-26)

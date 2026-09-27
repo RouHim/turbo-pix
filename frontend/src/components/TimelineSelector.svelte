@@ -700,7 +700,10 @@
   // reset — the view built above is already the right one for a deep link, and
   // re-creating it here from a not-yet-measured width would throw the restored
   // selection's framing away.
-  let resetHandled = resetNonce;
+  // Read through `untrack` on purpose: only the mount-time nonce matters here
+  // (a later `resetNonce` is handled by the effect below), and a bare read
+  // would make Svelte warn that the reference captures the initial value.
+  let resetHandled = untrack(() => resetNonce);
   $effect(() => {
     const nonce = resetNonce;
     if (nonce === resetHandled) return;

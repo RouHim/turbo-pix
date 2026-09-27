@@ -70,7 +70,8 @@ export const normalizeDateFilter = (raw) => {
  * Active selection, clamped to the months the library actually has; `null`
  * without overlap.
  *
- * A range (an explicit end bound) narrows to the overlap. A bare period keeps
+ * A range (an explicit end bound) narrows to the overlap, except a grid-aligned
+ * decade, which is a period and keeps its own bounds. A bare period keeps
  * both of its own boundaries — `?year=2012` must select January–December 2012
  * even when the library starts that March or ends before December — so the
  * round trip through `filterFromSelection` is stable and the clamp effect does

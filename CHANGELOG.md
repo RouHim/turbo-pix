@@ -1,3 +1,12 @@
+## [2.44.1](https://github.com/RouHim/turbo-pix/compare/2.44.0...2.44.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **e2e:** seed the multitrack fixture through an atomic rename ([b523300](https://github.com/RouHim/turbo-pix/commit/b5233009a2cb29412a9b8a8c5fe2448a34819019))
+* **timeline:** make the band ceiling inclusive and share the level window ([2f3c556](https://github.com/RouHim/turbo-pix/commit/2f3c5562e131458c219a8227b03b95808e513fac))
+* **timeline:** read the mount-time reset nonce through untrack ([735be16](https://github.com/RouHim/turbo-pix/commit/735be162707883e727a8390f9c396e612ea3c3a0))
+
 # [2.44.0](https://github.com/RouHim/turbo-pix/compare/2.43.3...2.44.0) (2026-09-27)
 
 

@@ -1,4 +1,7 @@
 <script>
+  // Comments marked `prev-spec` cite the timeline selector spec this drill-down
+  // extends (`.spec/date-month-selector.md`); an unmarked FR/SC citation refers
+  // to `.spec/timeline-selector-year-month-drilldown.md`.
   import { tick, untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import { locale } from 'svelte-i18n';
@@ -51,7 +54,7 @@
   // The pointers currently down on the lane, by id, holding the client X of
   // their last event. A single one drives brush/handle/translate, so the drag
   // can no longer assume it owns the whole pointer stream: a second one turns
-  // the gesture into a pinch (FR-003: zoom by touch).
+  // the gesture into a pinch (prev-spec FR-003: zoom by touch).
   const lanePointers = new SvelteMap();
   // Type of the last pointer that landed on the lane. Two simultaneous
   // pointers only exist for touch, so this gates the pinch and keeps it from
@@ -69,7 +72,7 @@
   // Set while a *user gesture* owns the view change it makes — a keyboard focus
   // move (`focusColumn`), a zoom control, a wheel, the release of a ruler pan or
   // a column drill-in. The selection-following effect further down must not undo
-  // that change (see `focusColumn`): without it the FR-010 reframe reverts every
+  // that change (see `focusColumn`): without it the prev-spec FR-010 reframe reverts every
   // user-initiated view change that takes the selection off screen, and a
   // zoom-in press lands on the fixed point `width / span` and changes nothing.
   // One-shot: the effect reads it and clears it.
@@ -118,7 +121,7 @@
   const columnMax = $derived(columns.reduce((max, column) => Math.max(max, column.count), 0) || 1);
   const effectiveSelection = $derived(drag?.selection ?? selection);
 
-  // FR-009 gives draggable bounds and translation to an active *range* only. A
+  // prev-spec FR-009 gives draggable bounds and translation to an active *range* only. A
   // single period — one month, or one whole year, the two shapes the route
   // collapses into a bare `year`/`month` — is not a range, so a press on its
   // overlay starts a new brush instead of a translation. Without that, a
@@ -152,8 +155,8 @@
 
   const rowCount = (column) => photoCountLabel(column.count);
 
-  // Every period announcement names the period *and* what it holds (FR-014,
-  // SC-005): columns say it in `aria-label`, handles in `aria-valuetext`. The
+  // Every period announcement names the period *and* what it holds (prev-spec FR-014,
+  // prev-spec SC-005): columns say it in `aria-label`, handles in `aria-valuetext`. The
   // status row names the hovered/focused column, so it reuses the column's own
   // label — the granularity the ruler shows — instead of formatting a second
   // time from the period's first month.
@@ -189,7 +192,7 @@
       : { startIndex: base.startIndex, endIndex: bound };
   };
 
-  // FR-007: a period without photos is never selectable, so no gesture may
+  // prev-spec FR-007: a period without photos is never selectable, so no gesture may
   // write a selection that is exactly one zero-photo month — neither the live
   // scrub nor the committed value. A range of two months or more stays legal
   // (it may merely contain empty months), and a route that already names such
@@ -480,7 +483,7 @@
     );
 
   // Arrow/Home/End walk the periods a user can *act* on: a period without
-  // photos announces itself but ignores activation (FR-007, `aria-disabled`),
+  // photos announces itself but ignores activation (prev-spec FR-007, `aria-disabled`),
   // and it cannot be selected either, so navigation lands on periods with
   // photos instead of parking on one that swallows Enter. `null` means the
   // direction holds none.
@@ -578,7 +581,7 @@
   // Handles are sliders: arrows move the bound one month at a time through
   // `clampBound` (a bound never crosses the other, so the range never inverts
   // and never leaves the model span), Home/End go to the model ends, and every
-  // move commits so the grid follows (SC-003).
+  // move commits so the grid follows (prev-spec SC-003).
   const handleBoundKeydown = (event, bound) => {
     const base = effectiveSelection;
     if (base === null || model.length === 0) return;
@@ -675,7 +678,7 @@
   // Re-clamp on model/width/view changes, but assign only when something moved:
   // clampView returns a fresh object, so an unconditional assign re-triggers
   // this effect forever. The first view a restored selection builds is framed
-  // on that selection instead of the whole span (SC-002: a `?year=2012` deep
+  // on that selection instead of the whole span (prev-spec SC-002: a `?year=2012` deep
   // link opens on that year's months, so the month it names is one activation
   // away), which is why `selection` is read before the guard.
   $effect(() => {
@@ -708,7 +711,7 @@
     });
   });
 
-  // FR-010: keep the selection on screen — never fight a gesture in progress
+  // prev-spec FR-010: keep the selection on screen — never fight a gesture in progress
   // (a drag, or a pinch, which drops the drag as it takes over) or a user view
   // change of its own (`reframeSuppressed`), and leave an already visible
   // selection's view untouched. (`reframeSuppressed` is read before the guards,
@@ -963,7 +966,7 @@
   }
 
   /* Full lane height, so a period with no photos is still a pointer target:
-     FR-007 lets a user *attempt* the activation of an empty period, which a
+     prev-spec FR-007 lets a user *attempt* the activation of an empty period, which a
      zero-height button (bar height 0) could not do. The bar stays the visible
      density profile. */
   .timeline-column {
@@ -989,7 +992,7 @@
     background: var(--background-secondary);
   }
 
-  /* Hover/focus reveals the period (FR-006) with a lighter tint than the
+  /* Hover/focus reveals the period (prev-spec FR-006) with a lighter tint than the
      active state, which stays the strongest signal on the lane. */
   .timeline-column.hovered .timeline-column-bar {
     background: color-mix(in oklch, var(--primary-color) 30%, transparent);
@@ -1038,7 +1041,7 @@
     right: 0;
   }
 
-  /* The ring is what makes a focused bound visible (SC-004/FR-014). */
+  /* The ring is what makes a focused bound visible (prev-spec FR-014). */
   .timeline-handle:focus-visible {
     outline: none;
     box-shadow:

@@ -85,7 +85,7 @@
       // FR-010: re-activating the period that is already the filter — or ending
       // a gesture exactly where it started — is not a state change, and a
       // duplicate history entry would make Back appear to do nothing. `filter`
-      // is the canonical route filter, so a non-canonical restored URL is still
+      // is the normalized route filter, so a non-canonical restored URL is still
       // left to the canonicalising effect below instead of being rewritten here.
       if (filterEquals(nextFilter, filter)) return;
       pushState(nextFilter);

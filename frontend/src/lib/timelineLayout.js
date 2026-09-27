@@ -115,20 +115,26 @@ export const unitWindow = (unit, width) => width / unitScaleMin(unit);
 /** Narrowest span (months) that still renders `unit`; 0 for months. */
 export const unitMinSpan = (unit, width) => width / unitScaleMax(unit);
 
+/** The lane's span for `unit`, never wider than the model. */
+const unitSpanWindow = (unit, width, model) => Math.min(unitWindow(unit, width), model.length);
+
 /**
  * Whether the lane can render `unit` at all: a model span must fall inside the
  * unit's band. A ten-year library has no decade view, a lane thinner than one
  * month column has no month view, and both are no-ops rather than clamps.
+ * The band's ceiling is inclusive: a span exactly at `unitMinSpan` renders
+ * the unit, not the finer one.
  */
 export const canRenderUnit = (unit, width, model) => {
   if (width <= 0 || model.length === 0) return false;
-  const window = Math.min(unitWindow(unit, width), model.length);
-  return window >= 1 && window > unitMinSpan(unit, width);
+  const window = unitSpanWindow(unit, width, model);
+  return window >= 1 && window >= unitMinSpan(unit, width);
 };
 
 const formatColumnLabel = (unit, gridStart, format) => {
   const { year } = fromMonthIndex(gridStart);
-  if (unit === MONTHS_PER_DECADE) return format.decadeLabel(year - (year % 10));
+  // `gridStart` is a multiple of the unit, so a decade column's year is aligned.
+  if (unit === MONTHS_PER_DECADE) return format.decadeLabel(year);
   if (unit === MONTHS_PER_YEAR) return String(year);
   return format.periodName(gridStart);
 };
@@ -251,7 +257,7 @@ export const zoomToUnitRange = (range, unit, width, model) =>
  */
 export const frameUnit = (unit, { selection, view, width, model }) => {
   if (!canRenderUnit(unit, width, model)) return view;
-  const window = Math.min(unitWindow(unit, width), model.length);
+  const window = unitSpanWindow(unit, width, model);
   if (selection !== null && selection.endIndex - selection.startIndex + 1 <= window) {
     return viewAround(
       clampSpanToUnit(selection.endIndex - selection.startIndex + 1, unit, width),

@@ -25,7 +25,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveTime, Timelike, Utc};
 
 /// Extensions this project will rewrite in place.
 pub const WRITABLE_EXTENSIONS: [&str; 3] = ["mp4", "mov", "m4v"];
@@ -45,6 +45,9 @@ const META_BOX: [u8; 4] = *b"meta";
 
 /// Legacy QuickTime item type carrying a date.
 const DAY_BOX: [u8; 4] = [0xA9, b'd', b'a', b'y'];
+
+/// [`DAY_BOX`] as text: how a failure names the carrier it could not fill.
+const DAY_NAME: &str = "\u{a9}day";
 
 /// Legacy QuickTime item type carrying an ISO 6709 location.
 const XYZ_BOX: [u8; 4] = [0xA9, b'x', b'y', b'z'];
@@ -734,10 +737,11 @@ const TIME_BOXES: [[u8; 4]; 3] = [*b"mvhd", *b"tkhd", *b"mdhd"];
 
 /// One region of the `moov` a carrier replaces, and what replaces it.
 ///
-/// Today the only carriers are the fixed-width creation timestamps above, whose
-/// replacement is as long as the field it overwrites. The text carriers of
-/// `©day`/`©xyz` and their mdta keys join this list in later steps, which is why
-/// the rebuild below is written as a splice rather than as a byte poke.
+/// Every replacement is as long as the region it overwrites: the fixed-width
+/// creation timestamps, and the text date carriers, whose rendering is padded
+/// with NULs to the payload slot it replaces. The location carriers of
+/// `©xyz` and their mdta keys join this list in a later step, which is why the
+/// rebuild below is written as a splice rather than as a byte poke.
 struct MoovEdit {
     /// Offset of the region in the original `moov`.
     offset: usize,
@@ -747,11 +751,15 @@ struct MoovEdit {
     content: Vec<u8>,
 }
 
-/// Rewrites the creation timestamps of `mvhd`, `tkhd` and `mdhd` in place, and
-/// hands back a fingerprint plus an undo token.
+/// Rewrites the creation timestamps of `mvhd`, `tkhd` and `mdhd` in place,
+/// together with every text date carrier the file holds, and hands back a
+/// fingerprint plus an undo token.
 ///
-/// The container's text carriers (`©day`, `©xyz`, the mdta pair) keep their
-/// bytes in this step; a later step renders them into the same rebuild.
+/// Each text carrier is rendered in its own representation (see
+/// [`render_date_in_shape`]), so the carriers still name one instant after the
+/// save and the file's byte length is unchanged. The location carriers
+/// (`©xyz` and their mdta keys) keep their bytes for now; a later step renders
+/// them into the same rebuild.
 ///
 /// All-or-nothing: the date and the coordinates are validated, the `moov` tree
 /// is parsed and the whole replacement is rendered and length-checked before
@@ -877,6 +885,196 @@ pub(crate) fn quicktime_seconds(dt: DateTime<Utc>) -> Option<u32> {
     u32::try_from(seconds).ok()
 }
 
+/// Renders `new` into the shape `existing` is written in, or `None` when
+/// `existing` is not one of the shapes a date carrier uses.
+///
+/// The shape is kept, not replaced: the separator, the fraction width and the
+/// offset style all come from `existing`, so a `Z` carrier stays `Z`, an offset
+/// carrier says the same instant in that same offset, and a carrier that names
+/// no offset gets the UTC wall clock. Only the four forms a carrier actually
+/// holds are recognized — `YYYY-MM-DD`, optionally `[T ]hh:mm:ss`, optionally
+/// `.fraction`, optionally `Z`/`±hhmm`/`±hh:mm` — and nothing else is invented.
+pub(crate) fn render_date_in_shape(existing: &str, new: DateTime<Utc>) -> Option<Vec<u8>> {
+    DateShape::parse(existing.as_bytes()).map(|shape| shape.render(new))
+}
+
+/// How a carrier writes an instant: which fields it has, how they are
+/// separated, how many fraction digits it keeps and how it names its offset.
+struct DateShape {
+    /// `T` or ` ` between the date and the time; `None` for a date-only value.
+    separator: Option<u8>,
+    /// Digits behind the seconds, 0 when the value has no fraction.
+    fraction_digits: usize,
+    /// The zone the instant is rendered in and the text naming it.
+    offset: OffsetStyle,
+}
+
+/// The offset of a carrier's value: where the instant is rendered, and the
+/// literal text that says so (`Z`, `+0200`, `+02:00`, or nothing at all).
+struct OffsetStyle {
+    zone: FixedOffset,
+    text: Vec<u8>,
+}
+
+impl DateShape {
+    /// The shape of a stored value, or `None` when it is not a shape this
+    /// writer knows.
+    fn parse(value: &[u8]) -> Option<Self> {
+        let year = digits(value, 0, 4)?;
+        if value.get(4)? != &b'-' {
+            return None;
+        }
+        let month = digits(value, 5, 2)?;
+        if value.get(7)? != &b'-' {
+            return None;
+        }
+        let day = digits(value, 8, 2)?;
+        NaiveDate::from_ymd_opt(year as i32, month, day)?;
+
+        let mut rest = value.get(10..)?;
+        if rest.is_empty() {
+            return Some(Self {
+                separator: None,
+                fraction_digits: 0,
+                offset: OffsetStyle::parse(&[])?,
+            });
+        }
+        let separator = *rest.first()?;
+        if separator != b'T' && separator != b' ' {
+            return None;
+        }
+        let hour = digits(rest, 1, 2)?;
+        if rest.get(3)? != &b':' {
+            return None;
+        }
+        let minute = digits(rest, 4, 2)?;
+        if rest.get(6)? != &b':' {
+            return None;
+        }
+        let second = digits(rest, 7, 2)?;
+        NaiveTime::from_hms_opt(hour, minute, second)?;
+        rest = rest.get(9..)?;
+
+        let mut fraction_digits = 0;
+        if rest.first() == Some(&b'.') {
+            fraction_digits = rest[1..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if fraction_digits == 0 || fraction_digits > 9 {
+                return None;
+            }
+            rest = rest.get(1 + fraction_digits..)?;
+        }
+        Some(Self {
+            separator: Some(separator),
+            fraction_digits,
+            offset: OffsetStyle::parse(rest)?,
+        })
+    }
+
+    /// `new` written the way this shape writes an instant.
+    fn render(&self, new: DateTime<Utc>) -> Vec<u8> {
+        let local = new.with_timezone(&self.offset.zone);
+        let mut rendered = format!(
+            "{:04}-{:02}-{:02}",
+            local.year(),
+            local.month(),
+            local.day()
+        );
+        if let Some(separator) = self.separator {
+            let fraction = if self.fraction_digits > 0 {
+                // Truncated, never rounded: the digits are the instant's own,
+                // only as many of them as this carrier keeps.
+                let mut nanos = format!("{:09}", local.nanosecond());
+                nanos.truncate(self.fraction_digits);
+                format!(".{nanos}")
+            } else {
+                String::new()
+            };
+            rendered.push_str(&format!(
+                "{}{:02}:{:02}:{:02}{fraction}",
+                char::from(separator),
+                local.hour(),
+                local.minute(),
+                local.second(),
+            ));
+        }
+        let mut bytes = rendered.into_bytes();
+        bytes.extend_from_slice(&self.offset.text);
+        bytes
+    }
+}
+
+impl OffsetStyle {
+    /// The offset a value ends with, consuming every byte it has. Absent,
+    /// `Z`, `±hhmm` and `±hh:mm` are the whole vocabulary; anything else — an
+    /// out-of-range or half-written offset — makes the value unrenderable
+    /// rather than being normalized into a style the file never had.
+    fn parse(value: &[u8]) -> Option<Self> {
+        let zone = |seconds: i32| FixedOffset::east_opt(seconds);
+        if value.is_empty() {
+            return Some(Self {
+                zone: zone(0)?,
+                text: Vec::new(),
+            });
+        }
+        if value == b"Z" {
+            return Some(Self {
+                zone: zone(0)?,
+                text: b"Z".to_vec(),
+            });
+        }
+        let sign = match value.first()? {
+            b'+' => 1i32,
+            b'-' => -1i32,
+            _ => return None,
+        };
+        let (hours, minutes) = match value.len() {
+            5 => (digits(value, 1, 2)?, digits(value, 3, 2)?),
+            6 if value.get(3) == Some(&b':') => (digits(value, 1, 2)?, digits(value, 4, 2)?),
+            _ => return None,
+        };
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        let seconds =
+            sign * (i32::try_from(hours).ok()? * 3600 + i32::try_from(minutes).ok()? * 60);
+        Some(Self {
+            zone: zone(seconds)?,
+            text: value.to_vec(),
+        })
+    }
+}
+
+/// `len` decimal digits at `start` of `bytes`, as a number; `None` when any of
+/// them is not a digit.
+fn digits(bytes: &[u8], start: usize, len: usize) -> Option<u32> {
+    let field = bytes.get(start..start + len)?;
+    field.iter().try_fold(0u32, |value, byte| {
+        byte.is_ascii_digit()
+            .then(|| value * 10 + u32::from(byte - b'0'))
+    })
+}
+
+/// Writes `rendered` into the front of `slot` and NUL-fills the rest, so the
+/// carrier's payload keeps the byte length it already has.
+///
+/// A rendering that does not fit is the caller's decision to make — [`NoRoom`]
+/// for a container with no room to grow — so it is caught here only as a
+/// violated invariant, never as a failure the caller may ignore.
+///
+/// [`NoRoom`]: Mp4MetadataError::NoRoom
+pub(crate) fn write_payload_slot(slot: &mut [u8], rendered: &[u8]) {
+    debug_assert!(
+        rendered.len() <= slot.len(),
+        "the rendered value must fit the payload slot it replaces"
+    );
+    let written = rendered.len().min(slot.len());
+    slot[..written].copy_from_slice(&rendered[..written]);
+    slot[written..].fill(0);
+}
+
 /// A modification time in the form the scanner stores: whole seconds.
 fn truncate_to_seconds(time: SystemTime) -> DateTime<Utc> {
     time.duration_since(std::time::UNIX_EPOCH)
@@ -915,9 +1113,10 @@ fn rebuild_moov(
 
 /// Every carrier this writer renders, as regions of `original`.
 ///
-/// Only the fixed-width timestamps today; the text carriers come later. All of
-/// them are rendered before anything is written, so a carrier that cannot hold
-/// the new value fails the write instead of leaving a half-patched file.
+/// The fixed-width creation fields, and the text carriers a save has to keep in
+/// step with them. All of them are rendered before anything is written, so a
+/// carrier that cannot hold the new value fails the write instead of leaving a
+/// half-patched file.
 fn carriers(
     buf: &[u8],
     moov: &BoxSpan,
@@ -927,8 +1126,105 @@ fn carriers(
     if let Some(taken_at) = edit.taken_at {
         let seconds = quicktime_seconds(taken_at).ok_or(Mp4MetadataError::InvalidDate)?;
         collect_time_edits(buf, moov, seconds, &mut edits)?;
+        collect_text_date_edits(buf, moov, taken_at, &mut edits)?;
     }
     Ok(edits)
+}
+
+/// Collects the replacement of every text date carrier at or below `moov`: the
+/// mdta keys, the `©day` `ilst` item and the direct `udta/©day` child.
+///
+/// All of them are rendered here, before anything is written, so that a carrier
+/// whose value cannot be read as a date — or that cannot hold the rendering —
+/// fails the whole write. Nothing is left half-updated: a file whose carriers
+/// disagree about the recording instant is worse than one that was refused.
+fn collect_text_date_edits(
+    buf: &[u8],
+    moov: &BoxSpan,
+    taken_at: DateTime<Utc>,
+    edits: &mut Vec<MoovEdit>,
+) -> Result<(), Mp4MetadataError> {
+    if let Some(ilst) = find_path(moov, &[*b"udta", META_BOX, *b"ilst"]) {
+        let keys = mdta_keys(buf, moov);
+        for (position, key) in keys.iter().enumerate() {
+            let Some(name) = MDTA_CREATION_DATE_KEYS
+                .iter()
+                .find(|name| **name == key.as_str())
+            else {
+                continue;
+            };
+            // mdta indexes are 1-based, and a key the file names twice is
+            // carried by an item per position.
+            let Ok(index) = u32::try_from(position + 1) else {
+                continue;
+            };
+            for item in &ilst.children {
+                if item.kind == index.to_be_bytes() {
+                    let (start, end) = item_text_slot(buf, item, name)?;
+                    edits.push(text_date_edit(buf, name, start, end, taken_at)?);
+                }
+            }
+        }
+        for item in &ilst.children {
+            if item.kind == DAY_BOX {
+                let (start, end) = item_text_slot(buf, item, DAY_NAME)?;
+                edits.push(text_date_edit(buf, DAY_NAME, start, end, taken_at)?);
+            }
+        }
+    }
+    if let Some(udta) = find_child(moov, b"udta") {
+        if let Some(direct) = find_child(udta, &DAY_BOX) {
+            let start = direct.offset + header_len(buf, direct.offset);
+            let end = direct.offset + direct.size;
+            edits.push(text_date_edit(buf, DAY_NAME, start, end, taken_at)?);
+        }
+    }
+    Ok(())
+}
+
+/// The byte range an `ilst` item's text lives in: the payload of its `data`
+/// box, behind the type-indicator/locale word.
+///
+/// An item of a date carrier with no readable `data` box is not something this
+/// writer can rewrite, so it refuses the save rather than skipping the carrier.
+fn item_text_slot(
+    buf: &[u8],
+    item: &BoxSpan,
+    carrier: &'static str,
+) -> Result<(usize, usize), Mp4MetadataError> {
+    let data = find_child(item, b"data").ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
+    let start = data.offset + header_len(buf, data.offset) + 8;
+    let end = data.offset + data.size;
+    if start > end || end > buf.len() {
+        return Err(Mp4MetadataError::Unrepresentable(carrier));
+    }
+    Ok((start, end))
+}
+
+/// The replacement of one text carrier: the new instant rendered in the shape
+/// the carrier already holds, filling its payload slot without changing it.
+fn text_date_edit(
+    buf: &[u8],
+    carrier: &'static str,
+    start: usize,
+    end: usize,
+    taken_at: DateTime<Utc>,
+) -> Result<MoovEdit, Mp4MetadataError> {
+    let slot = buf
+        .get(start..end)
+        .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
+    let rendered = render_date_in_shape(&text_of(slot), taken_at)
+        .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
+    if rendered.len() > slot.len() {
+        return Err(Mp4MetadataError::NoRoom(carrier));
+    }
+    let mut content = vec![0u8; slot.len()];
+    write_payload_slot(&mut content, &rendered);
+    Ok(MoovEdit {
+        offset: start,
+        replaced: slot.len(),
+        content,
+    })
 }
 
 /// Collects the replacement of every `mvhd`/`tkhd`/`mdhd` creation field at or
@@ -1345,6 +1641,254 @@ mod tests {
     }
 
     #[test]
+    fn renders_the_new_instant_in_the_files_own_date_shape() {
+        let new = "2024-07-04T12:00:00Z".parse().unwrap();
+        assert_eq!(
+            render_date_in_shape("2024-05-01T10:00:00+0200", new).unwrap(),
+            b"2024-07-04T14:00:00+0200"
+        );
+        assert_eq!(
+            render_date_in_shape("2024-05-01T10:00:00Z", new).unwrap(),
+            b"2024-07-04T12:00:00Z"
+        );
+        assert_eq!(
+            render_date_in_shape("2024-05-01T10:00:00.123+02:00", new).unwrap(),
+            b"2024-07-04T14:00:00.000+02:00"
+        );
+        assert_eq!(
+            render_date_in_shape("2024-05-01 10:00:00", new).unwrap(),
+            b"2024-07-04 12:00:00"
+        );
+        assert_eq!(
+            render_date_in_shape("2024-05-01", new).unwrap(),
+            b"2024-07-04"
+        );
+        assert_eq!(render_date_in_shape("May 1st, 2024", new), None);
+    }
+
+    #[test]
+    fn a_shorter_rendering_is_nul_padded_inside_the_existing_payload() {
+        let mut slot = *b"2024-05-01T10:00:00+0200";
+        write_payload_slot(&mut slot, b"2025-01-02T05:04:05+02");
+        assert_eq!(&slot[..], b"2025-01-02T05:04:05+02\0\0");
+    }
+
+    #[test]
+    fn a_date_save_updates_every_carrier_including_the_text_ones() {
+        let (_dir, path) = temp_copy("keys.mp4", "test-data/test_video_quicktime_keys.mp4");
+        let before = std::fs::read(&path).unwrap();
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+            ..Default::default()
+        };
+        write_metadata(&path, &edit).unwrap();
+
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .creation_time
+                .unwrap()
+                .to_rfc3339(),
+            "2025-01-02T03:04:05+00:00"
+        );
+        // The +0200-style carrier keeps its offset style and expresses the same instant:
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            Some("2025-01-02T05:04:05+0200")
+        );
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert!(after.windows(24).any(|w| w == b"2025-01-02T05:04:05+0200"));
+        assert!(!after.windows(24).any(|w| w == b"2024-05-01T10:00:00+0200"));
+        // No box was resized: the data box that held the old string still declares the same size.
+        assert_eq!(
+            data_boxes(&after),
+            data_boxes(&before),
+            "payload slots are rewritten, never resized"
+        );
+    }
+
+    #[test]
+    fn an_unparsable_carrier_refuses_the_whole_save() {
+        let (_dir, path) =
+            synthetic_mp4_with_carrier(CarrierSpec::ItemType(*b"\xa9day"), b"May 1st, 2024", 0);
+        let before = std::fs::read(&path).unwrap();
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(
+            matches!(write_metadata(&path, &edit).unwrap_err(), Mp4MetadataError::Unrepresentable(t) if t == "\u{a9}day")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn every_date_carrier_ends_at_the_same_instant_in_its_own_style() {
+        // Three carriers of the same file, each in a different shape: all of
+        // them must end up at the new instant, none of them in a new style.
+        let (_dir, path) = synthetic_multi_carrier_file();
+        let before = fs::read(&path).unwrap();
+        let taken_at: DateTime<Utc> = "2025-01-02T03:04:05Z".parse().unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some(taken_at),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        for expected in [
+            b"2025-01-02T05:04:05+0200".as_slice(),
+            b"2025-01-02 03:04:05".as_slice(),
+            b"2025-01-02T03:04:05.000Z".as_slice(),
+        ] {
+            assert!(
+                after
+                    .windows(expected.len())
+                    .any(|window| window == expected),
+                "missing {expected:?}"
+            );
+        }
+        for stale in [
+            b"2024-05-01T10:00:00+0200".as_slice(),
+            b"2024-05-01 10:00:00".as_slice(),
+            b"2024-05-01T10:00:00.500Z".as_slice(),
+        ] {
+            assert!(
+                !after.windows(stale.len()).any(|window| window == stale),
+                "stale {stale:?}"
+            );
+        }
+        // The reader still resolves the mdta carrier first, and every
+        // fixed-width carrier moved with the text ones.
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            Some("2025-01-02T05:04:05+0200")
+        );
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3
+        );
+        assert_eq!(data_boxes(&after), data_boxes(&before));
+    }
+
+    #[test]
+    fn a_carrier_named_by_the_second_mdta_key_is_rewritten_too() {
+        // `creation_time` is the other mdta name for the same thing, and a
+        // carrier under it has to move with the first one — fraction and `Z`
+        // intact.
+        let (_dir, path) = synthetic_mp4_with_carrier(
+            CarrierSpec::MdtaKey(MDTA_CREATION_DATE_KEYS[1]),
+            b"2024-05-01T10:00:00.5Z",
+            0,
+        );
+        let before = fs::read(&path).unwrap();
+        let taken_at: DateTime<Utc> = "2025-01-02T03:04:05Z".parse().unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some(taken_at),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            Some("2025-01-02T03:04:05.0Z")
+        );
+        assert!(!after
+            .windows(22)
+            .any(|window| window == b"2024-05-01T10:00:00.5Z"));
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3
+        );
+        assert_eq!(data_boxes(&after), data_boxes(&before));
+    }
+
+    #[test]
+    fn a_date_only_carrier_keeps_its_date_only_shape() {
+        let (_dir, path) =
+            synthetic_mp4_with_carrier(CarrierSpec::ItemType(*b"\xa9day"), b"2024-05-01", 0);
+        let before = fs::read(&path).unwrap();
+        let taken_at: DateTime<Utc> = "2025-01-02T03:04:05Z".parse().unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some(taken_at),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            Some("2025-01-02")
+        );
+        assert!(!after.windows(10).any(|window| window == b"2024-05-01"));
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3
+        );
+        assert_eq!(data_boxes(&after), data_boxes(&before));
+    }
+
+    #[test]
+    fn a_save_without_a_date_leaves_a_carrier_of_any_shape_alone() {
+        let (_dir, path) =
+            synthetic_mp4_with_carrier(CarrierSpec::ItemType(*b"\xa9day"), b"May 1st, 2024", 0);
+        let before = fs::read(&path).unwrap();
+        write_metadata(&path, &VideoMetadataEdit::default()).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn renders_every_shape_the_writer_accepts_and_refuses_the_rest() {
+        let new: DateTime<Utc> = "2024-07-04T12:00:00.25Z".parse().unwrap();
+        for (existing, expected) in [
+            ("2024-05-01T10:00:00-0730", "2024-07-04T04:30:00-0730"),
+            ("2024-05-01 10:00:00-07:30", "2024-07-04 04:30:00-07:30"),
+            (
+                "2024-05-01T10:00:00.123456789Z",
+                "2024-07-04T12:00:00.250000000Z",
+            ),
+            ("2024-05-01T10:00:00.5Z", "2024-07-04T12:00:00.2Z"),
+            ("2024-05-01T00:00:59Z", "2024-07-04T12:00:00Z"),
+            ("2024-05-01T10:00:00", "2024-07-04T12:00:00"),
+        ] {
+            assert_eq!(
+                render_date_in_shape(existing, new).unwrap(),
+                expected.as_bytes(),
+                "{existing}"
+            );
+        }
+        for refused in [
+            "May 1st, 2024",
+            "2024-05-01T10:00:00+02",
+            "2024-05-01T10:00:00+02000",
+            "2024-05-01T10:00",
+            "2024-05-01T10:00",
+            "2024-13-01",
+            "2024-05-01T25:00:00Z",
+            "2024-05-01T10:00:00.YZ",
+            "2024-05-01T10:00:00.1234567890Z",
+            "2024-05-01T10:00:00+2",
+            "",
+        ] {
+            assert_eq!(render_date_in_shape(refused, new), None, "{refused}");
+        }
+    }
+
+    #[test]
     fn a_refused_date_edit_leaves_the_file_byte_identical() {
         let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
         let before = fs::read(&path).unwrap();
@@ -1756,7 +2300,118 @@ mod tests {
     /// A `meta` body with no ISO version/flags word: `hdlr`, a one-entry `keys`
     /// box, and an empty `ilst`.
     fn qt_meta_body_without_version_flags() -> Vec<u8> {
-        let hdlr = box_bytes(
+        let keys = keys_box(&["com.apple.quicktime.location.ISO6709"]);
+        let ilst = box_bytes(b"ilst", &[]);
+        [mdta_hdlr(), keys, ilst].concat()
+    }
+
+    /// Offset and declared size of every `data` box in a whole-file buffer, in
+    /// file order: the payload slots an equal-length rewrite must leave exactly
+    /// as it found them.
+    fn data_boxes(buf: &[u8]) -> Vec<(usize, usize)> {
+        fn walk(span: &BoxSpan, out: &mut Vec<(usize, usize)>) {
+            if span.kind == *b"data" {
+                out.push((span.offset, span.size));
+            }
+            for child in &span.children {
+                walk(child, out);
+            }
+        }
+
+        let tree = parse_box_tree(buf, 0, buf.len(), &[]).unwrap();
+        let mut out = Vec::new();
+        for span in &tree {
+            walk(span, &mut out);
+        }
+        out
+    }
+
+    /// The text carrier a synthetic fixture should hold.
+    #[derive(Debug, Clone, Copy)]
+    enum CarrierSpec {
+        /// An mdta pair: a `keys` entry with this name, and an `ilst` item
+        /// indexed into it.
+        MdtaKey(&'static str),
+        /// A bare item of `ilst` with this four-character type (`©day`, `©xyz`).
+        ItemType([u8; 4]),
+    }
+
+    /// A minimal ISO-BMFF file carrying one text carrier, with `free_payload`
+    /// spare bytes in a `free` box behind it.
+    ///
+    /// The committed fixtures hold the carrier shapes ffmpeg and Apple write;
+    /// this is how a test reaches the ones they do not — an unparsable value, a
+    /// carrier with room to grow.
+    fn synthetic_mp4_with_carrier(
+        carrier: CarrierSpec,
+        payload: &[u8],
+        free_payload: usize,
+    ) -> (TempDir, PathBuf) {
+        let (keys, item) = match carrier {
+            CarrierSpec::MdtaKey(name) => (Some(name), text_item_box(&1u32.to_be_bytes(), payload)),
+            CarrierSpec::ItemType(kind) => (None, text_item_box(&kind, payload)),
+        };
+        let mut meta_children = vec![mdta_hdlr()];
+        if let Some(name) = keys {
+            meta_children.push(keys_box(&[name]));
+        }
+        meta_children.push(box_bytes(b"ilst", &item));
+        // The ISO FullBox form of `meta`: version/flags, then the children.
+        let mut meta_body = vec![0u8, 0, 0, 0];
+        meta_body.extend_from_slice(&meta_children.concat());
+        synthetic_file_with_udta(
+            &box_bytes(b"udta", &box_bytes(b"meta", &meta_body)),
+            free_payload,
+        )
+    }
+
+    /// A minimal file whose `udta` carries its `©day` in all three shapes at
+    /// once: an mdta key, an `ilst` item, and a direct `udta` child — each
+    /// written differently, so a save has to keep three styles apart.
+    fn synthetic_multi_carrier_file() -> (TempDir, PathBuf) {
+        let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags
+        meta_body.extend_from_slice(&mdta_hdlr());
+        meta_body.extend_from_slice(&keys_box(&[MDTA_CREATION_DATE_KEYS[0]]));
+        let mut ilst = text_item_box(&1u32.to_be_bytes(), b"2024-05-01T10:00:00+0200");
+        ilst.extend_from_slice(&text_item_box(&DAY_BOX, b"2024-05-01 10:00:00"));
+        meta_body.extend_from_slice(&box_bytes(b"ilst", &ilst));
+
+        let mut udta_body = box_bytes(b"meta", &meta_body);
+        udta_body.extend_from_slice(&box_bytes(&DAY_BOX, b"2024-05-01T10:00:00.500Z"));
+        synthetic_file_with_udta(&box_bytes(b"udta", &udta_body), 0)
+    }
+
+    /// The file skeleton every synthetic fixture shares: `ftyp`, then a `moov`
+    /// holding `mvhd`, one `trak`/`tkhd`/`mdia`/`mdhd`, the given `udta`, and a
+    /// `free` box of `free_payload` bytes as the last child of `moov`.
+    fn synthetic_file_with_udta(udta: &[u8], free_payload: usize) -> (TempDir, PathBuf) {
+        let mut moov = box_bytes(b"mvhd", &mvhd_body(0));
+        let mut trak = box_bytes(b"tkhd", &time_field_body());
+        trak.extend_from_slice(&box_bytes(b"mdia", &box_bytes(b"mdhd", &time_field_body())));
+        moov.extend_from_slice(&box_bytes(b"trak", &trak));
+        moov.extend_from_slice(udta);
+        moov.extend_from_slice(&box_bytes(b"free", &vec![0u8; free_payload]));
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("synthetic.mp4");
+        let mut bytes = ftyp_box();
+        bytes.extend_from_slice(&box_bytes(b"moov", &moov));
+        fs::write(&path, &bytes).unwrap();
+        (dir, path)
+    }
+
+    /// A version-0 `tkhd`/`mdhd` body: the version/flags word and the
+    /// creation/modification pair, which is all the writer's field patch reads.
+    fn time_field_body() -> Vec<u8> {
+        let mut body = vec![0u8, 0, 0, 0]; // version + flags
+        body.extend_from_slice(&0u32.to_be_bytes()); // creation time
+        body.extend_from_slice(&0u32.to_be_bytes()); // modification time
+        body
+    }
+
+    /// A `meta` handler box declaring the `mdta` namespace.
+    fn mdta_hdlr() -> Vec<u8> {
+        box_bytes(
             b"hdlr",
             &[
                 0, 0, 0, 0, // version + flags
@@ -1764,16 +2419,29 @@ mod tests {
                 b'm', b'd', b't', b'a', // handler type
                 0, 0, 0, 0, 0, 0, 0, 0,
             ],
-        );
-        let key = b"com.apple.quicktime.location.ISO6709";
-        let mut keys_body = vec![0u8, 0, 0, 0]; // version + flags
-        keys_body.extend_from_slice(&1u32.to_be_bytes()); // entry count
-        keys_body.extend_from_slice(&u32::try_from(8 + 4 + key.len()).unwrap().to_be_bytes());
-        keys_body.extend_from_slice(b"mdta");
-        keys_body.extend_from_slice(key);
-        let keys = box_bytes(b"keys", &keys_body);
-        let ilst = box_bytes(b"ilst", &[]);
-        [hdlr, keys, ilst].concat()
+        )
+    }
+
+    /// A `keys` box for the given mdta key names. An entry is its own size, the
+    /// `mdta` namespace and the name — the name is never NUL-terminated.
+    fn keys_box(names: &[&str]) -> Vec<u8> {
+        let mut body = vec![0u8, 0, 0, 0]; // version + flags
+        body.extend_from_slice(&u32::try_from(names.len()).unwrap().to_be_bytes());
+        for name in names {
+            body.extend_from_slice(&u32::try_from(8 + name.len()).unwrap().to_be_bytes());
+            body.extend_from_slice(b"mdta");
+            body.extend_from_slice(name.as_bytes());
+        }
+        box_bytes(b"keys", &body)
+    }
+
+    /// One `ilst` item: a `data` box holding `payload` as UTF-8 text behind the
+    /// type-indicator/locale word the reader skips.
+    fn text_item_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut body = vec![0u8, 0, 0, 1]; // type indicator 1: UTF-8 text
+        body.extend_from_slice(&0u32.to_be_bytes()); // locale
+        body.extend_from_slice(payload);
+        box_bytes(kind, &box_bytes(b"data", &body))
     }
 
     fn ftyp_box() -> Vec<u8> {

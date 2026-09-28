@@ -165,6 +165,12 @@ test('progress after a stall keeps the attempt alive', async (t) => {
   await flush();
   assert.equal(result.value, null, 'a served delivery expired the attempt');
 
+  // Past the deadline the `progress` armed: only the cleared stall lets the
+  // watchdog keep re-arming the window, so a resumed delivery cannot expire.
+  t.mock.timers.tick(graceMs);
+  await flush();
+  assert.equal(result.value, null, 'a resumed delivery expired the attempt');
+
   video.dispatch('loadeddata');
   await flush();
   assert.deepEqual(result.value, { verdict: 'playable', reason: null, frameObserved: true });

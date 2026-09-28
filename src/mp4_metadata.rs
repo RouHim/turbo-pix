@@ -20,9 +20,10 @@
 //! skipped.
 
 use std::fmt;
-use std::fs::File;
-use std::io::{ErrorKind, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 
@@ -677,10 +678,331 @@ pub fn parse_iso6709(value: &str) -> Option<(f64, f64)> {
     Some((latitude, longitude))
 }
 
+/// What to change about a container's recording metadata.
+///
+/// `taken_at` is the instant itself; `latitude`/`longitude` are the horizontal
+/// pair of an ISO 6709 position, which is only valid as a pair.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoMetadataEdit {
+    pub taken_at: Option<DateTime<Utc>>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
+/// What a successful write produced: the file's new identity as the scanner
+/// records it, and how to put it back.
+#[derive(Debug)]
+pub struct VideoMetadataWrite {
+    pub fingerprint: Fingerprint,
+    pub undo: UndoToken,
+}
+
+/// Identity of a file after a write, in exactly the form the scanner stores and
+/// compares: byte length plus modification time truncated to whole seconds
+/// (`src/file_scanner.rs`, `src/db.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint {
+    pub file_size: u64,
+    pub file_modified: DateTime<Utc>,
+}
+
+/// Everything needed to put the file back the way it was: which `moov` region
+/// was replaced, the bytes that were there, and the modification time to
+/// restore.
+///
+/// The path is part of the token because [`restore`] is called from a failure
+/// path that has nothing else about the file at hand.
+#[derive(Debug)]
+pub struct UndoToken {
+    path: PathBuf,
+    moov_offset: u64,
+    moov_bytes: Vec<u8>,
+    modified: SystemTime,
+}
+
+/// Earliest instant the writer accepts, as Unix seconds. The reader rejects
+/// anything before 1990 (`src/metadata_extractor.rs`), so storing one would
+/// hand back a file the reader refuses.
+const MIN_WRITABLE_UNIX_SECONDS: i64 = 631_152_000; // 1990-01-01T00:00:00Z
+
+/// Latest instant the writer accepts, as Unix seconds: the largest version-0
+/// QuickTime timestamp, `u32::MAX` seconds after 1904-01-01T00:00:00Z.
+const MAX_WRITABLE_UNIX_SECONDS: i64 = 2_212_122_495; // 2040-02-06T06:28:15Z
+
+/// FullBoxes whose payload opens with a creation (and modification) time.
+const TIME_BOXES: [[u8; 4]; 3] = [*b"mvhd", *b"tkhd", *b"mdhd"];
+
+/// One region of the `moov` a carrier replaces, and what replaces it.
+///
+/// Today the only carriers are the fixed-width creation timestamps above, whose
+/// replacement is as long as the field it overwrites. The text carriers of
+/// `©day`/`©xyz` and their mdta keys join this list in later steps, which is why
+/// the rebuild below is written as a splice rather than as a byte poke.
+struct MoovEdit {
+    /// Offset of the region in the original `moov`.
+    offset: usize,
+    /// Length of the region in the original `moov`.
+    replaced: usize,
+    /// What replaces it.
+    content: Vec<u8>,
+}
+
+/// Rewrites the creation timestamps of `mvhd`, `tkhd` and `mdhd` in place, and
+/// hands back a fingerprint plus an undo token.
+///
+/// The container's text carriers (`©day`, `©xyz`, the mdta pair) keep their
+/// bytes in this step; a later step renders them into the same rebuild.
+///
+/// All-or-nothing: the date and the coordinates are validated, the `moov` tree
+/// is parsed and the whole replacement is rendered and length-checked before
+/// the file is opened for writing, and the write itself is a single `write_all`
+/// of the `moov` region. No byte outside `moov` is ever touched, and the file
+/// is never truncated or grown.
+pub fn write_metadata(
+    path: &Path,
+    edit: &VideoMetadataEdit,
+) -> Result<VideoMetadataWrite, Mp4MetadataError> {
+    if !has_writable_extension(path) {
+        return Err(Mp4MetadataError::UnsupportedContainer(extension_name(path)));
+    }
+    validate_edit(edit)?;
+
+    let mut source = File::open(path).map_err(open_error)?;
+    let original_metadata = source.metadata().map_err(Mp4MetadataError::Io)?;
+    let original_modified = original_metadata.modified().map_err(Mp4MetadataError::Io)?;
+    let (moov_offset, moov_size) = locate_moov(&mut source, original_metadata.len())?;
+    let original_moov = read_moov(&mut source, moov_offset, moov_size)?;
+    drop(source);
+    let tree = parse_box_tree(&original_moov, 0, original_moov.len(), &[])?;
+    let moov = tree
+        .first()
+        .filter(|span| span.kind == *b"moov")
+        .ok_or_else(|| Mp4MetadataError::UnsupportedContainer("moov".to_string()))?;
+    if contains_kind(moov, b"mvex") {
+        return Err(Mp4MetadataError::Fragmented);
+    }
+    let patched = rebuild_moov(&original_moov, moov, edit)?;
+
+    let mut target = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(open_error)?;
+    target
+        .seek(SeekFrom::Start(moov_offset))
+        .map_err(Mp4MetadataError::Io)?;
+    target.write_all(&patched).map_err(Mp4MetadataError::Io)?;
+    if let Err(err) = target.set_modified(original_modified) {
+        log::warn!(
+            "could not restore the modification time of {}: {err}",
+            path.display()
+        );
+    }
+    drop(target);
+
+    let written = std::fs::metadata(path).map_err(Mp4MetadataError::Io)?;
+    Ok(VideoMetadataWrite {
+        fingerprint: Fingerprint {
+            file_size: written.len(),
+            file_modified: truncate_to_seconds(written.modified().map_err(Mp4MetadataError::Io)?),
+        },
+        undo: UndoToken {
+            path: path.to_path_buf(),
+            moov_offset,
+            moov_bytes: original_moov,
+            modified: original_modified,
+        },
+    })
+}
+
+/// Puts the `moov` region and the modification time back as the token recorded
+/// them.
+///
+/// Refuses to write when the region would no longer fit in the file: the token
+/// describes one file's layout, and a file that has changed size since is not
+/// that file any more.
+pub fn restore(token: &UndoToken) -> Result<(), Mp4MetadataError> {
+    let mut target = OpenOptions::new()
+        .write(true)
+        .open(&token.path)
+        .map_err(open_error)?;
+    let file_len = target.metadata().map_err(Mp4MetadataError::Io)?.len();
+    let end = token
+        .moov_offset
+        .checked_add(token.moov_bytes.len() as u64)
+        .ok_or(Mp4MetadataError::NoRoom("moov"))?;
+    if end > file_len {
+        return Err(Mp4MetadataError::NoRoom("moov"));
+    }
+    target
+        .seek(SeekFrom::Start(token.moov_offset))
+        .map_err(Mp4MetadataError::Io)?;
+    target
+        .write_all(&token.moov_bytes)
+        .map_err(Mp4MetadataError::Io)?;
+    if let Err(err) = target.set_modified(token.modified) {
+        log::warn!(
+            "could not restore the modification time of {}: {err}",
+            token.path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Rejects an edit that could not be written before a byte is touched.
+fn validate_edit(edit: &VideoMetadataEdit) -> Result<(), Mp4MetadataError> {
+    if let Some(taken_at) = edit.taken_at {
+        if !(MIN_WRITABLE_UNIX_SECONDS..=MAX_WRITABLE_UNIX_SECONDS).contains(&taken_at.timestamp())
+        {
+            return Err(Mp4MetadataError::InvalidDate);
+        }
+    }
+    // The same rules the image writer applies (`src/metadata_writer.rs`): both
+    // coordinates in range, or neither. A NaN fails the range check.
+    match (edit.latitude, edit.longitude) {
+        (Some(latitude), Some(longitude)) => {
+            if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+                return Err(Mp4MetadataError::InvalidCoordinates);
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => return Err(Mp4MetadataError::InvalidCoordinates),
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+/// `dt` as seconds from the QuickTime epoch (1904-01-01T00:00:00Z), or `None`
+/// when it does not fit a version-0 `u32` QuickTime timestamp.
+pub(crate) fn quicktime_seconds(dt: DateTime<Utc>) -> Option<u32> {
+    let seconds = dt.timestamp().checked_add(QUICKTIME_EPOCH_UNIX_SECONDS)?;
+    u32::try_from(seconds).ok()
+}
+
+/// A modification time in the form the scanner stores: whole seconds.
+fn truncate_to_seconds(time: SystemTime) -> DateTime<Utc> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| DateTime::from_timestamp(duration.as_secs() as i64, 0))
+        .unwrap_or_else(Utc::now)
+}
+
+/// Maps a failure to open a target for writing onto what the caller can act on.
+fn open_error(err: std::io::Error) -> Mp4MetadataError {
+    match err.kind() {
+        ErrorKind::NotFound => Mp4MetadataError::MissingFile,
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem => {
+            Mp4MetadataError::ReadOnly(err.to_string())
+        }
+        _ => Mp4MetadataError::Io(err),
+    }
+}
+
+/// Names what was found where a writable container was expected.
+fn extension_name(path: &Path) -> String {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) => extension.to_ascii_lowercase(),
+        None => "no extension".to_string(),
+    }
+}
+
+/// Renders `edit` into a `moov` of exactly the length `original` has.
+fn rebuild_moov(
+    original: &[u8],
+    moov: &BoxSpan,
+    edit: &VideoMetadataEdit,
+) -> Result<Vec<u8>, Mp4MetadataError> {
+    apply_edits(original, carriers(original, moov, edit)?)
+}
+
+/// Every carrier this writer renders, as regions of `original`.
+///
+/// Only the fixed-width timestamps today; the text carriers come later. All of
+/// them are rendered before anything is written, so a carrier that cannot hold
+/// the new value fails the write instead of leaving a half-patched file.
+fn carriers(
+    buf: &[u8],
+    moov: &BoxSpan,
+    edit: &VideoMetadataEdit,
+) -> Result<Vec<MoovEdit>, Mp4MetadataError> {
+    let mut edits = Vec::new();
+    if let Some(taken_at) = edit.taken_at {
+        let seconds = quicktime_seconds(taken_at).ok_or(Mp4MetadataError::InvalidDate)?;
+        collect_time_edits(buf, moov, seconds, &mut edits)?;
+    }
+    Ok(edits)
+}
+
+/// Collects the replacement of every `mvhd`/`tkhd`/`mdhd` creation field at or
+/// below `span`.
+fn collect_time_edits(
+    buf: &[u8],
+    span: &BoxSpan,
+    seconds: u32,
+    edits: &mut Vec<MoovEdit>,
+) -> Result<(), Mp4MetadataError> {
+    if TIME_BOXES.contains(&span.kind) {
+        edits.push(time_edit(buf, span, seconds)?);
+    }
+    for child in &span.children {
+        collect_time_edits(buf, child, seconds, edits)?;
+    }
+    Ok(())
+}
+
+/// The replacement of one creation field: the same reach as the field, filled
+/// with `seconds` in the width the box version declares.
+fn time_edit(buf: &[u8], span: &BoxSpan, seconds: u32) -> Result<MoovEdit, Mp4MetadataError> {
+    let body = span.offset + header_len(buf, span.offset);
+    let end = span.offset + span.size;
+    // version byte, then the creation field: 32 bits for version 0, 64 for 1.
+    let version = *buf.get(body).ok_or(Mp4MetadataError::InvalidDate)?;
+    let width = if version == 1 { 8 } else { 4 };
+    if body + 4 + width > end {
+        return Err(Mp4MetadataError::InvalidDate);
+    }
+    let content = if width == 8 {
+        u64::from(seconds).to_be_bytes().to_vec()
+    } else {
+        seconds.to_be_bytes().to_vec()
+    };
+    Ok(MoovEdit {
+        offset: body + 4,
+        replaced: width,
+        content,
+    })
+}
+
+/// Splices `edits` into `original`.
+///
+/// A rebuild that would change the container's length has no in-place path yet,
+/// so it is refused before the file is opened: nothing may be written until the
+/// resized-`moov` case is defined.
+fn apply_edits(original: &[u8], mut edits: Vec<MoovEdit>) -> Result<Vec<u8>, Mp4MetadataError> {
+    edits.sort_by_key(|edit| edit.offset);
+    let removed: usize = edits.iter().map(|edit| edit.replaced).sum();
+    let added: usize = edits.iter().map(|edit| edit.content.len()).sum();
+    if removed != added {
+        return Err(Mp4MetadataError::NoRoom("moov"));
+    }
+
+    let mut patched = Vec::with_capacity(original.len());
+    let mut cursor = 0usize;
+    for edit in &edits {
+        if edit.offset < cursor || edit.offset + edit.replaced > original.len() {
+            return Err(Mp4MetadataError::NoRoom("moov"));
+        }
+        patched.extend_from_slice(&original[cursor..edit.offset]);
+        patched.extend_from_slice(&edit.content);
+        cursor = edit.offset + edit.replaced;
+    }
+    patched.extend_from_slice(&original[cursor..]);
+    debug_assert_eq!(patched.len(), original.len());
+    Ok(patched)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Write as _;
+    use std::path::PathBuf;
 
     use tempfile::TempDir;
 
@@ -922,6 +1244,500 @@ mod tests {
                 Err(Mp4MetadataError::UnsupportedContainer(_))
             )
         });
+    }
+
+    #[test]
+    fn patching_the_date_writes_only_the_moov_region() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("clip.mp4");
+        fs::copy("test-data/test_video_with_date.mp4", &path).unwrap();
+        let before = fs::read(&path).unwrap();
+        let before_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        let out = write_metadata(&path, &edit).unwrap();
+        let after = fs::read(&path).unwrap();
+
+        assert_eq!(after.len(), before.len(), "the file length must not change");
+        let (moov_off, moov_len) = locate_moov_in(&before).unwrap();
+        assert_eq!(&after[..moov_off], &before[..moov_off]);
+        assert_eq!(
+            &after[moov_off + moov_len..],
+            &before[moov_off + moov_len..]
+        );
+        assert_ne!(
+            &after[moov_off..moov_off + moov_len],
+            &before[moov_off..moov_off + moov_len],
+            "the patched moov must differ"
+        );
+        // Not just "outside moov": every changed byte is inside a creation field.
+        let fields: Vec<_> = date_fields(&before)
+            .into_iter()
+            .map(|(_, offset, width)| offset..offset + width)
+            .collect();
+        for offset in differing_offsets(&before, &after) {
+            assert!(
+                fields.iter().any(|field| field.contains(&offset)),
+                "byte {offset} outside every creation field changed"
+            );
+        }
+
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime,
+            "mtime restored"
+        );
+        assert_eq!(out.fingerprint.file_size, before.len() as u64);
+        assert_eq!(
+            out.fingerprint.file_modified,
+            truncate_to_seconds(before_mtime)
+        );
+        let read_back = read_metadata(&path).unwrap();
+        assert_eq!(
+            read_back.creation_time.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        // Every fixed-width carrier the file has holds the same instant now:
+        // this fixture is one video trak, so `mvhd` + `tkhd` + `mdhd`.
+        let expected = u64::from(quicktime_seconds(edit.taken_at.unwrap()).unwrap());
+        assert_eq!(date_fields(&after).len(), 3);
+        assert_eq!(count_creation_times(&after, expected), 3);
+    }
+
+    #[test]
+    fn patches_a_moov_at_the_end_and_every_carrier_of_a_two_track_file() {
+        let (_dir, path) = temp_copy("moov_end.mp4", "test-data/test_video_moov_end.mp4");
+        let before = fs::read(&path).unwrap();
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        let out = write_metadata(&path, &edit).unwrap();
+        let after = fs::read(&path).unwrap();
+
+        assert_eq!(after.len(), before.len());
+        let (moov_off, moov_len) = locate_moov_in(&before).unwrap();
+        assert!(
+            moov_off > 1_000_000,
+            "this fixture's moov sits behind a 1.7 MB mdat"
+        );
+        assert_eq!(&after[..moov_off], &before[..moov_off]);
+        assert_eq!(
+            &after[moov_off + moov_len..],
+            &before[moov_off + moov_len..]
+        );
+        // `mvhd` + two traks × (`tkhd` + `mdhd`).
+        let expected = u64::from(quicktime_seconds(edit.taken_at.unwrap()).unwrap());
+        assert_eq!(date_fields(&after).len(), 5);
+        assert_eq!(count_creation_times(&after, expected), 5);
+        assert_eq!(out.fingerprint.file_size, after.len() as u64);
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .creation_time
+                .unwrap()
+                .to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn a_refused_date_edit_leaves_the_file_byte_identical() {
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let before_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let too_old = VideoMetadataEdit {
+            taken_at: Some("1989-12-31T00:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_metadata(&path, &too_old).unwrap_err(),
+            Mp4MetadataError::InvalidDate
+        ));
+        let too_new = VideoMetadataEdit {
+            taken_at: Some("2040-02-06T06:28:16Z".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_metadata(&path, &too_new).unwrap_err(),
+            Mp4MetadataError::InvalidDate
+        ));
+
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime
+        );
+    }
+
+    #[test]
+    fn accepts_the_writable_date_window_including_its_bounds() {
+        for stamp in [
+            "1990-01-01T00:00:00Z",
+            "2024-07-04T12:00:00Z",
+            "2040-02-06T06:28:15Z",
+        ] {
+            let (_dir, path) = temp_copy("window.mp4", "test-data/test_video_with_date.mp4");
+            let taken_at: DateTime<Utc> = stamp.parse().unwrap();
+            write_metadata(
+                &path,
+                &VideoMetadataEdit {
+                    taken_at: Some(taken_at),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                read_metadata(&path).unwrap().creation_time.unwrap(),
+                taken_at,
+                "{stamp} must round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn quicktime_seconds_maps_the_writable_window() {
+        assert_eq!(
+            quicktime_seconds("1904-01-01T00:00:00Z".parse().unwrap()),
+            Some(0)
+        );
+        assert_eq!(
+            quicktime_seconds("2024-07-04T12:00:00Z".parse().unwrap()),
+            Some(3_802_939_200)
+        );
+        assert_eq!(
+            quicktime_seconds("2040-02-06T06:28:15Z".parse().unwrap()),
+            Some(u32::MAX)
+        );
+        assert_eq!(
+            quicktime_seconds("2040-02-06T06:28:16Z".parse().unwrap()),
+            None
+        );
+        assert_eq!(
+            quicktime_seconds("1903-12-31T23:59:59Z".parse().unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn out_of_range_or_unpaired_coordinates_are_refused_before_writing() {
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+
+        for (latitude, longitude) in [
+            (Some(91.0), Some(0.0)),
+            (Some(-91.0), Some(0.0)),
+            (Some(0.0), Some(181.0)),
+            (Some(0.0), Some(-181.0)),
+            (Some(f64::NAN), Some(0.0)),
+            (Some(52.0), None),
+            (None, Some(13.0)),
+        ] {
+            let edit = VideoMetadataEdit {
+                taken_at: None,
+                latitude,
+                longitude,
+            };
+            assert!(
+                matches!(
+                    write_metadata(&path, &edit).unwrap_err(),
+                    Mp4MetadataError::InvalidCoordinates
+                ),
+                "latitude {latitude:?} / longitude {longitude:?} must be refused"
+            );
+        }
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_fragmented_movie_is_refused_before_anything_is_written() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("fragmented.mp4");
+        let mut moov = box_bytes(b"mvhd", &mvhd_body(0));
+        moov.extend_from_slice(&box_bytes(b"mvex", &[]));
+        let mut bytes = ftyp_box();
+        bytes.extend_from_slice(&box_bytes(b"moov", &moov));
+        fs::write(&path, &bytes).unwrap();
+
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_metadata(&path, &edit).unwrap_err(),
+            Mp4MetadataError::Fragmented
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn restores_the_original_moov_after_a_successful_write() {
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let before_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        let out = write_metadata(&path, &edit).unwrap();
+        assert_ne!(fs::read(&path).unwrap(), before, "the write must land");
+
+        restore(&out.undo).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime
+        );
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .creation_time
+                .unwrap()
+                .to_rfc3339(),
+            "2023-06-15T10:00:00+00:00"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_targets_are_refused_without_writing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let before_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        // Root, and anything holding CAP_DAC_OVERRIDE, may write a read-only
+        // file regardless, so the permission bit has to be the deciding factor
+        // for this test to mean anything.
+        if fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            eprintln!("Skipping read-only test: this user may write a 0444 file");
+            return;
+        }
+
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_metadata(&path, &edit).unwrap_err(),
+            Mp4MetadataError::ReadOnly(_)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime
+        );
+    }
+
+    #[test]
+    fn truncated_or_empty_files_are_refused() {
+        let dir = TempDir::new().unwrap();
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            ..Default::default()
+        };
+
+        let empty = dir.path().join("empty.mp4");
+        fs::write(&empty, []).unwrap();
+        assert!(matches!(
+            write_metadata(&empty, &edit).unwrap_err(),
+            Mp4MetadataError::UnsupportedContainer(_)
+        ));
+
+        let truncated = dir.path().join("truncated.mp4");
+        let fixture = fs::read("test-data/test_video_with_date.mp4").unwrap();
+        fs::write(&truncated, &fixture[..12]).unwrap();
+        assert!(matches!(
+            write_metadata(&truncated, &edit).unwrap_err(),
+            Mp4MetadataError::UnsupportedContainer(_)
+        ));
+
+        let missing = dir.path().join("missing.mp4");
+        assert!(matches!(
+            write_metadata(&missing, &edit).unwrap_err(),
+            Mp4MetadataError::MissingFile
+        ));
+
+        let mkv = dir.path().join("clip.mkv");
+        fs::copy("test-data/test_video_long.mkv", &mkv).unwrap();
+        let mkv_before = fs::read(&mkv).unwrap();
+        assert!(matches!(
+            write_metadata(&mkv, &edit).unwrap_err(),
+            Mp4MetadataError::UnsupportedContainer(_)
+        ));
+        assert_eq!(fs::read(&mkv).unwrap(), mkv_before);
+
+        let bare = dir.path().join("no-extension");
+        fs::copy("test-data/test_video_with_date.mp4", &bare).unwrap();
+        assert!(matches!(
+            write_metadata(&bare, &edit).unwrap_err(),
+            Mp4MetadataError::UnsupportedContainer(_)
+        ));
+    }
+
+    /// The ffprobe half of the writer's contract: the patched date is what
+    /// other tools read back, for a `moov` first and a `moov` last alike.
+    #[test]
+    fn ffprobe_reports_the_patched_date_and_moov_at_end_files_work_too() {
+        use std::process::Command;
+
+        if !video_tests_enabled() {
+            eprintln!("Skipping ffprobe patch test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+        let taken_at: DateTime<Utc> = "2024-07-04T12:00:00Z".parse().unwrap();
+        for (name, src) in [
+            (
+                "patched_ftyp_first.mp4",
+                "test-data/test_video_with_date.mp4",
+            ),
+            ("patched_moov_end.mp4", "test-data/test_video_moov_end.mp4"),
+        ] {
+            let (_dir, path) = temp_copy(name, src);
+            write_metadata(
+                &path,
+                &VideoMetadataEdit {
+                    taken_at: Some(taken_at),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let output = Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format_tags=creation_time:stream_tags=creation_time",
+                    "-of",
+                    "json",
+                ])
+                .arg(&path)
+                .output()
+                .expect("ffprobe must be installed for RUN_VIDEO_TESTS");
+            assert!(
+                output.status.success(),
+                "{name}: ffprobe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+            let tag = |value: &serde_json::Value| {
+                value["tags"]["creation_time"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name}: no creation_time tag in {value}"))
+                    .to_string()
+            };
+            assert_eq!(
+                parse_ffprobe_time(&tag(&report["format"])),
+                taken_at,
+                "{name}: format tag"
+            );
+            let streams = report["streams"].as_array().expect("streams");
+            assert!(!streams.is_empty(), "{name}: no streams");
+            for stream in streams {
+                assert_eq!(
+                    parse_ffprobe_time(&tag(stream)),
+                    taken_at,
+                    "{name}: stream tag"
+                );
+            }
+
+            let status = Command::new("ffprobe")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .status()
+                .expect("ffprobe must be installed for RUN_VIDEO_TESTS");
+            assert!(status.success(), "{name}: ffprobe could not read the file");
+        }
+    }
+
+    /// `RUN_VIDEO_TESTS` is the project-wide switch for tests that shell out to
+    /// ffmpeg/ffprobe; the byte-level tests never depend on it.
+    fn video_tests_enabled() -> bool {
+        matches!(
+            std::env::var("RUN_VIDEO_TESTS").as_deref(),
+            Ok("1") | Ok("true")
+        )
+    }
+
+    fn parse_ffprobe_time(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// A fresh copy of a committed fixture, in a directory that outlives the
+    /// call: nothing under `test-data/` is ever written to.
+    fn temp_copy(name: &str, src: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(name);
+        fs::copy(src, &path).unwrap();
+        (dir, path)
+    }
+
+    /// Offset and size of the top-level `moov` box in a whole-file buffer.
+    fn locate_moov_in(buf: &[u8]) -> Option<(usize, usize)> {
+        let tree = parse_box_tree(buf, 0, buf.len(), &[]).ok()?;
+        tree.iter()
+            .find(|span| span.kind == *b"moov")
+            .map(|span| (span.offset, span.size))
+    }
+
+    /// Creation-time field of every `mvhd`/`tkhd`/`mdhd` in a whole-file
+    /// buffer, as `(kind, offset, width)`.
+    fn date_fields(buf: &[u8]) -> Vec<([u8; 4], usize, usize)> {
+        fn walk(buf: &[u8], span: &BoxSpan, out: &mut Vec<([u8; 4], usize, usize)>) {
+            if TIME_BOXES.contains(&span.kind) {
+                let body = span.offset + header_len(buf, span.offset);
+                let width = if buf[body] == 1 { 8 } else { 4 };
+                out.push((span.kind, body + 4, width));
+            }
+            for child in &span.children {
+                walk(buf, child, out);
+            }
+        }
+
+        let tree = parse_box_tree(buf, 0, buf.len(), &[]).unwrap();
+        let mut out = Vec::new();
+        for span in &tree {
+            walk(buf, span, &mut out);
+        }
+        out
+    }
+
+    fn count_creation_times(buf: &[u8], expected_seconds: u64) -> usize {
+        date_fields(buf)
+            .into_iter()
+            .filter(|(_, offset, width)| read_field(buf, *offset, *width) == expected_seconds)
+            .count()
+    }
+
+    fn read_field(buf: &[u8], offset: usize, width: usize) -> u64 {
+        let field = &buf[offset..offset + width];
+        if width == 8 {
+            u64::from_be_bytes(field.try_into().unwrap())
+        } else {
+            u64::from(u32::from_be_bytes(field.try_into().unwrap()))
+        }
+    }
+
+    /// Every offset at which `after` differs from `before`.
+    fn differing_offsets(before: &[u8], after: &[u8]) -> Vec<usize> {
+        before
+            .iter()
+            .zip(after)
+            .enumerate()
+            .filter(|(_, (old, new))| old != new)
+            .map(|(offset, _)| offset)
+            .collect()
     }
 
     /// Runs `check` on a worker thread and fails when it does not answer in ten

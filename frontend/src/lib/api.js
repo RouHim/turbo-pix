@@ -143,7 +143,7 @@ class TurboPixAPI {
    * started" response here, not an error.
    * @param {string} hash - photo hash
    * @param {string} clientCodecs - e.g. 'h264-8,aac' (from getClientCodecsString)
-   * @returns {Promise<{action: string, url?: string, mode?: string|null, mime?: string|null, duration?: number|null, cached?: boolean, reason?: string|null, pollUrl?: string}>}
+   * @returns {Promise<{action: string, url?: string, mode?: string|null, mime?: string|null, duration?: number|null, cached?: boolean, reason?: string|null, pollUrl?: string, encoder?: string|null, codec?: string|null, bit_depth?: number|null, audio_codec?: string|null}>}
    */
   async getVideoDecision(hash, clientCodecs) {
     try {
@@ -168,6 +168,13 @@ class TurboPixAPI {
         // carries no response header the client can read, so this field is the
         // only way the viewer can name it; absent means "not video-encoded".
         encoder: typeof data.encoder === 'string' ? data.encoder : null,
+        // The SOURCE file's own facts, identical for every delivery: the viewer
+        // keys the codec it records from a proved playback on `codec` +
+        // `bit_depth`, and its audio gate on `audio_codec` (`''`/absent means
+        // "no video stream"/"no audio track").
+        codec: typeof data.codec === 'string' ? data.codec : null,
+        bit_depth: typeof data.bit_depth === 'number' ? data.bit_depth : null,
+        audio_codec: typeof data.audio_codec === 'string' ? data.audio_codec : null,
       };
     } catch (e) {
       if (logger) {

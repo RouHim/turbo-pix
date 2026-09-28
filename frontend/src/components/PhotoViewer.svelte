@@ -16,6 +16,12 @@
   import { videoCodecSupport } from '../lib/video/capabilities.js';
   import { logger } from '../lib/logger.js';
   import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
+  import {
+    ORIGINAL_ATTEMPT_GRACE_MS,
+    createOriginalFailureRegistry,
+    startOriginalAttempt,
+  } from '../lib/video/originalAttempt.js';
+  import { codecTokenFor } from '../lib/video/playbackVerification.js';
   import { isHardwareEncoder } from '../lib/video/encoderHint.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
@@ -58,10 +64,19 @@
   // the user must keep the "play original anyway" escape hatch. Rendered, so a
   // reactive state.
   let streamWaiting = $state(false);
-  // Set when the user selected "Play original anyway" after a transcode
-  // failure; suppresses the onerror transcode-retry so a failing original
-  // cannot loop back into the transcode decision. Logic-only (never rendered).
-  let hasUserChosenOriginal = false;
+  // The live ORIGINAL attempt of the current video: its delivery is the plain
+  // `?client=` byte request, and its verdict decides whether a conversion rung
+  // may start. Plain field, like `streamPlayer`: the module holds DOM listeners
+  // and closures that must never be proxied, and nothing renders from it.
+  let originalAttempt = null;
+  // The videos whose original already failed THIS SESSION. A reopen goes
+  // straight to the planned rung instead of repeating a window whose outcome is
+  // known; nothing is persisted, so a reload starts clean.
+  const originalFailures = createOriginalFailureRegistry();
+  // The declaration token of the codec the current video's decision names — the
+  // token a proved playback records (FR-006/FR-007). Set with every decision,
+  // so the attempt that resolves later records the codec it actually played.
+  let currentVideoToken = null;
   // Active MSE stream playback (Task 3). A plain field, not `$state`: the
   // object holds MediaSource/DOM references and closures that must never be
   // proxied, and nothing renders from it.
@@ -533,8 +548,11 @@
       hideTranscodeToast();
     }
     // Stop the MSE stream (and its fetch) too: a hidden viewer must not keep
-    // pulling conversion bytes, and the blob URL must be released.
+    // pulling conversion bytes, and the blob URL must be released. The original
+    // attempt goes with it: nothing plays behind a closed viewer, so a verdict
+    // landing later must not start a conversion or a notice.
     destroyStreamPlayer();
+    cancelOriginalAttempt();
     metadataEditRef?.close?.();
     isOpen = false;
     isPendingCollage = false;
@@ -610,8 +628,12 @@
     // unrelated photo, whose "play original" button would then play the
     // image's URL in the <video> element. displayVideo's own teardown cannot
     // run for the OLD video: its staleness guard bails. Both calls are
-    // idempotent, so the video paths (which also tear down) stay safe.
+    // idempotent, so the video paths (which also tear down) stay safe. The same
+    // reasoning retires the previous photo's original attempt: this photo owns
+    // the element now, so a verdict for the video being left behind must not
+    // start a conversion over it.
     destroyStreamPlayer();
+    cancelOriginalAttempt();
     hideTranscodeToast();
     // The previous photo's losses die with its playback too: a budget is spent
     // against one photo's runs at one rung, and this photo's playback starts
@@ -764,8 +786,10 @@
     if (!videoEl) return;
     // A different video may be on screen: its stream (and any pending
     // SourceBuffer, or an armed saturation retry) belongs to the old photo —
-    // and so does the notice it put up. This photo owns the toast now.
+    // and so do its original attempt and the notice it put up. This photo owns
+    // the element and the toast now.
     destroyStreamPlayer();
+    cancelOriginalAttempt();
     hideTranscodeToast();
     // A retry of the SAME photo (a playback failure) bypasses displayPhoto, so
     // the claim from the attempt that just failed is dropped here too: every
@@ -780,18 +804,19 @@
         clientCodecs: videoCodecSupport.getClientCodecsString(),
       });
       if (await tryStartTranscode(url, photo)) return;
-      setVideoSource(photo, url, false);
+      setVideoSource(photo, url);
       return;
     }
-
-    // A fresh playback attempt re-derives the decision; clear any prior
-    // "play original" choice so a normal playback failure can retry transcode.
-    hasUserChosenOriginal = false;
 
     // Ask the server for the recommended path (direct play / streamed remux /
     // streamed audio+video conversion / empty). The server owns the
     // codec+container decision using our declared capability set, so we do not
     // re-guess HEVC support client-side.
+    //
+    // The answer is a HINT, never a verdict: whatever rung it names is reached
+    // only after the original itself failed to play (or is remembered as having
+    // failed), so a client that under-declares its codecs cannot be converted
+    // for a file it can play.
     const decision = await api.getVideoDecision(
       photo.hash_sha256,
       videoCodecSupport.getClientCodecsString()
@@ -801,11 +826,71 @@
     // decision was loading — a hidden viewer must not start playback.
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
-    if (decision.action === 'direct') {
-      activeEncoder = decision.encoder ?? null;
-      setVideoSource(photo, decision.url, true);
+    // The codec this decision names for the SOURCE: the token a proved playback
+    // of this video records (FR-007), read once here so a verdict that lands
+    // later cannot pick up a newer decision's token.
+    currentVideoToken = codecTokenFor(decision.codec, decision.bit_depth);
+
+    if (decision.action === 'empty') {
+      // Nothing to attempt and nothing to convert: the only exemption from the
+      // original attempt (FR-001).
+      showTranscodeToast(
+        get(t)('video.file_empty', { default: 'This video file is empty or still being synced.' }),
+        true
+      );
       return;
     }
+    if (originalFailures.has(photo.hash_sha256)) {
+      // Known to fail in this session: the window is not repeated (FR-009).
+      startPlannedDelivery(photo, decision);
+      return;
+    }
+    armOriginalAttempt(photo, decision);
+  }
+
+  /**
+   * Try the ORIGINAL file — the plain `?client=` byte request the server serves
+   * for every non-direct delivery — and hand the verdict to the caller's
+   * discipline: a decoded frame keeps playback here, anything else takes the
+   * rung the decision named.
+   *
+   * This is the only path a video's playback starts from, whatever the server
+   * planned (FR-001/FR-008).
+   */
+  function armOriginalAttempt(photo, decision) {
+    const url = getVideoUrl(photo.hash_sha256, {
+      clientCodecs: videoCodecSupport.getClientCodecsString(),
+    });
+    showVideoSource(photo, url);
+    const attempt = startOriginalAttempt(videoEl, {
+      graceMs: ORIGINAL_ATTEMPT_GRACE_MS,
+      audioPlayable: () => videoCodecSupport.canPlayAudioCodec(decision.audio_codec),
+    });
+    originalAttempt = attempt;
+    attempt.promise.then(({ verdict, frameObserved }) => {
+      if (originalAttempt !== attempt) return; // superseded: a newer open owns the element
+      originalAttempt = null;
+      if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+      // The frame is proof even when the audio keeps the file off this path:
+      // FR-007 records an actual playback, not the plan's verdict.
+      if (frameObserved) videoCodecSupport.recordVerifiedCodec(currentVideoToken);
+      if (verdict === 'playable') {
+        originalFailures.clear(photo.hash_sha256);
+        return;
+      }
+      if (verdict === 'cancelled') return;
+      originalFailures.record(photo.hash_sha256);
+      startPlannedDelivery(photo, decision);
+    });
+  }
+
+  /**
+   * Start the conversion rung the server planned — reachable only after the
+   * original attempt failed, or because this session already watched that file
+   * fail. The plan is no longer a guess the viewer obeys, so nothing here runs
+   * before that evidence exists.
+   */
+  async function startPlannedDelivery(photo, decision) {
     if (decision.action === 'stream') {
       // The upcoming run's own header is authoritative for this playback.
       activeEncoder = null;
@@ -817,17 +902,24 @@
           clientCodecs: videoCodecSupport.getClientCodecsString(),
         });
         if (await tryStartTranscode(legacy, photo)) return;
-        setVideoSource(photo, legacy, false);
+        setVideoSource(photo, legacy);
         return;
       }
       playStream(photo, decision);
       return;
     }
-    if (decision.action === 'empty') {
-      showTranscodeToast(
-        get(t)('video.file_empty', { default: 'This video file is empty or still being synced.' }),
-        true
-      );
+    if (decision.action === 'direct') {
+      // A cached conversion is a file: serve it as one, no job needed — and the
+      // decision is the only place its encoder can come from (a file delivery
+      // carries no response header the client can read).
+      if (decision.cached && decision.url.includes('transcode=true')) {
+        activeEncoder = decision.encoder ?? null;
+        setVideoSource(photo, decision.url);
+        return;
+      }
+      // A plain direct URL means the server expected the original to work and
+      // it did not — the whole-file conversion is the fallback it always was.
+      displayVideo(photo, true);
       return;
     }
     showTranscodeToast(
@@ -891,15 +983,13 @@
     if (!videoEl) return;
     destroyStreamPlayer();
     // The stream path owns this element's failures now: `setVideoSource`
-    // installs an `onerror` *property* handler (the whole-file path's retry or
-    // its global toast), while msePlayer registers its own `error` listener, so
-    // a leftover property handler would deliver every media error twice —
+    // installs an `onerror` *property* handler (the conversion-file path's
+    // global toast), while msePlayer registers its own `error` listener, so a
+    // leftover property handler would deliver every media error twice —
     // raising a spurious global "conversion failed" toast next to the ladder's
     // own notice, or tearing the running ladder down to start a whole-file
-    // conversion behind its back. The stream run states its own failures; the
-    // escape hatch re-arms the property handler when the user asks for it.
+    // conversion behind its back. The stream run states its own failures.
     videoEl.onerror = null;
-    hasUserChosenOriginal = false;
     // Every run states its own answer, so a starting run claims nothing: the
     // failed rung's encoder must not survive into the escalated one (a remux
     // retry would otherwise wear the encoder of the transcode that just died)
@@ -1194,6 +1284,18 @@
   }
 
   /**
+   * Stop observing the current original attempt, if any. Cancelling settles it
+   * as `cancelled` and detaches every listener, so a verdict for the playback
+   * being left behind can never start a conversion for the photo that replaces
+   * it. Idempotent, like `destroyStreamPlayer`.
+   */
+  function cancelOriginalAttempt() {
+    if (!originalAttempt) return;
+    originalAttempt.cancel();
+    originalAttempt = null;
+  }
+
+  /**
    * Clear the lost-run budget: the losses counted so far belong to a position
    * or a session the viewer has left, so the next loss starts a fresh count.
    * The rung the count was spent against stays — a budget is per mode, and only
@@ -1422,7 +1524,7 @@
             // response header the client can read (staleness is already ruled
             // out by bailIfStale above).
             activeEncoder = status.encoder ?? null;
-            setVideoSource(photo, newUrl, false);
+            setVideoSource(photo, newUrl);
             resolve('Completed');
           } else if (status.state === 'Failed') {
             clearInterval(intervalId);
@@ -1462,31 +1564,65 @@
   }
 
   /**
-   * "Play original anyway": after a transcode failure, try the source bytes
-   * directly. Sets hasUserChosenOriginal so a subsequent playback error shows
-   * a plain error instead of looping back into the transcode decision.
+   * "Play original anyway": after a conversion failure (or while one waits for
+   * a slot), try the source bytes directly.
+   *
+   * It routes through the same attempt machinery as a normal open, because the
+   * user's choice is a playback, not a promise: a proved one is recorded and a
+   * failing one is reported — never answered with the conversion loop they just
+   * left (FR-015).
    */
   function playOriginalAnyway(photo) {
     if (!videoEl) return;
     if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-    hasUserChosenOriginal = true;
     // The user has decided: stop the stream run and any armed saturation
     // retry, otherwise the next attempt would put the waiting notice back up
     // and fight the choice they just made.
     destroyStreamPlayer();
+    cancelOriginalAttempt();
     hideTranscodeToast();
     // The original is played as-is: nothing encodes it, so nothing is claimed.
     activeEncoder = null;
-    setVideoSource(
-      photo,
-      getVideoUrl(photo.hash_sha256, {
-        clientCodecs: videoCodecSupport.getClientCodecsString(),
-      }),
-      false
-    );
+    const url = getVideoUrl(photo.hash_sha256, {
+      clientCodecs: videoCodecSupport.getClientCodecsString(),
+    });
+    showVideoSource(photo, url);
+    // The audio gate is deliberately open here: the user asked for these bytes,
+    // so a frame that plays is the answer even when the sound will not (FR-015
+    // keeps the escape hatch as the way out, not another conversion).
+    const attempt = startOriginalAttempt(videoEl, {
+      graceMs: ORIGINAL_ATTEMPT_GRACE_MS,
+      audioPlayable: () => true,
+    });
+    originalAttempt = attempt;
+    attempt.promise.then(({ verdict, frameObserved }) => {
+      if (originalAttempt !== attempt) return;
+      originalAttempt = null;
+      if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+      if (frameObserved) {
+        videoCodecSupport.recordVerifiedCodec(currentVideoToken);
+        originalFailures.clear(photo.hash_sha256);
+      }
+      if (verdict === 'playable' || verdict === 'cancelled') return;
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('video.playback_failed', { default: 'This video could not be played' }),
+        'error'
+      );
+    });
   }
 
-  function setVideoSource(photo, videoUrl, retryOnFailure) {
+  /**
+   * Point the element at `videoUrl` and show it (display, photoHash, autoplay).
+   *
+   * Every path states its own failures (the stream path's rule): a leftover
+   * property handler from an earlier conversion delivery would toast
+   * "conversion failed" next to this playback's own verdict, so the handler is
+   * cleared here and only `setVideoSource` — the conversion-file path, whose
+   * failures have no other reporter — installs one.
+   */
+  function showVideoSource(photo, videoUrl) {
+    videoEl.onerror = null;
     videoEl.src = '';
     videoEl.load();
     // Records which photo this video element currently holds; the Space
@@ -1494,20 +1630,6 @@
     // retains the previous photo's src while an image or a pending-transcode
     // video is shown).
     videoEl.dataset.photoHash = photo.hash_sha256;
-    videoEl.onerror = async () => {
-      // A stale photo's playback failure must neither retry nor toast.
-      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-      if (retryOnFailure && !hasUserChosenOriginal) {
-        await displayVideo(photo, true);
-        return;
-      }
-      showToast(
-        get(t)('notifications.error', { default: 'Error' }),
-        get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
-        'error'
-      );
-    };
-
     videoEl.src = videoUrl;
     videoEl.style.transform = '';
     videoEl.style.opacity = '';
@@ -1524,6 +1646,24 @@
     if (settings.autoPlay) {
       videoEl.play().catch(() => {});
     }
+  }
+
+  /**
+   * Show a conversion FILE (a cached artifact, or the whole-file job's output).
+   * Such a delivery has no attempt of its own to report a failure, so the
+   * element's error is answered here with the plain conversion failure.
+   */
+  function setVideoSource(photo, videoUrl) {
+    showVideoSource(photo, videoUrl);
+    videoEl.onerror = () => {
+      // A stale photo's playback failure must not toast.
+      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+        'error'
+      );
+    };
   }
 
   function updateRotationState() {

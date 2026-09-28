@@ -348,6 +348,23 @@ export class TestHelpers {
   }
 
   /**
+   * Make the ORIGINAL attempt fail, so the planned rung is what runs. The
+   * predicate is disjoint from the decision and stream URLs on purpose: those
+   * keep reaching their own route mocks. The `decision` exclusion is what makes
+   * it disjoint — the decision request for the same hash carries `client` too,
+   * and 404-ing it would replace the plan this helper exists to hand over to.
+   */
+  static async failOriginalAttempt(page, hash) {
+    await page.route(
+      (url) =>
+        url.pathname === `/api/photos/${hash}/video` &&
+        url.searchParams.has('client') &&
+        !url.searchParams.has('decision'),
+      (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'no original' })
+    );
+  }
+
+  /**
    * Clear the finished conversion artifacts of `hash`, and do not return until
    * the cache is COLD: nothing left for the server to serve, and no conversion
    * still running that could publish one moments later.

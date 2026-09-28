@@ -52,6 +52,9 @@ const DAY_NAME: &str = "\u{a9}day";
 /// Legacy QuickTime item type carrying an ISO 6709 location.
 const XYZ_BOX: [u8; 4] = [0xA9, b'x', b'y', b'z'];
 
+/// [`XYZ_BOX`] as text: how a failure names the legacy location carrier.
+const XYZ_NAME: &str = "\u{a9}xyz";
+
 /// mdta key names that carry the creation date, in resolution order.
 const MDTA_CREATION_DATE_KEYS: [&str; 2] = ["com.apple.quicktime.creationdate", "creation_time"];
 
@@ -618,19 +621,23 @@ fn text_carriers(buf: &[u8], moov: &BoxSpan) -> (Option<String>, Option<String>)
     (date, location)
 }
 
-/// Box text: UTF-8, with a single trailing NUL stripped (ffmpeg writes none,
-/// Apple writes one). No other whitespace is touched — the stored value has to
-/// survive a rewrite verbatim.
+/// Box text: UTF-8, with trailing NUL bytes stripped. Those bytes are the
+/// padding a rewrite leaves behind when its rendering is shorter than the slot
+/// it fills (ffmpeg writes none, Apple writes one), never part of the value. No
+/// other whitespace is touched — the stored value has to survive a rewrite
+/// verbatim.
 fn text_of(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(trim_trailing_nul(bytes)).into_owned()
+    String::from_utf8_lossy(trim_trailing_nuls(bytes)).into_owned()
 }
 
-fn trim_trailing_nul(bytes: &[u8]) -> &[u8] {
-    if bytes.last() == Some(&0) {
-        &bytes[..bytes.len() - 1]
-    } else {
-        bytes
-    }
+/// `bytes` without its trailing NUL padding; a payload that is all NULs is
+/// empty text.
+fn trim_trailing_nuls(bytes: &[u8]) -> &[u8] {
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |last| last + 1);
+    &bytes[..end]
 }
 
 /// Latitude and longitude of an ISO 6709 string, `None` when it is not one.
@@ -737,11 +744,9 @@ const TIME_BOXES: [[u8; 4]; 3] = [*b"mvhd", *b"tkhd", *b"mdhd"];
 
 /// One region of the `moov` a carrier replaces, and what replaces it.
 ///
-/// Every replacement is as long as the region it overwrites: the fixed-width
-/// creation timestamps, and the text date carriers, whose rendering is padded
-/// with NULs to the payload slot it replaces. The location carriers of
-/// `©xyz` and their mdta keys join this list in a later step, which is why the
-/// rebuild below is written as a splice rather than as a byte poke.
+/// A rendering is padded with NULs to the payload slot it replaces, so a value
+/// that did not grow leaves the container's length alone; one that did grow is
+/// paid for out of the file's own padding ([`rebuild_with_padding`]).
 struct MoovEdit {
     /// Offset of the region in the original `moov`.
     offset: usize,
@@ -749,17 +754,28 @@ struct MoovEdit {
     replaced: usize,
     /// What replaces it.
     content: Vec<u8>,
+    /// The carrier this region belongs to, as a failure names it.
+    carrier: &'static str,
 }
 
-/// Rewrites the creation timestamps of `mvhd`, `tkhd` and `mdhd` in place,
-/// together with every text date carrier the file holds, and hands back a
-/// fingerprint plus an undo token.
+impl MoovEdit {
+    /// Bytes this region adds (positive) or removes (negative).
+    fn delta(&self) -> isize {
+        self.content.len() as isize - self.replaced as isize
+    }
+}
+
+/// Rewrites a container's recording metadata: the creation timestamps of
+/// `mvhd`, `tkhd` and `mdhd`, every text date carrier the file holds, and every
+/// location carrier. Hands back a fingerprint plus an undo token.
 ///
-/// Each text carrier is rendered in its own representation (see
-/// [`render_date_in_shape`]), so the carriers still name one instant after the
-/// save and the file's byte length is unchanged. The location carriers
-/// (`©xyz` and their mdta keys) keep their bytes for now; a later step renders
-/// them into the same rebuild.
+/// Each carrier is rendered in its own representation (see
+/// [`render_date_in_shape`] and [`render_iso6709_in_shape`]), so the carriers
+/// still name one instant and one position after the save. A rendering that
+/// needs more bytes than its slot holds is paid for out of the file's own
+/// padding inside the `moov` (see [`rebuild_with_padding`]); when the file has
+/// no room for it, the save is refused. The file's byte length is unchanged
+/// either way.
 ///
 /// All-or-nothing: the date and the coordinates are validated, the `moov` tree
 /// is parsed and the whole replacement is rendered and length-checked before
@@ -790,6 +806,11 @@ pub fn write_metadata(
         return Err(Mp4MetadataError::Fragmented);
     }
     let patched = rebuild_moov(&original_moov, moov, edit)?;
+    if patched.len() != original_moov.len() {
+        // Only a `moov` of the same length can be written over the region it
+        // came from: anything else would move the bytes behind it.
+        return Err(Mp4MetadataError::NoRoom("moov"));
+    }
 
     let mut target = OpenOptions::new()
         .write(true)
@@ -1057,6 +1078,149 @@ fn digits(bytes: &[u8], start: usize, len: usize) -> Option<u32> {
     })
 }
 
+/// Renders `latitude`/`longitude` into the position shape `existing` is written
+/// in, or `None` when `existing` is not a position whose shape can be read.
+///
+/// The shape is kept, not replaced: each field keeps its decimal count and an
+/// integer part at least as wide as the stored one, the sign is always explicit,
+/// the altitude token is carried over byte for byte (it is not editable) and so
+/// is the closing solidus. A field that needs more integer digits than the file
+/// uses is widened — the value decides the text, and the writer prices the extra
+/// bytes against the room the file itself has. The horizontal pair is not
+/// validated here; the caller has already done that ([`validate_edit`]).
+pub(crate) fn render_iso6709_in_shape(
+    existing: &str,
+    latitude: f64,
+    longitude: f64,
+) -> Option<Vec<u8>> {
+    let shape = Iso6709Shape::parse(existing.as_bytes())?;
+    let mut rendered = shape.fields[0].render(latitude);
+    rendered.extend_from_slice(&shape.fields[1].render(longitude));
+    if let Some(altitude) = &shape.altitude {
+        rendered.extend_from_slice(altitude);
+    }
+    if shape.solidus {
+        rendered.push(b'/');
+    }
+    Some(rendered)
+}
+
+/// The shape of a stored ISO 6709 position: how each horizontal field is
+/// written, the altitude token verbatim, and whether a solidus closes it.
+struct Iso6709Shape {
+    /// Latitude and longitude, in that order.
+    fields: [FieldShape; 2],
+    /// The third component exactly as stored, sign and decimals included;
+    /// `None` when the value has no altitude.
+    altitude: Option<Vec<u8>>,
+    /// Whether the value ends with `/`.
+    solidus: bool,
+}
+
+/// How one field of a position is written.
+struct FieldShape {
+    /// Digits before the decimal separator.
+    integer_digits: usize,
+    /// Digits behind it, 0 when the field has none.
+    decimals: usize,
+}
+
+impl Iso6709Shape {
+    /// The shape of a stored value, or `None` when it is not
+    /// `±digits[.digits]` twice or three times, optionally closed by `/`.
+    fn parse(value: &[u8]) -> Option<Self> {
+        let mut components: Vec<(FieldShape, Vec<u8>)> = Vec::new();
+        let mut index = 0;
+        while index < value.len() {
+            if value[index] == b'/' {
+                // The solidus closes the value; nothing may follow it.
+                if index + 1 != value.len() || components.len() < 2 {
+                    return None;
+                }
+                return Self::of(components, true);
+            }
+            let (field, end) = FieldShape::parse(value, index)?;
+            components.push((field, value[index..end].to_vec()));
+            index = end;
+        }
+        Self::of(components, false)
+    }
+
+    fn of(components: Vec<(FieldShape, Vec<u8>)>, solidus: bool) -> Option<Self> {
+        let mut components = components.into_iter();
+        let latitude = components.next()?.0;
+        let longitude = components.next()?.0;
+        let third = components.next();
+        if components.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            fields: [latitude, longitude],
+            altitude: third.map(|(_, token)| token),
+            solidus,
+        })
+    }
+}
+
+impl FieldShape {
+    /// The field starting at `start`, and where it ends.
+    fn parse(value: &[u8], start: usize) -> Option<(Self, usize)> {
+        if !matches!(value.get(start), Some(b'+' | b'-')) {
+            return None;
+        }
+        let mut index = start + 1;
+        let integer_start = index;
+        while value.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        let integer_digits = index - integer_start;
+        if integer_digits == 0 {
+            return None;
+        }
+        let mut decimals = 0;
+        if value.get(index) == Some(&b'.') {
+            index += 1;
+            let fraction_start = index;
+            while value.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+            decimals = index - fraction_start;
+            if decimals == 0 {
+                return None;
+            }
+        }
+        Some((
+            Self {
+                integer_digits,
+                decimals,
+            },
+            index,
+        ))
+    }
+
+    /// `value` written in this shape: an explicit sign, the stored decimal
+    /// count, and at least the stored integer width (zero-padded, never
+    /// truncated).
+    fn render(&self, value: f64) -> Vec<u8> {
+        let sign = if value.is_sign_negative() { b'-' } else { b'+' };
+        let rendered = format!("{:.*}", self.decimals, value.abs());
+        let (integer, fraction) = match rendered.split_once('.') {
+            Some((integer, fraction)) => (integer, Some(fraction)),
+            None => (rendered.as_str(), None),
+        };
+        let width = integer.len().max(self.integer_digits);
+        let mut out = Vec::with_capacity(2 + width + self.decimals);
+        out.push(sign);
+        out.resize(1 + width - integer.len(), b'0');
+        out.extend_from_slice(integer.as_bytes());
+        if let Some(fraction) = fraction {
+            out.push(b'.');
+            out.extend_from_slice(fraction.as_bytes());
+        }
+        out
+    }
+}
+
 /// Writes `rendered` into the front of `slot` and NUL-fills the rest, so the
 /// carrier's payload keeps the byte length it already has.
 ///
@@ -1108,15 +1272,15 @@ fn rebuild_moov(
     moov: &BoxSpan,
     edit: &VideoMetadataEdit,
 ) -> Result<Vec<u8>, Mp4MetadataError> {
-    apply_edits(original, carriers(original, moov, edit)?)
+    apply_edits(original, moov, carriers(original, moov, edit)?)
 }
 
 /// Every carrier this writer renders, as regions of `original`.
 ///
-/// The fixed-width creation fields, and the text carriers a save has to keep in
-/// step with them. All of them are rendered before anything is written, so a
-/// carrier that cannot hold the new value fails the write instead of leaving a
-/// half-patched file.
+/// The fixed-width creation fields, the text carriers a save has to keep in
+/// step with them, and the location carriers. All of them are rendered before
+/// anything is written, so a carrier that cannot hold the new value fails the
+/// write instead of leaving a half-patched file.
 fn carriers(
     buf: &[u8],
     moov: &BoxSpan,
@@ -1127,6 +1291,11 @@ fn carriers(
         let seconds = quicktime_seconds(taken_at).ok_or(Mp4MetadataError::InvalidDate)?;
         collect_time_edits(buf, moov, seconds, &mut edits)?;
         collect_text_date_edits(buf, moov, taken_at, &mut edits)?;
+    }
+    // `validate_edit` has already refused a position whose pair is incomplete,
+    // so a latitude here always has its longitude.
+    if let (Some(latitude), Some(longitude)) = (edit.latitude, edit.longitude) {
+        collect_location_edits(buf, moov, latitude, longitude, &mut edits)?;
     }
     Ok(edits)
 }
@@ -1185,7 +1354,7 @@ fn collect_text_date_edits(
 /// The byte range an `ilst` item's text lives in: the payload of its `data`
 /// box, behind the type-indicator/locale word.
 ///
-/// An item of a date carrier with no readable `data` box is not something this
+/// An item of a text carrier with no readable `data` box is not something this
 /// writer can rewrite, so it refuses the save rather than skipping the carrier.
 fn item_text_slot(
     buf: &[u8],
@@ -1201,8 +1370,102 @@ fn item_text_slot(
     Ok((start, end))
 }
 
-/// The replacement of one text carrier: the new instant rendered in the shape
-/// the carrier already holds, filling its payload slot without changing it.
+/// Collects the replacement of every location carrier the file holds: the mdta
+/// keys, the `©xyz` `ilst` item and the direct `udta/©xyz` child.
+///
+/// Every carrier is rendered — in its own shape, so they all end up naming the
+/// same position — or the whole save is refused. A file with no location
+/// carrier at all cannot take the position, and says so.
+fn collect_location_edits(
+    buf: &[u8],
+    moov: &BoxSpan,
+    latitude: f64,
+    longitude: f64,
+    edits: &mut Vec<MoovEdit>,
+) -> Result<(), Mp4MetadataError> {
+    let mut carriers = 0usize;
+    if let Some(ilst) = find_path(moov, &[*b"udta", META_BOX, *b"ilst"]) {
+        let keys = mdta_keys(buf, moov);
+        for (position, key) in keys.iter().enumerate() {
+            let Some(name) = MDTA_LOCATION_KEYS
+                .iter()
+                .find(|name| **name == key.as_str())
+            else {
+                continue;
+            };
+            // mdta indexes are 1-based, and a key the file names twice is
+            // carried by an item per position.
+            let Ok(index) = u32::try_from(position + 1) else {
+                continue;
+            };
+            for item in &ilst.children {
+                if item.kind == index.to_be_bytes() {
+                    let (start, end) = item_text_slot(buf, item, name)?;
+                    edits.push(location_edit(buf, name, start, end, latitude, longitude)?);
+                    carriers += 1;
+                }
+            }
+        }
+        for item in &ilst.children {
+            if item.kind == XYZ_BOX {
+                let (start, end) = item_text_slot(buf, item, XYZ_NAME)?;
+                edits.push(location_edit(
+                    buf, XYZ_NAME, start, end, latitude, longitude,
+                )?);
+                carriers += 1;
+            }
+        }
+    }
+    if let Some(udta) = find_child(moov, b"udta") {
+        if let Some(direct) = find_child(udta, &XYZ_BOX) {
+            let start = direct.offset + header_len(buf, direct.offset);
+            let end = direct.offset + direct.size;
+            edits.push(location_edit(
+                buf, XYZ_NAME, start, end, latitude, longitude,
+            )?);
+            carriers += 1;
+        }
+    }
+    if carriers == 0 {
+        return Err(Mp4MetadataError::NoLocationCarrier);
+    }
+    Ok(())
+}
+
+/// The replacement of one location carrier: the new position rendered in the
+/// shape the carrier already holds, filling its payload slot.
+fn location_edit(
+    buf: &[u8],
+    carrier: &'static str,
+    start: usize,
+    end: usize,
+    latitude: f64,
+    longitude: f64,
+) -> Result<MoovEdit, Mp4MetadataError> {
+    let slot = buf
+        .get(start..end)
+        .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
+    let rendered = render_iso6709_in_shape(&text_of(slot), latitude, longitude)
+        .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
+    Ok(slot_edit(carrier, start, slot.len(), rendered))
+}
+
+/// A carrier's replacement: `rendered` NUL-padded to the payload slot it fills,
+/// or left as it is when the rendering needs more bytes than the slot has — the
+/// rebuild is what prices that growth.
+fn slot_edit(carrier: &'static str, offset: usize, replaced: usize, rendered: Vec<u8>) -> MoovEdit {
+    let mut content = vec![0u8; replaced.max(rendered.len())];
+    write_payload_slot(&mut content, &rendered);
+    MoovEdit {
+        offset,
+        replaced,
+        content,
+        carrier,
+    }
+}
+
+/// The replacement of one text date carrier: the new instant rendered in the
+/// shape the carrier already holds, filling its payload slot.
 fn text_date_edit(
     buf: &[u8],
     carrier: &'static str,
@@ -1215,16 +1478,7 @@ fn text_date_edit(
         .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
     let rendered = render_date_in_shape(&text_of(slot), taken_at)
         .ok_or(Mp4MetadataError::Unrepresentable(carrier))?;
-    if rendered.len() > slot.len() {
-        return Err(Mp4MetadataError::NoRoom(carrier));
-    }
-    let mut content = vec![0u8; slot.len()];
-    write_payload_slot(&mut content, &rendered);
-    Ok(MoovEdit {
-        offset: start,
-        replaced: slot.len(),
-        content,
-    })
+    Ok(slot_edit(carrier, start, slot.len(), rendered))
 }
 
 /// Collects the replacement of every `mvhd`/`tkhd`/`mdhd` creation field at or
@@ -1264,35 +1518,223 @@ fn time_edit(buf: &[u8], span: &BoxSpan, seconds: u32) -> Result<MoovEdit, Mp4Me
         offset: body + 4,
         replaced: width,
         content,
+        carrier: time_box_name(&span.kind),
     })
 }
 
-/// Splices `edits` into `original`.
-///
-/// A rebuild that would change the container's length has no in-place path yet,
-/// so it is refused before the file is opened: nothing may be written until the
-/// resized-`moov` case is defined.
-fn apply_edits(original: &[u8], mut edits: Vec<MoovEdit>) -> Result<Vec<u8>, Mp4MetadataError> {
-    edits.sort_by_key(|edit| edit.offset);
-    let removed: usize = edits.iter().map(|edit| edit.replaced).sum();
-    let added: usize = edits.iter().map(|edit| edit.content.len()).sum();
-    if removed != added {
-        return Err(Mp4MetadataError::NoRoom("moov"));
+/// The name of one of [`TIME_BOXES`], as a failure names the carrier it could
+/// not fill. Only `mvhd`, `tkhd` and `mdhd` are ever passed.
+fn time_box_name(kind: &[u8; 4]) -> &'static str {
+    if *kind == *b"mvhd" {
+        "mvhd"
+    } else if *kind == *b"tkhd" {
+        "tkhd"
+    } else {
+        "mdhd"
     }
+}
 
-    let mut patched = Vec::with_capacity(original.len());
+/// Applies `edits` to `original`.
+///
+/// A save whose renderings all fit the slots they replace is spliced in place
+/// and the `moov` keeps its layout byte for byte. One whose renderings need
+/// more bytes than their slots hold is paid for out of the file's own padding
+/// ([`rebuild_with_padding`]). The `moov` keeps its length either way, so no
+/// byte outside it moves and the media is never shifted.
+fn apply_edits(
+    original: &[u8],
+    moov: &BoxSpan,
+    mut edits: Vec<MoovEdit>,
+) -> Result<Vec<u8>, Mp4MetadataError> {
+    edits.sort_by_key(|edit| edit.offset);
     let mut cursor = 0usize;
     for edit in &edits {
+        // Overlapping regions, or one that runs off the buffer, cannot be
+        // rendered meaningfully: refuse rather than splice something wrong.
         if edit.offset < cursor || edit.offset + edit.replaced > original.len() {
-            return Err(Mp4MetadataError::NoRoom("moov"));
+            return Err(Mp4MetadataError::NoRoom(edit.carrier));
         }
+        cursor = edit.offset + edit.replaced;
+    }
+    let growth: isize = edits.iter().map(MoovEdit::delta).sum();
+    if growth == 0 {
+        return Ok(splice(original, &edits));
+    }
+    rebuild_with_padding(original, moov, &edits, growth)
+}
+
+/// `original` with every edit written at the offset it was measured at.
+fn splice(original: &[u8], edits: &[MoovEdit]) -> Vec<u8> {
+    let mut patched = Vec::with_capacity(original.len());
+    let mut cursor = 0usize;
+    for edit in edits {
         patched.extend_from_slice(&original[cursor..edit.offset]);
         patched.extend_from_slice(&edit.content);
         cursor = edit.offset + edit.replaced;
     }
     patched.extend_from_slice(&original[cursor..]);
     debug_assert_eq!(patched.len(), original.len());
-    Ok(patched)
+    patched
+}
+
+/// Whether `kind` is a box a file keeps only as padding.
+fn is_padding(kind: &[u8; 4]) -> bool {
+    *kind == *b"free" || *kind == *b"skip"
+}
+
+/// What the file's own padding offers a rendering that did not fit its slot.
+#[derive(Debug, Clone, Copy, Default)]
+struct Padding {
+    /// Bytes the `free`/`skip` boxes occupy, headers included: what a rebuild
+    /// has to cover to leave the `moov` its length.
+    total: usize,
+    /// Bytes behind their headers: the growth those boxes can pay for.
+    payload: usize,
+}
+
+impl Padding {
+    /// The padding at or below `span`.
+    fn of(span: &BoxSpan, buf: &[u8]) -> Self {
+        let mut padding = Self::default();
+        padding.collect(span, buf);
+        padding
+    }
+
+    fn collect(&mut self, span: &BoxSpan, buf: &[u8]) {
+        if is_padding(&span.kind) {
+            self.total += span.size;
+            self.payload += span.size - header_len(buf, span.offset);
+        }
+        for child in &span.children {
+            self.collect(child, buf);
+        }
+    }
+}
+
+/// Rebuilds `moov` with the renderings that did not fit their slots, paid for
+/// out of the file's own padding.
+///
+/// Every `free`/`skip` box inside the `moov` is dropped from its children and
+/// their bytes are re-emitted as one `free` box behind them, so the `moov`
+/// keeps its exact length and nothing outside it ever moves. What a save may
+/// spend is the room behind those boxes' headers: a growth that needs more than
+/// the file has is refused, and so is one that would leave 1..=7 bytes of
+/// padding — a stub box is never written. The edits keep the offsets they were
+/// measured at, because they are applied while the tree is walked rather than
+/// against a buffer: an earlier carrier's growth cannot displace a later one.
+fn rebuild_with_padding(
+    original: &[u8],
+    moov: &BoxSpan,
+    edits: &[MoovEdit],
+    growth: isize,
+) -> Result<Vec<u8>, Mp4MetadataError> {
+    let padding = Padding::of(moov, original);
+    let left = padding.payload as isize - growth;
+    if left < 0 || (1..=7).contains(&left) {
+        return Err(Mp4MetadataError::NoRoom(growing_carrier(edits)));
+    }
+    let header = header_len(original, moov.offset);
+    let mut out = Vec::with_capacity(original.len());
+    // The `moov` header is kept verbatim: the rebuild adds up to exactly the
+    // length the box already declares.
+    out.extend_from_slice(&original[moov.offset..moov.offset + header]);
+    emit_body(original, moov, edits, &mut out);
+    let filler = padding.total as isize - growth;
+    if filler > 0 {
+        let filler = usize::try_from(filler).map_err(|_| Mp4MetadataError::NoRoom("moov"))?;
+        if filler < 8 {
+            return Err(Mp4MetadataError::NoRoom(growing_carrier(edits)));
+        }
+        out.extend_from_slice(&free_box(filler));
+    }
+    if out.len() != original.len() {
+        // Length preservation is the whole safety argument of this path; a
+        // rebuild that missed it must not be written.
+        return Err(Mp4MetadataError::NoRoom("moov"));
+    }
+    Ok(out)
+}
+
+/// The carrier a growth refusal names: the first one that needed more bytes
+/// than its slot held.
+fn growing_carrier(edits: &[MoovEdit]) -> &'static str {
+    edits
+        .iter()
+        .find(|edit| edit.delta() > 0)
+        .map_or("moov", |edit| edit.carrier)
+}
+
+/// A `free` box of exactly `size` bytes with a zeroed payload.
+fn free_box(size: usize) -> Vec<u8> {
+    let size = size.max(8);
+    let mut out = vec![0u8; size];
+    out[..4].copy_from_slice(&(size as u32).to_be_bytes());
+    out[4..8].copy_from_slice(b"free");
+    out
+}
+
+/// Emits `span`'s payload — the gaps between its children, the children
+/// themselves and the tail — applying `edits` and dropping padding boxes.
+fn emit_body(buf: &[u8], span: &BoxSpan, edits: &[MoovEdit], out: &mut Vec<u8>) {
+    let start = span.offset + header_len(buf, span.offset);
+    let end = span.offset + span.size;
+    if span.children.is_empty() {
+        let mut cursor = start;
+        for edit in edits
+            .iter()
+            .filter(|edit| edit.offset >= start && edit.offset + edit.replaced <= end)
+        {
+            out.extend_from_slice(&buf[cursor..edit.offset]);
+            out.extend_from_slice(&edit.content);
+            cursor = edit.offset + edit.replaced;
+        }
+        out.extend_from_slice(&buf[cursor..end]);
+        return;
+    }
+    let mut cursor = start;
+    for child in &span.children {
+        // A `meta` body opens with a version/flags word when the file writes
+        // the ISO-BMFF form: the bytes in front of each child are copied, not
+        // assumed away. Advancing past a dropped padding box is what keeps its
+        // bytes out of the rebuild — they are re-emitted as one `free` box.
+        out.extend_from_slice(&buf[cursor..child.offset]);
+        if !is_padding(&child.kind) {
+            emit_box(buf, child, edits, out);
+        }
+        cursor = child.offset + child.size;
+    }
+    out.extend_from_slice(&buf[cursor..end]);
+}
+
+/// Emits `span` as a box whose size field says how long it now is.
+fn emit_box(buf: &[u8], span: &BoxSpan, edits: &[MoovEdit], out: &mut Vec<u8>) {
+    let header = header_len(buf, span.offset);
+    let size = span.size as isize + span_delta(buf, span, edits);
+    debug_assert!(size >= header as isize && size <= u32::MAX as isize);
+    let size = size as usize;
+    if header == 16 {
+        // The 64-bit form keeps its header shape: `1`, the type, then `largesize`.
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(&span.kind);
+        out.extend_from_slice(&(size as u64).to_be_bytes());
+    } else {
+        out.extend_from_slice(&(size as u32).to_be_bytes());
+        out.extend_from_slice(&span.kind);
+    }
+    emit_body(buf, span, edits, out);
+}
+
+/// The bytes `span` gains (or loses) in a rebuild: its edits' deltas, less the
+/// padding boxes dropped from inside it.
+fn span_delta(buf: &[u8], span: &BoxSpan, edits: &[MoovEdit]) -> isize {
+    let edited: isize = edits
+        .iter()
+        .filter(|edit| {
+            edit.offset >= span.offset && edit.offset + edit.replaced <= span.offset + span.size
+        })
+        .map(MoovEdit::delta)
+        .sum();
+    edited - Padding::of(span, buf).total as isize
 }
 
 #[cfg(test)]
@@ -1369,10 +1811,12 @@ mod tests {
     }
 
     #[test]
-    fn strips_one_trailing_nul_from_box_text() {
+    fn strips_trailing_nul_padding_from_box_text() {
         assert_eq!(text_of(b"encoder"), "encoder");
         assert_eq!(text_of(b"encoder\0"), "encoder");
-        assert_eq!(text_of(b"encoder\0\0"), "encoder\0");
+        // All of it, not just the last byte: a shorter rendering leaves its
+        // whole remainder as padding, and the value has to read back clean.
+        assert_eq!(text_of(b"encoder\0\0\0"), "encoder");
         assert_eq!(text_of(b"a b "), "a b "); // never trims other whitespace
     }
 
@@ -1713,6 +2157,7 @@ mod tests {
         let (_dir, path) =
             synthetic_mp4_with_carrier(CarrierSpec::ItemType(*b"\xa9day"), b"May 1st, 2024", 0);
         let before = std::fs::read(&path).unwrap();
+        let before_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
         let edit = VideoMetadataEdit {
             taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
             ..Default::default()
@@ -1721,6 +2166,11 @@ mod tests {
             matches!(write_metadata(&path, &edit).unwrap_err(), Mp4MetadataError::Unrepresentable(t) if t == "\u{a9}day")
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime,
+            "a refused save does not even touch the file"
+        );
     }
 
     #[test]
@@ -1849,6 +2299,462 @@ mod tests {
         let before = fs::read(&path).unwrap();
         write_metadata(&path, &VideoMetadataEdit::default()).unwrap();
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn renders_coordinates_in_the_files_own_iso6709_shape() {
+        assert_eq!(
+            render_iso6709_in_shape("+48.2082+016.3737/", 52.52, 13.405).unwrap(),
+            b"+52.5200+013.4050/"
+        );
+        assert_eq!(
+            render_iso6709_in_shape("+48.2082+016.3737+150.00/", 52.52, 13.405).unwrap(),
+            b"+52.5200+013.4050+150.00/"
+        );
+        assert_eq!(
+            render_iso6709_in_shape("-33.8688+151.2093", -33.9, 151.3).unwrap(),
+            b"-33.9000+151.3000"
+        );
+        // A narrower file width is widened, never kept: the value decides, the
+        // writer pays for the extra bytes.
+        assert_eq!(
+            render_iso6709_in_shape("+8.2082+016.3737/", 52.52, 13.405).unwrap(),
+            b"+52.5200+013.4050/"
+        );
+        // The stored integer width is kept as a floor, the sign is explicit and
+        // a field without a fraction keeps none — the value is rounded to the
+        // degree the file's own text can express.
+        assert_eq!(
+            render_iso6709_in_shape("-08.2082+16.3737", -0.5, 2.0).unwrap(),
+            b"-00.5000+02.0000"
+        );
+        assert_eq!(
+            render_iso6709_in_shape("+48+016/", 52.52, 13.405).unwrap(),
+            b"+53+013/"
+        );
+        assert_eq!(render_iso6709_in_shape("garbage", 1.0, 2.0), None);
+        for unparsable in [
+            "",
+            "+48.2082",
+            "48.2082+016.3737",
+            "+48.2082+016.3737//",
+            "+48.2082+016.3737/+1.0",
+            "+48.2082+016.3737+150.00+1.0",
+            "+48.+016.3737",
+        ] {
+            assert_eq!(
+                render_iso6709_in_shape(unparsable, 1.0, 2.0),
+                None,
+                "{unparsable}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_location_save_replaces_the_entry_without_duplicating_it() {
+        /// The mdta key the fixture stores its location under: the whole entry
+        /// text has to stay single.
+        const KEY: &[u8] = b"com.apple.quicktime.location.ISO6709";
+        let (_dir, path) = temp_copy("keys.mp4", "test-data/test_video_quicktime_keys.mp4");
+        let before = fs::read(&path).unwrap();
+        let before_len = std::fs::metadata(&path).unwrap().len();
+        let edit = VideoMetadataEdit {
+            latitude: Some(52.52),
+            longitude: Some(13.405),
+            ..Default::default()
+        };
+        write_metadata(&path, &edit).unwrap();
+
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        // The save carries no date, so the file's own date text is left as it
+        // was.
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200")
+        );
+        let buf = fs::read(&path).unwrap();
+        assert_eq!(
+            buf.windows(KEY.len()).filter(|w| *w == KEY).count(),
+            1,
+            "the key entry is not duplicated"
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), before_len);
+        // The rendering is exactly as long as the text it replaces, so every
+        // box the carrier lives in keeps its size.
+        assert_eq!(data_boxes(&buf), data_boxes(&before));
+    }
+
+    #[test]
+    fn a_file_without_a_location_carrier_refuses_the_save() {
+        let (_dir, path) = temp_copy("plain.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let edit = VideoMetadataEdit {
+            latitude: Some(52.52),
+            longitude: Some(13.405),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_metadata(&path, &edit).unwrap_err(),
+            Mp4MetadataError::NoLocationCarrier
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_longer_render_uses_the_files_free_room_or_is_refused() {
+        let edit = VideoMetadataEdit {
+            latitude: Some(52.52),
+            longitude: Some(13.405),
+            ..Default::default()
+        };
+        let spec = || CarrierSpec::MdtaKey("com.apple.quicktime.location.ISO6709");
+        // The stored value "+8.2082+016.3737/" is 17 bytes; the render
+        // "+52.5200+013.4050/" is 18 — the latitude widens from one integer
+        // digit to two — so the save needs one byte the slot does not have.
+        let stored = b"+8.2082+016.3737/";
+        let rendered = b"+52.5200+013.4050/";
+
+        // (a) 16 bytes of payload behind the free box: the save succeeds, the
+        //     file length is unchanged, and one free box of 23 bytes (15 of
+        //     them payload) is left where the previous boxes were — the 24-byte
+        //     box it replaces paid for the growth out of its own payload.
+        let (_dir, path) = synthetic_mp4_with_carrier(spec(), stored, 16);
+        let before_len = std::fs::metadata(&path).unwrap().len();
+        write_metadata(&path, &edit).unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        let after = fs::read(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            before_len,
+            "the file length is unchanged"
+        );
+        assert!(after.windows(rendered.len()).any(|w| w == rendered));
+        assert_eq!(trailing_free_box_size(&after), 23);
+
+        // (b) no room at all: refusal, byte-identical file.
+        let (_dir2, path2) = synthetic_mp4_with_carrier(spec(), stored, 0);
+        let before = fs::read(&path2).unwrap();
+        let before_mtime = fs::metadata(&path2).unwrap().modified().unwrap();
+        assert!(matches!(
+            write_metadata(&path2, &edit).unwrap_err(),
+            Mp4MetadataError::NoRoom(t) if t == "com.apple.quicktime.location.ISO6709"
+        ));
+        assert_eq!(fs::read(&path2).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&path2).unwrap().modified().unwrap(),
+            before_mtime,
+            "a refused save does not even touch the file"
+        );
+
+        // (c) room that would leave 7 bytes of padding: also refused, never a
+        //     stub box.
+        let (_dir3, path3) = synthetic_mp4_with_carrier(spec(), stored, 8);
+        let before3 = fs::read(&path3).unwrap();
+        let before3_mtime = fs::metadata(&path3).unwrap().modified().unwrap();
+        assert!(matches!(
+            write_metadata(&path3, &edit).unwrap_err(),
+            Mp4MetadataError::NoRoom(_)
+        ));
+        assert_eq!(fs::read(&path3).unwrap(), before3);
+        assert_eq!(
+            fs::metadata(&path3).unwrap().modified().unwrap(),
+            before3_mtime
+        );
+    }
+
+    #[test]
+    fn the_ffmpeg_style_location_key_is_writable_too() {
+        let (_dir, path) =
+            synthetic_mp4_with_carrier(CarrierSpec::MdtaKey("location"), b"+48.2082+016.3737/", 0);
+        let edit = VideoMetadataEdit {
+            latitude: Some(-33.9),
+            longitude: Some(151.3),
+            ..Default::default()
+        };
+        write_metadata(&path, &edit).unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("-33.9000+151.3000/")
+        );
+    }
+
+    #[test]
+    fn every_legacy_location_carrier_is_rewritten_in_place() {
+        let (_dir, path) = synthetic_mp4_with_legacy_location_carriers(16);
+        let before = fs::read(&path).unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len(), "the file length is unchanged");
+        // One `©xyz` item inside `ilst` and one direct `udta/©xyz` child: both
+        // carry the new position, each in the shape its own text was written
+        // in, and neither was duplicated.
+        assert_eq!(box_count(&after, &XYZ_BOX), 2);
+        assert_eq!(
+            after
+                .windows(18)
+                .filter(|w| *w == b"+52.5200+013.4050/")
+                .count(),
+            1,
+            "the four-decimal carrier keeps its solidus"
+        );
+        assert_eq!(
+            after
+                .windows(19)
+                .filter(|w| *w == b"+52.52000+013.40500")
+                .count(),
+            1,
+            "the five-decimal carrier keeps its width and has no solidus"
+        );
+        // The direct child grew by one byte; the 24-byte free box paid for it
+        // and is re-emitted as one 23-byte box.
+        assert_eq!(trailing_free_box_size(&after), 23);
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+    }
+
+    #[test]
+    fn a_skip_box_is_padding_too() {
+        // The same synthetic file with its trailing `free` box declared `skip`:
+        // both spellings are room a save may spend.
+        let (_dir, path) = synthetic_mp4_with_carrier(
+            CarrierSpec::MdtaKey(MDTA_LOCATION_KEYS[0]),
+            b"+8.2082+016.3737/",
+            16,
+        );
+        let mut bytes = fs::read(&path).unwrap();
+        let tree = parse_box_tree(&bytes, 0, bytes.len(), &[]).unwrap();
+        let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+        let padding = moov
+            .children
+            .iter()
+            .rfind(|child| is_padding(&child.kind))
+            .expect("the fixture has a padding box");
+        bytes[padding.offset + 4..padding.offset + 8].copy_from_slice(b"skip");
+        fs::write(&path, &bytes).unwrap();
+        let before_len = std::fs::metadata(&path).unwrap().len();
+
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), before_len);
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        assert_eq!(
+            trailing_free_box_size(&fs::read(&path).unwrap()),
+            23,
+            "the padding is re-emitted as one `free` box"
+        );
+    }
+
+    #[test]
+    fn a_date_and_a_position_are_all_or_nothing() {
+        // The file has a date carrier but no location carrier: the request
+        // cannot be honoured, so the date it *could* have patched is left
+        // alone too.
+        let (_dir, path) = temp_copy("plain.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+            latitude: Some(52.52),
+            longitude: Some(13.405),
+        };
+        assert!(matches!(
+            write_metadata(&path, &edit).unwrap_err(),
+            Mp4MetadataError::NoLocationCarrier
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_grown_render_never_moves_the_bytes_behind_the_moov() {
+        let (_dir, path) = synthetic_mp4_with_carrier(
+            CarrierSpec::MdtaKey(MDTA_LOCATION_KEYS[0]),
+            b"+8.2082+016.3737/",
+            16,
+        );
+        // Something that looks like media behind the metadata: only the `moov`
+        // region may change, and only within the length it already declares.
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(&box_bytes(b"mdat", b"not really samples"));
+        fs::write(&path, &bytes).unwrap();
+
+        let before = fs::read(&path).unwrap();
+        let (moov_offset, moov_len) = locate_moov_in(&before).unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(&after[..moov_offset], &before[..moov_offset]);
+        assert_eq!(
+            &after[moov_offset + moov_len..],
+            &before[moov_offset + moov_len..],
+            "the media bytes are untouched"
+        );
+        assert_ne!(
+            &after[moov_offset..moov_offset + moov_len],
+            &before[moov_offset..moov_offset + moov_len],
+            "the grown carrier is inside the moov"
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+    }
+
+    #[test]
+    fn a_growth_into_the_files_own_room_rebuilds_a_real_moov() {
+        // An ffmpeg file whose carrier text is narrower than the position the
+        // save wants, with room behind it: the `moov` has to be rebuilt — every
+        // box size above the carrier rewritten — without moving a byte of the
+        // `mdat` that follows it.
+        let (_dir, path) = prepared_growth_fixture("grown.mp4", 16);
+        let before = fs::read(&path).unwrap();
+        let (moov_offset, moov_len) = locate_moov_in(&before).unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+8.2082+16.3737/"),
+            "the prepared carrier is readable"
+        );
+
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len(), "the file length is unchanged");
+        assert_eq!(&after[..moov_offset], &before[..moov_offset]);
+        assert_eq!(
+            &after[moov_offset + moov_len..],
+            &before[moov_offset + moov_len..],
+            "the media behind the moov is untouched"
+        );
+        let read_back = read_metadata(&path).unwrap();
+        // The prepared carrier writes a two-digit longitude, and the shape is
+        // kept: the new position is rendered into it, not into some canonical
+        // form — one byte longer than the text it replaces.
+        assert_eq!(
+            read_back.location_iso6709.as_deref(),
+            Some("+52.5200+13.4050/")
+        );
+        assert_eq!(
+            read_back.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "the file's own date carrier is left alone"
+        );
+        // The 24-byte free box paid for the extra byte of the position.
+        assert_eq!(trailing_free_box_size(&after), 23);
+    }
+
+    #[test]
+    fn a_mixed_date_and_location_edit_lands_both_values() {
+        // The location carrier sits in front of the date carrier and grows by
+        // one byte, while the date rendering is exactly as long as the text it
+        // replaces: a rebuild that applied the date edit at its original offset
+        // would land it one byte early.
+        let (_dir, path) = synthetic_mp4_with_date_and_location_carriers(16);
+        let before = fs::read(&path).unwrap();
+        let taken_at: DateTime<Utc> = "2025-01-02T03:04:05Z".parse().unwrap();
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some(taken_at),
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+            },
+        )
+        .unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len());
+        let read_back = read_metadata(&path).unwrap();
+        assert_eq!(
+            read_back.location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        assert_eq!(
+            read_back.creation_date_text.as_deref(),
+            Some("2025-01-02T05:04:05+0200")
+        );
+        assert!(after.windows(24).any(|w| w == b"2025-01-02T05:04:05+0200"));
+        assert!(!after.windows(24).any(|w| w == b"2024-05-01T10:00:00+0200"));
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3
+        );
+    }
+
+    #[test]
+    fn a_location_carrier_with_room_to_spare_reads_back_clean() {
+        // The stored text is NUL-padded, and the rendering is shorter than the
+        // slot: padding has to survive the reader's strip and the writer's fill
+        // alike, or the value would come back with a NUL in it.
+        let (_dir, path) = synthetic_mp4_with_carrier(
+            CarrierSpec::ItemType(XYZ_BOX),
+            b"+8.2082+016.3737/\0\0\0",
+            0,
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+8.2082+016.3737/")
+        );
+
+        // The slot is 20 bytes and the rendering 18: nothing grows, so the
+        // file's own free box is left exactly as it was.
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        let after = fs::read(&path).unwrap();
+        assert!(after.windows(18).any(|w| w == b"+52.5200+013.4050/"));
+        assert_eq!(trailing_free_box_size(&after), 8);
     }
 
     #[test]
@@ -2203,6 +3109,83 @@ mod tests {
         }
     }
 
+    /// The ffprobe half of the location writer's contract: the position is
+    /// written in place under the same mdta key, and other tools read it back.
+    #[test]
+    fn ffprobe_reports_the_patched_location() {
+        use std::process::Command;
+
+        if !video_tests_enabled() {
+            eprintln!("Skipping ffprobe location test: RUN_VIDEO_TESTS not set");
+            return;
+        }
+        let (_dir, path) = temp_copy(
+            "patched_location.mp4",
+            "test-data/test_video_quicktime_keys.mp4",
+        );
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let location_of = |path: &Path, expected: &str| {
+            let output = Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format_tags=com.apple.quicktime.location.ISO6709",
+                    "-of",
+                    "json",
+                ])
+                .arg(path)
+                .output()
+                .expect("ffprobe must be installed for RUN_VIDEO_TESTS");
+            assert!(
+                output.status.success(),
+                "ffprobe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                report["format"]["tags"]["com.apple.quicktime.location.ISO6709"]
+                    .as_str()
+                    .expect("the location tag"),
+                expected
+            );
+            let status = Command::new("ffprobe")
+                .args(["-v", "error", "-i"])
+                .arg(path)
+                .status()
+                .expect("ffprobe must be installed for RUN_VIDEO_TESTS");
+            assert!(status.success(), "ffprobe could not read the file");
+        };
+
+        // The in-place rewrite: the position replaces the carrier's bytes and
+        // nothing else moves.
+        location_of(&path, "+52.5200+013.4050/");
+
+        // The rebuild: a real `moov` grown into the file's own padding, every
+        // box size above the carrier rewritten, is still a file ffprobe reads.
+        let (_dir2, grown) = prepared_growth_fixture("grown_location.mp4", 16);
+        location_of(&grown, "+8.2082+16.3737/");
+        write_metadata(
+            &grown,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        location_of(&grown, "+52.5200+13.4050/");
+    }
+
     /// `RUN_VIDEO_TESTS` is the project-wide switch for tests that shell out to
     /// ffmpeg/ffprobe; the byte-level tests never depend on it.
     fn video_tests_enabled() -> bool {
@@ -2326,6 +3309,35 @@ mod tests {
         out
     }
 
+    /// Size of the trailing `free`/`skip` child of the file's `moov`, `0` when
+    /// the file has none: the padding a rebuilt `moov` leaves behind.
+    fn trailing_free_box_size(buf: &[u8]) -> usize {
+        let tree = parse_box_tree(buf, 0, buf.len(), &[]).unwrap();
+        let Some(moov) = tree.iter().find(|span| span.kind == *b"moov") else {
+            return 0;
+        };
+        moov.children
+            .iter()
+            .rev()
+            .find(|child| is_padding(&child.kind))
+            .map_or(0, |child| child.size)
+    }
+
+    /// How many boxes of `kind` occur in a whole-file buffer.
+    fn box_count(buf: &[u8], kind: &[u8; 4]) -> usize {
+        fn walk(span: &BoxSpan, kind: &[u8; 4]) -> usize {
+            usize::from(span.kind == *kind)
+                + span
+                    .children
+                    .iter()
+                    .map(|child| walk(child, kind))
+                    .sum::<usize>()
+        }
+
+        let tree = parse_box_tree(buf, 0, buf.len(), &[]).unwrap();
+        tree.iter().map(|span| walk(span, kind)).sum()
+    }
+
     /// The text carrier a synthetic fixture should hold.
     #[derive(Debug, Clone, Copy)]
     enum CarrierSpec {
@@ -2363,6 +3375,109 @@ mod tests {
             &box_bytes(b"udta", &box_bytes(b"meta", &meta_body)),
             free_payload,
         )
+    }
+
+    /// A minimal file whose `udta` carries a location in both legacy shapes at
+    /// once: a `©xyz` `ilst` item written with four decimals and a solidus, and
+    /// a direct `udta/©xyz` child written with five decimals and none — so a
+    /// save has to keep two shapes apart, and only the direct child grows.
+    /// `free_payload` spare bytes sit behind them.
+    fn synthetic_mp4_with_legacy_location_carriers(free_payload: usize) -> (TempDir, PathBuf) {
+        let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags
+        meta_body.extend_from_slice(&mdta_hdlr());
+        meta_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&XYZ_BOX, b"+48.2082+016.3737/"),
+        ));
+        let mut udta = box_bytes(b"meta", &meta_body);
+        udta.extend_from_slice(&box_bytes(&XYZ_BOX, b"+3.86888+151.20930"));
+        synthetic_file_with_udta(&box_bytes(b"udta", &udta), free_payload)
+    }
+
+    /// A minimal file whose location carrier sits in front of its `©day`
+    /// carrier in the same `ilst`, with `free_payload` spare bytes behind them.
+    fn synthetic_mp4_with_date_and_location_carriers(free_payload: usize) -> (TempDir, PathBuf) {
+        let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags
+        meta_body.extend_from_slice(&mdta_hdlr());
+        meta_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        let mut ilst = text_item_box(&1u32.to_be_bytes(), b"+8.2082+016.3737/");
+        ilst.extend_from_slice(&text_item_box(&DAY_BOX, b"2024-05-01T10:00:00+0200"));
+        meta_body.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        synthetic_file_with_udta(
+            &box_bytes(b"udta", &box_bytes(b"meta", &meta_body)),
+            free_payload,
+        )
+    }
+
+    /// A copy of the keys fixture whose location carrier is ready for a save
+    /// that has to grow: its text is rewritten with a one-digit latitude and a
+    /// two-digit longitude, so a new position needs more bytes than the text
+    /// has; the box chain above the carrier is shrunk to match and a `free` box
+    /// of `free_payload` bytes is appended as the last child of the `moov`.
+    ///
+    /// No committed fixture carries padding inside its `moov`, and a save may
+    /// only grow into padding, so this is the only way to run the room model
+    /// over a box tree as real as ffmpeg writes it — `stbl`/`stco`/`stsz`
+    /// tables, a second `trak` and a 58 KB `mdat` behind the metadata.
+    fn prepared_growth_fixture(name: &str, free_payload: usize) -> (TempDir, PathBuf) {
+        /// The narrower text the carrier is rewritten with: a save to
+        /// 52.52 / 13.405 renders "+52.5200+13.4050/" (17 bytes) into it.
+        const TEXT: &[u8] = b"+8.2082+16.3737/";
+        const OLD: &[u8] = b"+48.2082+016.3737/";
+
+        let (dir, path) = temp_copy(name, "test-data/test_video_quicktime_keys.mp4");
+        let bytes = fs::read(&path).unwrap();
+        let tree = parse_box_tree(&bytes, 0, bytes.len(), &[]).unwrap();
+        let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+
+        /// The chain from `span` down to the `data` box holding `text`.
+        fn chain_to<'a>(
+            span: &'a BoxSpan,
+            buf: &[u8],
+            text: &[u8],
+            chain: &mut Vec<&'a BoxSpan>,
+        ) -> bool {
+            chain.push(span);
+            let holds = span.kind == *b"data"
+                && buf.get(span.offset + 16..span.offset + span.size) == Some(text);
+            if holds
+                || span
+                    .children
+                    .iter()
+                    .any(|child| chain_to(child, buf, text, chain))
+            {
+                return true;
+            }
+            chain.pop();
+            false
+        }
+
+        let mut chain = Vec::new();
+        assert!(
+            chain_to(moov, &bytes, OLD, &mut chain),
+            "the fixture stores its location under the mdta key"
+        );
+        let data = *chain.last().unwrap();
+        let shrink = OLD.len() - TEXT.len();
+        let mut region = Vec::with_capacity(moov.size + 8 + free_payload);
+        region.extend_from_slice(&bytes[moov.offset..data.offset + 16]);
+        region.extend_from_slice(TEXT);
+        region.extend_from_slice(&bytes[data.offset + data.size..moov.offset + moov.size]);
+        // Every box on the chain now holds `shrink` bytes fewer; the fixture
+        // writes all of them in the 32-bit size form.
+        for span in &chain {
+            let at = span.offset - moov.offset;
+            region[at..at + 4].copy_from_slice(&((span.size - shrink) as u32).to_be_bytes());
+        }
+        region.extend_from_slice(&box_bytes(b"free", &vec![0u8; free_payload]));
+        let moov_size = region.len() as u32;
+        region[..4].copy_from_slice(&moov_size.to_be_bytes());
+
+        let mut prepared = bytes[..moov.offset].to_vec();
+        prepared.extend_from_slice(&region);
+        prepared.extend_from_slice(&bytes[moov.offset + moov.size..]);
+        fs::write(&path, &prepared).unwrap();
+        (dir, path)
     }
 
     /// A minimal file whose `udta` carries its `©day` in all three shapes at

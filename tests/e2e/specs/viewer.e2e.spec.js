@@ -201,17 +201,16 @@ test.describe('Photo Viewer', () => {
           db.prepare(
             `INSERT OR REPLACE INTO photos (
               hash_sha256, file_path, filename, file_size, mime_type,
-              taken_at, width, height, orientation, duration,
+              width, height, orientation, duration,
               thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
               metadata, file_modified, date_indexed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).run(
             deletedPhoto.hash_sha256,
             deletedPhoto.file_path,
             deletedPhoto.filename,
             deletedPhoto.file_size,
             deletedPhoto.mime_type ?? null,
-            deletedPhoto.taken_at ?? null,
             deletedPhoto.width ?? null,
             deletedPhoto.height ?? null,
             deletedPhoto.orientation ?? null,

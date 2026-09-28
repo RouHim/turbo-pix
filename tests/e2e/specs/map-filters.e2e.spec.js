@@ -321,37 +321,9 @@ test.describe('Map filters', () => {
     }
   });
 
-  test('videos with coordinates are plotted and open in the viewer', async ({ page }) => {
-    // Videos cannot take EXIF writes, so seed the indexed row directly (the
-    // same DB-seeding pattern the collage/housekeeping specs use). The
-    // coordinate is cleared again in the `finally`: the whole run shares one
-    // server and one database, so a leaked coordinate would break the
-    // `?q=type:video` empty-state assertion of the map shell spec.
-    TestHelpers.setPhotoLocationInDb('test_video.mp4', 52.52, 13.405);
-    try {
-      const listing = await page.request.get('/api/photos?q=type:video&limit=100');
-      const { photos } = await listing.json();
-      const video = photos.find((photo) => photo.filename === 'test_video.mp4');
-      expect(video, 'test_video.mp4 must be seeded and indexed').toBeTruthy();
-
-      await TestHelpers.goto(page, '/map');
-
-      const marker = await focusLocation(page, '52.52,13.405');
-      await expect(marker).toBeVisible();
-      await marker.click();
-
-      const item = page.locator('.leaflet-popup [data-map-popup-photo]').first();
-      await expect(item).toHaveAttribute('data-map-popup-photo', video.hash_sha256);
-      await item.click();
-
-      await expect(page.locator('#photo-viewer')).toBeVisible();
-      await expect(page).toHaveURL(new RegExp(`photo=${video.hash_sha256}`));
-      // FR-016: video items play through the existing viewer behavior.
-      await expect(page.locator('#viewer-video')).toBeVisible({ timeout: 30000 });
-    } finally {
-      TestHelpers.clearPhotoLocationInDb('test_video.mp4');
-    }
-  });
+  // Videos carry no file-level coordinates, so a video can never be plotted;
+  // the map shell spec's `?q=type:video` empty-state assertion already covers
+  // that negative.
 
   test('back/forward restores the map with the same filter state', async ({ page }) => {
     await TestHelpers.goto(page, '/map');

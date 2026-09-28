@@ -189,18 +189,27 @@ fn parse_region(
             "box nesting depth".to_string(),
         ));
     }
+    let start = start.min(end);
     let mut offset = start;
     if enclosing.last() == Some(&META_BOX) {
-        offset += meta_children_offset(buf, start, end);
+        offset = (offset + meta_children_offset(buf, start, end)).min(end);
     }
     let mut spans = Vec::new();
-    while offset + 8 <= end {
+    // `end - offset` rather than `offset + 8 <= end`: the difference cannot
+    // overflow, and `offset <= end` is the invariant every later subtraction
+    // relies on.
+    while end - offset >= 8 {
+        let available = end - offset;
         let declared = size_field(buf, offset).ok_or_else(unsupported_size)?;
+        // Every declared size is validated against `available` before it reaches
+        // an addition. The 64-bit `largesize` form can declare a size near
+        // `usize::MAX`, which an unchecked `offset + size` would wrap past the
+        // bounds check — turning a malformed box into an endless walk.
         let (size, header) = match declared {
             // "Extends to the end of the enclosing box" — the file's own size
             // for a top-level box.
-            0 => (end - offset, 8),
-            1 => {
+            0 => (available, 8),
+            1 if available >= 16 => {
                 let large = buf
                     .get(offset + 8..offset + 16)
                     .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
@@ -210,9 +219,11 @@ fn parse_region(
                     16,
                 )
             }
+            // Also covers `size == 1` with a truncated `largesize`: 1 is below
+            // the 8-byte header floor, so the guard below rejects it.
             size => (size as usize, 8),
         };
-        if size < header || offset + size > end {
+        if size < header || size > available {
             return Err(unsupported_size());
         }
         let mut kind = [0u8; 4];
@@ -334,7 +345,11 @@ pub fn read_metadata(path: &Path) -> Result<Mp4Metadata, Mp4MetadataError> {
 fn locate_moov(file: &mut File, file_len: u64) -> Result<(u64, u64), Mp4MetadataError> {
     let mut offset = 0u64;
     let mut found_ftyp = false;
-    while offset + 8 <= file_len {
+    // Scan on the bytes remaining (`file_len - offset`) rather than on
+    // `offset + 8 <= file_len`: an accepted box advances `offset` by at most
+    // what is left, so the difference cannot wrap — and the guard is written so
+    // that it cannot underflow either.
+    while offset <= file_len && file_len - offset >= 8 {
         let found = read_file_box(file, offset, file_len)?;
         if !found_ftyp {
             if found.kind != *b"ftyp" {
@@ -345,7 +360,7 @@ fn locate_moov(file: &mut File, file_len: u64) -> Result<(u64, u64), Mp4Metadata
         if found.kind == *b"moov" {
             return Ok((found.offset, found.size));
         }
-        offset = found.offset + found.size;
+        offset += found.size;
     }
     if !found_ftyp {
         // Too short to even hold one box header: no container here at all.
@@ -365,11 +380,16 @@ struct FileBox {
 
 /// Reads the header of the top-level box at `offset`, never its payload.
 fn read_file_box(file: &mut File, offset: u64, file_len: u64) -> Result<FileBox, Mp4MetadataError> {
-    if offset + 8 > file_len {
+    // Every size comparison below is made against the bytes actually left in the
+    // file, never against `offset + size`: the 64-bit `largesize` form can
+    // declare `2^64 - offset`, whose sum wraps to a small value that would pass
+    // an unchecked bounds check and send the scan in circles.
+    if offset > file_len || file_len - offset < 8 {
         return Err(Mp4MetadataError::UnsupportedContainer(
             "not ISO-BMFF".to_string(),
         ));
     }
+    let available = file_len - offset;
     file.seek(SeekFrom::Start(offset))
         .map_err(Mp4MetadataError::Io)?;
     let mut header = [0u8; 8];
@@ -378,15 +398,17 @@ fn read_file_box(file: &mut File, offset: u64, file_len: u64) -> Result<FileBox,
     kind.copy_from_slice(&header[4..8]);
     let (size, header_len) = match u32::from_be_bytes([header[0], header[1], header[2], header[3]])
     {
-        0 => (file_len - offset, 8),
-        1 => {
+        0 => (available, 8),
+        1 if available >= 16 => {
             let mut large = [0u8; 8];
             file.read_exact(&mut large).map_err(truncated_container)?;
             (u64::from_be_bytes(large), 16)
         }
+        // Also covers `size == 1` with a truncated `largesize`: 1 is below the
+        // 8-byte header floor, so the guard below rejects it.
         declared => (u64::from(declared), 8),
     };
-    if size < header_len || offset + size > file_len {
+    if size < header_len || size > available {
         return Err(Mp4MetadataError::UnsupportedContainer(sniffed(&kind)));
     }
     Ok(FileBox { offset, size, kind })
@@ -851,6 +873,68 @@ mod tests {
             read_metadata(&path),
             Err(Mp4MetadataError::NoRoom("moov"))
         ));
+    }
+
+    #[test]
+    fn refuses_a_largesize_that_would_wrap_the_file_scan() {
+        // Two 64-bit-size boxes where the second declares `2^64 - 40` bytes:
+        // `offset + size` wraps to 0, so an unchecked bound accepts it and the
+        // scan cycles between the two boxes forever (or dies on the overflow in
+        // a debug build). The declared size must be judged against the bytes
+        // left in the file instead.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("wrapping.mp4");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(&40u64.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 24]);
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(b"free");
+        bytes.extend_from_slice(&(u64::MAX - 39).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        assert_eq!(bytes.len(), 64);
+        fs::write(&path, &bytes).unwrap();
+
+        assert_terminates_within(move || {
+            matches!(
+                read_metadata(&path),
+                Err(Mp4MetadataError::UnsupportedContainer(_))
+            )
+        });
+    }
+
+    #[test]
+    fn refuses_a_box_size_that_would_wrap_the_region() {
+        // An 8-byte box followed by one whose 64-bit size is `2^64 - 8`: added
+        // to its own offset it wraps to 0, which an unchecked region bound would
+        // accept and then re-walk the same bytes forever.
+        let mut buf = box_bytes(b"free", &[]);
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(b"trak");
+        buf.extend_from_slice(&(u64::MAX - 7).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        let len = buf.len();
+
+        assert_terminates_within(move || {
+            matches!(
+                parse_box_tree(&buf, 0, len, &[]),
+                Err(Mp4MetadataError::UnsupportedContainer(_))
+            )
+        });
+    }
+
+    /// Runs `check` on a worker thread and fails when it does not answer in ten
+    /// seconds, so a wrapped box size shows up as a failed test instead of a
+    /// suite that never returns.
+    fn assert_terminates_within(check: impl FnOnce() -> bool + Send + 'static) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _worker = std::thread::spawn(move || {
+            let _ = sender.send(check());
+        });
+        assert!(receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the box walk must terminate"));
     }
 
     /// A `meta` body with no ISO version/flags word: `hdlr`, a one-entry `keys`

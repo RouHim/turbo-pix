@@ -24,6 +24,7 @@ pub mod handlers_video;
 pub mod housekeeping_manager;
 pub mod image_editor;
 pub mod indexer;
+pub mod media_facts;
 pub mod metadata_extractor;
 pub mod metadata_writer;
 pub mod mimetype_detector;

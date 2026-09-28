@@ -1946,7 +1946,7 @@ test('a waiting of a later run that has not played is not a stall', async () => 
   await run;
 });
 
-test('the slot-wait notice is armed before the stream request is issued', async (t) => {
+test('a held request is never announced as a slot wait', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const video = fakeVideo();
   const states = [];
@@ -1969,25 +1969,17 @@ test('the slot-wait notice is armed before the stream request is issued', async 
   await settle(2);
   assert.equal(requested.length, 1, 'the run issued its request');
   assert.equal(calls.length, 0, 'the server has not answered yet');
-  assert.deepEqual(states, [], 'nothing is announced before the notice is due');
 
-  // The hold the notice names happens BEFORE a response exists — a saturated
-  // pool keeps the request pending for its whole queue wait, with neither
-  // headers nor bytes — so the notice has to be reachable right here. Armed
-  // after the response resolved, this timer could only ever fire for a run that
-  // already holds a conversion slot and is slow to emit its first fragment.
-  t.mock.timers.tick(1499);
-  assert.deepEqual(states, [], 'the notice waits out its delay');
-  t.mock.timers.tick(1);
-  assert.deepEqual(states, ['waiting'], 'the notice tracks the hold, not a slow first fragment');
+  // The hold may be a saturated pool — or a run that already holds its slot and
+  // is slow. The player cannot tell, so it announces neither: the viewer's
+  // "preparing" notice covers the whole wait, and the queued wording is
+  // reserved for the server's own refusal (spec FR-012).
+  t.mock.timers.tick(5000);
+  assert.deepEqual(states, [], 'a held request is never announced as a slot wait');
 
   release();
   await settle(10);
-  assert.deepEqual(
-    states,
-    ['waiting', 'buffering', 'ended'],
-    'the first bytes replace the notice, and the run then plays out'
-  );
+  assert.deepEqual(states, ['buffering', 'ended'], 'the first bytes announce the buffering run');
 
   player.destroy();
   await run;
@@ -2010,11 +2002,12 @@ test('a refused run leaves no slot-wait notice behind', async (t) => {
   assert.equal(errors.length, 1, 'the refusal reached the viewer');
   assert.deepEqual(states, [], 'a refused run announces nothing');
 
-  // The notice armed for that run went with it. Firing its timer now would put
-  // "waiting for a free conversion slot" on top of the failure the viewer is
-  // already handling, and re-arm the escape hatch the retry just took down.
+  // There is no timer to fire any more: the player does not arm a slot-wait
+  // notice ahead of the response, so a refusal leaves it silent for good. The
+  // viewer's own 503 handling — its queued notice and its retry — is the only
+  // word on a refusal.
   t.mock.timers.tick(5000);
-  assert.deepEqual(states, [], "the dead run's notice never fires");
+  assert.deepEqual(states, [], 'a refusal emits no state at all');
 
   player.destroy();
 });

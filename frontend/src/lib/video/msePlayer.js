@@ -590,18 +590,6 @@ export function createStreamPlayer(
 
     let reader;
     let buffer;
-    // Show "waiting for a free conversion slot" if the server holds this run
-    // open. The hold happens BEFORE a response exists: while every worker is
-    // busy the endpoint awaits a free permit for its whole queue wait
-    // (`TURBO_PIX_STREAM_QUEUE_WAIT_SECS`) and only then answers — no headers,
-    // no bytes — so the timer is armed ahead of the request. Armed after the
-    // response resolved it could only ever fire for a run that already holds a
-    // slot and is slow to emit its first fragment, leaving the window the
-    // notice names uncovered (and a seek-restarted run with no notice at all).
-    //
-    // The timer belongs to this run: it is cleared on the first bytes and on
-    // every exit path below, so a superseded run cannot disarm its successor's.
-    const slotTimer = setTimeout(() => state('waiting'), 1500);
     try {
       // Fetch before the MediaSource exists: the MIME this run's bytes are in
       // is only known once the server answers, and a refused (503) run must not
@@ -676,9 +664,8 @@ export function createStreamPlayer(
       };
 
       reader = response.body.getReader();
-      // First bytes arrived: we are buffering, not waiting.
+      // The run's first bytes: it is buffering, not waiting on anything.
       const first = await reader.read();
-      clearTimeout(slotTimer);
       if (destroyed) return;
       if (first.done) {
         // A zero-byte source answers 200 with an empty body, and ffmpeg dying
@@ -689,13 +676,13 @@ export function createStreamPlayer(
         reportError(signal, new Error('the stream delivered no media'));
         return;
       }
-      // The run's first bytes are in: the viewer's notice changes from
-      // "waiting for a slot" to "preparing playback". This is the run's only
-      // `buffering` — a chunk landing is not news (the notice is hidden by
-      // `playing`, and re-reporting it after every append would put "video is
-      // being prepared" back on top of a video that is already playing, with no
-      // auto-hide to take it away). A stall mid-run still surfaces: the element
-      // reports it with `waiting`, which `onWaiting` maps back onto this state.
+      // The run's first bytes are in: the viewer's notice is "preparing
+      // playback". This is the run's only `buffering` — a chunk landing is not
+      // news (the notice is hidden by `playing`, and re-reporting it after
+      // every append would put "video is being prepared" back on top of a video
+      // that is already playing, with no auto-hide to take it away). A stall
+      // mid-run still surfaces: the element reports it with `waiting`, which
+      // `onWaiting` maps back onto this state.
       state('buffering');
       await appendWhenReady(buffer, first.value);
       // That append is a task boundary — `clampDuration` waits on `updateend`
@@ -739,12 +726,6 @@ export function createStreamPlayer(
       if (error.name !== 'AbortError') reportError(signal, error);
       return;
     } finally {
-      // Whatever ended this run's setup — its first bytes, a refusal, a network
-      // failure, a supersession or `destroy()` — its slot-wait notice must not
-      // outlive it: a stale `waiting` would land on top of the failure the
-      // viewer is already handling and re-arm the escape hatch it just took
-      // down.
-      clearTimeout(slotTimer);
       // Setup finished (or bailed): `seeking` events are user intent again.
       starting = false;
     }

@@ -1039,23 +1039,13 @@
           // they paused, which is exactly what `playing` reports.
           forgetLostRuns();
         }
-        if (state === 'waiting') {
-          // The server is holding the request open for a slot: the same wait,
-          // so the same escape hatch applies.
-          streamWaiting = true;
-          showTranscodeToast(
-            get(t)('video.stream.waiting', {
-              default: 'Waiting for a free conversion slot…',
-            })
-          );
-        } else if (state === 'buffering') {
-          // Bytes are flowing: the slot wait is over — and so is its notice.
-          // Every notice that was up before this point (the saturation retry's
-          // "waiting for a free slot", the runner's own slow-start timer) has
-          // stopped being true, and the waiting text also *is* the escape
-          // hatch's trigger: leaving it up would strand a run that buffers
-          // slowly, or stalls after its first chunk, on a false "pool is
-          // saturated" claim with no way out.
+        if (state === 'buffering') {
+          // Bytes are flowing: the run is preparing playback. A run the server
+          // refused is not this state — nothing is ever announced while a
+          // request is merely held open (it may be a saturated pool, or a run
+          // that holds its slot and is slow: the player cannot tell them
+          // apart), so the queued wording belongs to `handleStreamFailure`'s
+          // 503 path alone, which is the only place that saw a refusal.
           streamWaiting = false;
           showTranscodeToast(
             get(t)('video.stream.buffering', { default: 'Video is being prepared for playback…' })

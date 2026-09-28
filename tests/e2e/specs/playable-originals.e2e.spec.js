@@ -451,4 +451,47 @@ test.describe('Playable originals are never converted', () => {
     ).toHaveLength(0);
     await expect(page.locator(TestHelpers.selectors.viewer)).toHaveClass(/active/);
   });
+
+  test('a granted but slow stream run is never labelled as queued', async ({ page }) => {
+    // GIVEN a video the browser cannot decode (its attempt fails in
+    // milliseconds, so the stream rung runs) and a conversion run that IS
+    // granted but takes seconds to deliver its first bytes
+    const photo = await findVideoByFilename(page, 'test_video_hevc.mp4');
+    await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
+    await underReportDecision(page);
+    await page.route(STREAM_VIDEO, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await route.continue();
+    });
+
+    // Every notice the toast ever shows, recorded as it is rendered. The toast
+    // is created and replaced as the run progresses, so a snapshot taken after
+    // playback would miss a notice that was only up while the bytes were
+    // withheld — which is exactly the claim under test. The observer is
+    // installed before the open, on the body, because the toast does not exist
+    // yet and is mounted only once the viewer has something to say.
+    await page.evaluate(() => {
+      window.__toastTexts = [];
+      const record = () => {
+        const toast = document.querySelector('.transcode-toast');
+        if (toast) window.__toastTexts.push(toast.textContent);
+      };
+      new MutationObserver(record).observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    });
+
+    // WHEN the viewer opens it and the granted run is slow to deliver
+    await openVideo(page, photo);
+    await waitForPlaybackOf(page, photo, 20000);
+
+    // THEN the whole wait is reported as preparation, never as a queue wait:
+    // the run holds its conversion slot, the pool was never busy, and only the
+    // server's own 503 refusal may claim otherwise (spec FR-012, Scenario 4.2).
+    const texts = await page.evaluate(() => window.__toastTexts);
+    expect(texts.some((text) => /being prepared for playback/i.test(text))).toBe(true);
+    expect(texts.some((text) => /free conversion slot/i.test(text))).toBe(false);
+  });
 });

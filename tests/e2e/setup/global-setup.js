@@ -22,7 +22,9 @@ const ARCHIVE_DAYS_AGO = 400;
 // Legacy seeds: six photos spread over six decades give the timeline real
 // decade/year granularity, a populated gap-free modern cluster, and one empty
 // decade (the 1990s) so gaps are exercised. Dates are written by
-// updateTestPhotoDates() — the source image's own EXIF/mtime never matters.
+// updateTestPhotoDates() — the source image's own EXIF/mtime never matters —
+// but the copies must be real JPEGs, because that date is written INTO the file
+// through the PATCH endpoint (see seedTestMedia).
 const LEGACY_PHOTOS = [
   ['legacy_01.jpg', '1962-03-15T12:00:00.000Z'],
   ['legacy_02.jpg', '1974-09-02T12:00:00.000Z'],
@@ -33,6 +35,12 @@ const LEGACY_PHOTOS = [
 ];
 const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+// ffmpeg/ffprobe are hard dependencies of the suite: the server shells out to
+// them and the fixtures below are remuxed with them. Resolved once so the
+// seeding helpers and the tag probes agree on the binaries; the env overrides
+// let a developer point the suite at a specific build.
+const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+const ffprobePath = process.env.FFPROBE_PATH || 'ffprobe';
 
 // Reap only THIS checkout's stale server: the previous machine-wide pattern
 // killed a sibling worktree's server mid-run. The spawned binary's argv is
@@ -113,6 +121,30 @@ async function setupTestDataDirectory() {
 }
 
 /**
+ * A video's taken_at must come out of the container; the DB pin it used to
+ * come from is gone. ffmpeg writes the tag ffprobe reads (creation_time for
+ * mov/mp4/matroska, the generic `date` tag for AVI which has no
+ * creation_time). No -f: the muxer is inferred from the destination extension
+ * (`mkv` needs the `matroska` muxer, which only inference gets right).
+ */
+function pinVideoDate(source, destination, date) {
+  const iso = date.toISOString();
+  const tag = path.extname(destination) === '.avi' ? 'date' : 'creation_time';
+  execFileSync(ffmpegPath, [
+    '-v',
+    'error',
+    '-y',
+    '-i',
+    source,
+    '-c',
+    'copy',
+    '-metadata',
+    `${tag}=${iso}`,
+    destination,
+  ]);
+}
+
+/**
  * Seed the multi-track fixture as a progressive all-stream twin of its source.
  *
  * The source ships with its moov at the end, so the indexing pass would
@@ -122,14 +154,15 @@ async function setupTestDataDirectory() {
  * multi-track spec's "the second (AC-3) track must not be picked" assertion
  * vacuous. Remuxing here with `-map 0` keeps h264+aac+ac3 and moves the moov to
  * the front, so `fix_moov_atom`'s progressive check is already satisfied and
- * the indexing pass leaves every stream alone.
+ * the indexing pass leaves every stream alone. The same remux carries the
+ * pinned creation_time (see pinVideoDate), which `-map 0` forces us to set
+ * here rather than through that helper.
  *
  * Fails loudly: a seed that silently lost a track would make the spec assert
  * against the wrong file, which is exactly the state this avoids.
  */
-function seedMultitrackFixture(source, destination) {
-  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-  const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
+function seedMultitrackFixture(source, destination, date) {
+  const iso = date.toISOString();
   // Mux into a per-process staging sibling and rename it into place: two runs
   // sharing this worktree (a re-run racing its predecessor, a sibling spec run)
   // would otherwise write the same destination, and one of them would probe the
@@ -137,7 +170,7 @@ function seedMultitrackFixture(source, destination) {
   const staging = `${destination}.${process.pid}.tmp`;
   try {
     execFileSync(
-      ffmpeg,
+      ffmpegPath,
       [
         '-v',
         'error',
@@ -150,6 +183,8 @@ function seedMultitrackFixture(source, destination) {
         'copy',
         '-movflags',
         '+faststart',
+        '-metadata',
+        `creation_time=${iso}`,
         // The staging name carries no media extension, so name the muxer: it
         // also keeps a leaked staging file from looking like indexable media.
         '-f',
@@ -162,12 +197,12 @@ function seedMultitrackFixture(source, destination) {
   } catch (error) {
     rmSync(staging, { force: true });
     throw new Error(
-      `Failed to seed ${destination} from ${source} with ${ffmpeg}: ` +
+      `Failed to seed ${destination} from ${source} with ${ffmpegPath}: ` +
         `${error.stderr?.toString().trim() || error.message}`
     );
   }
 
-  const streams = execFileSync(ffprobe, [
+  const streams = execFileSync(ffprobePath, [
     '-v',
     'error',
     '-show_entries',
@@ -212,10 +247,18 @@ async function seedTestMedia() {
     await utimes(filePath, archiveDate, archiveDate);
   }
 
-  const legacySource = path.join('test-data', 'test_image_1.jpg');
-  if (!existsSync(legacySource)) {
-    throw new Error(`Missing legacy source image at ${legacySource}`);
-  }
+  // The legacy copies must be EXIF-writable: `updateTestPhotoDates` pins their
+  // dates through the PATCH endpoint, which writes the date INTO the file. The
+  // old source here was a 13-byte non-JPEG placeholder ("fake image 1"), which
+  // the EXIF writer rejects ("file signature didn't match the expected
+  // signature") and no extractor can read a date out of; the filename-date
+  // fallback can never express these years either (parse_date_from_filename
+  // rejects pre-1990). So seed them from the same real JPEG as the cluster and
+  // archive copies — the smallest source in test-data (34 KB, ~0.68 MP) and
+  // one that carries no camera Make/Model, so the metadata spec's "photo with
+  // camera EXIF" locator stays unambiguous. Its EXIF date is overwritten by the
+  // PATCH below; its mtime never mattered.
+  const legacySource = clusterSource;
   for (const [filename] of LEGACY_PHOTOS) {
     const filePath = path.join(photosDir, filename);
     await copyFile(legacySource, filePath);
@@ -247,15 +290,55 @@ async function seedTestMedia() {
     console.warn(`EXIF fixture not found at ${exifSrc}`);
   }
 
-  const videoSrc = path.join('test-data', 'test_video.mp4');
-  const videoDest = path.join(photosDir, 'test_video.mp4');
-  if (existsSync(videoSrc)) {
-    await copyFile(videoSrc, videoDest);
-    await utimes(videoDest, recentDate, recentDate);
-  } else {
-    console.warn(`Video fixture not found at ${videoSrc}`);
+  // Every video carries its own pinned date in the container (pinVideoDate):
+  // a video's `taken_at` comes out of the file now, not out of the DB. The
+  // offsets keep `test_video.mp4` the newest video (the fixture the older specs
+  // open as the first card), give the matrix fixtures a stable order among
+  // themselves, and place every video behind the cluster photos in the photos
+  // view. Streaming-playback fixtures (video-streaming.e2e.spec.js) are in the
+  // list too: the same 20 s h264+aac content in Matroska (remux case) and as an
+  // h264 + AC-3 MP4 (audio-only conversion case). The progressive MP4 twin of
+  // the mkv (test_video_long.mp4) is NOT seeded: no spec references it, and the
+  // matrix's direct-play row for a progressive h264+aac MP4 is covered by
+  // test_video.mp4.
+  const videoFixtures = [
+    ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
+    ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
+    ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
+    // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
+    // silent h264, an h264 with two audio tracks (h264+aac+ac3, seeded as a
+    // progressive all-stream remux of its source — see seedMultitrackFixture —
+    // so the indexing pass keeps all three streams), a progressive-less h264
+    // and a legacy MPEG-4/AVI rip.
+    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],
+    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 6],
+    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 7],
+    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 8],
+    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 9],
+  ];
+  for (const [fixture, daysAgo] of videoFixtures) {
+    const source = path.join('test-data', fixture);
+    const destination = path.join(photosDir, fixture);
+    if (!existsSync(source)) {
+      console.warn(`Video fixture not found at ${source}`);
+      continue;
+    }
+    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    if (fixture === 'test_video_multitrack.mp4') {
+      // Remuxed to keep both audio tracks, not copied: see
+      // seedMultitrackFixture.
+      seedMultitrackFixture(source, destination, date);
+    } else {
+      pinVideoDate(source, destination, date);
+    }
+    // The mtime still keys the conversion cache; the date now also lives in the
+    // container.
+    await utimes(destination, date, date);
   }
 
+  // The HEVC fixture is NOT date-pinned: its source already carries a
+  // creation_time (2020-01-01), old enough to stay behind every pinned video in
+  // the videos view. Copying keeps that tag.
   const hevcVideoSrc = path.join('test-data', 'test_video_hevc.mp4');
   const hevcVideoDest = path.join(photosDir, 'test_video_hevc.mp4');
   if (existsSync(hevcVideoSrc)) {
@@ -263,57 +346,6 @@ async function seedTestMedia() {
     await utimes(hevcVideoDest, recentDate, recentDate);
   } else {
     console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
-  }
-
-  // Streaming-playback fixtures (video-streaming.e2e.spec.js): the same 20 s
-  // h264+aac content in Matroska (remux case) and as an h264 + AC-3 MP4
-  // (audio-only conversion case). Same pinned date as the videos above, so
-  // nothing here displaces the first video card with the existing h264
-  // fixtures. The progressive MP4 twin of the mkv (test_video_long.mp4) is NOT
-  // seeded: no spec references it, and the matrix's direct-play row for a
-  // progressive h264+aac MP4 is covered by test_video.mp4.
-  for (const fixture of ['test_video_long.mkv', 'test_video_ac3.mp4']) {
-    const source = path.join('test-data', fixture);
-    const destination = path.join(photosDir, fixture);
-    if (existsSync(source)) {
-      await copyFile(source, destination);
-      await utimes(destination, recentDate, recentDate);
-    } else {
-      console.warn(`Video fixture not found at ${source}`);
-    }
-  }
-
-  // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
-  // silent h264, an h264 with two audio tracks (h264+aac+ac3, seeded as a
-  // progressive all-stream remux of its source — see seedMultitrackFixture — so
-  // the indexing pass keeps all three streams), a progressive-less h264 and a
-  // legacy MPEG-4/AVI rip. The dates pinned here only fix each file's
-  // `date_modified` (the conversion cache key); the sort order the videos view
-  // and the first-card specs see is pinned in updateTestPhotoDates, because a
-  // video's `taken_at` falls back to its birth time, not its mtime.
-  const matrixFixtures = [
-    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 1],
-    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 2],
-    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 3],
-    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 4],
-    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 5],
-  ];
-  for (const [fixture, daysAgo] of matrixFixtures) {
-    const source = path.join('test-data', fixture);
-    const destination = path.join(photosDir, fixture);
-    if (existsSync(source)) {
-      if (fixture === 'test_video_multitrack.mp4') {
-        // Remuxed to keep both audio tracks, not copied: see
-        // seedMultitrackFixture.
-        seedMultitrackFixture(source, destination);
-      } else {
-        await copyFile(source, destination);
-      }
-      const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-      await utimes(destination, date, date);
-    } else {
-      console.warn(`Video fixture not found at ${source}`);
-    }
   }
 
   console.log('Generated test media ready');
@@ -330,6 +362,11 @@ async function seedTestMedia() {
  * capability record carries no `capability_version` yet (the indexer writes
  * codec/container facts only), so the decision probes the restored file rather
  * than answering from the record.
+ *
+ * Seeded through pinVideoDate rather than copyFile: a plain `-c copy` to an MP4
+ * destination writes the moov at the END (the whole premise of this fixture)
+ * and re-pins the container's creation_time, which the in-place faststart
+ * rewrite above dropped.
  */
 async function reseedNonProgressiveFixture() {
   const source = path.join('test-data', 'test_video_moov_end.mp4');
@@ -338,8 +375,8 @@ async function reseedNonProgressiveFixture() {
     console.warn(`Progressive-less fixture not found at ${source}`);
     return;
   }
-  const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 1) * 24 * 60 * 60 * 1000);
-  await copyFile(source, destination);
+  const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 5) * 24 * 60 * 60 * 1000);
+  pinVideoDate(source, destination, date);
   await utimes(destination, date, date);
 }
 
@@ -447,57 +484,32 @@ async function waitForIndexingComplete(baseURL, maxRetries = INDEXING_COMPLETE_R
 }
 
 async function updateTestPhotoDates(baseURL) {
+  const response = await fetch(`${baseURL}/api/photos?limit=200`);
+  if (!response.ok) throw new Error(`Failed to list photos: ${response.statusText}`);
+  const { photos } = await response.json();
+  // PATCH writes the file, so this is the product's own write path; the old
+  // sqlite3 block (and the video rows in it) is gone. Videos need no PATCH —
+  // their dates were pinned in seedTestMedia.
   const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
   const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
-  const recentTakenAt = recentDate.toISOString();
-  const archiveTakenAt = archiveDate.toISOString();
-
-  const legacySql = LEGACY_PHOTOS.map(
-    ([filename, takenAt]) =>
-      `UPDATE photos SET taken_at = '${takenAt}', updated_at = CURRENT_TIMESTAMP ` +
-      `WHERE filename = '${filename}';`
-  ).join(' ');
-  // The seeded videos carry no embedded creation_time (the hevc fixture is the
-  // exception), so their `taken_at` falls back to the file's BIRTH time — the
-  // moment this setup copied them, i.e. the seeding order — and `utimes` cannot
-  // pin it. That would put the last-copied fixture (the legacy AVI) at the top
-  // of the videos view and ahead of nothing at all in the photos view. Pin
-  // every seeded video to a distinct day older than the cluster seed instead:
-  // `test_video.mp4` stays the newest video (the fixture the older specs open
-  // as the first card), the matrix fixtures keep a stable order among
-  // themselves, and no video can displace the cluster photos from `photos[0]`.
-  const videoTakenAt = [
-    ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
-    ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
-    ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
-    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],
-    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 6],
-    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 7],
-    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 8],
-    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 9],
-  ]
-    .map(([filename, daysAgo]) => {
-      const takenAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
-      return (
-        `UPDATE photos SET taken_at = '${takenAt}', updated_at = CURRENT_TIMESTAMP ` +
-        `WHERE filename = '${filename}'; `
-      );
-    })
-    .join('');
-
-  const sql =
-    `PRAGMA busy_timeout=5000; ` +
-    `UPDATE photos SET taken_at = '${recentTakenAt}', updated_at = CURRENT_TIMESTAMP ` +
-    `WHERE filename LIKE 'cluster_%'; ` +
-    `UPDATE photos SET taken_at = '${archiveTakenAt}', updated_at = CURRENT_TIMESTAMP ` +
-    `WHERE filename LIKE 'archive_%'; ` +
-    legacySql +
-    videoTakenAt;
-
-  try {
-    await execAsync(`sqlite3 "${DB_PATH}" "${sql}"`);
-  } catch (error) {
-    throw new Error(`Failed to update photo dates: ${error.message}`);
+  const legacy = LEGACY_PHOTOS.map(([filename, takenAt]) => ({
+    match: (p) => p.filename === filename,
+    takenAt,
+  }));
+  const groups = [
+    { match: (p) => p.filename?.startsWith('cluster_'), takenAt: recentDate.toISOString() },
+    { match: (p) => p.filename?.startsWith('archive_'), takenAt: archiveDate.toISOString() },
+    ...legacy,
+  ];
+  for (const { match, takenAt } of groups) {
+    for (const photo of photos.filter(match)) {
+      const patched = await fetch(`${baseURL}/api/photos/${photo.hash_sha256}/metadata`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taken_at: takenAt }),
+      });
+      if (!patched.ok) throw new Error(`Failed to pin ${photo.filename}: ${patched.status}`);
+    }
   }
 }
 
@@ -558,6 +570,26 @@ async function verifyTestPhotoDates(baseURL) {
       `Expected at least ${ARCHIVE_PHOTO_COUNT} archive photos on ${archivePrefix}, found ${matchingArchive.length}`
     );
   }
+
+  // The videos carry no DB pin any more (updateTestPhotoDates PATCHes photos
+  // only), so their `taken_at` is the container tag seedTestMedia wrote; the
+  // newest video (test_video.mp4, CLUSTER_DAYS_AGO + 1) sorts first. Checked
+  // here because a remux that silently failed to write the tag would leave the
+  // fixture with its birth time — the regression this assertion exists to
+  // catch, and one a photos-only verification would not see.
+  const firstVideo = photos.find((photo) => /\.(mp4|mkv|avi)$/i.test(photo.filename ?? ''));
+  if (!firstVideo) {
+    throw new Error('No video fixture in the indexed library');
+  }
+  const videoPrefix = new Date(Date.now() - (CLUSTER_DAYS_AGO + 1) * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split('T')[0];
+  if (!firstVideo.taken_at?.startsWith(videoPrefix)) {
+    throw new Error(
+      `Expected first video ${firstVideo.filename} on ${videoPrefix}, got ${firstVideo.taken_at}`
+    );
+  }
+  console.log(`Video date verification: ${firstVideo.filename} set to ${firstVideo.taken_at}`);
 }
 
 async function ensureHousekeepingCandidate(baseURL) {

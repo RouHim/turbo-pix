@@ -943,9 +943,11 @@
    * How long a refused (503) stream run waits before retrying when the server
    * sent no `Retry-After`. A saturated pool does not answer immediately: the
    * endpoint can hold the request for its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS`
-   * (20 s by default) before it refuses, and that hold is covered by the
-   * player's own slot-wait notice. This delay paces only the retry that follows
-   * the refusal; the server's own hint wins inside
+   * (20 s by default) before it refuses, and that hold is shown as the viewer's
+   * preparing notice — a request the server is merely holding is never announced
+   * as a queue wait, which only a refusal earns, and this retry then keeps that
+   * queued wording up. This delay paces only the retry that follows the refusal;
+   * the server's own hint wins inside
    * [STREAM_RETRY_DELAY_MS, STREAM_RETRY_DELAY_MAX_MS].
    */
   const STREAM_RETRY_DELAY_MS = 1500;

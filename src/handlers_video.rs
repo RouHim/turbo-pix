@@ -307,7 +307,7 @@ pub async fn get_video_file(
         .as_deref()
         .is_some_and(|v| v.is_empty() || v == "true")
     {
-        let response = match delivery {
+        let mut response = match delivery {
             Delivery::Direct => json!({
                 "action": "direct",
                 "url": video_url,
@@ -358,6 +358,16 @@ pub async fn get_video_file(
                 })
             }
         };
+        // The source's own facts travel with the decision: the client keys its
+        // playback verification on `codec` + `bit_depth` and its audio gate on
+        // `audio_codec` (spec FR-006/FR-007). They describe the FILE, identically
+        // for every delivery, so they are attached once here rather than per arm.
+        let object = response
+            .as_object_mut()
+            .expect("every decision arm is an object");
+        object.insert("codec".to_string(), json!(caps.codec));
+        object.insert("bit_depth".to_string(), json!(caps.bit_depth));
+        object.insert("audio_codec".to_string(), json!(caps.audio_codec));
         return Ok(Box::new(warp::reply::json(&response)));
     }
 
@@ -1824,6 +1834,51 @@ mod tests {
             decision["mime"],
             "video/mp4; codecs=\"avc1.42E01E,mp4a.40.2\""
         );
+    }
+
+    #[tokio::test]
+    async fn decision_endpoint_reports_the_source_facts_the_client_keys_on() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "1313131313131313131313131313131313131313131313131313131313131313";
+        setup_test_video_with_content(&db_pool, &temp_dir, hash, b"fake-video-data").await;
+
+        // A 10-bit HEVC source with an AAC track: the client keys its playback
+        // verification on exactly this pair, and its audio gate on the codec below.
+        // The record carries `capability_version`, so it is complete and no probe
+        // runs — the facts below are the ones the endpoint must report verbatim.
+        set_video_record(
+            &db_pool,
+            hash,
+            json!({
+                "codec": "hevc", "container": "mp4", "bit_depth": 10,
+                "audio_codec": "aac", "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+        let decision = decision_for(&db_pool, hash, "h264-8,hevc,aac").await;
+        assert_eq!(decision["action"], "direct");
+        assert_eq!(decision["codec"], "hevc");
+        assert_eq!(decision["bit_depth"], 10);
+        assert_eq!(decision["audio_codec"], "aac");
+
+        // A source with no audio stream reports that as null, never as a token the
+        // client's audio gate would have to test.
+        let silent = "1414141414141414141414141414141414141414141414141414141414141414";
+        let silent_dir = TempDir::new().expect("failed to create temp dir");
+        setup_test_video_with_content(&db_pool, &silent_dir, silent, b"fake-video-data").await;
+        set_video_record(
+            &db_pool,
+            silent,
+            json!({
+                "codec": "h264", "container": "mp4", "bit_depth": 8,
+                "moov_at_start": true, "capability_version": 1
+            }),
+        )
+        .await;
+        let decision = decision_for(&db_pool, silent, "h264-8,aac").await;
+        assert_eq!(decision["codec"], "h264");
+        assert_eq!(decision["audio_codec"], serde_json::Value::Null);
     }
 
     /// A source the resolver recorded as having no video stream arrives with an

@@ -12,8 +12,8 @@
     isRawFile,
     isVideoFile,
     showToast,
-    videoCodecSupport,
   } from '../lib/utils.js';
+  import { videoCodecSupport } from '../lib/video/capabilities.js';
   import { logger } from '../lib/logger.js';
   import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
   import { isHardwareEncoder } from '../lib/video/encoderHint.js';

@@ -441,12 +441,6 @@ pub struct BatchFavoriteRequest {
     pub is_favorite: bool,
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct BatchDateShiftRequest {
-    pub hashes: Vec<String>,
-    pub days: i32,
-}
-
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BatchFailure {
     pub id: String,
@@ -456,8 +450,6 @@ pub struct BatchFailure {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BatchResult {
     pub applied: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skipped: Vec<String>, // only batch date-shift fills this (photos with no taken_at)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<BatchFailure>,
 }
@@ -817,7 +809,6 @@ pub async fn batch_delete(
 
     let mut result = BatchResult {
         applied: Vec::new(),
-        skipped: Vec::new(),
         failed: Vec::new(),
     };
 
@@ -871,7 +862,6 @@ pub async fn batch_favorite(
 
     let mut result = BatchResult {
         applied: Vec::new(),
-        skipped: Vec::new(),
         failed: Vec::new(),
     };
 
@@ -904,66 +894,6 @@ pub async fn batch_favorite(
                     error: format!("Database error: {}", e),
                 });
             }
-        }
-    }
-
-    Ok(warp::reply::json(&result))
-}
-
-/// Batch date-shift of the taken date by ±N days. Photos without a taken_at
-/// are skipped and counted (never silently dropped, never given an invented
-/// date); `taken_at` is already a `DateTime<Utc>` after row decode.
-pub async fn batch_date_shift(
-    req: BatchDateShiftRequest,
-    db_pool: DbPool,
-) -> Result<impl Reply, Rejection> {
-    if req.days == 0 {
-        return Err(reject::custom(ValidationError {
-            message: "days must be non-zero".to_string(),
-        }));
-    }
-    validate_hashes(&req.hashes)?;
-
-    let mut result = BatchResult {
-        applied: Vec::new(),
-        skipped: Vec::new(),
-        failed: Vec::new(),
-    };
-
-    for hash in &req.hashes {
-        let mut photo = match Photo::find_by_hash(&db_pool, hash).await {
-            Ok(Some(photo)) => photo,
-            Ok(None) => {
-                result.failed.push(BatchFailure {
-                    id: hash.clone(),
-                    error: "Photo not found".to_string(),
-                });
-                continue;
-            }
-            Err(e) => {
-                log::error!("Database error: {}", e);
-                result.failed.push(BatchFailure {
-                    id: hash.clone(),
-                    error: format!("Database error: {}", e),
-                });
-                continue;
-            }
-        };
-        match photo.taken_at {
-            Some(dt) => {
-                photo.taken_at = Some(dt + chrono::Duration::days(req.days as i64));
-                match photo.update(&db_pool).await {
-                    Ok(_) => result.applied.push(hash.clone()),
-                    Err(e) => {
-                        log::error!("Database error: {}", e);
-                        result.failed.push(BatchFailure {
-                            id: hash.clone(),
-                            error: format!("Database error: {}", e),
-                        });
-                    }
-                }
-            }
-            None => result.skipped.push(hash.clone()),
         }
     }
 
@@ -1216,17 +1146,6 @@ pub fn build_photo_routes(
         .and(with_db(db_pool.clone()))
         .and_then(batch_favorite);
 
-    let api_photo_batch_date_shift = warp::path("api")
-        .and(warp::path("photos"))
-        .and(warp::path("batch"))
-        .and(warp::path("date-shift"))
-        .and(warp::path::end())
-        .and(warp::post())
-        .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
-        .and(warp::body::json::<BatchDateShiftRequest>())
-        .and(with_db(db_pool.clone()))
-        .and_then(batch_date_shift);
-
     let api_photo_batch_export = {
         let data_path = data_path.clone();
         warp::path("api")
@@ -1366,7 +1285,6 @@ pub fn build_photo_routes(
         .or(api_photo_timeline)
         .or(api_photo_batch_delete)
         .or(api_photo_batch_favorite)
-        .or(api_photo_batch_date_shift)
         .or(api_photo_batch_export)
         .or(api_photo_get)
         .or(api_photo_file)
@@ -2346,69 +2264,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(photo2.is_favorite, Some(false));
-    }
-
-    #[tokio::test]
-    async fn test_batch_date_shift_moves_and_skips() {
-        let db_pool = create_in_memory_pool()
-            .await
-            .expect("Failed to create test database");
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await; // taken_at 2020-01-01
-        create_photo_row(&db_pool, &temp_dir, BATCH_H2).await;
-        sqlx::query("UPDATE photos SET taken_at = NULL WHERE hash_sha256 = ?")
-            .bind(BATCH_H2)
-            .execute(&db_pool)
-            .await
-            .unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
-
-        let response = warp::test::request()
-            .method("POST")
-            .path("/api/photos/batch/date-shift")
-            .json(&json!({"hashes": [BATCH_H1, BATCH_H2], "days": -1}))
-            .reply(&routes)
-            .await;
-
-        assert_eq!(response.status(), 200);
-        let result: BatchResult = serde_json::from_slice(response.body()).unwrap();
-        assert_eq!(result.applied, vec![BATCH_H1.to_string()]);
-        assert_eq!(result.skipped, vec![BATCH_H2.to_string()]);
-        assert!(result.failed.is_empty());
-
-        let photo = Photo::find_by_hash(&db_pool, BATCH_H1)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            photo.taken_at,
-            Some(Utc.with_ymd_and_hms(2019, 12, 31, 12, 0, 0).unwrap())
-        );
-        assert!(Photo::find_by_hash(&db_pool, BATCH_H2)
-            .await
-            .unwrap()
-            .unwrap()
-            .taken_at
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn test_batch_date_shift_zero_days_rejected() {
-        let db_pool = create_in_memory_pool()
-            .await
-            .expect("Failed to create test database");
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        create_photo_row(&db_pool, &temp_dir, BATCH_H1).await;
-        let routes = build_test_routes(db_pool, temp_dir.path().join("cache"));
-
-        let response = warp::test::request()
-            .method("POST")
-            .path("/api/photos/batch/date-shift")
-            .json(&json!({"hashes": [BATCH_H1], "days": 0}))
-            .reply(&routes)
-            .await;
-
-        assert_eq!(response.status(), 400);
     }
 
     #[tokio::test]

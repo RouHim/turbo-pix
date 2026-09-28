@@ -188,12 +188,9 @@
     "selected_count": "{count} ausgewählt",
     "select_all_visible": "Alle sichtbaren auswählen",
     "cancel_selection": "Auswahl aufheben",
-    "shift_dates": "Datumsverschiebung",
     "export": "Exportieren",
     "exporting": "Exportiere…",
-    "working": "Arbeite…",
-    "days": "Tage",
-    "apply": "Anwenden"
+    "working": "Arbeite…"
   },
   "map": {
     "withoutLocation": "{count} Fotos ohne Standortdaten",
@@ -237,8 +234,6 @@
     "batchKept": "{count} Kandidaten behalten",
     "batchFavorited": "{count} Fotos zu Favoriten hinzugefügt",
     "batchUnfavorited": "{count} Fotos aus Favoriten entfernt",
-    "batchDateShifted": "{count} Fotos verschoben",
-    "batchSkippedNoDate": "{count} Fotos übersprungen (kein Aufnahmedatum)",
     "batchExported": "{count} Fotos exportiert",
     "batchAccepted": "{count} Collagen akzeptiert",
     "batchRejected": "{count} Collagen abgelehnt",

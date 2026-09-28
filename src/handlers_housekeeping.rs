@@ -84,7 +84,6 @@ pub async fn batch_remove_candidates(
 
     let mut result = BatchResult {
         applied: Vec::new(),
-        skipped: Vec::new(),
         failed: Vec::new(),
     };
 

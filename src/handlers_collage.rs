@@ -43,7 +43,6 @@ pub async fn batch_accept_collages(
 
     let mut result = BatchResult {
         applied: Vec::new(),
-        skipped: Vec::new(),
         failed: Vec::new(),
     };
 
@@ -74,7 +73,6 @@ pub async fn batch_reject_collages(
 
     let mut result = BatchResult {
         applied: Vec::new(),
-        skipped: Vec::new(),
         failed: Vec::new(),
     };
 

@@ -46,14 +46,12 @@
               { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
               { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
               { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-              { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
               { id: 'export', labelKey: 'ui.export', icon: 'archive' },
             ]
           : [
               { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
               { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
               { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-              { id: 'dateShift', labelKey: 'ui.shift_dates', icon: 'calendar' },
               { id: 'export', labelKey: 'ui.export', icon: 'archive' },
             ]
   );
@@ -66,12 +64,10 @@
     reject: 'batch-reject',
     addFavorite: 'batch-add-favorite',
     removeFavorite: 'batch-remove-favorite',
-    dateShift: 'batch-date-shift',
     export: 'batch-export',
     deleteAlbums: 'batch-delete-albums',
   };
 
-  let dateShiftOpen = $state(false);
   let pickerOpen = $state(false);
   // Snapshot at picker-open time (mirrors PhotoViewer staleness rule): the
   // picker must not bind live selection keys, which a route change can clear
@@ -82,10 +78,6 @@
     pickerHashes = [...keys];
     pickerOpen = true;
   }
-  let daysInput = $state('');
-  const daysValid = $derived(
-    daysInput !== '' && Number.isInteger(Number(daysInput)) && Number(daysInput) !== 0
-  );
 
   /** Drop applied keys from the selection map and re-arm the range anchor. */
   function dropSelectedKeys(applied) {
@@ -310,11 +302,6 @@
       return;
     }
 
-    if (actionId === 'dateShift') {
-      dateShiftOpen = true;
-      return;
-    }
-
     if (actionId === 'export') {
       selectionState.busy = 'export';
       // Short-lived info toast; the button's spinner + "Working…" carry the
@@ -403,49 +390,6 @@
     }
   }
 
-  async function applyDateShift() {
-    if (!daysValid || selectionState.busy) return;
-    const days = Number(daysInput);
-    selectionState.busy = 'dateShift';
-    try {
-      const res = await api.batchDateShift(keys, days);
-      // The backend returns only hashes, not updated photo objects; one
-      // reload keeps every surface consistent (order may change too).
-      window.dispatchEvent(new CustomEvent('photosReloadRequested'));
-      addToast(
-        $t('notifications.batchDateShifted', {
-          default: '{count} photos date-shifted',
-          values: { count: res.applied?.length || 0 },
-        }),
-        '',
-        'success'
-      );
-      if ((res.skipped || []).length > 0) {
-        addToast(
-          $t('notifications.batchSkippedNoDate', {
-            default: '{count} photos skipped (no taken date)',
-            values: { count: res.skipped.length },
-          }),
-          '',
-          'info',
-          5000
-        );
-      }
-      reportResult(res);
-      dateShiftOpen = false;
-    } catch (error) {
-      logger.error('Batch date shift failed', { component: 'SelectionBar' }, error);
-      addToast(
-        $t('errors.batchActionFailed', { default: 'Batch action failed' }),
-        error?.message,
-        'error',
-        5000
-      );
-    } finally {
-      selectionState.busy = null;
-    }
-  }
-
   function onKeydown(e) {
     // Escape exits selection mode — but never steal it from an open viewer
     // or the album picker: dismissing the modal with Escape must not also
@@ -485,59 +429,23 @@
   </button>
 
   {#each actionConfig as action (action.id)}
-    {#if action.id === 'dateShift' && dateShiftOpen}
-      <span class="date-shift-row">
-        <Icon name="calendar" width={16} height={16} />
-        <input
-          id="batch-days-input"
-          type="number"
-          step="1"
-          aria-label={$t('ui.days', { default: 'Days' })}
-          bind:value={daysInput}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') applyDateShift();
-          }}
-        />
-        <button
-          type="button"
-          class="btn"
-          data-action="batch-date-shift-apply"
-          disabled={!daysValid || !!selectionState.busy}
-          onclick={applyDateShift}
-        >
-          {$t('ui.apply', { default: 'Apply' })}
-        </button>
-        <button
-          type="button"
-          class="btn"
-          disabled={!!selectionState.busy}
-          onclick={() => {
-            dateShiftOpen = false;
-            daysInput = '';
-          }}
-        >
-          <Icon name="x" width={16} height={16} />
-        </button>
-      </span>
-    {:else}
-      <button
-        type="button"
-        class="btn batch-action-btn"
-        data-action={actionDataName[action.id]}
-        disabled={!canAct}
-        onclick={() => runAction(action.id)}
-      >
-        {#if selectionState.busy === action.id}
-          <span class="spin">
-            <Icon name="loader" width={16} height={16} />
-          </span>
-          {$t('ui.working', { default: 'Working…' })}
-        {:else}
-          <Icon name={action.icon} width={16} height={16} />
-          {$t(action.labelKey)}
-        {/if}
-      </button>
-    {/if}
+    <button
+      type="button"
+      class="btn batch-action-btn"
+      data-action={actionDataName[action.id]}
+      disabled={!canAct}
+      onclick={() => runAction(action.id)}
+    >
+      {#if selectionState.busy === action.id}
+        <span class="spin">
+          <Icon name="loader" width={16} height={16} />
+        </span>
+        {$t('ui.working', { default: 'Working…' })}
+      {:else}
+        <Icon name={action.icon} width={16} height={16} />
+        {$t(action.labelKey)}
+      {/if}
+    </button>
   {/each}
 
   {#if route.view !== 'collages' && !isAlbumOverview}
@@ -613,21 +521,6 @@
   .selection-count {
     font-weight: var(--font-semibold);
     white-space: nowrap;
-  }
-
-  .date-shift-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  #batch-days-input {
-    width: 6rem;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--divider-color);
-    border-radius: var(--radius-sm);
-    background: var(--surface-color);
-    color: var(--text-primary);
   }
 
   .btn {

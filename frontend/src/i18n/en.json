@@ -188,12 +188,9 @@
     "selected_count": "{count} selected",
     "select_all_visible": "Select all visible",
     "cancel_selection": "Cancel selection",
-    "shift_dates": "Shift dates",
     "export": "Export",
     "exporting": "Exporting…",
-    "working": "Working…",
-    "days": "Days",
-    "apply": "Apply"
+    "working": "Working…"
   },
   "map": {
     "withoutLocation": "{count} photos without location data",
@@ -237,8 +234,6 @@
     "batchKept": "{count} candidates kept",
     "batchFavorited": "{count} photos added to favorites",
     "batchUnfavorited": "{count} photos removed from favorites",
-    "batchDateShifted": "{count} photos date-shifted",
-    "batchSkippedNoDate": "{count} photos skipped (no taken date)",
     "batchExported": "{count} photos exported",
     "batchAccepted": "{count} collages accepted",
     "batchRejected": "{count} collages rejected",

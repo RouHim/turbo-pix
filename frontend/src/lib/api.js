@@ -431,13 +431,6 @@ class TurboPixAPI {
     });
   }
 
-  async batchDateShift(hashes, days) {
-    return this.request('/api/photos/batch/date-shift', {
-      method: 'POST',
-      body: JSON.stringify({ hashes, days }),
-    });
-  }
-
   /**
    * Downloads the export archive as a blob. Bypasses `request` (which would
    * `.text()` the body): the caller needs the raw bytes plus the

@@ -3,7 +3,7 @@ import { TestHelpers } from '../setup/test-helpers.js';
 import { TestDataManager } from '../setup/test-data-manager.js';
 
 // NOTE: this spec runs FIRST alphabetically (workers: 1) and MUST restore the
-// shared seed state it consumes: favorites toggled back, dates shifted back,
+// shared seed state it consumes: favorites toggled back,
 // 2 photos deleted (permanently — nothing asserts a minimum photo count),
 // housekeeping candidate reseeded, pending collages reseeded.
 
@@ -151,59 +151,6 @@ test.describe('Batch select + actions', () => {
       expect(photo, `photo ${hash} should exist`).toBeTruthy();
       expect(photo.is_favorite, `photo ${hash} should not be favorite`).toBeFalsy();
     }
-  });
-
-  test('batch date-shift applies and reports', async ({ page }) => {
-    // GIVEN: two cluster photos with pinned taken_at dates
-    const dataManager = new TestDataManager();
-    const hashes = await dataManager.fetchTestPhotoHashes();
-    const allPhotos = await dataManager.fetchAllPhotos();
-    const clusterHashes = allPhotos
-      .filter((p) => p.filename?.startsWith('cluster_'))
-      .slice(0, 2)
-      .map((p) => p.hash_sha256);
-    expect(clusterHashes.length).toBe(2);
-    const before = allPhotos.filter((p) => clusterHashes.includes(p.hash_sha256));
-    for (const photo of before) {
-      expect(photo.taken_at, `${photo.filename} must have a taken date`).toBeTruthy();
-    }
-
-    // WHEN: both are selected and shifted by -1 day
-    await page.click('[data-action="select-mode"]');
-    await page.locator(TestHelpers.selectors.photoCard(clusterHashes[0])).first().click();
-    await page.locator(TestHelpers.selectors.photoCard(clusterHashes[1])).first().click();
-    await expect(page.locator(selectionBar)).toContainText('2 selected');
-    await page.click('[data-action="batch-date-shift"]');
-    await page.fill('#batch-days-input', '-1');
-    const shiftResponse = TestHelpers.waitForApiCall(page, '/api/photos/batch/date-shift');
-    await page.click('[data-action="batch-date-shift-apply"]');
-    await shiftResponse;
-
-    // THEN: each taken_at moved back exactly one day (same time of day)
-    const afterShift = await dataManager.fetchAllPhotos();
-    for (const photo of before) {
-      const shifted = afterShift.find((p) => p.hash_sha256 === photo.hash_sha256);
-      expect(shifted).toBeTruthy();
-      const beforeMs = Date.parse(photo.taken_at);
-      const shiftedMs = Date.parse(shifted.taken_at);
-      expect(shiftedMs).toBe(beforeMs - 24 * 60 * 60 * 1000);
-    }
-
-    // AND: shifting back +1 day restores the pinned dates (seed cleanup).
-    // The selection survives the reload (FR-002) — the same two hashes stay
-    // selected, so no select-all needed (that would shift every visible card).
-    await page.click('[data-action="batch-date-shift"]');
-    await page.fill('#batch-days-input', '1');
-    const restoreResponse = TestHelpers.waitForApiCall(page, '/api/photos/batch/date-shift');
-    await page.click('[data-action="batch-date-shift-apply"]');
-    await restoreResponse;
-
-    const restored = await dataManager.fetchAllPhotos();
-    for (const photo of before) {
-      const back = restored.find((p) => p.hash_sha256 === photo.hash_sha256);
-      expect(Date.parse(back.taken_at)).toBe(Date.parse(photo.taken_at));
-    }
-    await page.click('[data-action="batch-exit"]');
   });
 
   test('batch delete with confirmation', async ({ page }) => {

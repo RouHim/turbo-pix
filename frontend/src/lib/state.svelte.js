@@ -39,7 +39,7 @@ export const selectionState = $state({
   selected: {},
   anchorKey: null,
   orderedKeys: [],
-  busy: null, // 'delete' | 'keep' | 'favorite' | 'unfavorite' | 'dateShift' | 'export' | 'accept' | 'reject' | null
+  busy: null, // 'delete' | 'keep' | 'favorite' | 'unfavorite' | 'export' | 'accept' | 'reject' | null
 });
 
 export function enterSelectionMode() {

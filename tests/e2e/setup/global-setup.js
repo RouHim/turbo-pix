@@ -35,6 +35,39 @@ const LEGACY_PHOTOS = [
 ];
 const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+
+// Every video the harness pins, and how many days before "now" its date is. A
+// video's taken_at comes out of the container, so these offsets are
+// load-bearing (the videos view's order, the first-card specs, the capability
+// matrix); the seeding, the file-level tag check and the API assertion all read
+// this one list so an offset cannot drift in one place only.
+const VIDEO_FIXTURES = [
+  ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
+  ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
+  ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
+  ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],
+  ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 6],
+  ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 7],
+  ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 8],
+  ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 9],
+];
+// The one fixture that must reach the specs with its moov at the END: it is the
+// premise of the capability matrix's serve-time remux row. Everything else is
+// seeded progressive.
+const NON_PROGRESSIVE_FIXTURE = 'test_video_moov_end.mp4';
+
+function videoDate(daysAgo) {
+  return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+}
+
+function pinnedVideoDate(filename) {
+  const entry = VIDEO_FIXTURES.find(([name]) => name === filename);
+  if (!entry) {
+    throw new Error(`No pinned date for video fixture ${filename}`);
+  }
+  return videoDate(entry[1]);
+}
+
 // ffmpeg/ffprobe are hard dependencies of the suite: the server shells out to
 // them and the fixtures below are remuxed with them. Resolved once so the
 // seeding helpers and the tag probes agree on the binaries; the env overrides
@@ -126,8 +159,19 @@ async function setupTestDataDirectory() {
  * mov/mp4/matroska, the generic `date` tag for AVI which has no
  * creation_time). No -f: the muxer is inferred from the destination extension
  * (`mkv` needs the `matroska` muxer, which only inference gets right).
+ *
+ * `faststart` defaults to true because a plain `-c copy` to an `.mp4`
+ * destination writes the moov at the END, and the scan then faststarts such a
+ * file in place with `-c copy -movflags +faststart` and no `-map_metadata`
+ * (video_processor::fix_moov_atom), which replaces the file and drops the tag
+ * this helper just wrote — a regression `verifyTestPhotoDates` cannot see,
+ * because it only reads the API, whose value the scan extracted before that
+ * rewrite. Seeding every pinned video progressive keeps the scan off the file.
+ * The moov-at-end fixture opts out (see reseedNonProgressiveFixture), since
+ * there the layout IS the premise; the matroska muxer accepts and ignores
+ * movflags, and the AVI muxer never gets them.
  */
-function pinVideoDate(source, destination, date) {
+function pinVideoDate(source, destination, date, { faststart = true } = {}) {
   const iso = date.toISOString();
   const tag = path.extname(destination) === '.avi' ? 'date' : 'creation_time';
   execFileSync(ffmpegPath, [
@@ -140,8 +184,47 @@ function pinVideoDate(source, destination, date) {
     'copy',
     '-metadata',
     `${tag}=${iso}`,
+    ...(faststart && tag === 'creation_time' ? ['-movflags', '+faststart'] : []),
     destination,
   ]);
+}
+
+/** The first non-empty format tag value of a container (creation_time or date). */
+function probeVideoDate(filePath) {
+  const tags = execFileSync(ffprobePath, [
+    '-v',
+    'error',
+    '-show_entries',
+    'format_tags=creation_time,date',
+    '-of',
+    'default=noprint_wrappers=1:nokey=1',
+    filePath,
+  ])
+    .toString()
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return tags[0] ?? '';
+}
+
+/**
+ * The pinned date has to survive in the FILE, not only in the DB: the DB value
+ * is extracted before the scan may rewrite a video in place, so an API-only
+ * check is blind to a dropped tag. Reads every pinned video off disk and
+ * compares the container tag's day with the fixture list's offset.
+ */
+function verifyPinnedVideoFiles() {
+  for (const [filename, daysAgo] of VIDEO_FIXTURES) {
+    const filePath = path.join(TEST_DATA_DIR, 'photos', filename);
+    const expectedPrefix = videoDate(daysAgo).toISOString().split('T')[0];
+    const tag = probeVideoDate(filePath);
+    if (!tag.startsWith(expectedPrefix)) {
+      throw new Error(
+        `Pinned container date missing in ${filename}: expected ${expectedPrefix}, got '${tag || '(no tag)'}'`
+      );
+    }
+  }
+  console.log(`Pinned container dates verified in ${VIDEO_FIXTURES.length} video files`);
 }
 
 /**
@@ -290,40 +373,24 @@ async function seedTestMedia() {
     console.warn(`EXIF fixture not found at ${exifSrc}`);
   }
 
-  // Every video carries its own pinned date in the container (pinVideoDate):
-  // a video's `taken_at` comes out of the file now, not out of the DB. The
-  // offsets keep `test_video.mp4` the newest video (the fixture the older specs
-  // open as the first card), give the matrix fixtures a stable order among
-  // themselves, and place every video behind the cluster photos in the photos
-  // view. Streaming-playback fixtures (video-streaming.e2e.spec.js) are in the
-  // list too: the same 20 s h264+aac content in Matroska (remux case) and as an
-  // h264 + AC-3 MP4 (audio-only conversion case). The progressive MP4 twin of
+  // Every pinned video is seeded through pinVideoDate (or seedMultitrackFixture
+  // for the multi-track one), which writes the date into the container and — by
+  // default — leaves the file progressive, so the scan's in-place faststart
+  // rewrite never touches it. See VIDEO_FIXTURES for the offsets, and
+  // pinVideoDate for why progressive matters. `test_video.mp4` stays the newest
+  // video (the fixture the older specs open as the first card) and no video can
+  // displace the cluster photos from `photos[0]`. The progressive MP4 twin of
   // the mkv (test_video_long.mp4) is NOT seeded: no spec references it, and the
   // matrix's direct-play row for a progressive h264+aac MP4 is covered by
   // test_video.mp4.
-  const videoFixtures = [
-    ['test_video.mp4', CLUSTER_DAYS_AGO + 1],
-    ['test_video_long.mkv', CLUSTER_DAYS_AGO + 3],
-    ['test_video_ac3.mp4', CLUSTER_DAYS_AGO + 4],
-    // Capability-matrix fixtures (video-streaming.e2e.spec.js): 10-bit h264, a
-    // silent h264, an h264 with two audio tracks (h264+aac+ac3, seeded as a
-    // progressive all-stream remux of its source — see seedMultitrackFixture —
-    // so the indexing pass keeps all three streams), a progressive-less h264
-    // and a legacy MPEG-4/AVI rip.
-    ['test_video_moov_end.mp4', CLUSTER_DAYS_AGO + 5],
-    ['test_video_10bit.mp4', CLUSTER_DAYS_AGO + 6],
-    ['test_video_multitrack.mp4', CLUSTER_DAYS_AGO + 7],
-    ['test_video_noaudio.mp4', CLUSTER_DAYS_AGO + 8],
-    ['test_video_legacy.avi', CLUSTER_DAYS_AGO + 9],
-  ];
-  for (const [fixture, daysAgo] of videoFixtures) {
+  for (const [fixture, daysAgo] of VIDEO_FIXTURES) {
     const source = path.join('test-data', fixture);
     const destination = path.join(photosDir, fixture);
     if (!existsSync(source)) {
       console.warn(`Video fixture not found at ${source}`);
       continue;
     }
-    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    const date = videoDate(daysAgo);
     if (fixture === 'test_video_multitrack.mp4') {
       // Remuxed to keep both audio tracks, not copied: see
       // seedMultitrackFixture.
@@ -363,20 +430,25 @@ async function seedTestMedia() {
  * codec/container facts only), so the decision probes the restored file rather
  * than answering from the record.
  *
- * Seeded through pinVideoDate rather than copyFile: a plain `-c copy` to an MP4
- * destination writes the moov at the END (the whole premise of this fixture)
- * and re-pins the container's creation_time, which the in-place faststart
- * rewrite above dropped.
+ * Seeded through pinVideoDate rather than copyFile, with `faststart: false`: a
+ * plain `-c copy` to an MP4 destination writes the moov at the END (the whole
+ * premise of this fixture) and pins the container's creation_time in the same
+ * pass. The seed itself is progressive (VIDEO_FIXTURES + pinVideoDate's default)
+ * so the scan leaves the tag alone; this reseed is what makes the file
+ * non-progressive for the specs.
  */
 async function reseedNonProgressiveFixture() {
-  const source = path.join('test-data', 'test_video_moov_end.mp4');
-  const destination = path.join(TEST_DATA_DIR, 'photos', 'test_video_moov_end.mp4');
+  const source = path.join('test-data', NON_PROGRESSIVE_FIXTURE);
+  const destination = path.join(TEST_DATA_DIR, 'photos', NON_PROGRESSIVE_FIXTURE);
   if (!existsSync(source)) {
     console.warn(`Progressive-less fixture not found at ${source}`);
     return;
   }
-  const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 5) * 24 * 60 * 60 * 1000);
-  pinVideoDate(source, destination, date);
+  const date = pinnedVideoDate(NON_PROGRESSIVE_FIXTURE);
+  // `faststart: false`: this fixture exists to reach the specs with its moov at
+  // the END, and a plain `-c copy` to an MP4 destination is what writes it that
+  // way (the pinned creation_time is written in the same pass).
+  pinVideoDate(source, destination, date, { faststart: false });
   await utimes(destination, date, date);
 }
 
@@ -573,20 +645,22 @@ async function verifyTestPhotoDates(baseURL) {
 
   // The videos carry no DB pin any more (updateTestPhotoDates PATCHes photos
   // only), so their `taken_at` is the container tag seedTestMedia wrote; the
-  // newest video (test_video.mp4, CLUSTER_DAYS_AGO + 1) sorts first. Checked
-  // here because a remux that silently failed to write the tag would leave the
+  // newest entry of VIDEO_FIXTURES (test_video.mp4) sorts first. Checked here
+  // because a remux that silently failed to write the tag would leave the
   // fixture with its birth time — the regression this assertion exists to
-  // catch, and one a photos-only verification would not see.
+  // catch, and one a photos-only verification would not see. That the tag also
+  // survives in the FILE (which this API check cannot see) is asserted by
+  // verifyPinnedVideoFiles.
+  const [newestVideo, newestVideoDaysAgo] = VIDEO_FIXTURES[0];
   const firstVideo = photos.find((photo) => /\.(mp4|mkv|avi)$/i.test(photo.filename ?? ''));
   if (!firstVideo) {
     throw new Error('No video fixture in the indexed library');
   }
-  const videoPrefix = new Date(Date.now() - (CLUSTER_DAYS_AGO + 1) * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .split('T')[0];
-  if (!firstVideo.taken_at?.startsWith(videoPrefix)) {
+  const videoPrefix = videoDate(newestVideoDaysAgo).toISOString().split('T')[0];
+  if (firstVideo.filename !== newestVideo || !firstVideo.taken_at?.startsWith(videoPrefix)) {
     throw new Error(
-      `Expected first video ${firstVideo.filename} on ${videoPrefix}, got ${firstVideo.taken_at}`
+      `Expected first video ${newestVideo} on ${videoPrefix}, ` +
+        `got ${firstVideo.filename} at ${firstVideo.taken_at}`
     );
   }
   console.log(`Video date verification: ${firstVideo.filename} set to ${firstVideo.taken_at}`);
@@ -719,10 +793,17 @@ export default async function globalSetup() {
     // phase and starts with DELETE FROM housekeeping_candidates — wait for
     // full completion so the seeded candidate is not wiped by the scan.
     await waitForIndexingComplete(baseURL);
+    // The scan faststarts videos in place, which would strip the container tag
+    // of a non-progressive seed; assert the tags are still in the files before
+    // anything else rewrites them.
+    verifyPinnedVideoFiles();
     // Indexing rewrites progressive-less videos in place; restore the fixture
     // to its moov-at-the-end state so the serve-time layout decision is
     // testable (see reseedNonProgressiveFixture).
     await reseedNonProgressiveFixture();
+    // The reseed is the last writer of a pinned fixture, so the check runs
+    // again here: this is the state the specs read.
+    verifyPinnedVideoFiles();
     await ensureHousekeepingCandidate(baseURL);
     await seedPendingCollages();
 

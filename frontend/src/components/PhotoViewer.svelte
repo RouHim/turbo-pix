@@ -827,9 +827,13 @@
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
 
     // The codec this decision names for the SOURCE: the token a proved playback
-    // of this video records (FR-007), read once here so a verdict that lands
-    // later cannot pick up a newer decision's token.
-    currentVideoToken = codecTokenFor(decision.codec, decision.bit_depth);
+    // of this video records (FR-007). It is captured in the local FIRST and the
+    // module field only carries it for the escape hatch, which is opened later
+    // from the notice — the attempt's own continuation gets the local by value,
+    // so a verdict landing after a newer decision can never credit this
+    // playback to another video's codec.
+    const codecToken = codecTokenFor(decision.codec, decision.bit_depth);
+    currentVideoToken = codecToken;
 
     if (decision.action === 'empty') {
       // Nothing to attempt and nothing to convert: the only exemption from the
@@ -845,7 +849,7 @@
       startPlannedDelivery(photo, decision);
       return;
     }
-    armOriginalAttempt(photo, decision);
+    armOriginalAttempt(photo, decision, codecToken);
   }
 
   /**
@@ -856,8 +860,12 @@
    *
    * This is the only path a video's playback starts from, whatever the server
    * planned (FR-001/FR-008).
+   *
+   * `codecToken` is THIS video's declaration token, passed in by value: the
+   * verdict landing later records what was armed, never whatever the viewer's
+   * current-photo field happens to hold by then.
    */
-  function armOriginalAttempt(photo, decision) {
+  function armOriginalAttempt(photo, decision, codecToken) {
     const url = getVideoUrl(photo.hash_sha256, {
       clientCodecs: videoCodecSupport.getClientCodecsString(),
     });
@@ -873,7 +881,7 @@
       if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
       // The frame is proof even when the audio keeps the file off this path:
       // FR-007 records an actual playback, not the plan's verdict.
-      if (frameObserved) videoCodecSupport.recordVerifiedCodec(currentVideoToken);
+      if (frameObserved) videoCodecSupport.recordVerifiedCodec(codecToken);
       if (verdict === 'playable') {
         originalFailures.clear(photo.hash_sha256);
         return;
@@ -1575,6 +1583,10 @@
   function playOriginalAnyway(photo) {
     if (!videoEl) return;
     if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+    // This video's declaration token, captured by value: the module field
+    // belongs to the current photo, and the verdict below must record what this
+    // playback armed — not whatever the field holds when it lands.
+    const codecToken = currentVideoToken;
     // The user has decided: stop the stream run and any armed saturation
     // retry, otherwise the next attempt would put the waiting notice back up
     // and fight the choice they just made.
@@ -1600,7 +1612,7 @@
       originalAttempt = null;
       if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
       if (frameObserved) {
-        videoCodecSupport.recordVerifiedCodec(currentVideoToken);
+        videoCodecSupport.recordVerifiedCodec(codecToken);
         originalFailures.clear(photo.hash_sha256);
       }
       if (verdict === 'playable' || verdict === 'cancelled') return;

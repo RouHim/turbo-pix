@@ -423,9 +423,17 @@ test.describe('Playable originals are never converted', () => {
     });
     const streamRequests = collectRequests(page, STREAM_VIDEO);
     const wholeFileRequests = collectRequests(page, WHOLE_FILE);
+    const plainRequests = collectRequests(page, PLAIN_VIDEO);
 
     await openVideo(page, photo);
-    await page.waitForTimeout(500); // the attempt is armed and has not resolved
+    // The attempt must be ARMED before the switch, and that is observed rather
+    // than assumed: the pending `?client=` request for this photo is the
+    // evidence, and its 8 s-delayed route keeps it pending across the switch. A
+    // fixed sleep could fire before the decision round-trip finished, leaving
+    // `displayVideo` to arm nothing once the newer photo bails it — and every
+    // "nothing left behind" assertion would then hold over a cancellation path
+    // that never ran.
+    await waitForRequest(plainRequests, photo.hash_sha256);
 
     // WHEN the viewer moves to the next photo
     await page.keyboard.press('ArrowRight');

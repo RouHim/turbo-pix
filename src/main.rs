@@ -164,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.locale.clone(),
         semantic_search,
     );
-    let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
+    let housekeeping_routes = build_housekeeping_routes(db_pool.clone(), media_facts.clone());
     let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
     let albums_routes = build_albums_routes(db_pool.clone(), media_facts.clone());
     let config_routes = build_config_routes(config.locale.clone(), config.tile_url.clone());

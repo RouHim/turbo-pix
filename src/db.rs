@@ -1397,21 +1397,32 @@ pub async fn get_paths_needing_semantic_indexing(
     Ok(paths)
 }
 
+/// Photos still needing a location label, with the coordinates the file
+/// carries. Coordinates live in the index (the DB stores none), so the query
+/// narrows to unresolved rows and the index decides which of them have a
+/// usable coordinate pair.
 pub async fn get_photos_needing_geo_resolution(
     pool: &DbPool,
+    facts: &MediaFactsIndex,
 ) -> Result<Vec<(String, f64, f64)>, Box<dyn std::error::Error>> {
-    let photos: Vec<(String, f64, f64)> = sqlx::query_as(
-        "SELECT
-            file_path,
-            json_extract(metadata, '$.location.latitude') AS latitude,
-            json_extract(metadata, '$.location.longitude') AS longitude
-         FROM photos
-         WHERE geo_location_resolved = 0
-           AND json_extract(metadata, '$.location.latitude') IS NOT NULL
+    let paths: Vec<String> = sqlx::query_scalar(
+        "SELECT file_path FROM photos
+         WHERE geo_location_resolved IS NULL OR geo_location_resolved = 0
          ORDER BY file_path",
     )
     .fetch_all(pool)
     .await?;
+
+    let mut photos = Vec::new();
+    for file_path in paths {
+        let Some(entry) = facts.get(&file_path) else {
+            continue;
+        };
+        if let (Some(latitude), Some(longitude)) = (entry.latitude, entry.longitude) {
+            photos.push((file_path, latitude, longitude));
+        }
+    }
+
     Ok(photos)
 }
 
@@ -1448,7 +1459,7 @@ pub(crate) mod tests {
     use chrono::Datelike;
     use sqlx::Row;
 
-    use crate::media_facts::{test_facts, MediaFacts, MediaFactsIndex};
+    use crate::media_facts::{test_facts, test_facts_with_coords, MediaFacts, MediaFactsIndex};
 
     pub(crate) fn create_test_photo(filename: String, hash: String) -> Photo {
         // Ensure hash is 64 characters for SHA256
@@ -2279,35 +2290,28 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_get_photos_needing_geo_resolution() {
         let pool = create_test_db_pool().await.unwrap();
-        let unresolved_photo = create_test_photo_with_metadata(
-            "needs-geo.jpg",
-            "needs-geo-hash",
-            json!({
-                "location": {
-                    "latitude": 52.52,
-                    "longitude": 13.405
-                }
-            }),
+        // Coordinates live in the index (the DB stores none).
+        let facts = test_facts_with_coords(&[
+            (
+                "./test/needs-geo.jpg",
+                "2024-01-01T00:00:00Z",
+                52.52,
+                13.405,
+            ),
+            (
+                "./test/resolved-geo.jpg",
+                "2024-01-01T00:00:00Z",
+                48.137,
+                11.575,
+            ),
+        ]);
+        let unresolved_photo =
+            create_test_photo("needs-geo.jpg".to_string(), "needs-geo-hash".to_string());
+        let resolved_photo = create_test_photo(
+            "resolved-geo.jpg".to_string(),
+            "resolved-geo-hash".to_string(),
         );
-        let resolved_photo = create_test_photo_with_metadata(
-            "resolved-geo.jpg",
-            "resolved-geo-hash",
-            json!({
-                "location": {
-                    "latitude": 48.137,
-                    "longitude": 11.575
-                }
-            }),
-        );
-        let no_gps_photo = create_test_photo_with_metadata(
-            "no-gps.jpg",
-            "no-gps-hash",
-            json!({
-                "camera": {
-                    "make": "Canon"
-                }
-            }),
-        );
+        let no_gps_photo = create_test_photo("no-gps.jpg".to_string(), "no-gps-hash".to_string());
 
         unresolved_photo.create(&pool).await.unwrap();
         resolved_photo.create(&pool).await.unwrap();
@@ -2319,7 +2323,9 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
+        let photos = get_photos_needing_geo_resolution(&pool, &facts)
+            .await
+            .unwrap();
 
         assert_eq!(
             photos,
@@ -2330,15 +2336,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_mark_photo_geo_resolved() {
         let pool = create_test_db_pool().await.unwrap();
-        let photo = create_test_photo_with_metadata(
-            "mark-resolved.jpg",
-            "mark-resolved-hash",
-            json!({
-                "location": {
-                    "latitude": 52.52,
-                    "longitude": 13.405
-                }
-            }),
+        let facts = test_facts_with_coords(&[(
+            "./test/mark-resolved.jpg",
+            "2024-01-01T00:00:00Z",
+            52.52,
+            13.405,
+        )]);
+        let photo = create_test_photo(
+            "mark-resolved.jpg".to_string(),
+            "mark-resolved-hash".to_string(),
         );
 
         photo.create(&pool).await.unwrap();
@@ -2346,7 +2352,9 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
+        let photos = get_photos_needing_geo_resolution(&pool, &facts)
+            .await
+            .unwrap();
 
         assert!(photos.is_empty());
     }
@@ -2354,15 +2362,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_update_photo_city() {
         let pool = create_test_db_pool().await.unwrap();
-        let photo = create_test_photo_with_metadata(
-            "city-update.jpg",
-            "city-update-hash",
-            json!({
-                "location": {
-                    "latitude": 52.52,
-                    "longitude": 13.405
-                }
-            }),
+        let facts = test_facts_with_coords(&[(
+            "./test/city-update.jpg",
+            "2024-01-01T00:00:00Z",
+            52.52,
+            13.405,
+        )]);
+        let photo = create_test_photo(
+            "city-update.jpg".to_string(),
+            "city-update-hash".to_string(),
         );
 
         photo.create(&pool).await.unwrap();
@@ -2380,20 +2388,19 @@ pub(crate) mod tests {
 
         assert_eq!(metadata["location"]["city"], json!("Berlin"));
         assert_eq!(resolved_value, 1);
+        // A labelled photo is no longer a geo-resolution candidate.
+        assert!(get_photos_needing_geo_resolution(&pool, &facts)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn test_update_photo_city_null() {
         let pool = create_test_db_pool().await.unwrap();
-        let photo = create_test_photo_with_metadata(
-            "city-update-null.jpg",
-            "city-update-null-hash",
-            json!({
-                "location": {
-                    "latitude": 52.52,
-                    "longitude": 13.405
-                }
-            }),
+        let photo = create_test_photo(
+            "city-update-null.jpg".to_string(),
+            "city-update-null-hash".to_string(),
         );
 
         photo.create(&pool).await.unwrap();

@@ -406,7 +406,13 @@ impl PhotoScheduler {
                         // Phase 3: Geo resolution
                         info!("Phase 3: Resolving photo geo locations");
                         status.set_phase("geo_resolution").await;
-                        Self::run_geo_resolution_phase(&db_pool, &nominatim_url, &status).await;
+                        Self::run_geo_resolution_phase(
+                            &db_pool,
+                            &nominatim_url,
+                            &status,
+                            &media_facts,
+                        )
+                        .await;
 
                         // Phase 4: Generate collages
                         info!("Phase 4: Generating collages");
@@ -483,8 +489,9 @@ impl PhotoScheduler {
         db_pool: &DbPool,
         nominatim_url: &str,
         status: &IndexingStatus,
+        facts: &MediaFactsIndex,
     ) {
-        let photos = match crate::db::get_photos_needing_geo_resolution(db_pool).await {
+        let photos = match crate::db::get_photos_needing_geo_resolution(db_pool, facts).await {
             Ok(photos) => photos,
             Err(e) => {
                 error!("Failed to query photos needing geo resolution: {}", e);
@@ -593,7 +600,13 @@ impl PhotoScheduler {
         // Phase 3: Geo resolution
         info!("Phase 3: Resolving photo geo locations");
         self.status.set_phase("geo_resolution").await;
-        Self::run_geo_resolution_phase(&self.db_pool, &self.nominatim_url, &self.status).await;
+        Self::run_geo_resolution_phase(
+            &self.db_pool,
+            &self.nominatim_url,
+            &self.status,
+            &self.media_facts,
+        )
+        .await;
 
         // Phase 4: Generate collages
         info!("Phase 4: Generating collages");

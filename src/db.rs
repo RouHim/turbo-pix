@@ -1260,33 +1260,34 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             settings.insert("flash_used".to_string(), json!(flash_used));
         }
 
-
+        // Video members are stated only for a video row: a photo must not
+        // acquire a `video` object it never had. `codec`, `audio_codec`,
+        // `bit_depth` and `container` are what `ResolvedCapabilities::from_record`
+        // reads back; `bitrate`, `frame_rate` and `profile` are display facts
+        // the scan owns just as much, so they must not outlive the file's own
+        // values either.
         let mut video = serde_json::Map::new();
-        if let Some(codec) = processed.video_codec {
-            video.insert("codec".to_string(), json!(codec));
-        }
-        if let Some(audio_codec) = processed.audio_codec {
-            video.insert("audio_codec".to_string(), json!(audio_codec));
-        }
-        if let Some(bitrate) = processed.bitrate {
-            video.insert("bitrate".to_string(), json!(bitrate));
-        }
-        if let Some(frame_rate) = processed.frame_rate {
-            video.insert("frame_rate".to_string(), json!(frame_rate));
-        }
-        if let Some(profile) = processed.video_profile {
-            video.insert("profile".to_string(), json!(profile));
-        }
-        if let Some(bit_depth) = processed.bit_depth {
-            video.insert("bit_depth".to_string(), json!(bit_depth));
-        }
-        if let Some(container) = processed.container {
-            video.insert("container".to_string(), json!(container));
-        }
-        // Only record moov_at_start when false — absence means true, which
-        // avoids bloating every record.
-        if !processed.moov_at_start {
-            video.insert("moov_at_start".to_string(), json!(false));
+        if processed
+            .mime_type
+            .as_deref()
+            .is_some_and(|mime| mime.starts_with("video/"))
+        {
+            video.insert("codec".to_string(), json!(processed.video_codec));
+            video.insert("audio_codec".to_string(), json!(processed.audio_codec));
+            video.insert("bitrate".to_string(), json!(processed.bitrate));
+            video.insert("frame_rate".to_string(), json!(processed.frame_rate));
+            video.insert("profile".to_string(), json!(processed.video_profile));
+            video.insert("bit_depth".to_string(), json!(processed.bit_depth));
+            video.insert("container".to_string(), json!(processed.container));
+            // `moov_at_start` keeps its "absence means true" idiom: the
+            // scanner's own fallback for a failed layout pass is `true`
+            // (`photo_processor`), and a persisted `true` is exactly what
+            // `stored_moov_at_start` trusts for `Delivery::Direct` — the
+            // scenario `video_probe` warns about. Absent stays "never
+            // established", which no playback decision reads as progressive.
+            if !processed.moov_at_start {
+                video.insert("moov_at_start".to_string(), json!(false));
+            }
         }
 
         let mut metadata = serde_json::Map::new();
@@ -1296,7 +1297,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
         if !settings.is_empty() {
             metadata.insert("settings".to_string(), json!(settings));
         }
-
         if !video.is_empty() {
             metadata.insert("video".to_string(), json!(video));
         }
@@ -2371,6 +2371,135 @@ pub(crate) mod tests {
         assert_eq!(stored.latitude(), Some(48.2082));
         assert_eq!(stored.longitude(), Some(16.3737));
         assert_eq!(stored.metadata["location"]["city"], "Berlin");
+    }
+
+    /// A scan owns the video facts it writes, so it must state their absence:
+    /// a row's identity is the PATH hash, so replacing the file in place at the
+    /// same path never triggers the pre-upsert DELETE and the merge is what
+    /// runs. An omitted member would keep the stored value, `capability_version`
+    /// would keep `record_is_complete` true, and `video_probe::resolve` would
+    /// short-circuit to `ResolvedCapabilities::from_record` — trusting facts the
+    /// file no longer has instead of re-probing it.
+    #[tokio::test]
+    async fn scan_upsert_clears_stale_video_facts_so_the_record_is_reprobed() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-stale");
+        // GIVEN: an mp4 once probed as h264 with audio
+        let mut existing = create_test_photo_with_date(&hash, "replaced.mp4", Utc::now());
+        existing.metadata = json!({
+            "video": {
+                "codec": "h264",
+                "audio_codec": "aac",
+                "bit_depth": 10,
+                "container": "mp4",
+                "frame_rate": 30.0,
+                "capability_version": 1
+            }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the path now holds an audio-only mp4 and the scan writes what
+        // the extraction found — no video-stream facts at all
+        let mut extracted = scanned_photo("replaced.mp4", &hash, "video/mp4", None, None);
+        extracted.container = Some("mp4".to_string());
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: every stale fact is gone
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.video_codec().is_none(),
+            "stale codec survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.audio_codec().is_none(),
+            "stale audio codec survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.bit_depth().is_none(),
+            "stale bit depth survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.frame_rate().is_none(),
+            "stale frame rate survived: {}",
+            stored.metadata
+        );
+        // AND: what the file does have is recorded
+        assert_eq!(stored.metadata["video"]["container"], "mp4");
+        // AND: the record no longer looks probed, so the next request re-probes
+        assert!(
+            !crate::video_probe::record_is_complete(&stored),
+            "a record whose video facts are gone must be re-probed: {}",
+            stored.metadata
+        );
+    }
+
+    /// Same mechanism for the EXIF-owned members: a photo whose EXIF was
+    /// stripped must not keep showing the camera and settings it had, and a
+    /// photo row must not acquire a `video` object.
+    #[tokio::test]
+    async fn scan_upsert_clears_camera_and_settings_the_file_no_longer_has() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-exif");
+        let mut existing = create_test_photo_with_date(&hash, "stripped.jpg", Utc::now());
+        existing.metadata = json!({
+            "camera": { "make": "Canon", "model": "Canon EOS 40D" },
+            "settings": { "iso": 400, "aperture": 4.0, "flash_used": true }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the file is replaced by one whose EXIF carries none of that
+        let fresh: Photo = scanned_photo("stripped.jpg", &hash, "image/jpeg", None, None).into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the stale EXIF members are cleared
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.camera_make().is_none(),
+            "stale camera make survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.camera_model().is_none(),
+            "stale camera model survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.iso().is_none(),
+            "stale iso survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.aperture().is_none(),
+            "stale aperture survived: {}",
+            stored.metadata
+        );
+        assert!(!stored.flash_used().unwrap_or(false));
+        // AND: a photo row still carries no video object
+        assert!(
+            stored.metadata.get("video").is_none(),
+            "{}",
+            stored.metadata
+        );
     }
 
     #[tokio::test]

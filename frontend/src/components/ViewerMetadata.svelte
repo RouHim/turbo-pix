@@ -83,6 +83,11 @@
   );
 
   const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
+  // `flash_used` is a boolean, so its presence cannot be read as truthiness —
+  // but the scanner now states every settings member explicitly and writes
+  // `null` for one the file does not have, so "present and not null" is the
+  // check that means "the file carries a flash verdict".
+  const hasFlash = $derived(settings.flash_used != null);
   const hasSettings = $derived(
     settings.iso ||
       settings.aperture ||
@@ -91,7 +96,7 @@
       settings.exposure_mode ||
       settings.metering_mode ||
       settings.white_balance ||
-      settings.flash_used !== undefined ||
+      hasFlash ||
       photo?.orientation ||
       settings.color_space
   );
@@ -298,9 +303,9 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.flash', { default: 'Flash:' })}</span><span
             id="meta-flash"
-            style="opacity: {fieldOpacity(settings.flash_used !== undefined)}"
+            style="opacity: {fieldOpacity(hasFlash)}"
             >{setField(
-              settings.flash_used !== undefined
+              hasFlash
                 ? settings.flash_used
                   ? $t('ui.yes', { default: 'Yes' })
                   : $t('ui.no', { default: 'No' })

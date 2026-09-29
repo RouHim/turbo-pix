@@ -213,6 +213,23 @@ mod tests {
             "frontend RAW_EXTENSIONS drifted from the backend RAW set"
         );
 
+        // The frontend enables the editor from METADATA_VIDEO_EXTENSIONS while
+        // the backend accepts from mp4_metadata::WRITABLE_EXTENSIONS, so the
+        // two lists must agree (case-insensitively).
+        let metadata_video_exts = parse_extension_list(constants_js, "METADATA_VIDEO_EXTENSIONS");
+        let frontend_writable: Vec<String> = metadata_video_exts
+            .iter()
+            .map(|ext| ext.to_ascii_lowercase())
+            .collect();
+        let backend_writable: Vec<String> = crate::mp4_metadata::WRITABLE_EXTENSIONS
+            .iter()
+            .map(|ext| ext.to_ascii_lowercase())
+            .collect();
+        assert_eq!(
+            frontend_writable, backend_writable,
+            "frontend METADATA_VIDEO_EXTENSIONS drifted from mp4_metadata::WRITABLE_EXTENSIONS"
+        );
+
         // Reverse direction: every extension the frontend knows must be
         // detected by the backend (mimetype_detector AND raw_processor).
         for ext in video_exts.iter().chain(raw_exts.iter()) {

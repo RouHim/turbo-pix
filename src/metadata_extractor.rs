@@ -383,6 +383,31 @@ impl MetadataExtractor {
                 debug!("  while extracting metadata for: {}", path.display());
             }
         }
+
+        Self::apply_container_location(path, metadata);
+    }
+
+    /// Fills `latitude`/`longitude` from the container's own ISO 6709 carrier.
+    ///
+    /// ffprobe does not report the QuickTime location, so the ISO-BMFF
+    /// metadata reader supplies it. A container without a carrier — or one the
+    /// reader does not support at all (MKV, AVI, WebM return
+    /// `UnsupportedContainer`) — is normal and simply leaves the pair unset,
+    /// so nothing is logged per file.
+    fn apply_container_location(path: &Path, metadata: &mut PhotoMetadata) {
+        let Ok(container) = crate::mp4_metadata::read_metadata(path) else {
+            return;
+        };
+        let Some((latitude, longitude)) = container
+            .location_iso6709
+            .as_deref()
+            .and_then(crate::mp4_metadata::parse_iso6709)
+        else {
+            return;
+        };
+
+        metadata.latitude = Some(latitude);
+        metadata.longitude = Some(longitude);
     }
 
     /// Applies codec/dimension/frame-rate info from the first real video
@@ -1280,6 +1305,40 @@ mod tests {
             metadata.taken_at.is_some(),
             "Should have taken_at from file date fallback"
         );
+    }
+
+    #[test]
+    fn extracts_location_from_the_files_iso6709_carrier() {
+        // Hold the shared test env lock so a concurrent test module's fake
+        // FFPROBE_PATH cannot break real ffprobe extraction.
+        let _env_lock = acquire_test_env_lock();
+        // GIVEN: an MP4 whose container carries an ISO 6709 location
+        let path = Path::new("test-data/test_video_quicktime_keys.mp4");
+        assert!(path.exists(), "test fixture missing: {path:?}");
+
+        // WHEN: Extract metadata
+        let m = MetadataExtractor::extract_with_metadata(path, None);
+
+        // THEN: The container's coordinates are the extracted ones
+        assert_eq!(m.latitude, Some(48.2082));
+        assert_eq!(m.longitude, Some(16.3737));
+    }
+
+    #[test]
+    fn leaves_location_empty_for_a_video_without_a_carrier() {
+        // Hold the shared test env lock: extract_with_metadata runs real
+        // ffprobe here too.
+        let _env_lock = acquire_test_env_lock();
+        // GIVEN: an MP4 with no location carrier at all
+        let path = Path::new("test-data/test_video.mp4");
+        assert!(path.exists(), "test fixture missing: {path:?}");
+
+        // WHEN: Extract metadata
+        let m = MetadataExtractor::extract_with_metadata(path, None);
+
+        // THEN: No coordinates are invented
+        assert_eq!(m.latitude, None);
+        assert_eq!(m.longitude, None);
     }
 
     #[test]

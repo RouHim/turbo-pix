@@ -1260,6 +1260,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             settings.insert("flash_used".to_string(), json!(flash_used));
         }
 
+
         let mut video = serde_json::Map::new();
         if let Some(codec) = processed.video_codec {
             video.insert("codec".to_string(), json!(codec));
@@ -1295,6 +1296,7 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
         if !settings.is_empty() {
             metadata.insert("settings".to_string(), json!(settings));
         }
+
         if !video.is_empty() {
             metadata.insert("video".to_string(), json!(video));
         }
@@ -1488,6 +1490,58 @@ pub(crate) mod tests {
         let mut photo = create_test_photo(filename.to_string(), hash.to_string());
         photo.metadata = metadata;
         photo
+    }
+
+    /// The row a scan writes, built through the production JSON builder
+    /// (`ProcessedPhoto` → `Photo`) rather than hand-made JSON: that builder is
+    /// the only definition of the stored metadata shape, so tests that bypass
+    /// it cannot catch a shape change. `latitude`/`longitude` stand for what
+    /// the extraction found — `None` means the file carries no position.
+    fn scanned_photo(
+        filename: &str,
+        hash: &str,
+        mime_type: &str,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> crate::indexer::ProcessedPhoto {
+        crate::indexer::ProcessedPhoto {
+            file_path: format!("./test/{}", filename),
+            filename: filename.to_string(),
+            file_size: 1024,
+            mime_type: Some(mime_type.to_string()),
+            taken_at: Some(Utc::now()),
+            date_modified: Utc::now(),
+            camera_make: None,
+            camera_model: None,
+            lens_make: None,
+            lens_model: None,
+            iso: None,
+            aperture: None,
+            shutter_speed: None,
+            focal_length: None,
+            width: Some(1920),
+            height: Some(1080),
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: None,
+            flash_used: None,
+            latitude,
+            longitude,
+            hash_sha256: Some(hash.to_string()),
+            blurhash: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
+            video_profile: None,
+            bit_depth: None,
+            container: None,
+            moov_at_start: true,
+            semantic_vector_indexed: Some(false),
+        }
     }
 
     async fn read_photo_metadata(pool: &DbPool, file_path: &str) -> serde_json::Value {
@@ -2206,6 +2260,117 @@ pub(crate) mod tests {
         );
         assert_eq!(metadata["location"]["city"], "Munich");
         assert_eq!(metadata["camera"]["make"], "Canon");
+    }
+
+    /// The builder must state the position explicitly (`latitude: null`) when
+    /// the extraction found none — otherwise `json_patch` would preserve the
+    /// stored pair and the row would keep serving coordinates the video file
+    /// no longer carries, where the old wholesale replace cleared them.
+    #[tokio::test]
+    async fn scan_upsert_clears_video_coordinates_the_file_no_longer_carries() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-video");
+        // GIVEN: a video row that still holds the file's former position and a
+        // resolved city
+        let mut existing = create_test_photo_with_date(&hash, "builder_video.mp4", Utc::now());
+        existing.metadata = json!({
+            "location": { "latitude": 48.2082, "longitude": 16.3737, "city": "Vienna" },
+            "video": { "codec": "h264", "capability_version": 1 }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the next scan writes what a file without a position produces,
+        // through the real builder
+        let mut extracted = scanned_photo("builder_video.mp4", &hash, "video/mp4", None, None);
+        extracted.video_codec = Some("h264".to_string());
+        extracted.audio_codec = Some("aac".to_string());
+        extracted.container = Some("mp4".to_string());
+        let fresh: Photo = extracted.into();
+        assert!(
+            fresh.metadata["location"]["latitude"].is_null(),
+            "the builder must state the absent position, got {}",
+            fresh.metadata
+        );
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the stale pair is gone, the city and the capability record stay
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.metadata["location"].get("latitude").is_none(),
+            "the file no longer has a position: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.metadata["location"].get("longitude").is_none(),
+            "the file no longer has a position: {}",
+            stored.metadata
+        );
+        assert!(stored.latitude().is_none());
+        assert_eq!(stored.metadata["location"]["city"], "Vienna");
+        assert_eq!(stored.metadata["video"]["capability_version"], 1);
+        assert!(crate::video_probe::record_is_complete(&stored));
+    }
+
+    /// Same guarantee for the photo path (FR-011: photo behaviour stays as it
+    /// was) — a photo whose EXIF lost its GPS must not keep the stored pair,
+    /// while the resolved city survives, and a position that reappears is
+    /// written again.
+    #[tokio::test]
+    async fn scan_upsert_clears_photo_coordinates_the_file_no_longer_carries() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-photo");
+        let mut existing = create_test_photo_with_date(&hash, "builder_photo.jpg", Utc::now());
+        existing.metadata = json!({
+            "location": { "latitude": 52.52, "longitude": 13.405, "city": "Berlin" }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: a scan runs over the same file with no GPS left in its EXIF
+        let fresh: Photo =
+            scanned_photo("builder_photo.jpg", &hash, "image/jpeg", None, None).into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the coordinates are cleared, the city is not
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(stored.latitude().is_none(), "{}", stored.metadata);
+        assert!(stored.longitude().is_none(), "{}", stored.metadata);
+        assert_eq!(stored.metadata["location"]["city"], "Berlin");
+
+        // AND: a position that is in the file again lands in the row
+        let mut extracted = scanned_photo("builder_photo.jpg", &hash, "image/jpeg", None, None);
+        extracted.latitude = Some(48.2082);
+        extracted.longitude = Some(16.3737);
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(stored.latitude(), Some(48.2082));
+        assert_eq!(stored.longitude(), Some(16.3737));
+        assert_eq!(stored.metadata["location"]["city"], "Berlin");
     }
 
     #[tokio::test]

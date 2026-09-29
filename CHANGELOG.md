@@ -1,3 +1,17 @@
+# [2.45.0](https://github.com/RouHim/turbo-pix/compare/2.44.2...2.45.0) (2026-09-29)
+
+
+### Bug Fixes
+
+* date accepted collages immediately and close task-4 review gaps ([3d8e335](https://github.com/RouHim/turbo-pix/commit/3d8e335fbea083c6c0168cd69077ef11e38a4430))
+* **ui:** keep the rendered timeline when a density refetch fails ([374d9cf](https://github.com/RouHim/turbo-pix/commit/374d9cf0a31947ffff1bc2381b384994fe09aa31))
+
+
+### Features
+
+* add file-derived media facts index ([edda7d3](https://github.com/RouHim/turbo-pix/commit/edda7d32b7648622d7d874101220ff150c274ece))
+* refresh derived views after a metadata edit ([bf1a702](https://github.com/RouHim/turbo-pix/commit/bf1a702f163dba877de6015ecccaf7a2f84a3c86))
+
 ## [2.44.2](https://github.com/RouHim/turbo-pix/compare/2.44.1...2.44.2) (2026-09-27)
 
 ## [2.44.1](https://github.com/RouHim/turbo-pix/compare/2.44.0...2.44.1) (2026-09-27)

@@ -1479,12 +1479,18 @@ pub async fn generate_collages(
     Ok(generated_count)
 }
 
-/// Move accepted collage to photos directory and trigger indexing
+/// Move accepted collage to photos directory and trigger indexing.
+///
+/// The freshly created photo row is undated in the DB (dates live in the
+/// files), so the extracted facts must be published to `facts` in the same
+/// step — otherwise the accepted collage stays undated until the next scan
+/// and is missing from the timeline, every month filter and a date sort.
 pub async fn accept_collage(
     pool: &DbPool,
     collage_id: i64,
     data_path: &Path,
     semantic_search: std::sync::Arc<dyn crate::semantic_search::SemanticSearch>,
+    facts: &MediaFactsIndex,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get collage
     let collage = Collage::get_by_id(pool, collage_id)
@@ -1584,7 +1590,7 @@ pub async fn accept_collage(
     tx.commit().await?;
 
     // Index the collage into photos table immediately
-    if let Err(e) = index_collage_file(pool, &dest, semantic_search).await {
+    if let Err(e) = index_collage_file(pool, &dest, semantic_search, facts).await {
         error!("Failed to index collage into photos table: {}", e);
         // Don't fail the whole operation if indexing fails
     }
@@ -1621,11 +1627,13 @@ pub async fn reject_collage(
     Ok(())
 }
 
-/// Index a single collage file into the photos table
+/// Index a single collage file into the photos table, publishing the facts the
+/// file yielded alongside the row write (the row itself stores no date).
 async fn index_collage_file(
     pool: &DbPool,
     file_path: &Path,
     semantic_search: std::sync::Arc<dyn crate::semantic_search::SemanticSearch>,
+    facts: &MediaFactsIndex,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get file metadata
     let metadata = fs::metadata(file_path)?;
@@ -1652,11 +1660,18 @@ async fn index_collage_file(
         .await
         .ok_or("Failed to process collage file")?;
 
+    // Facts must be copied off `processed_photo` before `into()` consumes it;
+    // the row carries no date, so the index is the only place the extracted
+    // date survives.
+    let extracted_facts = crate::media_facts::MediaFacts::from(&processed_photo);
+
     // Convert to Photo and insert into database
     let photo: Photo = processed_photo.into();
     let mut tx = pool.begin().await?;
     photo.create_or_update_with_transaction(&mut tx).await?;
     tx.commit().await?;
+
+    facts.set(&photo.file_path, extracted_facts);
 
     info!("Collage indexed into photos table: {}", file_path.display());
     Ok(())

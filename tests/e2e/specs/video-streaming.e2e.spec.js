@@ -144,37 +144,66 @@ test.describe('On-the-fly streaming playback', () => {
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
   });
 
-  test('Matroska h264 remuxes losslessly and seeks within 3s', async ({ page }) => {
+  test('a Matroska the browser can play is served from the original', async ({ page }) => {
     test.setTimeout(60_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
-    // A cold cache: the playthrough below fills the `remux/` sidecar, after
-    // which the same probe legitimately answers `direct`/`cached` and the
-    // viewer plays a file instead of streaming (and a Playwright retry would
-    // hit exactly that artifact from the first attempt). Probe *before*
-    // playing, so the answer is the first-play one rather than a race against
-    // the background fill.
+    // A cold cache: a playthrough would fill the `remux/` sidecar, after which
+    // the same probe legitimately answers `direct`/`cached` (and a Playwright
+    // retry would hit exactly that artifact from the first attempt). Probe
+    // *before* playing, so the answer is the first-play one rather than a race
+    // against the background fill.
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
     const response = await page.request.get(
       `/api/photos/${mkv.hash_sha256}/video?decision&client=h264-8,aac`
     );
     expect(response.ok()).toBeTruthy();
     const decision = await response.json();
+    // The server's plan is unchanged — it still answers `stream`/`remux` — and
+    // it is exactly what the viewer must not obey on faith: this container is
+    // one Chromium decodes, so the original wins and no remux may be asked for.
     expect(decision.action).toBe('stream');
     expect(decision.mode).toBe('remux');
+
+    // Every `/video/stream*` request the app makes: the claim below is that
+    // there are none, so the wire is the evidence rather than the src alone.
+    const streamRequests = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/video/stream')) streamRequests.push(request.url());
+    });
+    // A plain source only auto-plays when the viewer's autoPlay setting is on
+    // (the MSE path always self-plays), so enable it before opening: the frame
+    // below is only presented by an element that actually loads the file, and
+    // a paused source may never leave HAVE_METADATA.
+    await page.evaluate(() =>
+      localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+    );
 
     await openVideo(page, mkv);
 
     const video = videoHandle(page);
+    // The proof is the original's own playback: a decoded frame of THIS photo,
+    // anchored on the element's stamp so the previous photo's state cannot
+    // satisfy it.
     await page.waitForFunction(
-      () => {
+      (hash) => {
         const el = document.querySelector('#viewer-video');
-        return el && el.readyState >= 2 && el.currentTime > 0;
+        return !!el && el.dataset.photoHash === hash && el.readyState >= 2 && el.videoWidth > 0;
       },
-      null,
+      mkv.hash_sha256,
       { timeout: 30_000 }
     );
 
-    // The 3 s bound in the test name is the wait's own timeout below.
+    // The source is the original's own byte request — not a `blob:` backing an
+    // MSE run, and not a conversion request.
+    const src = await video.getAttribute('src');
+    expect(src).toContain(`/api/photos/${mkv.hash_sha256}/video?`);
+    expect(src).toContain('client=');
+    expect(src).not.toContain('blob:');
+    expect(src).not.toContain('transcode=true');
+    expect(streamRequests).toEqual([]);
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+
+    // The 3 s bound is the wait's own timeout below.
     await video.evaluate((el) => {
       el.currentTime = 15;
     });
@@ -202,6 +231,16 @@ test.describe('On-the-fly streaming playback', () => {
     expect(decision.action).toBe('stream');
     expect(decision.mode).toBe('audio');
 
+    // Every `/video/stream*` request, in order, with the mode it asked for. The
+    // original's own attempt is what fails here — the audio gate refuses AC-3,
+    // which the client never declared — so the first rung the viewer runs is
+    // the audio one, not a full video conversion.
+    const streamModes = [];
+    await page.route('**/video/stream*', async (route) => {
+      streamModes.push(new URL(route.request().url()).searchParams.get('mode'));
+      await route.continue();
+    });
+
     await openVideo(page, ac3);
     await page.waitForFunction(
       () => {
@@ -211,6 +250,7 @@ test.describe('On-the-fly streaming playback', () => {
       null,
       { timeout: 30_000 }
     );
+    expect(streamModes[0]).toBe('audio');
   });
 
   test('h264 video still plays directly without any conversion notice', async ({ page }) => {
@@ -327,6 +367,9 @@ test.describe('On-the-fly streaming playback', () => {
     // A disabled pool is only observable while the decisions say "stream": a
     // cached artifact is served as a file, with no stream request to refuse.
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
 
     // The server's own answer for `TURBO_PIX_MAX_TRANSCODES=0`: the same 503 a
     // saturated pool sends, with the refusal body that names the pool as
@@ -432,6 +475,9 @@ test.describe('On-the-fly streaming playback', () => {
     // The ladder only runs on a stream delivery: a cached artifact would be
     // played as a file, with no stream request to fail.
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
     const requestedModes = await failStreamModes(page, ['remux']);
 
     await openVideo(page, mkv);
@@ -464,6 +510,9 @@ test.describe('On-the-fly streaming playback', () => {
     // The ladder only runs on a stream delivery: a cached artifact would be
     // played as a file, with no stream request to fail.
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
 
     // The seek below must land outside the buffered range, or it starts no run
     // at all and the restart this test is about never happens: throttle the
@@ -572,6 +621,9 @@ test.describe('On-the-fly streaming playback', () => {
     test.setTimeout(60_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
     const requestedModes = await failStreamModes(page, ['remux', 'audio', 'transcode']);
 
     await openVideo(page, mkv);
@@ -586,12 +638,22 @@ test.describe('On-the-fly streaming playback', () => {
     const playOriginal = page.locator('.transcode-toast [data-action="play-original"]');
     await expect(playOriginal).toBeVisible();
 
+    // The hatch re-runs the original attempt through the same machinery, so the
+    // route that failed the FIRST attempt must step aside: routes run in the
+    // order opposite to their registration, and this later one serves the real
+    // bytes for the hatch's own attempt (see the frame assertion below).
+    await page.route(
+      (url) =>
+        url.pathname === `/api/photos/${mkv.hash_sha256}/video` &&
+        url.searchParams.has('client') &&
+        !url.searchParams.has('decision'),
+      (route) => route.continue()
+    );
+    const modesBeforeHatch = [...requestedModes];
+
     // AND it actually hands the original over instead of merely rendering: the
-    // notice goes away with the ladder, and the element is pointed at the file
-    // itself rather than at another conversion. The fixture's container is one
-    // Chromium cannot present, so "decoded frames" is not available here — what
-    // the hatch promises for this file is the original's URL, which is exactly
-    // what a hatch that no-ops (or that re-requests a conversion) would change.
+    // notice goes away with the ladder, the element is pointed at the file
+    // itself rather than at another conversion, and the file really plays.
     await playOriginal.click();
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
     const video = videoHandle(page);
@@ -599,12 +661,29 @@ test.describe('On-the-fly streaming playback', () => {
     // Containment alone is satisfied by a conversion request as well, so the
     // file claim needs its own negative.
     await expect(video).not.toHaveAttribute('src', /transcode=true/);
+    // The frame is the evidence the bytes were not merely assigned: this
+    // container is h264 the browser decodes, so a decoded frame of THIS photo
+    // is what the hatch promises here.
+    await page.waitForFunction(
+      (hash) => {
+        const el = document.querySelector('#viewer-video');
+        return !!el && el.dataset.photoHash === hash && el.readyState >= 2 && el.videoWidth > 0;
+      },
+      mkv.hash_sha256,
+      { timeout: 10_000 }
+    );
+    // FR-015: the user's choice is final — the hatch must not re-enter the
+    // conversion loop, so not one further rung may be requested after it.
+    expect(requestedModes).toEqual(modesBeforeHatch);
   });
 
   test('a stream that keeps being lost still ends on the ladder', async ({ page }) => {
     test.setTimeout(60_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
 
     // EVERY run is served a body that stops after its initialization segment:
     // no coded frame ever reaches the element, so nothing ever plays and the
@@ -666,6 +745,9 @@ test.describe('On-the-fly streaming playback', () => {
     test.setTimeout(60_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    // The ladder is only reached after a failed attempt, and this container
+    // plays natively here: fail the original so the planned rung is what runs.
+    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
 
     // A seek only restarts the stream when its target is not buffered yet, and
     // this 20 s remux buffers in a few hundred milliseconds: throttle the

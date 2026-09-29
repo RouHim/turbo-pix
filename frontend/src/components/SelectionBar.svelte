@@ -30,7 +30,7 @@
       selectionState.orderedKeys.every((k) => selectionState.selected[k])
   );
   // Per-surface action set: housekeeping candidates are photos, so they get
-  // the five photo actions plus keep; collages get accept/reject only; the
+  // the four photo actions plus keep; collages get accept/reject only; the
   // albums overview selects whole albums, so it gets delete-albums only.
   const actionConfig = $derived(
     isAlbumOverview

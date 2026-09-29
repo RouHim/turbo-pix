@@ -169,8 +169,11 @@ test.describe('Map filters', () => {
     // below passing. Assert the load itself first.
     await expect(page.locator('[data-testid="map-error"]')).toHaveCount(0);
     // Teeth: every photo the city matches carries coordinates, while the
-    // unfiltered render shows this notice for the unlocated videos, receipt,
-    // and camera-EXIF fixture (`sample_with_exif.jpg` has no GPS tags).
+    // unfiltered render shows this notice for the unlocated videos and receipt.
+    // The counts are derived from the API at runtime, and `sample_with_exif.jpg`
+    // carries no *seeded* GPS only until `metadata-edit.e2e.spec.js` (later in
+    // the run) leaves coordinates on it — nothing here may depend on any single
+    // fixture being unlocated.
     // A dropped query leaves the notice in place and fails here.
     await expect(page.locator('[data-testid="map-unlocated-notice"]')).toHaveCount(0);
     // Scoping, not just parity: the densest location's marker carries exactly

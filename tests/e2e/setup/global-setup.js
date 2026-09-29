@@ -162,11 +162,14 @@ async function setupTestDataDirectory() {
  *
  * `faststart` defaults to true because a plain `-c copy` to an `.mp4`
  * destination writes the moov at the END, and the scan then faststarts such a
- * file in place with `-c copy -movflags +faststart` and no `-map_metadata`
- * (video_processor::fix_moov_atom), which replaces the file and drops the tag
- * this helper just wrote — a regression `verifyTestPhotoDates` cannot see,
- * because it only reads the API, whose value the scan extracted before that
- * rewrite. Seeding every pinned video progressive keeps the scan off the file.
+ * file in place with `-c copy -movflags +faststart`
+ * (video_processor::fix_moov_atom), which replaces the file. That rewrite does
+ * carry the container's global tags over (`-map_metadata 0`, added with the
+ * file-only dates), but it is still real work on a fixture, and a regression in
+ * it would be invisible to `verifyTestPhotoDates` — which only reads the API,
+ * whose value the scan extracted before the rewrite — hence the file-level
+ * `verifyPinnedVideoFiles`. Seeding every pinned video progressive keeps the
+ * scan off the file.
  * The moov-at-end fixture opts out (see reseedNonProgressiveFixture), since
  * there the layout IS the premise; the matroska muxer accepts and ignores
  * movflags, and the AVI muxer never gets them.
@@ -793,9 +796,9 @@ export default async function globalSetup() {
     // phase and starts with DELETE FROM housekeeping_candidates — wait for
     // full completion so the seeded candidate is not wiped by the scan.
     await waitForIndexingComplete(baseURL);
-    // The scan faststarts videos in place, which would strip the container tag
-    // of a non-progressive seed; assert the tags are still in the files before
-    // anything else rewrites them.
+    // The scan faststarts videos in place; the rewrite carries the container
+    // tags over (`-map_metadata 0`), and this first file-level check is what
+    // would catch it if that stopped being true.
     verifyPinnedVideoFiles();
     // Indexing rewrites progressive-less videos in place; restore the fixture
     // to its moov-at-the-end state so the serve-time layout decision is

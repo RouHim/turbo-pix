@@ -1,9 +1,11 @@
 use serde::Serialize;
+use std::sync::Arc;
 use warp::{reject, Filter, Rejection, Reply};
 
 use crate::db::{DbPool, Photo};
 use crate::handlers_photo::{validate_hashes, BatchFailure, BatchHashesRequest, BatchResult};
-use crate::warp_helpers::{with_db, DatabaseError, NotFoundError};
+use crate::media_facts::MediaFactsIndex;
+use crate::warp_helpers::{with_db, with_facts, DatabaseError, NotFoundError};
 
 #[derive(Debug, Serialize)]
 pub struct HousekeepingCandidate {
@@ -17,7 +19,10 @@ pub struct HousekeepingResponse {
     pub candidates: Vec<HousekeepingCandidate>,
 }
 
-pub async fn list_housekeeping_candidates(db_pool: DbPool) -> Result<impl Reply, Rejection> {
+pub async fn list_housekeeping_candidates(
+    db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
+) -> Result<impl Reply, Rejection> {
     // Query candidates with photo hashes and metadata
     let candidates_data: Vec<(String, String, f32)> = sqlx::query_as(
         "SELECT photo_hash, reason, score
@@ -36,12 +41,15 @@ pub async fn list_housekeeping_candidates(db_pool: DbPool) -> Result<impl Reply,
     // Fetch photos for each candidate
     let mut candidates = Vec::new();
     for (photo_hash, reason, score) in candidates_data {
-        if let Ok(Some(photo)) =
+        if let Ok(Some(mut photo)) =
             sqlx::query_as::<_, Photo>("SELECT * FROM photos WHERE hash_sha256 = ?")
                 .bind(&photo_hash)
                 .fetch_optional(&db_pool)
                 .await
         {
+            // The candidate carries the file's capture facts, like every other
+            // photo response.
+            facts.enrich(&mut photo);
             candidates.push(HousekeepingCandidate {
                 photo,
                 reason,
@@ -115,6 +123,7 @@ pub async fn batch_remove_candidates(
 
 pub fn build_housekeeping_routes(
     db_pool: DbPool,
+    media_facts: Arc<MediaFactsIndex>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let list_route = warp::path("api")
         .and(warp::path("housekeeping"))
@@ -122,6 +131,7 @@ pub fn build_housekeeping_routes(
         .and(warp::path::end())
         .and(warp::get())
         .and(with_db(db_pool.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(list_housekeeping_candidates);
 
     // Literal batch route must be registered BEFORE the parameterized
@@ -161,11 +171,61 @@ mod tests {
     fn build_test_routes(
         db_pool: DbPool,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
-        build_housekeeping_routes(db_pool).recover(handle_rejection)
+        build_test_routes_with_facts(db_pool, Arc::new(MediaFactsIndex::new()))
+    }
+
+    fn build_test_routes_with_facts(
+        db_pool: DbPool,
+        facts: Arc<MediaFactsIndex>,
+    ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
+        build_housekeeping_routes(db_pool, facts).recover(handle_rejection)
     }
 
     const CAND_A: &str = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
     const CAND_B: &str = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
+
+    #[tokio::test]
+    async fn test_housekeeping_candidates_carry_file_facts() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let photo =
+            crate::db::tests::create_test_photo("candidate.jpg".to_string(), CAND_A.to_string());
+        photo.create(&db_pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO housekeeping_candidates (photo_hash, reason, score) VALUES (?, ?, ?)",
+        )
+        .bind(CAND_A)
+        .bind("blurry")
+        .bind(90.0f32)
+        .execute(&db_pool)
+        .await
+        .unwrap();
+
+        let facts = Arc::new(crate::media_facts::test_facts_with_coords(&[(
+            "./test/candidate.jpg",
+            "2024-05-01T10:00:00Z",
+            48.1,
+            11.5,
+        )]));
+        let routes = build_test_routes_with_facts(db_pool.clone(), facts.clone());
+
+        let response = warp::test::request()
+            .path("/api/housekeeping/candidates")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let candidate = &body["candidates"][0];
+        assert_eq!(candidate["photo"]["filename"], "candidate.jpg");
+        assert_eq!(candidate["photo"]["taken_at"], "2024-05-01T10:00:00Z");
+        assert_eq!(candidate["photo"]["metadata"]["location"]["latitude"], 48.1);
+        assert_eq!(
+            candidate["photo"]["metadata"]["location"]["longitude"],
+            11.5
+        );
+    }
 
     #[tokio::test]
     async fn test_batch_remove_candidates_applies_and_reports_missing() {

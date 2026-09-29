@@ -60,6 +60,7 @@ const TRANSCODE_BUSY_WARNING: &str = "Transcode worker pool busy - serving origi
 use std::sync::Arc;
 
 use crate::db::{DbPool, Photo};
+use crate::media_facts::MediaFactsIndex;
 use crate::mimetype_detector;
 use crate::video_capability::{plan, ClientCodecs, Delivery};
 use crate::video_probe::ResolvedCapabilities;
@@ -95,8 +96,9 @@ pub async fn get_video_file(
     query: VideoQuery,
     headers: HeaderMap,
     db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -114,6 +116,9 @@ pub async fn get_video_file(
         .unwrap_or(false);
 
     if return_metadata_only {
+        // The date lives in the file; the payload must carry what the file
+        // carries (the DB row has none).
+        facts.enrich(&mut photo);
         let video_metadata = json!({
             "hash_sha256": photo.hash_sha256,
             "filename": photo.filename,
@@ -1432,6 +1437,48 @@ mod tests {
         make_executable(path);
     }
 
+    /// An empty capture-facts index for the streaming tests, which never look
+    /// at a date.
+    fn no_facts() -> Arc<MediaFactsIndex> {
+        Arc::new(MediaFactsIndex::new())
+    }
+
+    #[tokio::test]
+    async fn test_video_metadata_payload_carries_the_files_date() {
+        let db_pool = create_in_memory_pool().await.expect("failed to create db");
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let hash = "9988776655443322110099887766554433221100998877665544332211009988";
+        setup_test_video(&db_pool, &temp_dir, hash).await;
+
+        let facts = Arc::new(crate::media_facts::test_facts(&[(
+            temp_dir
+                .path()
+                .join("video.mp4")
+                .to_str()
+                .expect("video path"),
+            "2024-05-01T10:00:00Z",
+        )]));
+
+        let response = get_video_file(
+            hash.to_string(),
+            VideoQuery {
+                metadata: Some("true".to_string()),
+                transcode: None,
+                client_codecs: None,
+                decision: None,
+            },
+            HeaderMap::new(),
+            db_pool,
+            facts,
+        )
+        .await
+        .expect("metadata handler should return");
+
+        let body = collect_response_body(response.into_response()).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON metadata");
+        assert_eq!(json["taken_at"], "2024-05-01T10:00:00+00:00");
+    }
+
     async fn setup_test_video(
         db_pool: &DbPool,
         temp_dir: &TempDir,
@@ -1525,6 +1572,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return")
@@ -1573,6 +1621,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return")
@@ -1616,6 +1665,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("decision handler should return")
@@ -2224,6 +2274,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("byte request should be served")
@@ -2284,6 +2335,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return")
@@ -2345,6 +2397,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return accepted response")
@@ -2408,6 +2461,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return")
@@ -2487,6 +2541,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return")
@@ -2848,6 +2903,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("cache hit should succeed")
@@ -3125,6 +3181,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("decision reply")
@@ -3149,6 +3206,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("byte request should be served")
@@ -3247,6 +3305,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("decision reply")
@@ -3327,6 +3386,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("byte request should be served")
@@ -3361,6 +3421,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("byte request should be served")
@@ -3380,6 +3441,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("byte request should be served")
@@ -3527,6 +3589,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool.clone(),
+            no_facts(),
         )
         .await
         .expect("handler should return a response")
@@ -3558,6 +3621,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return a response")
@@ -3602,6 +3666,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("suffix range should succeed")
@@ -3646,6 +3711,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("suffix range should succeed")
@@ -3686,6 +3752,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return a response")
@@ -3723,6 +3790,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return a response")
@@ -3760,6 +3828,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return a response")
@@ -3795,6 +3864,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should stream the file")
@@ -3898,6 +3968,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should serve the artifact")
@@ -3993,6 +4064,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should serve the sidecar")
@@ -4028,6 +4100,7 @@ mod tests {
             },
             headers,
             db_pool,
+            no_facts(),
         )
         .await
         .expect("full-file range should succeed")
@@ -4111,6 +4184,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should serve the original video")
@@ -4183,6 +4257,7 @@ mod tests {
             },
             HeaderMap::new(),
             db_pool,
+            no_facts(),
         )
         .await
         .expect("handler should return the poll response")

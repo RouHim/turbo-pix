@@ -375,6 +375,14 @@ test.describe('Metadata edit', () => {
     expect(key).toBe(`${savedLatitude},${savedLongitude}`);
     const locationCount = mapPhotos.filter((candidate) => keyOf(candidate) === key).length;
 
+    // The canvas mounts before the map's own photo fetch resolves, so wait for
+    // the first feature: expanding too early would silently no-op.
+    await expect
+      .poll(() => page.locator('[data-map-cluster], [data-map-location]').count(), {
+        timeout: 15000,
+      })
+      .toBeGreaterThan(0);
+
     // The fitted view clusters everything, so expand until the marker itself
     // is rendered.
     const marker = page.locator(`[data-map-location="${key}"]`);

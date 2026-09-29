@@ -171,9 +171,10 @@ test.describe('On-the-fly streaming playback', () => {
       if (request.url().includes('/video/stream')) streamRequests.push(request.url());
     });
     // A plain source only auto-plays when the viewer's autoPlay setting is on
-    // (the MSE path always self-plays), so enable it before opening: the frame
-    // below is only presented by an element that actually loads the file, and
-    // a paused source may never leave HAVE_METADATA.
+    // (the MSE path always self-plays), so enable it before opening: the wait
+    // below asserts the original's clock is running, and a paused element —
+    // which satisfies a frame-only predicate, as the exhausted-ladder spec's
+    // wait shows — would pass without it.
     await page.evaluate(() =>
       localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
     );
@@ -183,11 +184,20 @@ test.describe('On-the-fly streaming playback', () => {
     const video = videoHandle(page);
     // The proof is the original's own playback: a decoded frame of THIS photo,
     // anchored on the element's stamp so the previous photo's state cannot
-    // satisfy it.
+    // satisfy it, and the running clock, so a delivery that only decodes a
+    // frame and never starts (the showVideoSource play() wiring, which is what
+    // autoplay above drives) cannot pass either.
     await page.waitForFunction(
       (hash) => {
         const el = document.querySelector('#viewer-video');
-        return !!el && el.dataset.photoHash === hash && el.readyState >= 2 && el.videoWidth > 0;
+        return (
+          !!el &&
+          el.dataset.photoHash === hash &&
+          el.readyState >= 2 &&
+          el.videoWidth > 0 &&
+          el.currentTime > 0 &&
+          !el.error
+        );
       },
       mkv.hash_sha256,
       { timeout: 30_000 }
@@ -653,7 +663,10 @@ test.describe('On-the-fly streaming playback', () => {
 
     // AND it actually hands the original over instead of merely rendering: the
     // notice goes away with the ladder, the element is pointed at the file
-    // itself rather than at another conversion, and the file really plays.
+    // itself rather than at another conversion, and the file really decodes.
+    // (The frame wait below is the app's own criterion — delivery plus a
+    // decoded frame; this spec enables no autoplay and the hatch does not call
+    // play(), so the clock is deliberately not part of this claim.)
     await playOriginal.click();
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
     const video = videoHandle(page);

@@ -1590,8 +1590,7 @@ mod tests {
         // in the index — so the count assertion below is about the filter and
         // not about the library holding a single row: a dropped `type:video`
         // token would return this photo too.
-        let still =
-            crate::db::tests::create_test_photo("still.jpg".to_string(), "d".repeat(64));
+        let still = crate::db::tests::create_test_photo("still.jpg".to_string(), "d".repeat(64));
         still.create(&db_pool).await.unwrap();
         facts.set(
             &still.file_path,

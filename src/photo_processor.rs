@@ -707,9 +707,19 @@ mod tests {
     }
 
     /// A row matching `path`'s current size and mtime: the scan's
-    /// "unchanged file" precondition.
+    /// "unchanged file" precondition. The mtime is truncated to whole seconds
+    /// exactly as the scanner does
+    /// (`DateTime::from_timestamp(duration.as_secs() as i64, 0)`) because
+    /// `Photo::find_unchanged_photo` compares the RFC3339 form: a
+    /// full-precision mtime would never match and would silently exercise the
+    /// "new or modified" branch instead. `blurhash` carries a marker the
+    /// modified branch would overwrite, so a test can prove which branch ran.
     fn unchanged_row(path: &Path, hash: &str) -> Photo {
         let metadata = std::fs::metadata(path).expect("file must exist");
+        let modified = metadata.modified().expect("file must have an mtime");
+        let duration = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("mtime must be after the Unix epoch");
         Photo {
             hash_sha256: hash.to_string(),
             file_path: path.to_string_lossy().to_string(),
@@ -723,11 +733,12 @@ mod tests {
             duration: None,
             thumbnail_path: None,
             has_thumbnail: Some(false),
-            blurhash: None,
+            blurhash: Some("unchanged-marker".to_string()),
             is_favorite: None,
             semantic_vector_indexed: Some(false),
             metadata: serde_json::json!({}),
-            date_modified: chrono::DateTime::<Utc>::from(metadata.modified().unwrap()),
+            date_modified: chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                .expect("mtime must be representable"),
             date_indexed: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -758,7 +769,7 @@ mod tests {
         let facts = MediaFactsIndex::new();
 
         let status = IndexingStatus::new();
-        test_processor(&temp_dir)
+        let photos = test_processor(&temp_dir)
             .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
             .await
             .expect("rescan must succeed");
@@ -768,6 +779,17 @@ mod tests {
             published.taken_at,
             Some(pinned),
             "an unchanged file still publishes its own date"
+        );
+        // The fast path copies the row's blurhash verbatim; the modified branch
+        // would have recomputed a real one. This proves which branch ran.
+        let processed = photos
+            .iter()
+            .find(|photo| photo.file_path == row.file_path)
+            .expect("the unchanged photo must be returned");
+        assert_eq!(
+            processed.blurhash,
+            Some("unchanged-marker".to_string()),
+            "an unchanged file must take the fast path"
         );
     }
 
@@ -851,7 +873,7 @@ mod tests {
         }
 
         let status = IndexingStatus::new();
-        test_processor(&temp_dir)
+        let photos = test_processor(&temp_dir)
             .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
             .await
             .expect("rescan must succeed");
@@ -862,6 +884,18 @@ mod tests {
             "an orphaned photo's facts must be removed"
         );
         assert!(facts.get(&keep.file_path).is_some());
+        // The surviving file is unchanged, so it must have taken the fast path
+        // (which preserves the seeded blurhash marker) rather than being
+        // reprocessed.
+        let keep_processed = photos
+            .iter()
+            .find(|photo| photo.file_path == keep.file_path)
+            .expect("the surviving photo must be returned");
+        assert_eq!(
+            keep_processed.blurhash,
+            Some("unchanged-marker".to_string()),
+            "the unchanged surviving file must take the fast path"
+        );
     }
 
     fn project_photo_path(filename: &str) -> std::path::PathBuf {

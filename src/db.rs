@@ -980,7 +980,15 @@ impl Photo {
                 blurhash = excluded.blurhash,
                 is_favorite = COALESCE(photos.is_favorite, excluded.is_favorite),
                 semantic_vector_indexed = excluded.semantic_vector_indexed,
-                metadata = excluded.metadata,
+                -- RFC 7396 merge, not a wholesale replace: the fresh extraction
+                -- owns only the keys it emits, so keys written by other paths
+                -- (location.city, video.capability_version, video.no_video_stream)
+                -- survive the rescan. An explicit null in the fresh extraction
+                -- still deletes the key, so coordinates the file no longer has
+                -- are cleared. A non-object stored value (NULL) merges from {}.
+                metadata = json_patch(
+                    CASE WHEN json_type(photos.metadata) = 'object' THEN photos.metadata ELSE '{}' END,
+                    excluded.metadata),
                 file_modified = excluded.file_modified,
                 updated_at = excluded.updated_at
             "#,

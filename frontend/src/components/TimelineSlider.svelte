@@ -115,6 +115,12 @@
 
   $effect(() => {
     fetchTimelineData();
+    // A saved date edit moves a photo between buckets; the density is a
+    // server-side aggregate, so the whole graph has to be re-read. Registering
+    // is not a reactive read (the dependency set stays empty), and the teardown
+    // keeps a remount from stacking listeners.
+    window.addEventListener('photosReloadRequested', fetchTimelineData);
+    return () => window.removeEventListener('photosReloadRequested', fetchTimelineData);
   });
 
   const fetchTimelineData = async () => {

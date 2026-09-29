@@ -5,14 +5,14 @@
     formatFileSize,
     formatDuration,
     isCollagePhoto,
-    isFormatSupported,
+    isMetadataEditable,
     isVideoFile,
   } from '../lib/utils.js';
   import Icon from './Icon.svelte';
 
   const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
 
-  const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
+  const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isMetadataEditable(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
   const isCollage = $derived(photo ? isCollagePhoto(photo) : false);
 
@@ -33,7 +33,12 @@
       'image/avif': 'AVIF',
       'video/mp4': 'video',
       'video/quicktime': 'video',
-      'video/x-msvideo': 'video',
+      'video/x-m4v': 'video',
+      // Containers the viewer plays but the metadata endpoint cannot rewrite:
+      // the disabled tooltip must name the format, not a vague "video".
+      'video/x-matroska': 'Matroska',
+      'video/webm': 'WebM',
+      'video/x-msvideo': 'AVI',
     };
     return map[mimeType] || mimeType.replace('image/', '').toUpperCase();
   }

@@ -1851,10 +1851,17 @@
   }
 
   function onMetadataSaved(updatedPhoto) {
+    // Read the PREVIOUS date before the assignment below: a moved date changes
+    // where the photo belongs in the server's order and which timeline bucket
+    // it counts in, and both are derived server-side — the views that show them
+    // have to re-read. Coordinates need no reload: MapView recomputes locations
+    // from the `photoUpdated` payload.
+    const dateChanged = updatedPhoto?.taken_at !== currentPhoto?.taken_at;
     currentPhoto = updatedPhoto;
     const idx = photos.findIndex((p) => p.hash_sha256 === updatedPhoto.hash_sha256);
     if (idx !== -1) photos[idx] = updatedPhoto;
     window.dispatchEvent(new CustomEvent('photoUpdated', { detail: { photo: updatedPhoto } }));
+    if (dateChanged) window.dispatchEvent(new CustomEvent('photosReloadRequested'));
   }
 
   // ── Keyboard ───────────────────────────────────────────────────────────────

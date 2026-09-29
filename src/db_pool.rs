@@ -26,14 +26,15 @@ fn db_pool_size() -> usize {
     (max_concurrent_photo_tasks() * 2) + API_REQUEST_BUFFER
 }
 
-pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    // Create parent directory
-    if let Some(parent) = std::path::Path::new(database_path).parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    // Register sqlite-vec extension for vector operations
-    // This must be done before creating any connections
+/// Register the sqlite-vec extension so every connection opened afterwards
+/// loads it. Process-global and applies at open time, hence "before any
+/// connections"; tests that build a pre-migration database must call this
+/// themselves rather than rely on another test having registered it already
+/// (migration 2 creates a `vec0` virtual table).
+pub(crate) fn register_vector_extension() {
+    // SAFETY: `sqlite3_vec_init` is the extension's entry point shipped by
+    // the `sqlite-vec` crate; `sqlite3_auto_extension` only records the
+    // function pointer for connections opened later.
     unsafe {
         sqlite3_auto_extension(Some(std::mem::transmute::<
             *const (),
@@ -44,6 +45,17 @@ pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::
             ) -> std::os::raw::c_int,
         >(sqlite3_vec_init as *const ())));
     }
+}
+
+pub async fn create_db_pool(database_path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
+    // Create parent directory
+    if let Some(parent) = std::path::Path::new(database_path).parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Register sqlite-vec extension for vector operations
+    // This must be done before creating any connections
+    register_vector_extension();
 
     // Build connection options with PRAGMAs (extracted for clarity)
     fn build_connect_options(
@@ -209,16 +221,7 @@ pub async fn vacuum_database(pool: &DbPool) -> Result<(), Box<dyn std::error::Er
 #[cfg(test)]
 pub async fn create_in_memory_pool() -> Result<DbPool, Box<dyn std::error::Error>> {
     // Register sqlite-vec extension for vector operations
-    unsafe {
-        sqlite3_auto_extension(Some(std::mem::transmute::<
-            *const (),
-            unsafe extern "C" fn(
-                *mut libsqlite3_sys::sqlite3,
-                *mut *mut std::os::raw::c_char,
-                *const libsqlite3_sys::sqlite3_api_routines,
-            ) -> std::os::raw::c_int,
-        >(sqlite3_vec_init as *const ())));
-    }
+    register_vector_extension();
 
     let options = SqliteConnectOptions::from_str("sqlite::memory:")?.create_if_missing(true);
 

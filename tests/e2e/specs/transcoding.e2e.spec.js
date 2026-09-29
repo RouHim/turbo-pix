@@ -5,6 +5,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { fetchAllPhotos } from '../setup/photo-pages.js';
 
 // The encoder hint is fed by the `x-turbopix-encoder` header of the stream run,
 // and that header does not exist until the run has produced bytes: the server
@@ -16,10 +17,12 @@ import { TestHelpers } from '../setup/test-helpers.js';
 const ENCODER_HINT_TIMEOUT = 20_000;
 
 async function findVideoByFilename(page, filename) {
-  const response = await page.request.get('/api/photos?q=type:video&limit=200');
-  expect(response.ok()).toBeTruthy();
-  const data = await response.json();
-  const photo = (data.photos || []).find((p) => p.filename === filename);
+  const photos = await fetchAllPhotos(async (requestPath) => {
+    const response = await page.request.get(requestPath);
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  }, '/api/photos?q=type:video');
+  const photo = photos.find((p) => p.filename === filename);
   expect(photo, `${filename} must be seeded and indexed`).toBeTruthy();
   return photo;
 }

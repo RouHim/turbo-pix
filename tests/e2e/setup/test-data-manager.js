@@ -1,10 +1,22 @@
 import { execSync } from 'child_process';
 import { copyFileSync, existsSync } from 'fs';
 import path from 'path';
+import { fetchAllPhotos } from './photo-pages.js';
 
 const TEST_DATA_DIR = 'test-e2e-data';
 const DB_PATH = path.join(TEST_DATA_DIR, 'database', 'turbo-pix.db');
 const DEFAULT_BASE_URL = `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`;
+
+/** Every photo of the library; `failureMessage` labels this site's error. */
+async function listAllPhotos(baseURL, failureMessage) {
+  return fetchAllPhotos(async (requestPath) => {
+    const response = await fetch(`${baseURL}${requestPath}`);
+    if (!response.ok) {
+      throw new Error(`${failureMessage}: ${response.statusText}`);
+    }
+    return response.json();
+  });
+}
 
 export class TestDataManager {
   constructor(baseURL = DEFAULT_BASE_URL) {
@@ -13,12 +25,7 @@ export class TestDataManager {
   }
 
   async fetchAllPhotos() {
-    const response = await fetch(`${this.baseURL}/api/photos?limit=100`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch photos: ${response.statusText}`);
-    }
-    const data = await response.json();
-    return data.photos || [];
+    return listAllPhotos(this.baseURL, 'Failed to fetch photos');
   }
 
   async fetchTestPhotoHashes() {
@@ -121,12 +128,10 @@ export class TestDataManager {
    * global-setup's ensureHousekeepingCandidate): the current first photo.
    */
   static async reseedHousekeepingCandidate() {
-    const response = await fetch(`${DEFAULT_BASE_URL}/api/photos?limit=200`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch photos for housekeeping reseed: ${response.statusText}`);
-    }
-    const data = await response.json();
-    const photos = data.photos || [];
+    const photos = await listAllPhotos(
+      DEFAULT_BASE_URL,
+      'Failed to fetch photos for housekeeping reseed'
+    );
     const targetPhoto = photos.find((photo) => photo.filename === 'receipt.jpg') || photos[0];
     if (!targetPhoto) {
       throw new Error('No photos available to reseed housekeeping candidates');

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { fetchAllPhotos } from '../setup/photo-pages.js';
 
 /**
  * The metadata edit flow, end to end: a save through the viewer's modal lands
@@ -56,12 +57,31 @@ function storedMetadata(hashSha256) {
 
 /** A fixture photo from the listing (the hash these specs address it by). */
 async function getPhotoByFilename(page, filename) {
-  const response = await page.request.get('/api/photos?limit=200');
-  expect(response.ok()).toBeTruthy();
-  const { photos } = await response.json();
-  const photo = (photos || []).find((candidate) => candidate.filename === filename);
+  const photos = await fetchAllPhotos(async (requestPath) => {
+    const response = await page.request.get(requestPath);
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  });
+  const photo = photos.find((candidate) => candidate.filename === filename);
   expect(photo, `fixture ${filename} is indexed`).toBeTruthy();
   return photo;
+}
+
+/** The server's timeline density as it stands now. */
+async function timelineDensity(page) {
+  const response = await page.request.get('/api/photos/timeline');
+  expect(response.ok()).toBeTruthy();
+  const { density = [] } = await response.json();
+  return density;
+}
+
+/** The count one year/month bucket of that density holds, 0 when absent. */
+function monthCount(density, date) {
+  const bucket = density.find(
+    (candidate) =>
+      candidate.year === date.getUTCFullYear() && candidate.month === date.getUTCMonth() + 1
+  );
+  return bucket?.count ?? 0;
 }
 
 /** The photo as the server answers it now — a second, independent read. */
@@ -138,6 +158,9 @@ test.describe('Metadata edit', () => {
     );
 
     let originalLocalDate = null;
+    // Set by the `finally`'s restore fallback when even the API restore fails;
+    // asserted after the `finally`, never inside it (see there).
+    let restoreFallbackFailure = null;
     try {
       await TestHelpers.goto(
         page,
@@ -157,6 +180,25 @@ test.describe('Metadata edit', () => {
       originalLocalDate = await modalField(page, 'Date Taken').inputValue();
       expect(originalLocalDate).toBeTruthy();
       await closeModal(page);
+
+      // GIVEN the timeline the mounted TimelineSlider renders: a server-side
+      // aggregate (the file dates), read before the edit. The component only
+      // re-reads it when the save dispatches `photosReloadRequested`, so the
+      // page's OWN requests for it are tracked below — our `page.request` reads
+      // are a separate context and never count — which is what pins the
+      // listener: a typo'd event name would leave the graph stale with no
+      // request made.
+      const densityBefore = await timelineDensity(page);
+      const originalDate = new Date(originalTakenAt);
+      const originalBucketBefore = monthCount(densityBefore, originalDate);
+      const timelineRequests = [];
+      const trackTimelineRequest = (request) => {
+        if (new URL(request.url()).pathname === '/api/photos/timeline') {
+          timelineRequests.push(request.url());
+        }
+      };
+      page.on('request', trackTimelineRequest);
+      const timelineReloadsBeforeSave = timelineRequests.length;
 
       // WHEN the metadata edit modal saves a new date
       const saved = await saveThroughModal(page, photo.hash_sha256, () =>
@@ -188,6 +230,27 @@ test.describe('Metadata edit', () => {
         month: original.getUTCMonth() + 1,
       });
 
+      // AND the mounted timeline re-read its density, and the photo's month
+      // bucket moved with it: the tracked request proves the listener fired, and
+      // the aggregate proves the graph now carries the file's new date. Both
+      // deltas are relative to the reads above, so whatever month residue other
+      // specs left in the shared library cannot make these pass.
+      await expect
+        .poll(() => timelineRequests.length, {
+          message: 'the saved date must make the mounted TimelineSlider re-read its density',
+        })
+        .toBeGreaterThan(timelineReloadsBeforeSave);
+      page.off('request', trackTimelineRequest);
+      const savedDate = new Date(saved.taken_at);
+      expect(
+        `${savedDate.getUTCFullYear()}-${savedDate.getUTCMonth() + 1}`,
+        'the save must move the photo to a different month bucket'
+      ).not.toBe(`${originalDate.getUTCFullYear()}-${originalDate.getUTCMonth() + 1}`);
+      const savedBucketBefore = monthCount(densityBefore, savedDate);
+      const densityAfter = await timelineDensity(page);
+      expect(monthCount(densityAfter, originalDate)).toBe(originalBucketBefore - 1);
+      expect(monthCount(densityAfter, savedDate)).toBe(savedBucketBefore + 1);
+
       // AND the database stores no part of the date: no column for it, and no
       // key for it in the row's metadata (the schema after the file-only-date
       // migration).
@@ -216,12 +279,27 @@ test.describe('Metadata edit', () => {
         );
       } catch (error) {
         console.error(`Restoring ${FIXTURE}'s date through the modal failed: ${error.message}`);
-        const restored = await page.request.patch(`/api/photos/${photo.hash_sha256}/metadata`, {
-          data: { taken_at: new Date(originalTakenAt).toISOString() },
-        });
-        expect(restored.ok()).toBeTruthy();
+        // Deliberately non-throwing: this runs inside `finally`, and a throw
+        // from there REPLACES an exception the test body already raised, hiding
+        // the real failure from the report. The fallback's outcome is recorded
+        // here and asserted after the `finally` instead.
+        try {
+          const restored = await page.request.patch(`/api/photos/${photo.hash_sha256}/metadata`, {
+            data: { taken_at: new Date(originalTakenAt).toISOString() },
+          });
+          if (!restored.ok()) {
+            restoreFallbackFailure = `the API restore fallback answered ${restored.status()}`;
+          }
+        } catch (fallbackError) {
+          restoreFallbackFailure = `the API restore fallback threw: ${fallbackError.message}`;
+        }
       }
     }
+
+    // Asserted after the `finally`, so a failed fallback can never supersede an
+    // in-flight body failure (a throw inside `finally` would). When the body
+    // did fail, that failure surfaces instead and this line never runs.
+    expect(restoreFallbackFailure).toBeNull();
 
     // The fixture is back where it started, so the rest of the run reads the
     // seeded library. Asserted here, not in the `finally`, so a failed restore

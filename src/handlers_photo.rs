@@ -1585,6 +1585,23 @@ mod tests {
             },
         );
 
+        // A second row that matches every OTHER dimension of the query — an
+        // image (the default mime of a test photo) with a date AND coordinates
+        // in the index — so the count assertion below is about the filter and
+        // not about the library holding a single row: a dropped `type:video`
+        // token would return this photo too.
+        let still =
+            crate::db::tests::create_test_photo("still.jpg".to_string(), "d".repeat(64));
+        still.create(&db_pool).await.unwrap();
+        facts.set(
+            &still.file_path,
+            MediaFacts {
+                taken_at: Some(Utc.with_ymd_and_hms(2023, 6, 7, 8, 9, 10).unwrap()),
+                latitude: Some(52.5),
+                longitude: Some(13.4),
+            },
+        );
+
         let response = warp::test::request()
             .path("/api/photos/map?q=type:video")
             .reply(&routes)
@@ -1593,8 +1610,13 @@ mod tests {
         assert_eq!(response.status(), 200);
         let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
         let photos = body["photos"].as_array().unwrap();
-        assert_eq!(photos.len(), 1, "type:video must select the video");
+        assert_eq!(
+            photos.len(),
+            1,
+            "type:video must select exactly the video, not the image beside it"
+        );
         assert_eq!(photos[0]["filename"], "clip.mp4");
+        assert_eq!(photos[0]["hash_sha256"], video.hash_sha256);
 
         // A video can never acquire map coordinates: no matter how the index
         // is seeded, the payload must carry no location pair...

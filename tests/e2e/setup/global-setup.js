@@ -4,6 +4,7 @@ import { copyFile, mkdir, readlink, rm, utimes, writeFile } from 'fs/promises';
 import { existsSync, renameSync, rmSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { fetchAllPhotos } from './photo-pages.js';
 
 const execAsync = promisify(exec);
 
@@ -558,10 +559,17 @@ async function waitForIndexingComplete(baseURL, maxRetries = INDEXING_COMPLETE_R
   );
 }
 
+/** Every photo of the library; `failureMessage` labels this site's error. */
+async function listAllPhotos(baseURL, failureMessage) {
+  return fetchAllPhotos(async (requestPath) => {
+    const response = await fetch(`${baseURL}${requestPath}`);
+    if (!response.ok) throw new Error(`${failureMessage}: ${response.statusText}`);
+    return response.json();
+  });
+}
+
 async function updateTestPhotoDates(baseURL) {
-  const response = await fetch(`${baseURL}/api/photos?limit=200`);
-  if (!response.ok) throw new Error(`Failed to list photos: ${response.statusText}`);
-  const { photos } = await response.json();
+  const photos = await listAllPhotos(baseURL, 'Failed to list photos');
   // PATCH writes the file, so this is the product's own write path; the old
   // sqlite3 block (and the video rows in it) is gone. Videos need no PATCH —
   // their dates were pinned in seedTestMedia.
@@ -608,13 +616,8 @@ async function waitForPhotosTable() {
 }
 
 async function verifyTestPhotoDates(baseURL) {
-  const response = await fetch(`${baseURL}/api/photos?limit=200`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch photos for verification: ${response.statusText}`);
-  }
+  const photos = await listAllPhotos(baseURL, 'Failed to fetch photos for verification');
 
-  const data = await response.json();
-  const photos = data.photos || [];
   const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
   const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
   const recentPrefix = recentDate.toISOString().split('T')[0];
@@ -670,13 +673,8 @@ async function verifyTestPhotoDates(baseURL) {
 }
 
 async function ensureHousekeepingCandidate(baseURL) {
-  const response = await fetch(`${baseURL}/api/photos?limit=200`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch photos for housekeeping seed: ${response.statusText}`);
-  }
+  const photos = await listAllPhotos(baseURL, 'Failed to fetch photos for housekeeping seed');
 
-  const data = await response.json();
-  const photos = data.photos || [];
   const receiptPhoto = photos.find((photo) => photo.filename === 'receipt.jpg');
   const targetPhoto = receiptPhoto || photos[0];
 

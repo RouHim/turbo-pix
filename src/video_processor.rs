@@ -790,6 +790,11 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
             path.to_string_lossy().as_ref(),
             "-c",
             "copy",
+            // ffmpeg drops the container's global tags (notably
+            // `creation_time`, the only remaining copy of a video's capture
+            // date) on a plain remux; `-map_metadata 0` carries them over.
+            "-map_metadata",
+            "0",
             "-movflags",
             "+faststart",
             temp_path.to_string_lossy().as_ref(),
@@ -2139,6 +2144,95 @@ pub(crate) mod tests {
         let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
 
         assert_eq!(before, after);
+    }
+
+    /// The container's `creation_time` tag as ffprobe reports it (empty when
+    /// the file carries none).
+    fn ffprobe_format_creation_time(path: &Path) -> String {
+        let output = Command::new(get_ffprobe_path())
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=creation_time",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(path)
+            .output()
+            .expect("ffprobe must run");
+        assert!(
+            output.status.success(),
+            "ffprobe failed on {}",
+            path.display()
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// GIVEN a moov-at-end MP4 whose format carries a pinned creation_time
+    /// WHEN fix_moov_atom runs
+    /// THEN has_moov_at_start is true AND the file's format creation_time is
+    /// unchanged
+    ///
+    /// The scan stills every non-progressive video through this in-place
+    /// remux, and the file is the only place a video's date lives: ffmpeg
+    /// drops the container's global tags without `-map_metadata 0`, so without
+    /// that flag the app's own faststart pass would silently re-date every
+    /// video to its birth time on the next scan.
+    #[tokio::test]
+    async fn test_fix_moov_atom_preserves_creation_time() {
+        let video_filename = "test_video.mp4";
+        if !should_run_video_tests(video_filename) {
+            return;
+        }
+        let _lock = acquire_test_env_lock();
+
+        let temp_dir = TempDir::new().unwrap();
+        let source = project_photo_path(video_filename);
+        let moov_end = temp_dir.path().join("moov_end.mp4");
+        let pinned = "2018-01-01T12:00:00Z";
+
+        // Seed a moov-at-end copy that carries the pinned container tag.
+        let output = Command::new(get_ffmpeg_path())
+            .args([
+                "-y",
+                "-i",
+                source.to_string_lossy().as_ref(),
+                "-c",
+                "copy",
+                "-metadata",
+                &format!("creation_time={pinned}"),
+                "-movflags",
+                "-faststart",
+                moov_end.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .expect("ffmpeg must run");
+        assert!(
+            output.status.success(),
+            "failed to seed the moov-at-end fixture: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !has_moov_at_start(&moov_end).unwrap(),
+            "the seed must be a moov-at-end file for the fix to run"
+        );
+        let before = ffprobe_format_creation_time(&moov_end);
+        assert!(
+            before.contains("2018-01-01"),
+            "the seed must carry the pinned creation_time, got {before:?}"
+        );
+
+        // WHEN: the remux runs
+        fix_moov_atom(&moov_end).unwrap();
+
+        // THEN: the moov moved to the front and the date tag survived
+        assert!(has_moov_at_start(&moov_end).unwrap());
+        assert_eq!(
+            ffprobe_format_creation_time(&moov_end),
+            before,
+            "the faststart remux must keep the container's creation_time"
+        );
     }
 
     /// A `-v trace` pass that collected no stderr established no layout, so it

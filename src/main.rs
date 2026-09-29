@@ -137,8 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize services
+    let media_facts = Arc::new(turbo_pix::media_facts::MediaFactsIndex::new());
     let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =
-        initialize_services(&config).await?;
+        initialize_services(&config, media_facts.clone()).await?;
 
     // Extract indexing status before moving photo_scheduler
     let indexing_status = photo_scheduler.status.clone();
@@ -149,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(
         db_pool.clone(),
+        media_facts.clone(),
         cache_manager,
         config.data_path.clone().into(),
     );
@@ -157,13 +159,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let indexing_routes = build_indexing_routes(indexing_status, db_pool.clone());
     let collage_routes = build_collage_routes(
         db_pool.clone(),
+        media_facts.clone(),
         config.data_path.clone().into(),
         config.locale.clone(),
         semantic_search,
     );
     let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
     let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
-    let albums_routes = build_albums_routes(db_pool.clone());
+    let albums_routes = build_albums_routes(db_pool.clone(), media_facts.clone());
     let config_routes = build_config_routes(config.locale.clone(), config.tile_url.clone());
     let static_routes = build_static_routes();
 
@@ -225,6 +228,7 @@ type InitServicesResult = (
 
 async fn initialize_services(
     config: &config::Config,
+    media_facts: Arc<turbo_pix::media_facts::MediaFactsIndex>,
 ) -> Result<InitServicesResult, Box<dyn std::error::Error>> {
     // Initialize database
     let db_pool = db::create_db_pool(&config.db_path).await?;
@@ -255,6 +259,7 @@ async fn initialize_services(
         data_path,
         config.locale.clone(),
         config.nominatim_url.clone(),
+        media_facts,
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

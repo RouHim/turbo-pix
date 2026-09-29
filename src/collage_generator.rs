@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ use sqlx::{FromRow, Row};
 use crate::db::{parse_datetime, Photo};
 use crate::db_pool::DbPool;
 use crate::file_scanner::PhotoFile;
+use crate::media_facts::MediaFactsIndex;
 use crate::photo_processor::PhotoProcessor;
 use crate::raw_processor;
 
@@ -951,47 +952,47 @@ fn draw_text(
     }
 }
 
-/// Find photo clusters (dates with ≥10 photos) in the last 30 days
+/// Find photo clusters (dates with ≥10 photos) in the last 30 days.
+///
+/// The dates live in the files: every row is enriched from the index first,
+/// then grouped by its capture day. Ordered newest day first, each group
+/// oldest photo first — the same order the SQL `ORDER BY photo_date DESC` /
+/// `ORDER BY taken_at` produced.
 async fn find_photo_clusters(
     pool: &DbPool,
+    facts: &MediaFactsIndex,
 ) -> Result<Vec<PhotoCluster>, Box<dyn std::error::Error>> {
-    // Get cutoff date (30 days ago)
-    let cutoff_date = (Utc::now() - Duration::days(30)).to_rfc3339();
+    let cutoff_date = Utc::now() - Duration::days(30);
 
-    // Find dates with ≥10 photos
-    let dates: Vec<String> = sqlx::query_scalar(
-        "SELECT DATE(taken_at) as photo_date
-         FROM photos
-         WHERE taken_at IS NOT NULL
-           AND taken_at >= ?
-         GROUP BY photo_date
-         HAVING COUNT(*) >= 10
-         ORDER BY photo_date DESC",
-    )
-    .bind(cutoff_date)
-    .fetch_all(pool)
-    .await?;
-
-    let mut clusters = Vec::new();
-
-    for date_str in dates {
-        // Parse date
-        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
-
-        // Get all photos for this date
-        let photos = sqlx::query_as::<_, Photo>(
-            "SELECT * FROM photos
-             WHERE DATE(taken_at) = ?
-             ORDER BY taken_at",
-        )
-        .bind(&date_str)
+    let photos: Vec<Photo> = sqlx::query_as::<_, Photo>("SELECT * FROM photos")
         .fetch_all(pool)
         .await?;
 
-        if photos.len() >= 10 {
-            clusters.push(PhotoCluster { date, photos });
+    let mut by_date: BTreeMap<NaiveDate, Vec<Photo>> = BTreeMap::new();
+    for mut photo in photos {
+        facts.enrich(&mut photo);
+        let Some(taken_at) = photo.taken_at else {
+            continue;
+        };
+        if taken_at < cutoff_date {
+            continue;
         }
+        by_date
+            .entry(taken_at.date_naive())
+            .or_default()
+            .push(photo);
     }
+
+    let mut clusters = Vec::new();
+    for (date, mut photos) in by_date {
+        if photos.len() < 10 {
+            continue;
+        }
+        photos.sort_by_key(|photo| photo.taken_at);
+        clusters.push(PhotoCluster { date, photos });
+    }
+    // Newest day first, like the removed `ORDER BY photo_date DESC`.
+    clusters.reverse();
 
     Ok(clusters)
 }
@@ -1348,6 +1349,7 @@ fn generate_collage_thumbnail(
 /// Generate collages for all detected clusters
 pub async fn generate_collages(
     pool: &DbPool,
+    facts: &MediaFactsIndex,
     data_path: &Path,
     locale: &str,
 ) -> Result<usize, Box<dyn std::error::Error>> {
@@ -1358,7 +1360,7 @@ pub async fn generate_collages(
     std::fs::create_dir_all(&staging_dir)?;
 
     // Find clusters
-    let clusters = find_photo_clusters(pool).await?;
+    let clusters = find_photo_clusters(pool, facts).await?;
     info!("Found {} photo clusters to process", clusters.len());
 
     let mut generated_count = 0;
@@ -1684,7 +1686,8 @@ mod tests {
                 .to_string(),
             file_size: 1024,
             mime_type: Some("image/x-canon-cr2".to_string()),
-            taken_at: Some(Utc::now()),
+            // The DB stores no date; cluster tests seed the index instead.
+            taken_at: None,
             width: Some(6000),
             height: Some(4000),
             orientation: Some(1),
@@ -1730,6 +1733,7 @@ mod tests {
 
     async fn insert_photo(
         pool: &DbPool,
+        facts: &MediaFactsIndex,
         file_path: &Path,
         hash_seed: u64,
         taken_at: DateTime<Utc>,
@@ -1748,7 +1752,7 @@ mod tests {
             filename,
             file_size,
             mime_type: Some("image/jpeg".to_string()),
-            taken_at: Some(taken_at),
+            taken_at: None,
             width: Some(8),
             height: Some(8),
             orientation: Some(1),
@@ -1771,6 +1775,16 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
+
+        // The date a photo cluster is derived from lives in the file (the
+        // index's stand-in here), not in the row.
+        facts.set(
+            &photo.file_path,
+            crate::media_facts::MediaFacts {
+                taken_at: Some(taken_at),
+                ..Default::default()
+            },
+        );
     }
 
     #[test]
@@ -1956,7 +1970,7 @@ mod tests {
         .await
         .unwrap();
 
-        let _ = generate_collages(&pool, temp_dir.path(), "en")
+        let _ = generate_collages(&pool, &MediaFactsIndex::new(), temp_dir.path(), "en")
             .await
             .unwrap();
 
@@ -2011,15 +2025,16 @@ mod tests {
         fs::create_dir_all(&staging_dir).unwrap();
 
         let base_time = Utc::now();
+        let facts = MediaFactsIndex::new();
         for i in 0..10 {
             let photo_path = photos_dir.join(format!("photo_{}.jpg", i));
             write_test_image(&photo_path);
             let taken_at = base_time + chrono::Duration::seconds(i as i64);
             let hash_seed = i as u64 + 1;
-            insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
+            insert_photo(&pool, &facts, &photo_path, hash_seed, taken_at).await;
         }
 
-        let generated = generate_collages(&pool, temp_dir.path(), "en")
+        let generated = generate_collages(&pool, &facts, temp_dir.path(), "en")
             .await
             .unwrap();
         assert_eq!(generated, 2);
@@ -2033,7 +2048,7 @@ mod tests {
         reject_collage(&pool, collage_id).await.unwrap();
         assert!(!Path::new(&rejected_file_path).exists());
 
-        let regenerated = generate_collages(&pool, temp_dir.path(), "en")
+        let regenerated = generate_collages(&pool, &facts, temp_dir.path(), "en")
             .await
             .unwrap();
         assert_eq!(regenerated, 0);
@@ -2052,13 +2067,14 @@ mod tests {
         fs::create_dir_all(&staging_dir).unwrap();
 
         let base_time = Utc::now();
+        let facts = MediaFactsIndex::new();
         let mut first_chunk_hashes = Vec::new();
         for i in 0..10 {
             let photo_path = photos_dir.join(format!("photo_{}.jpg", i));
             write_test_image(&photo_path);
             let taken_at = base_time + chrono::Duration::seconds(i as i64);
             let hash_seed = i as u64 + 1;
-            insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
+            insert_photo(&pool, &facts, &photo_path, hash_seed, taken_at).await;
             if i < 6 {
                 first_chunk_hashes.push(format!("{:064x}", hash_seed));
             }
@@ -2092,7 +2108,7 @@ mod tests {
         .await
         .unwrap();
 
-        let generated = generate_collages(&pool, temp_dir.path(), "en")
+        let generated = generate_collages(&pool, &facts, temp_dir.path(), "en")
             .await
             .unwrap();
 

@@ -65,6 +65,26 @@ function fileIdentity(file) {
   };
 }
 
+/**
+ * sha256 of every byte outside the top-level `moov` — the media payload a
+ * metadata save must not touch (SC-001). The regions are read from the file's
+ * own box sizes, the same structure the writer locates its region in.
+ */
+function payloadDigest(file) {
+  const data = readFileSync(file);
+  const outside = [];
+  let offset = 0;
+  while (offset + 8 <= data.length) {
+    let size = data.readUInt32BE(offset);
+    const kind = data.subarray(offset + 4, offset + 8).toString('latin1');
+    if (size === 1) size = Number(data.readBigUInt64BE(offset + 8));
+    if (size === 0) size = data.length - offset;
+    if (kind !== 'moov') outside.push(data.subarray(offset, offset + size));
+    offset += size;
+  }
+  return createHash('sha256').update(Buffer.concat(outside)).digest('hex');
+}
+
 /** Opens the viewer on `photo` and the metadata editor modal on top of it. */
 async function openMetadataEditor(page, photo) {
   await TestHelpers.navigateToView(page, 'videos');
@@ -150,6 +170,78 @@ test.describe('Video metadata editing', () => {
       )
       .toEqual(orderedHashes);
     expect(orderedHashes[orderedHashes.length - 1]).toBe(video.hash_sha256);
+  });
+
+  test('GIVEN a video playing WHEN its capture date is saved THEN playback continues and the media stream is unchanged', async ({
+    page,
+  }) => {
+    // GIVEN: a 10 s natively playable video open in the viewer and playing.
+    // test_video_noaudio.mp4 rather than test_video.mp4 because the latter is
+    // 0.3 s long — playback would be over before a save could be observed.
+    const video = await findVideoByFilename(page, 'test_video_noaudio.mp4');
+    const file = fixturePath('test_video_noaudio.mp4');
+    const before = fileIdentity(file);
+    const payloadBefore = payloadDigest(file);
+
+    // A directly played source only auto-plays with the viewer's own setting on
+    // (the MSE path self-plays); without it the element never leaves 0.
+    await page.evaluate(() =>
+      localStorage.setItem('viewSettings', JSON.stringify({ autoPlay: true }))
+    );
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await page.locator(TestHelpers.selectors.photoCard(video.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    const handle = page.locator(TestHelpers.selectors.viewerVideo);
+    await expect(handle).toBeVisible();
+    await page.waitForFunction(
+      () => {
+        const element = document.querySelector('#viewer-video');
+        return element !== null && element.readyState >= 2 && element.currentTime > 0;
+      },
+      null,
+      { timeout: 30_000 }
+    );
+    // Restart from the top so the whole 10 s lies ahead of the save, and so the
+    // read it starts is in flight across the write — that overlap is the point.
+    await handle.evaluate((element) => {
+      element.currentTime = 0;
+    });
+    const currentTimeBefore = await handle.evaluate((element) => element.currentTime);
+    const srcBefore = await handle.getAttribute('src');
+
+    // WHEN: the same route the UI uses saves a new capture date mid-playback
+    const response = await page.request.patch(`/api/photos/${video.hash_sha256}/metadata`, {
+      data: { taken_at: '2017-03-04T10:00:00.000Z' },
+    });
+
+    // THEN: the save lands
+    expect(response.ok()).toBeTruthy();
+
+    // AND: the element is still playing the file it was handed — the position
+    // moves past where it was, on the same non-transcoded source with no error
+    await expect
+      .poll(() => handle.evaluate((element) => element.currentTime), { timeout: 15_000 })
+      .toBeGreaterThan(currentTimeBefore);
+    expect(
+      await handle.evaluate((element) => (element.error ? element.error.code : null))
+    ).toBeNull();
+    const srcAfter = await handle.getAttribute('src');
+    expect(srcAfter).toBe(srcBefore);
+    expect(srcAfter).not.toContain('transcode=true');
+    expect(srcAfter).not.toMatch(/^blob:/);
+
+    // AND: the container took the write while it was being read — the bytes
+    // outside `moov` are untouched, the length and mtime do not move, and the
+    // file as a whole did change (so this is not a no-op save)
+    expect(payloadDigest(file)).toBe(payloadBefore);
+    expect(statSync(file).size).toBe(before.size);
+    expect(statSync(file).mtimeMs).toBe(before.mtimeMs);
+    expect(fileIdentity(file).sha256).not.toBe(before.sha256);
+    expect(instantOf(probe(file, 'format_tags').format.tags.creation_time)).toBe(
+      '2017-03-04T10:00:00.000Z'
+    );
   });
 
   test('GIVEN a video carrying a QuickTime location WHEN coordinates are saved THEN the carrier is replaced', async ({

@@ -1550,6 +1550,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_map_photos_returns_no_coordinates_for_a_video() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        // Coordinates live in the index; a video's file yields a date but no
+        // GPS, so the index entry has `taken_at` only.
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            PathBuf::from("/tmp/turbo-pix-test-cache"),
+            facts.clone(),
+        );
+
+        let mut video = crate::db::tests::create_test_photo("clip.mp4".to_string(), "c".repeat(64));
+        video.mime_type = Some("video/mp4".to_string());
+        video.create(&db_pool).await.unwrap();
+        let taken_at = Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap();
+        facts.set(
+            &video.file_path,
+            MediaFacts {
+                taken_at: Some(taken_at),
+                ..MediaFacts::default()
+            },
+        );
+
+        let response = warp::test::request()
+            .path("/api/photos/map?q=type:video")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let photos = body["photos"].as_array().unwrap();
+        assert_eq!(photos.len(), 1, "type:video must select the video");
+        assert_eq!(photos[0]["filename"], "clip.mp4");
+
+        // A video can never acquire map coordinates: no matter how the index
+        // is seeded, the payload must carry no location pair...
+        assert!(
+            photos[0]["metadata"]["location"].get("latitude").is_none(),
+            "a video must not expose metadata.location.latitude"
+        );
+        assert!(
+            photos[0]["metadata"]["location"].get("longitude").is_none(),
+            "a video must not expose metadata.location.longitude"
+        );
+
+        // ...while the date the file carries still travels with it.
+        let serialized = photos[0]["taken_at"]
+            .as_str()
+            .expect("the video's file-derived date");
+        assert_eq!(
+            DateTime::parse_from_rfc3339(serialized)
+                .unwrap()
+                .with_timezone(&Utc),
+            taken_at
+        );
+    }
+
+    #[tokio::test]
     async fn test_map_photos_scopes_to_album() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
@@ -1818,6 +1876,74 @@ mod tests {
         assert!(filenames.contains(&"mar2012.jpg"));
         assert!(filenames.contains(&"aug2015.jpg"));
         assert!(!filenames.contains(&"sep2015.jpg"));
+    }
+
+    #[tokio::test]
+    async fn test_list_photos_sql_sort_orders_and_still_carries_facts() {
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            PathBuf::from("/tmp/turbo-pix-test-cache"),
+            facts.clone(),
+        );
+
+        // `sort=name` is a SQL fast-path column sort, but the payload contract
+        // still holds: every row must be enriched from the index.
+        for (hash, filename, taken_at) in [
+            ("a", "alpha.jpg", "2015-06-20T10:00:00Z"),
+            ("b", "bravo.jpg", "2024-01-02T03:04:05Z"),
+        ] {
+            let photo = crate::db::tests::create_test_photo(filename.to_string(), hash.repeat(64));
+            photo.create(&db_pool).await.unwrap();
+            facts.set(
+                &photo.file_path,
+                MediaFacts {
+                    taken_at: Some(
+                        DateTime::parse_from_rfc3339(taken_at)
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    ),
+                    latitude: Some(48.1372),
+                    longitude: Some(11.5755),
+                },
+            );
+        }
+
+        let response = warp::test::request()
+            .path("/api/photos?sort=name&order=asc")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let photos = body["photos"].as_array().unwrap();
+        let filenames: Vec<&str> = photos
+            .iter()
+            .map(|p| p["filename"].as_str().unwrap())
+            .collect();
+        assert_eq!(filenames, ["alpha.jpg", "bravo.jpg"]);
+
+        for (row, expected_date) in photos
+            .iter()
+            .zip(["2015-06-20T10:00:00Z", "2024-01-02T03:04:05Z"])
+        {
+            let serialized = row["taken_at"]
+                .as_str()
+                .expect("the fast path must enrich taken_at");
+            assert_eq!(
+                DateTime::parse_from_rfc3339(serialized)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                DateTime::parse_from_rfc3339(expected_date)
+                    .unwrap()
+                    .with_timezone(&Utc)
+            );
+            assert_eq!(row["metadata"]["location"]["latitude"], 48.1372);
+            assert_eq!(row["metadata"]["location"]["longitude"], 11.5755);
+        }
     }
 
     #[tokio::test]

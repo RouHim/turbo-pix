@@ -39,6 +39,7 @@ pub async fn batch_accept_collages(
     db_pool: DbPool,
     data_path: PathBuf,
     semantic_search: Arc<dyn SemanticSearch>,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     validate_collage_ids(&req.ids)?;
 
@@ -48,8 +49,14 @@ pub async fn batch_accept_collages(
     };
 
     for id in &req.ids {
-        match collage_generator::accept_collage(&db_pool, *id, &data_path, semantic_search.clone())
-            .await
+        match collage_generator::accept_collage(
+            &db_pool,
+            *id,
+            &data_path,
+            semantic_search.clone(),
+            &facts,
+        )
+        .await
         {
             Ok(_) => result.applied.push(id.to_string()),
             Err(e) => {
@@ -112,12 +119,15 @@ pub async fn accept_collage(
     db_pool: DbPool,
     data_path: PathBuf,
     semantic_search: Arc<dyn SemanticSearch>,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     info!("Accepting collage {}", id);
 
     // Move collage to photos directory and index immediately
     let accepted_path =
-        match collage_generator::accept_collage(&db_pool, id, &data_path, semantic_search).await {
+        match collage_generator::accept_collage(&db_pool, id, &data_path, semantic_search, &facts)
+            .await
+        {
             Ok(path) => path,
             Err(e) => {
                 log::error!("Failed to accept collage: {}", e);
@@ -264,10 +274,20 @@ pub fn build_collage_routes(
     let accept = {
         let data_path = data_path.clone();
         let semantic_search = semantic_search.clone();
+        let media_facts = media_facts.clone();
         warp::path!("api" / "collages" / i64 / "accept")
             .and(warp::post())
             .and(with_db(db_pool.clone()))
-            .map(move |id, db_pool| (id, db_pool, data_path.clone(), semantic_search.clone()))
+            .and(with_facts(media_facts))
+            .map(move |id, db_pool, facts| {
+                (
+                    id,
+                    db_pool,
+                    data_path.clone(),
+                    semantic_search.clone(),
+                    facts,
+                )
+            })
             .untuple_one()
             .and_then(accept_collage)
     };
@@ -282,12 +302,14 @@ pub fn build_collage_routes(
     let batch_accept = {
         let data_path = data_path.clone();
         let semantic_search = semantic_search.clone();
+        let media_facts = media_facts.clone();
         warp::path!("api" / "collages" / "batch-accept")
             .and(warp::post())
             .and(warp::body::content_length_limit(1024 * 1024))
             .and(warp::body::json::<BatchCollageIdsRequest>())
             .and(with_db(db_pool.clone()))
-            .map(move |req, db| (req, db, data_path.clone(), semantic_search.clone()))
+            .and(with_facts(media_facts))
+            .map(move |req, db, facts| (req, db, data_path.clone(), semantic_search.clone(), facts))
             .untuple_one()
             .and_then(batch_accept_collages)
     };
@@ -323,14 +345,25 @@ mod tests {
         data_path: PathBuf,
         semantic_search: Arc<dyn SemanticSearch>,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
-        build_collage_routes(
+        build_test_routes_with_facts(
             db_pool,
-            Arc::new(MediaFactsIndex::new()),
             data_path,
-            "en".to_string(),
             semantic_search,
+            Arc::new(MediaFactsIndex::new()),
         )
-        .recover(handle_rejection)
+    }
+
+    /// Same route set, serving capture facts from `facts` — the tests that
+    /// assert an accepted collage's date must inspect the index it publishes
+    /// into.
+    fn build_test_routes_with_facts(
+        db_pool: DbPool,
+        data_path: PathBuf,
+        semantic_search: Arc<dyn SemanticSearch>,
+        facts: Arc<MediaFactsIndex>,
+    ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
+        build_collage_routes(db_pool, facts, data_path, "en".to_string(), semantic_search)
+            .recover(handle_rejection)
     }
 
     /// Seed a pending collage backed by a real staging file; returns its id.
@@ -348,6 +381,123 @@ mod tests {
         )
         .await
         .expect("Failed to insert collage")
+    }
+
+    /// GIVEN a pending collage whose file carries a capture date
+    /// WHEN it is accepted through the API
+    /// THEN the accepted collage is queryable through the index with the
+    ///      extracted date right away — no rescan — and a month filter for
+    ///      that month matches it.
+    #[tokio::test]
+    async fn test_accept_collage_publishes_the_extracted_date_to_facts() {
+        use crate::db::{Photo, SearchQuery};
+        use chrono::{TimeZone, Utc};
+
+        let db_pool = create_in_memory_pool()
+            .await
+            .expect("Failed to create test database");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let staging_dir = temp_dir.path().join("collages").join("staging");
+        fs::create_dir_all(&staging_dir).unwrap();
+
+        // A real, EXIF-carrying file: the accept path extracts the date from
+        // the file itself (the DB row stores none).
+        let file_path = staging_dir.join("collage_2026-08-01_1.jpg");
+        fs::copy("test-data/IMG_9377.jpg", &file_path).unwrap();
+        let captured = Utc.with_ymd_and_hms(2015, 6, 20, 10, 0, 0).unwrap();
+        crate::metadata_writer::update_metadata(&file_path, Some(captured), None, None)
+            .expect("failed to write the capture date into the file");
+
+        let hashes = vec!["hash1".to_string()];
+        let collage_id = Collage::insert(
+            &db_pool,
+            "2026-08-01",
+            &file_path.to_string_lossy(),
+            None,
+            3,
+            &hashes,
+            "accept-publishes-date-sig",
+        )
+        .await
+        .expect("Failed to insert collage");
+
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().to_path_buf(),
+            Arc::new(NoopSemanticSearch),
+            facts.clone(),
+        );
+
+        // WHEN: the collage is accepted
+        let response = warp::test::request()
+            .method("POST")
+            .path(&format!("/api/collages/{}/accept", collage_id))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let dest = body["path"]
+            .as_str()
+            .expect("accept returns the destination");
+        assert_eq!(
+            std::path::Path::new(dest).file_name().unwrap(),
+            "collage_2026-08-01_1.jpg"
+        );
+
+        // THEN: the index carries the date the file holds...
+        let published = facts
+            .get(dest)
+            .expect("the accepted collage's facts must be published");
+        assert_eq!(
+            published.taken_at,
+            Some(captured),
+            "the extracted date must be published with the row write"
+        );
+
+        // ...and a month filter for that date matches the new photo.
+        let (photos, total) = Photo::search_photos(
+            &db_pool,
+            &facts,
+            &SearchQuery {
+                q: None,
+                year: Some(2015),
+                month: Some(6),
+                to_year: None,
+                to_month: None,
+            },
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .expect("search must succeed");
+        assert_eq!(total, 1, "the accepted collage must match its own month");
+        assert_eq!(photos[0].file_path, dest);
+        assert_eq!(photos[0].taken_at, Some(captured));
+
+        // The undated-path control: a different month must not match it.
+        let (other, other_total) = Photo::search_photos(
+            &db_pool,
+            &facts,
+            &SearchQuery {
+                q: None,
+                year: Some(2020),
+                month: Some(1),
+                to_year: None,
+                to_month: None,
+            },
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .expect("search must succeed");
+        assert_eq!(other_total, 0);
+        assert!(other.is_empty());
     }
 
     #[tokio::test]

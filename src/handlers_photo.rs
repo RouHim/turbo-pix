@@ -14,9 +14,10 @@ use crate::image_editor::{self, RotationAngle};
 use crate::media_facts::MediaFactsIndex;
 use crate::metadata_writer;
 use crate::mimetype_detector;
+use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit};
 use crate::warp_helpers::{
     handle_rejection, with_cache, with_db, with_facts, DatabaseError, NotFoundError,
-    PermissionError, ValidationError,
+    PermissionError, ValidationError, VideoMetadataError,
 };
 use std::sync::Arc;
 
@@ -565,6 +566,26 @@ pub async fn update_photo_metadata(
         None
     };
 
+    // Videos carry their metadata in the container, not in EXIF, and a
+    // container save is a `moov` rewrite plus a row mirror rather than an
+    // EXIF append. The photo path below stays what it always was.
+    if photo
+        .mime_type
+        .as_deref()
+        .is_some_and(|m| m.starts_with("video/"))
+    {
+        return apply_video_metadata_edit(
+            photo,
+            VideoMetadataEdit {
+                taken_at,
+                latitude: metadata_req.latitude,
+                longitude: metadata_req.longitude,
+            },
+            &db_pool,
+        )
+        .await;
+    }
+
     // Get file path
     let file_path = Path::new(&photo.file_path);
 
@@ -606,6 +627,167 @@ pub async fn update_photo_metadata(
         }
         Err(e) => {
             log::error!("Database error: {}", e);
+            Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }))
+        }
+    }
+}
+
+/// Serializes video metadata saves. A save is a read-modify-write of the
+/// container's `moov` region followed by a row write that records the file's
+/// new identity; two saves running together would each locate and rewrite the
+/// same region from their own read and the second row write would be based on
+/// a stale row. Saving a video is a rare user action and the critical section
+/// is short, so one lock for all videos is enough (and simpler than a
+/// per-file map).
+static VIDEO_EDIT_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Classify a container failure into the client-visible refusal. Every variant
+/// but [`Mp4MetadataError::Io`] is a condition the client can act on (wrong
+/// file kind, no slot for the value, no carrier, read-only medium), so it
+/// carries a machine-readable code; an I/O failure is a server fault and takes
+/// the shared generic 500 path with no code and a sanitized message.
+fn video_metadata_rejection(err: Mp4MetadataError) -> Rejection {
+    let (status, code) = match &err {
+        Mp4MetadataError::UnsupportedContainer(_) => (
+            warp::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_container",
+        ),
+        Mp4MetadataError::Fragmented | Mp4MetadataError::NoRoom(_) => (
+            warp::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "no_writable_slot",
+        ),
+        Mp4MetadataError::NoLocationCarrier => (
+            warp::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "no_location_carrier",
+        ),
+        Mp4MetadataError::Unrepresentable(_) => (
+            warp::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "unrepresentable_value",
+        ),
+        Mp4MetadataError::InvalidDate => (warp::http::StatusCode::BAD_REQUEST, "invalid_date"),
+        Mp4MetadataError::InvalidCoordinates => {
+            (warp::http::StatusCode::BAD_REQUEST, "invalid_coordinates")
+        }
+        Mp4MetadataError::MissingFile => (warp::http::StatusCode::NOT_FOUND, "file_missing"),
+        Mp4MetadataError::ReadOnly(_) => (warp::http::StatusCode::FORBIDDEN, "file_read_only"),
+        Mp4MetadataError::Io(io) => {
+            log::error!("Failed to write video metadata: {}", io);
+            return reject::custom(DatabaseError {
+                message: format!("Failed to update video metadata: {}", io),
+            });
+        }
+    };
+
+    log::error!("Refused video metadata edit: {} ({} {})", err, status, code);
+    reject::custom(VideoMetadataError {
+        status,
+        code,
+        message: err.to_string(),
+    })
+}
+
+/// Apply a metadata edit to a video's container and mirror the result into
+/// `photo`'s row.
+///
+/// The container is the source of truth: the file is rewritten first (every
+/// refusal is decided by `write_metadata` before a byte is written), then the
+/// row records what the file now says — its `taken_at` and location plus the
+/// scanner's identity of the new file. When the row write fails, the file is
+/// rolled back through the write's undo token, so a 500 never leaves the file
+/// changed without the row that describes it.
+async fn apply_video_metadata_edit(
+    photo: Photo,
+    edit: VideoMetadataEdit,
+    db_pool: &DbPool,
+) -> Result<warp::reply::Json, Rejection> {
+    // FR-013: an empty request must not rewrite the container. Nothing was
+    // asked for, so the row comes back as it was read.
+    if edit.taken_at.is_none() && edit.latitude.is_none() && edit.longitude.is_none() {
+        log::debug!(
+            "Empty metadata request for video {}; file and row left untouched",
+            photo.hash_sha256
+        );
+        return Ok(warp::reply::json(&photo));
+    }
+
+    let _guard = VIDEO_EDIT_LOCK.lock().await;
+
+    // The row read before this lock is a pre-save snapshot: merging into it
+    // would drop a field a save that just finished had written. Re-read it
+    // under the lock so the mirror is a merge into committed state.
+    let mut photo = match Photo::find_by_hash(db_pool, &photo.hash_sha256).await {
+        Ok(Some(photo)) => photo,
+        Ok(None) => return Err(reject::custom(NotFoundError)),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            return Err(reject::custom(DatabaseError {
+                message: format!("Database error: {}", e),
+            }));
+        }
+    };
+
+    let write = match mp4_metadata::write_metadata(Path::new(&photo.file_path), &edit) {
+        Ok(write) => write,
+        Err(err) => return Err(video_metadata_rejection(err)),
+    };
+
+    if let Some(dt) = edit.taken_at {
+        photo.taken_at = Some(dt);
+    }
+
+    // GPS coordinates are stored inside the metadata JSON object; make sure the
+    // stored value is actually an object before mutating it.
+    if !photo.metadata.is_object() {
+        photo.metadata = serde_json::json!({});
+    }
+
+    if edit.latitude.is_some() || edit.longitude.is_some() {
+        let mut location = photo
+            .metadata
+            .get("location")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(lat) = edit.latitude {
+            location.insert("latitude".to_string(), json!(lat));
+        }
+        if let Some(lon) = edit.longitude {
+            location.insert("longitude".to_string(), json!(lon));
+        }
+
+        photo
+            .metadata
+            .as_object_mut()
+            .unwrap()
+            .insert("location".to_string(), json!(location));
+    }
+
+    // The rewrite preserves the file's byte length and its modification time,
+    // so these are the values the scanner will compare against on its next
+    // pass — recording them here keeps the row "unchanged" for
+    // `find_unchanged_photo`.
+    photo.file_size = write.fingerprint.file_size as i64;
+    photo.date_modified = write.fingerprint.file_modified;
+    photo.updated_at = Utc::now();
+
+    match photo.update(db_pool).await {
+        Ok(()) => Ok(warp::reply::json(&photo)),
+        Err(e) => {
+            log::error!("Database error after a video metadata write: {}", e);
+            // The container is already rewritten; putting it back keeps the
+            // file and the row in agreement. A failed rollback is loud but
+            // still answered with the generic 500.
+            if let Err(rollback) = mp4_metadata::restore(&write.undo) {
+                log::warn!(
+                    "Could not roll back {} after a failed row write: {}",
+                    photo.file_path,
+                    rollback
+                );
+            }
             Err(reject::custom(DatabaseError {
                 message: format!("Database error: {}", e),
             }))
@@ -1377,6 +1559,56 @@ mod tests {
         temp_image
     }
 
+    /// Insert a row backed by a temp copy of a video fixture. `file_size` is
+    /// the copy's real byte length, so the row starts out describing the file
+    /// exactly as the scanner would have stored it.
+    async fn create_video_row(
+        db_pool: &DbPool,
+        temp_dir: &TempDir,
+        hash: &str,
+        fixture: &str,
+        mime_type: &str,
+    ) -> std::path::PathBuf {
+        let filename = Path::new(fixture)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let temp_video = temp_dir.path().join(&filename);
+        fs::copy(fixture, &temp_video).expect("Failed to copy test video");
+        let file_size = fs::metadata(&temp_video).unwrap().len() as i64;
+
+        let photo = Photo {
+            hash_sha256: hash.to_string(),
+            file_path: temp_video.to_str().unwrap().to_string(),
+            filename,
+            file_size,
+            mime_type: Some(mime_type.to_string()),
+            taken_at: None,
+            width: None,
+            height: None,
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified: Utc::now(),
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        photo
+            .create(db_pool)
+            .await
+            .expect("Failed to create test video row");
+
+        temp_video
+    }
+
     /// Same fixture as `create_photo_row`, and additionally seeds the photo's
     /// file-derived capture date into `facts` — the DB stores no date. Returns
     /// `(hash, backing file path)`.
@@ -2049,6 +2281,451 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_metadata_edits_a_video_file_and_the_row() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1000000000000000000000000000000000000000000000000000000000000001";
+        // The keys fixture has a location carrier, so the date AND the position
+        // can both be written into the container itself.
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(before.file_size, fs::metadata(&video).unwrap().len() as i64);
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({
+                "taken_at": "2024-07-04T12:00:00Z",
+                "latitude": 52.52,
+                "longitude": 13.405,
+            }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["taken_at"], "2024-07-04T12:00:00Z");
+        assert_eq!(body["metadata"]["location"]["latitude"], 52.52);
+        assert_eq!(body["metadata"]["location"]["longitude"], 13.405);
+        // A `moov` rewrite of the same length never changes the file's size.
+        assert_eq!(body["file_size"], before.file_size);
+
+        // The container itself now carries the new instant and the position.
+        let stored = crate::mp4_metadata::read_metadata(&video).unwrap();
+        assert_eq!(
+            stored.creation_time.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        assert_eq!(
+            stored.location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+
+        // The row mirrors that file, including the scanner's identity fields.
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(
+            row.taken_at.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        assert_eq!(row.file_size, before.file_size);
+        let on_disk = fs::metadata(&video).unwrap().modified().unwrap();
+        assert_eq!(
+            row.date_modified.timestamp(),
+            DateTime::<Utc>::from(on_disk).timestamp()
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_metadata_refuses_a_video_without_a_location_carrier() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "2000000000000000000000000000000000000000000000000000000000000002";
+        // This fixture carries a date but no location carrier at all.
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 52.52, "longitude": 13.405 }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 422);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "no_location_carrier");
+
+        // Refused before a byte was written and before the row was touched.
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(after_row.taken_at, before_row.taken_at);
+        assert_eq!(after_row.metadata, before_row.metadata);
+        assert_eq!(after_row.date_modified, before_row.date_modified);
+        assert_eq!(after_row.updated_at, before_row.updated_at);
+    }
+
+    #[tokio::test]
+    async fn patch_metadata_refuses_a_matroska_video_with_a_machine_readable_code() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "3000000000000000000000000000000000000000000000000000000000000003";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_long.mkv",
+            "video/x-matroska",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        // A container this project cannot rewrite is a 415 with a code the
+        // client can translate — never the generic 500.
+        assert_eq!(response.status(), 415);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "unsupported_container");
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+    }
+
+    #[tokio::test]
+    async fn an_empty_video_request_touches_nothing() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "4000000000000000000000000000000000000000000000000000000000000004";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_mtime = fs::metadata(&video).unwrap().modified().unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({}))
+            .reply(&routes)
+            .await;
+
+        // FR-013: an empty request answers the row it found and rewrites
+        // neither the container nor the row.
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body, serde_json::to_value(&before_row).unwrap());
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_mtime
+        );
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&after_row).unwrap(),
+            serde_json::to_value(&before_row).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_row_write_rolls_the_file_back() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "5000000000000000000000000000000000000000000000000000000000000005";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_mtime = fs::metadata(&video).unwrap().modified().unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        // Fail the row write only: the SELECTs still work, so the handler gets
+        // as far as the mirror and has to undo the file write.
+        sqlx::query(
+            "CREATE TRIGGER refuse_photo_update BEFORE UPDATE ON photos \
+             BEGIN SELECT RAISE(ABORT, 'row write refused'); END",
+        )
+        .execute(&db_pool)
+        .await
+        .expect("trigger");
+
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 500);
+        // The file is byte-identical and its mtime is the one the scanner saw,
+        // so the next scan still matches this row as unchanged.
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_mtime
+        );
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(after_row.taken_at, before_row.taken_at);
+        assert_eq!(after_row.date_modified, before_row.date_modified);
+    }
+
+    // Multi-threaded on purpose: the two saves must be kept apart by the
+    // handler's lock, not by a single-threaded runtime that can only switch
+    // between them at an `await`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_saves_do_not_interleave() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "6000000000000000000000000000000000000000000000000000000000000006";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+
+        let date_req = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes);
+        let location_req = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 52.52, "longitude": 13.405 }))
+            .reply(&routes);
+
+        let (date_response, location_response) = tokio::join!(date_req, location_req);
+        assert_eq!(date_response.status(), 200);
+        assert_eq!(location_response.status(), 200);
+
+        // Neither save's write is lost, and the container still parses.
+        let stored = crate::mp4_metadata::read_metadata(&video).unwrap();
+        assert_eq!(
+            stored.creation_time.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        assert_eq!(
+            stored.location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+
+        // The row carries both saves too: the second one merges into the row
+        // the first one committed instead of overwriting it with its own
+        // pre-lock snapshot.
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(
+            row.taken_at.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        assert_eq!(row.metadata["location"]["latitude"], 52.52);
+        assert_eq!(row.metadata["location"]["longitude"], 13.405);
+    }
+
+    #[tokio::test]
+    async fn video_refusals_carry_distinct_machine_readable_codes() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "7000000000000000000000000000000000000000000000000000000000000007";
+        create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+
+        // Values the container itself refuses: the photo path answers an
+        // out-of-range coordinate with a bare validation error, the container
+        // write names what was wrong.
+        for (payload, expected_code) in [
+            (
+                json!({ "latitude": 91.0, "longitude": 0.0 }),
+                "invalid_coordinates",
+            ),
+            // The writer's representable range ends in 2040.
+            (
+                json!({ "taken_at": "2050-01-01T00:00:00Z" }),
+                "invalid_date",
+            ),
+        ] {
+            let response = warp::test::request()
+                .method("PATCH")
+                .path(&format!("/api/photos/{}/metadata", hash))
+                .json(&payload)
+                .reply(&routes)
+                .await;
+
+            assert_eq!(response.status(), 400, "{}", expected_code);
+            let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(body["error_code"], expected_code);
+        }
+    }
+
+    /// Pins the whole refusal table. Three rows of it (fragmented/no-room,
+    /// unrepresentable, I/O) have no fixture that reaches them through the
+    /// route, so the classification is asserted directly.
+    #[test]
+    fn video_refusal_table_maps_every_container_failure() {
+        use crate::mp4_metadata::Mp4MetadataError;
+
+        for (err, expected_status, expected_code) in [
+            (
+                Mp4MetadataError::UnsupportedContainer("matroska".to_string()),
+                415,
+                "unsupported_container",
+            ),
+            (Mp4MetadataError::Fragmented, 422, "no_writable_slot"),
+            (Mp4MetadataError::NoRoom("moov"), 422, "no_writable_slot"),
+            (
+                Mp4MetadataError::NoLocationCarrier,
+                422,
+                "no_location_carrier",
+            ),
+            (
+                Mp4MetadataError::Unrepresentable("\u{a9}day"),
+                422,
+                "unrepresentable_value",
+            ),
+            (Mp4MetadataError::InvalidDate, 400, "invalid_date"),
+            (
+                Mp4MetadataError::InvalidCoordinates,
+                400,
+                "invalid_coordinates",
+            ),
+            (Mp4MetadataError::MissingFile, 404, "file_missing"),
+            (
+                Mp4MetadataError::ReadOnly("read-only mount".to_string()),
+                403,
+                "file_read_only",
+            ),
+        ] {
+            let rejection = video_metadata_rejection(err);
+            let refusal = rejection
+                .find::<VideoMetadataError>()
+                .unwrap_or_else(|| panic!("{expected_code}: expected a coded refusal"));
+            assert_eq!(refusal.status.as_u16(), expected_status, "{expected_code}");
+            assert_eq!(refusal.code, expected_code);
+        }
+
+        // An I/O failure is a server fault, not something the client can act
+        // on: it takes the generic 500 with no code at all.
+        let rejection =
+            video_metadata_rejection(Mp4MetadataError::Io(std::io::Error::other("disk gone")));
+        assert!(rejection.find::<VideoMetadataError>().is_none());
+        assert!(rejection.find::<DatabaseError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn patch_metadata_reports_a_video_file_that_is_gone() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "8000000000000000000000000000000000000000000000000000000000000008";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+        fs::remove_file(&video).unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 404);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "file_missing");
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(after_row.taken_at, before_row.taken_at);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn patch_metadata_refuses_a_read_only_video() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "9000000000000000000000000000000000000000000000000000000000000009";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        fs::set_permissions(&video, fs::Permissions::from_mode(0o444)).unwrap();
+
+        // Root may write a 0444 file regardless, so the permission bit has to
+        // be the deciding factor for this test to mean anything.
+        if fs::OpenOptions::new().write(true).open(&video).is_ok() {
+            eprintln!("Skipping read-only test: this user may write a 0444 file");
+            return;
+        }
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 403);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "file_read_only");
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+    }
+
+    #[tokio::test]
     async fn test_list_photos_page_zero() {
         let db_pool = create_in_memory_pool()
             .await
@@ -2505,6 +3182,13 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), 400);
+        // The machine-readable code is emitted only where the client is meant
+        // to act on it; the photo path's error body is otherwise unchanged.
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert!(
+            body.get("error_code").is_none(),
+            "unexpected error_code: {body}"
+        );
     }
 
     #[tokio::test]

@@ -12,6 +12,11 @@ use warp::{reject, Filter, Rejection, Reply};
 pub struct ErrorResponse {
     pub error: String,
     pub code: u16,
+    /// Machine-readable refusal reason, present only where the client is
+    /// expected to act on the specific cause (the video metadata refusals).
+    /// Absent — and therefore not serialized — on every generic error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<&'static str>,
     pub timestamp: String,
 }
 
@@ -47,6 +52,19 @@ pub struct ValidationError {
 
 impl reject::Reject for ValidationError {}
 
+/// A refused video metadata edit, already classified: the status and the
+/// machine-readable `code` are decided where the container failure is known
+/// (`handlers_photo::video_metadata_rejection`), so the rejection handler only
+/// has to render them.
+#[derive(Debug)]
+pub struct VideoMetadataError {
+    pub status: warp::http::StatusCode,
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl reject::Reject for VideoMetadataError {}
+
 pub fn with_db(db_pool: DbPool) -> impl Filter<Extract = (DbPool,), Error = Infallible> + Clone {
     warp::any().map(move || db_pool.clone())
 }
@@ -79,6 +97,7 @@ pub fn with_cache(
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
     let message;
+    let mut error_code = None;
     let timestamp = chrono::Utc::now().to_rfc3339();
 
     if err.is_not_found() {
@@ -100,6 +119,12 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if err.find::<CrossOriginRequest>().is_some() {
         code = warp::http::StatusCode::FORBIDDEN;
         message = "Cross-origin request rejected".to_string();
+    } else if let Some(video_error) = err.find::<VideoMetadataError>() {
+        // The refusal class (and with it the status) was decided where the
+        // container told us what was wrong; the client translates the code.
+        code = video_error.status;
+        message = video_error.message.clone();
+        error_code = Some(video_error.code);
     } else if let Some(validation_error) = err.find::<ValidationError>() {
         code = warp::http::StatusCode::BAD_REQUEST;
         message = validation_error.message.clone();
@@ -136,6 +161,7 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     let error_response = ErrorResponse {
         error: message,
         code: code.as_u16(),
+        error_code,
         timestamp,
     };
 

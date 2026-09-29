@@ -332,11 +332,17 @@ test.describe('Playable originals are never converted', () => {
   });
 
   test('a slow-but-delivering original is not converted', async ({ page }) => {
-    // GIVEN a delivery that takes well over a second to produce its first byte
+    // GIVEN a delivery whose first byte takes LONGER than the grace window
+    // itself. A delay inside the window (a 3 s one) could not tell this design
+    // apart from a fixed deadline: a regression that expired the attempt
+    // without re-arming on progress would still deliver the frame in time. At
+    // 6.5 s, only a window that the delivery's own `progress` re-arms survives —
+    // the element's `stalled` freezes the deadline at first, and the resume is
+    // what clears it (FR-004/SC-005).
     const photo = await findVideoByFilename(page, 'test_video.mp4');
     await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
     await page.route(PLAIN_VIDEO, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((resolve) => setTimeout(resolve, 6500));
       await route.continue();
     });
     const streamRequests = collectRequests(page, STREAM_VIDEO);
@@ -409,6 +415,35 @@ test.describe('Playable originals are never converted', () => {
     expect(plainRequests).toHaveLength(0);
     expect(streamRequests).toHaveLength(0);
     expect(wholeFileRequests).toHaveLength(0);
+  });
+
+  test('a direct plan that failed converts through the stream, not the bytes it refuted', async ({
+    page,
+  }) => {
+    // GIVEN a file the server plans as DIRECT — its own bytes are what the plan
+    // offers — and an original delivery that fails outright
+    const photo = await findVideoByFilename(page, 'test_video.mp4');
+    await TestHelpers.failOriginalAttempt(page, photo.hash_sha256);
+    await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
+    const streamRequests = collectRequests(page, STREAM_VIDEO);
+    const wholeFileRequests = collectRequests(page, WHOLE_FILE);
+
+    // WHEN the viewer opens it
+    await openVideo(page, photo);
+
+    // THEN the conversion runs through the STREAM endpoint: a Direct plan has no
+    // rung of its own, and the byte endpoint ignores `transcode=true` for a
+    // directly playable source — it would hand back the very bytes the attempt
+    // just refuted, leaving the viewer to fail on the same media twice.
+    await expect.poll(() => streamRequests.length, { timeout: 15000 }).toBeGreaterThan(0);
+    expect(streamRequests[0].url).toContain('mode=transcode');
+    // AND the file really plays from those converted bytes.
+    await waitForPlaybackOf(page, photo);
+    // AND the byte endpoint's trap was never walked into: no whole-file request
+    // for this photo at all.
+    expect(
+      wholeFileRequests.filter((request) => request.url.includes(photo.hash_sha256))
+    ).toHaveLength(0);
   });
 
   test('a switch away from a pending attempt leaves nothing behind', async ({ page }) => {

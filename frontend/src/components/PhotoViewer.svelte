@@ -782,7 +782,7 @@
     return false;
   }
 
-  async function displayVideo(photo, forceTranscode = false) {
+  async function displayVideo(photo) {
     if (!videoEl) return;
     // A different video may be on screen: its stream (and any pending
     // SourceBuffer, or an armed saturation retry) belongs to the old photo —
@@ -791,22 +791,9 @@
     destroyStreamPlayer();
     cancelOriginalAttempt();
     hideTranscodeToast();
-    // A retry of the SAME photo (a playback failure) bypasses displayPhoto, so
-    // the claim from the attempt that just failed is dropped here too: every
-    // branch below (or the run it starts) states this attempt's own answer.
+    // Every branch below (or the run it starts) states this attempt's own
+    // answer, so nothing claims the previous playback's encoder.
     activeEncoder = null;
-
-    if (forceTranscode) {
-      // Explicit retry (e.g. HEVC playback failure): jump straight to the
-      // transcode flow, no decision round-trip.
-      const url = getVideoUrl(photo.hash_sha256, {
-        transcode: true,
-        clientCodecs: videoCodecSupport.getClientCodecsString(),
-      });
-      if (await tryStartTranscode(url, photo)) return;
-      setVideoSource(photo, url);
-      return;
-    }
 
     // Ask the server for the recommended path (direct play / streamed remux /
     // streamed audio+video conversion / empty). The server owns the
@@ -853,6 +840,33 @@
   }
 
   /**
+   * Install the playback's own failure reporter, for a playback an attempt has
+   * already settled `playable`.
+   *
+   * The attempt detaches every listener with its verdict, and `showVideoSource`
+   * clears the property handler, so without this a media error arriving later —
+   * a corrupt segment further into the file, a dropped connection mid-download
+   * of the range-served original, the file rewritten by a sync under the viewer
+   * — would reach nobody and freeze the player silently. It is a REPORT, not a
+   * fallback: the file demonstrably decodes, so a mid-playback error is no
+   * evidence that a conversion is needed.
+   *
+   * `showVideoSource` clears the handler on every new source, and the staleness
+   * guard covers the window before it does, so the report can never land on
+   * another photo.
+   */
+  function reportPlaybackFailure(photo) {
+    videoEl.onerror = () => {
+      if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+      showToast(
+        get(t)('notifications.error', { default: 'Error' }),
+        get(t)('video.playback_failed', { default: 'This video could not be played' }),
+        'error'
+      );
+    };
+  }
+
+  /**
    * Try the ORIGINAL file — the plain `?client=` byte request the server serves
    * for every non-direct delivery — and hand the verdict to the caller's
    * discipline: a decoded frame keeps playback here, anything else takes the
@@ -884,6 +898,9 @@
       if (frameObserved) videoCodecSupport.recordVerifiedCodec(codecToken);
       if (verdict === 'playable') {
         originalFailures.clear(photo.hash_sha256);
+        // The attempt took its listeners with its verdict, so the playback's
+        // own reporter takes over for everything that arrives after the frame.
+        reportPlaybackFailure(photo);
         return;
       }
       if (verdict === 'cancelled') return;
@@ -925,9 +942,28 @@
         setVideoSource(photo, decision.url);
         return;
       }
-      // A plain direct URL means the server expected the original to work and
-      // it did not — the whole-file conversion is the fallback it always was.
-      displayVideo(photo, true);
+      // The Direct plan has no rung of its own: the byte endpoint ignores
+      // `transcode=true` for a directly playable source and would serve the very
+      // bytes the attempt just refuted (a 200 with no warning, so the viewer
+      // would point the element at the same file and fail twice). The stream
+      // endpoint re-plans server-side and answers a Direct plan with its full
+      // transcode, so that is the one path to a conversion for this file.
+      const fallback = {
+        url: `/api/photos/${photo.hash_sha256}/video/stream?client=${encodeURIComponent(
+          videoCodecSupport.getClientCodecsString()
+        )}`,
+        mime: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+        duration: decision.duration,
+        mode: 'transcode',
+      };
+      if (mseSupported(fallback.mime)) {
+        playStream(photo, fallback);
+        return;
+      }
+      showTranscodeToast(
+        get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+        true
+      );
       return;
     }
     showTranscodeToast(
@@ -1607,7 +1643,14 @@
         videoCodecSupport.recordVerifiedCodec(codecToken);
         originalFailures.clear(photo.hash_sha256);
       }
-      if (verdict === 'playable' || verdict === 'cancelled') return;
+      if (verdict === 'playable') {
+        // The user's own playback gets the same reporter as any other proved
+        // one: an error after the frame is reported, never looped back into the
+        // conversion they just left.
+        reportPlaybackFailure(photo);
+        return;
+      }
+      if (verdict === 'cancelled') return;
       showToast(
         get(t)('notifications.error', { default: 'Error' }),
         get(t)('video.playback_failed', { default: 'This video could not be played' }),

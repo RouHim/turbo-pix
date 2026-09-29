@@ -109,8 +109,14 @@ test.describe('Map view', () => {
   });
 
   test('filters with matching photos but no coordinates show the empty state', async ({ page }) => {
-    // The seeded videos carry no GPS; the map must explain instead of showing a blank map.
-    await TestHelpers.goto(page, '/map?q=type%3Avideo');
+    // Not every video is unlocated any more: the quicktime-keys fixture carries
+    // its own `com.apple.quicktime.location.ISO6709`, so `type:video` alone now
+    // has something to plot. test_video.mp4 is the seeded video left without
+    // coordinates. The `type:` token is what keeps this query on the regular
+    // (non-CLIP) path — a bare `test_video.mp4` would run through semantic
+    // search and assert nothing about the filter. The map must explain instead
+    // of showing a blank map.
+    await TestHelpers.goto(page, '/map?q=type%3Avideo%20test_video.mp4');
 
     await expect(page.locator('[data-testid="map-empty-state"]')).toBeVisible();
     await expect(page.locator('[data-testid="map-empty-state"]')).toContainText(
@@ -156,8 +162,9 @@ test.describe('Map view', () => {
     // Supercluster guarantees every point is represented, and each feature
     // announces the PHOTOS it stands for — a cluster the ones it aggregates
     // (FR-006), a marker its location's count (FR-009) — so both kinds must add
-    // up to the library's 14 geo-located photos (10 `cluster_*` plus 4
-    // `archive_*`, all car.jpg copies). The seeded pair's cluster holds 2
+    // up to every geo-located photo in the library (the 10 `cluster_*` and 4
+    // `archive_*` car.jpg copies, plus the quicktime-keys fixture, which brings
+    // its own container coordinates). The seeded pair's cluster holds 2
     // locations but 14 photos, so announcing the location count fails.
     await expect
       .poll(async () =>
@@ -293,15 +300,20 @@ test.describe('Map view', () => {
   });
 
   test('cluster markers expand on click and on Enter', async ({ page }) => {
-    await TestHelpers.goto(page, '/map');
+    // Scoped to images: the library's other geo-located photo — the
+    // quicktime-keys video, whose position comes from its own container — sits
+    // in Vienna, so an unfiltered fit spans two continents and legitimately
+    // renders this cluster without it. The seeded pair is images, so the scope
+    // restores the premise the count below describes.
+    await TestHelpers.goto(page, '/map?q=type%3Aimage');
     await waitForMapFeatures(page);
 
     // FR-006: the fitted view holds the seeded pair in one cluster, whose
     // bubble, data attribute, and label carry the PHOTOS it aggregates. The
-    // pair's cluster covers 2 locations but all the library's geo-located
-    // photos, so announcing the location count (2) fails here.
+    // pair's cluster covers 2 locations but every geo-located image, so
+    // announcing the location count (2) fails here.
     const expectedClusterPhotos = await page.evaluate(async () => {
-      const response = await fetch('/api/photos/map');
+      const response = await fetch('/api/photos/map?q=type%3Aimage');
       const { photos } = await response.json();
       return photos.filter((photo) => {
         const latitude = photo.metadata?.location?.latitude;
@@ -326,7 +338,7 @@ test.describe('Map view', () => {
       .toBeGreaterThan(before);
 
     // A fresh load restores the fitted (clustered) view for the keyboard pass.
-    await TestHelpers.goto(page, '/map');
+    await TestHelpers.goto(page, '/map?q=type%3Aimage');
     await waitForMapFeatures(page);
     const keyboardCluster = page.locator('[data-map-cluster]').first();
     await expect(keyboardCluster).toBeVisible();

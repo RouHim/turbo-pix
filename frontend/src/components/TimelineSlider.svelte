@@ -126,6 +126,7 @@
   const fetchTimelineData = async () => {
     try {
       data = await api.request('/api/photos/timeline');
+      initError = false;
     } catch (error) {
       console.error('Failed to initialize timeline:', error);
       addToast(
@@ -134,7 +135,10 @@
         'error',
         4000
       );
-      initError = true;
+      // Only the initial load is fatal: with nothing rendered there is no
+      // timeline to keep. A refetch that fails after a save must leave an
+      // already-rendered graph in place; the next success clears the flag.
+      if (data === null) initError = true;
     }
   };
 

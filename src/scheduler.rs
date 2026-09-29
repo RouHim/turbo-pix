@@ -13,6 +13,7 @@ use crate::db::DbPool;
 use crate::geo_location::NominatimClient;
 use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
+use crate::media_facts::MediaFactsIndex;
 use crate::semantic_search::SemanticSearch;
 #[cfg(test)]
 use crate::semantic_search::SemanticSearchEngine;
@@ -201,10 +202,18 @@ pub struct PhotoScheduler {
     locale: String,
     nominatim_url: String,
     rescan_lock: Arc<Mutex<()>>,
+    /// File-derived capture facts, shared with the API: both scans publish
+    /// into it and every response reads from it.
+    media_facts: Arc<MediaFactsIndex>,
     pub status: IndexingStatus,
 }
 
 impl PhotoScheduler {
+    /// Every dependency the five-phase rescan needs, plus the shared capture
+    /// facts index. The argument count follows the call graph (the constructor
+    /// is the single wiring point), so the blanket lint is waived here as it
+    /// is on the other multi-argument constructors in this crate.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         photo_paths: Vec<PathBuf>,
         db_pool: DbPool,
@@ -213,6 +222,7 @@ impl PhotoScheduler {
         data_path: PathBuf,
         locale: String,
         nominatim_url: String,
+        media_facts: Arc<MediaFactsIndex>,
     ) -> Self {
         let mut photo_paths = photo_paths;
         let collages_path = data_path.join("collages").join("accepted");
@@ -237,6 +247,7 @@ impl PhotoScheduler {
             locale,
             nominatim_url,
             rescan_lock: Arc::new(Mutex::new(())),
+            media_facts,
             status: IndexingStatus::new(),
         }
     }
@@ -333,6 +344,7 @@ impl PhotoScheduler {
         let status = self.status.clone();
         let locale = self.locale.clone();
         let nominatim_url = self.nominatim_url.clone();
+        let media_facts = self.media_facts.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
@@ -358,7 +370,7 @@ impl PhotoScheduler {
                 // Phase 1: Fast metadata-only scan (skip semantic vectors)
                 info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
                 match processor
-                    .full_rescan_and_cleanup(&db_pool, &cache_manager, &status)
+                    .full_rescan_and_cleanup(&db_pool, &cache_manager, &status, &media_facts)
                     .await
                 {
                     Ok(processed_photos) => {
@@ -401,6 +413,7 @@ impl PhotoScheduler {
                         status.set_phase("collages").await;
                         match collage_generator::generate_collages(
                             &db_pool,
+                            &media_facts,
                             &data_path,
                             locale.as_str(),
                         )
@@ -527,7 +540,12 @@ impl PhotoScheduler {
         // Phase 1: Fast metadata-only scan (skip semantic vectors)
         info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
         let result = processor
-            .full_rescan_and_cleanup(&self.db_pool, &self.cache_manager, &self.status)
+            .full_rescan_and_cleanup(
+                &self.db_pool,
+                &self.cache_manager,
+                &self.status,
+                &self.media_facts,
+            )
             .await
             .map_err(|e| anyhow::anyhow!("Phase 1 failed: {}", e));
 
@@ -580,8 +598,13 @@ impl PhotoScheduler {
         // Phase 4: Generate collages
         info!("Phase 4: Generating collages");
         self.status.set_phase("collages").await;
-        match collage_generator::generate_collages(&self.db_pool, &self.data_path, &self.locale)
-            .await
+        match collage_generator::generate_collages(
+            &self.db_pool,
+            &self.media_facts,
+            &self.data_path,
+            &self.locale,
+        )
+        .await
         {
             Ok(count) => info!("Phase 4 completed: {} collages generated", count),
             Err(e) => error!("Phase 4 (collage generation) failed: {}", e),
@@ -680,6 +703,7 @@ mod tests {
                 data_path,
                 "en".to_string(),
                 "https://nominatim.openstreetmap.org".to_string(),
+                Arc::new(MediaFactsIndex::new()),
             );
 
             Self {
@@ -708,6 +732,7 @@ mod tests {
                 data_path,
                 "en".to_string(),
                 "https://nominatim.openstreetmap.org".to_string(),
+                Arc::new(MediaFactsIndex::new()),
             );
 
             Self {
@@ -967,6 +992,7 @@ mod tests {
             data_path,
             "en".to_string(),
             "https://nominatim.openstreetmap.org".to_string(),
+            Arc::new(MediaFactsIndex::new()),
         );
 
         // Should handle errors gracefully

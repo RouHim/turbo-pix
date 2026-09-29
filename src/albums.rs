@@ -2,6 +2,7 @@ use serde::Serialize;
 use sqlx::{FromRow, Row};
 
 use crate::db::{build_order_clause, DbPool, Photo};
+use crate::media_facts::MediaFactsIndex;
 
 /// A manual, hand-curated album: a named set of explicitly chosen photos.
 /// Membership lives in `album_members`; there are no rule/criteria fields.
@@ -206,37 +207,65 @@ pub async fn delete(pool: &DbPool, id: i64) -> Result<bool, Box<dyn std::error::
 
 /// Query member photos via the membership join, with the shared sort/order
 /// contract. Returns `(photos, total)`.
+///
+/// The album listing (like the default grid) orders by capture date, which
+/// only the in-memory index knows: the SQL fast path is used for an explicit
+/// column sort, everything else fetches every member row, enriches it from the
+/// index, sorts and pages in memory.
 pub async fn photos_for_album(
     pool: &DbPool,
+    facts: &MediaFactsIndex,
     album_id: i64,
     limit: i64,
     offset: i64,
     sort: Option<&str>,
     order: Option<&str>,
 ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos \
+    if crate::db::is_sql_sort(sort) {
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos \
+             JOIN album_members ON photos.hash_sha256 = album_members.photo_hash \
+             WHERE album_members.album_id = ?",
+        )
+        .bind(album_id)
+        .fetch_one(pool)
+        .await?;
+
+        let data_sql = format!(
+            "SELECT photos.* FROM photos \
+             JOIN album_members ON photos.hash_sha256 = album_members.photo_hash \
+             WHERE album_members.album_id = ? ORDER BY {} LIMIT ? OFFSET ?",
+            build_order_clause(sort, order)
+        );
+        let mut photos = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql))
+            .bind(album_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        for photo in &mut photos {
+            facts.enrich(photo);
+        }
+        return Ok((photos, total));
+    }
+
+    let mut photos = sqlx::query_as::<_, Photo>(
+        "SELECT photos.* FROM photos \
          JOIN album_members ON photos.hash_sha256 = album_members.photo_hash \
          WHERE album_members.album_id = ?",
     )
     .bind(album_id)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await?;
+    for photo in &mut photos {
+        facts.enrich(photo);
+    }
+    crate::db::sort_photos(&mut photos, sort, order);
+    let total = photos.len() as i64;
+    let offset = usize::try_from(offset).unwrap_or(0);
+    let limit = usize::try_from(limit).unwrap_or(0);
 
-    let data_sql = format!(
-        "SELECT photos.* FROM photos \
-         JOIN album_members ON photos.hash_sha256 = album_members.photo_hash \
-         WHERE album_members.album_id = ? ORDER BY {} LIMIT ? OFFSET ?",
-        build_order_clause(sort, order)
-    );
-    let photos = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql))
-        .bind(album_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?;
-
-    Ok((photos, total))
+    Ok((photos.into_iter().skip(offset).take(limit).collect(), total))
 }
 
 #[cfg(test)]

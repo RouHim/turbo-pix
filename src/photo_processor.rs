@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
 use crate::file_scanner::{FileScanner, PhotoFile};
+use crate::media_facts::{MediaFacts, MediaFactsIndex};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
@@ -83,6 +84,18 @@ pub struct PhotoProcessor {
     semantic_search: Arc<dyn SemanticSearch>,
 }
 
+/// The file-derived facts a processed photo carries: what a scan publishes to
+/// the index and what every response is enriched from.
+impl From<&ProcessedPhoto> for MediaFacts {
+    fn from(photo: &ProcessedPhoto) -> Self {
+        MediaFacts {
+            taken_at: photo.taken_at,
+            latitude: photo.latitude,
+            longitude: photo.longitude,
+        }
+    }
+}
+
 /// Attempt to fix MOOV atom placement for video files during scanning.
 /// Only applies to video files (by MIME type). Errors are logged as warnings
 /// and never propagate — scanning continues regardless of MOOV fix outcome.
@@ -118,6 +131,7 @@ impl PhotoProcessor {
         db_pool: &DbPool,
         cache_manager: &CacheManager,
         status: &IndexingStatus,
+        facts: &MediaFactsIndex,
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
         // Step 1: Get all photo files on disk. A partial scan (missing or
         // unreadable directory) must NOT trigger orphan cleanup — files that
@@ -160,6 +174,11 @@ impl PhotoProcessor {
                 error!("Failed to clear cache for {}: {}", hash, e);
             }
         }
+        // A deleted row's file is gone (or gone from the roots), so its facts
+        // must not linger in the index.
+        let deleted_file_paths: Vec<String> =
+            deleted_paths.iter().map(|(path, _)| path.clone()).collect();
+        facts.remove_many(&deleted_file_paths);
         // Conversions are keyed by the same hash; orphan rows must not leave them
         // behind. Cleared in one pass per namespace for the whole batch, not once
         // per orphan: the per-hash form re-lists all three namespace directories,
@@ -212,13 +231,19 @@ impl PhotoProcessor {
                                 .set_current_item(Some(file_path.clone()));
                             status_clone.phases.metadata.add_processed(1);
 
-                            // Convert existing Photo to ProcessedPhoto
+                            // Convert existing Photo to ProcessedPhoto. The
+                            // date/coordinates come from the FILE, not the row
+                            // (the DB stores neither any more).
+                            let file_facts = crate::media_facts::read_media_facts_with_metadata(
+                                &photo_file.path,
+                                Some(&photo_file.metadata),
+                            );
                             return Some(ProcessedPhoto {
                                 file_path: existing_photo.file_path.clone(),
                                 filename: existing_photo.filename.clone(),
                                 file_size: existing_photo.file_size,
                                 mime_type: existing_photo.mime_type.clone(),
-                                taken_at: existing_photo.taken_at,
+                                taken_at: file_facts.taken_at,
                                 date_modified: existing_photo.date_modified,
                                 camera_make: existing_photo.camera_make().map(String::from),
                                 camera_model: existing_photo.camera_model().map(String::from),
@@ -236,8 +261,8 @@ impl PhotoProcessor {
                                 metering_mode: existing_photo.metering_mode().map(String::from),
                                 orientation: existing_photo.orientation,
                                 flash_used: existing_photo.flash_used(),
-                                latitude: existing_photo.latitude(),
-                                longitude: existing_photo.longitude(),
+                                latitude: file_facts.latitude,
+                                longitude: file_facts.longitude,
                                 hash_sha256: Some(existing_photo.hash_sha256.clone()),
                                 blurhash: existing_photo.blurhash.clone(),
                                 duration: existing_photo.duration,
@@ -273,6 +298,10 @@ impl PhotoProcessor {
             // Wait for at least one task to complete
             if let Some(outcome) = tasks.join_next().await {
                 if let Some(photo) = record_metadata_task_outcome(outcome, status) {
+                    // Every scan republishes what the file says: the index is
+                    // the only place the date and coordinates live for as long
+                    // as the process runs.
+                    facts.set(&photo.file_path, MediaFacts::from(&photo));
                     photos.push(photo);
                 }
             }
@@ -661,7 +690,179 @@ mod tests {
     use crate::video_processor;
     use std::path::Path;
     use std::process::Command;
+    use std::sync::Arc;
     use tempfile::TempDir;
+
+    use chrono::{TimeZone, Utc};
+
+    use super::PhotoProcessor;
+    use crate::cache_manager::CacheManager;
+    use crate::db::{create_in_memory_pool, DbPool, Photo};
+    use crate::media_facts::MediaFactsIndex;
+    use crate::scheduler::IndexingStatus;
+    use crate::semantic_search::NoopSemanticSearch;
+
+    fn test_processor(dir: &TempDir) -> PhotoProcessor {
+        PhotoProcessor::new(vec![dir.path().to_path_buf()], Arc::new(NoopSemanticSearch))
+    }
+
+    /// A row matching `path`'s current size and mtime: the scan's
+    /// "unchanged file" precondition.
+    fn unchanged_row(path: &Path, hash: &str) -> Photo {
+        let metadata = std::fs::metadata(path).expect("file must exist");
+        Photo {
+            hash_sha256: hash.to_string(),
+            file_path: path.to_string_lossy().to_string(),
+            filename: path.file_name().unwrap().to_string_lossy().to_string(),
+            file_size: metadata.len() as i64,
+            mime_type: Some("image/jpeg".to_string()),
+            taken_at: None,
+            width: None,
+            height: None,
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: None,
+            semantic_vector_indexed: Some(false),
+            metadata: serde_json::json!({}),
+            date_modified: chrono::DateTime::<Utc>::from(metadata.modified().unwrap()),
+            date_indexed: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    async fn seed_row(pool: &DbPool, photo: &Photo) {
+        photo.create(pool).await.expect("row must be created");
+    }
+
+    /// GIVEN a photo row whose file is unchanged (size + mtime match) and an
+    /// EMPTY facts index
+    /// WHEN a phase-1 rescan runs
+    /// THEN the index carries the date the file itself holds
+    #[tokio::test]
+    async fn test_rescan_publishes_facts_for_unchanged_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let pool = create_in_memory_pool().await.unwrap();
+        let cache = CacheManager::new(temp_dir.path().join("cache"));
+        let path = temp_dir.path().join("photo.jpg");
+        std::fs::copy("test-data/IMG_9377.jpg", &path).unwrap();
+        let pinned = Utc.with_ymd_and_hms(2012, 3, 15, 14, 30, 0).unwrap();
+        crate::metadata_writer::update_metadata(&path, Some(pinned), None, None)
+            .expect("failed to write the date into the file");
+
+        let row = unchanged_row(&path, &"a".repeat(64));
+        seed_row(&pool, &row).await;
+        let facts = MediaFactsIndex::new();
+
+        let status = IndexingStatus::new();
+        test_processor(&temp_dir)
+            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+            .await
+            .expect("rescan must succeed");
+
+        let published = facts.get(&row.file_path).expect("facts must be published");
+        assert_eq!(
+            published.taken_at,
+            Some(pinned),
+            "an unchanged file still publishes its own date"
+        );
+    }
+
+    /// GIVEN facts for a file's old date (the row's size/mtime also match the
+    /// OLD file)
+    /// WHEN the file's EXIF date is rewritten outside the app and a rescan runs
+    /// THEN the index carries the NEW date (FR-013/SC-006)
+    #[tokio::test]
+    async fn test_rescan_picks_up_an_external_date_change() {
+        let temp_dir = TempDir::new().unwrap();
+        let pool = create_in_memory_pool().await.unwrap();
+        let cache = CacheManager::new(temp_dir.path().join("cache"));
+        let path = temp_dir.path().join("photo.jpg");
+        std::fs::copy("test-data/IMG_9377.jpg", &path).unwrap();
+        let old_date = Utc.with_ymd_and_hms(2012, 3, 15, 14, 30, 0).unwrap();
+        let new_date = Utc.with_ymd_and_hms(2024, 8, 1, 9, 15, 0).unwrap();
+        crate::metadata_writer::update_metadata(&path, Some(old_date), None, None)
+            .expect("failed to write the old date");
+
+        let row = unchanged_row(&path, &"b".repeat(64));
+        seed_row(&pool, &row).await;
+        let facts = MediaFactsIndex::new();
+        facts.set(
+            &row.file_path,
+            crate::media_facts::MediaFacts {
+                taken_at: Some(old_date),
+                ..Default::default()
+            },
+        );
+
+        // WHEN: the file's date changes outside the app
+        crate::metadata_writer::update_metadata(&path, Some(new_date), None, None)
+            .expect("failed to rewrite the date");
+
+        let status = IndexingStatus::new();
+        test_processor(&temp_dir)
+            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+            .await
+            .expect("rescan must succeed");
+
+        // THEN: the index carries the file's new date, not the old one
+        assert_eq!(
+            facts.get(&row.file_path).unwrap().taken_at,
+            Some(new_date),
+            "a rescan must republish the date the file now carries"
+        );
+    }
+
+    /// GIVEN a facts entry for a photo whose file is gone
+    /// WHEN a rescan runs
+    /// THEN the orphan's facts are removed from the index
+    #[tokio::test]
+    async fn test_rescan_removes_facts_of_orphaned_photos() {
+        let temp_dir = TempDir::new().unwrap();
+        let pool = create_in_memory_pool().await.unwrap();
+        let cache = CacheManager::new(temp_dir.path().join("cache"));
+        let keep_path = temp_dir.path().join("keep.jpg");
+        std::fs::copy("test-data/IMG_9377.jpg", &keep_path).unwrap();
+        let keep = unchanged_row(&keep_path, &"c".repeat(64));
+        seed_row(&pool, &keep).await;
+
+        // A row whose file does not exist on disk any more.
+        let gone_path = temp_dir.path().join("gone.jpg");
+        let gone = unchanged_row(&keep_path, &"d".repeat(64));
+        let gone = Photo {
+            file_path: gone_path.to_string_lossy().to_string(),
+            filename: "gone.jpg".to_string(),
+            ..gone
+        };
+        seed_row(&pool, &gone).await;
+
+        let facts = MediaFactsIndex::new();
+        for path in [&keep.file_path, &gone.file_path] {
+            facts.set(
+                path,
+                crate::media_facts::MediaFacts {
+                    taken_at: Some(Utc.with_ymd_and_hms(2012, 3, 15, 14, 30, 0).unwrap()),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let status = IndexingStatus::new();
+        test_processor(&temp_dir)
+            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+            .await
+            .expect("rescan must succeed");
+
+        // THEN: the orphan's entry is gone and the surviving file's is not
+        assert!(
+            facts.get(&gone.file_path).is_none(),
+            "an orphaned photo's facts must be removed"
+        );
+        assert!(facts.get(&keep.file_path).is_some());
+    }
 
     fn project_photo_path(filename: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

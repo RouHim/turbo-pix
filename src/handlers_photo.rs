@@ -11,12 +11,14 @@ use crate::handlers_video::{
     get_video_file, get_video_status, stream_video, StreamQuery, VideoQuery,
 };
 use crate::image_editor::{self, RotationAngle};
+use crate::media_facts::MediaFactsIndex;
 use crate::metadata_writer;
 use crate::mimetype_detector;
 use crate::warp_helpers::{
-    handle_rejection, with_cache, with_db, DatabaseError, NotFoundError, PermissionError,
-    ValidationError,
+    handle_rejection, with_cache, with_db, with_facts, DatabaseError, NotFoundError,
+    PermissionError, ValidationError,
 };
+use std::sync::Arc;
 
 /// Cap for JSON request bodies (favorite/metadata/rotate). All three payloads
 /// are a handful of fields; anything larger is a memory-exhaustion attempt.
@@ -73,6 +75,7 @@ pub struct MapPhotosResponse {
 
 async fn fetch_photos(
     db_pool: &DbPool,
+    facts: &MediaFactsIndex,
     query: &PhotoQuery,
     limit: i64,
     offset: i64,
@@ -92,6 +95,7 @@ async fn fetch_photos(
         };
         Photo::search_photos(
             db_pool,
+            facts,
             &search_query,
             limit,
             offset,
@@ -103,6 +107,7 @@ async fn fetch_photos(
     } else {
         Photo::list_with_pagination(
             db_pool,
+            facts,
             limit,
             offset,
             query.sort.as_deref(),
@@ -113,7 +118,11 @@ async fn fetch_photos(
     }
 }
 
-pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Reply, Rejection> {
+pub async fn list_photos(
+    query: PhotoQuery,
+    db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
+) -> Result<impl Reply, Rejection> {
     // Client-supplied pagination must not underflow/overflow: page and limit
     // are clamped to sane ranges before arithmetic.
     let page = query.page.unwrap_or(DEFAULT_PAGE).max(DEFAULT_PAGE);
@@ -124,7 +133,7 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
     let offset = (page as u64 - 1) * limit as u64;
 
     // Dispatch to helper that selects search vs list
-    let result = fetch_photos(&db_pool, &query, limit as i64, offset as i64).await;
+    let result = fetch_photos(&db_pool, &facts, &query, limit as i64, offset as i64).await;
 
     match result {
         Ok((photos, total)) => {
@@ -152,6 +161,7 @@ pub async fn list_photos(query: PhotoQuery, db_pool: DbPool) -> Result<impl Repl
 pub async fn list_map_photos(
     query: Option<MapPhotoQuery>,
     db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<warp::reply::Response, Rejection> {
     // `None` is a query `warp::query` could not deserialize; see the map route.
     let Some(query) = query else {
@@ -176,6 +186,7 @@ pub async fn list_map_photos(
 
     match Photo::list_all_filtered(
         &db_pool,
+        &facts,
         &search_query,
         query.sort.as_deref(),
         query.order.as_deref(),
@@ -511,6 +522,7 @@ pub async fn update_photo_metadata(
     photo_hash: String,
     metadata_req: MetadataUpdateRequest,
     db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     // Find the photo in database
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
@@ -561,6 +573,10 @@ pub async fn update_photo_metadata(
         }));
     }
 
+    // The file just changed, so re-read it: the index must reflect what the
+    // file now carries.
+    facts.reload(&photo.file_path);
+
     // Update photo with provided metadata directly
     let mut updated_photo = photo;
 
@@ -610,8 +626,11 @@ pub async fn update_photo_metadata(
     }
 }
 
-pub async fn get_timeline(db_pool: DbPool) -> Result<impl Reply, Rejection> {
-    match Photo::get_timeline_data(&db_pool).await {
+pub async fn get_timeline(
+    db_pool: DbPool,
+    facts: Arc<MediaFactsIndex>,
+) -> Result<impl Reply, Rejection> {
+    match Photo::get_timeline_data(&db_pool, &facts).await {
         Ok(timeline) => Ok(warp::reply::json(&timeline)),
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -766,6 +785,7 @@ pub async fn delete_photo(
     photo_hash: String,
     db_pool: DbPool,
     cache_manager: CacheManager,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     // Find photo
     let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
@@ -780,7 +800,7 @@ pub async fn delete_photo(
     };
 
     // Delete photo
-    match image_editor::delete_photo(&photo, &db_pool, &cache_manager).await {
+    match image_editor::delete_photo(&photo, &db_pool, &cache_manager, &facts).await {
         Ok(()) => Ok(warp::reply::json(
             &json!({"success": true, "message": "Photo deleted successfully"}),
         )),
@@ -804,6 +824,7 @@ pub async fn batch_delete(
     req: BatchHashesRequest,
     db_pool: DbPool,
     cache_manager: CacheManager,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     validate_hashes(&req.hashes)?;
 
@@ -831,7 +852,7 @@ pub async fn batch_delete(
                 continue;
             }
         };
-        match image_editor::delete_photo(&photo, &db_pool, &cache_manager).await {
+        match image_editor::delete_photo(&photo, &db_pool, &cache_manager, &facts).await {
             Ok(()) => result.applied.push(hash.clone()),
             Err(image_editor::ImageEditError::PermissionDenied(msg)) => {
                 result.failed.push(BatchFailure {
@@ -1076,6 +1097,7 @@ fn build_export_archive(export_dir: &Path, photos: &[Photo]) -> Result<PathBuf, 
 
 pub fn build_photo_routes(
     db_pool: DbPool,
+    media_facts: Arc<MediaFactsIndex>,
     cache_manager: CacheManager,
     data_path: PathBuf,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -1085,6 +1107,7 @@ pub fn build_photo_routes(
         .and(warp::get())
         .and(warp::query::<PhotoQuery>())
         .and(with_db(db_pool.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(list_photos);
 
     let api_photo_timeline = warp::path("api")
@@ -1093,6 +1116,7 @@ pub fn build_photo_routes(
         .and(warp::path::end())
         .and(warp::get())
         .and(with_db(db_pool.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(get_timeline);
 
     // Literal sub-paths (`/map`, `/timeline`, `/batch/...`) must be registered
@@ -1116,6 +1140,7 @@ pub fn build_photo_routes(
                 .unify(),
         )
         .and(with_db(db_pool.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(list_map_photos);
 
     // NOTE: the batch literal routes AND the `/timeline` literal route must
@@ -1133,6 +1158,7 @@ pub fn build_photo_routes(
         .and(warp::body::json::<BatchHashesRequest>())
         .and(with_db(db_pool.clone()))
         .and(with_cache(cache_manager.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(batch_delete);
 
     let api_photo_batch_favorite = warp::path("api")
@@ -1257,6 +1283,7 @@ pub fn build_photo_routes(
         .and(warp::body::content_length_limit(MAX_JSON_BODY_BYTES))
         .and(warp::body::json::<MetadataUpdateRequest>())
         .and(with_db(db_pool.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(update_photo_metadata);
 
     let api_photo_rotate = warp::path("api")
@@ -1278,6 +1305,7 @@ pub fn build_photo_routes(
         .and(warp::delete())
         .and(with_db(db_pool.clone()))
         .and(with_cache(cache_manager.clone()))
+        .and(with_facts(media_facts.clone()))
         .and_then(delete_photo);
 
     api_photos_list
@@ -1304,6 +1332,7 @@ pub fn build_photo_routes(
 mod tests {
     use super::*;
     use crate::db::create_in_memory_pool;
+    use crate::media_facts::{MediaFacts, MediaFactsIndex};
     use crate::warp_helpers::handle_rejection;
     use chrono::{DateTime, Datelike, TimeZone, Utc};
     use std::convert::Infallible;
@@ -1353,14 +1382,17 @@ mod tests {
         temp_image
     }
 
-    /// Same fixture as `create_photo_row` but with an explicit `taken_at`.
-    async fn create_dated_photo_row(
+    /// Same fixture as `create_photo_row`, and additionally seeds the photo's
+    /// file-derived capture date into `facts` — the DB stores no date. Returns
+    /// `(hash, backing file path)`.
+    async fn create_photo_row_at(
         db_pool: &DbPool,
+        facts: &MediaFactsIndex,
         temp_dir: &TempDir,
         hash: &str,
         filename: &str,
         taken_at: &str,
-    ) {
+    ) -> (String, PathBuf) {
         let test_image = Path::new("test-data/IMG_9377.jpg");
         let temp_image = temp_dir.path().join(filename);
         fs::copy(test_image, &temp_image).expect("Failed to copy test image");
@@ -1371,11 +1403,7 @@ mod tests {
             filename: filename.to_string(),
             file_size: 12345,
             mime_type: Some("image/jpeg".to_string()),
-            taken_at: Some(
-                DateTime::parse_from_rfc3339(taken_at)
-                    .unwrap()
-                    .with_timezone(&Utc),
-            ),
+            taken_at: None,
             width: Some(800),
             height: Some(600),
             orientation: Some(1),
@@ -1396,6 +1424,19 @@ mod tests {
             .create(db_pool)
             .await
             .expect("Failed to create test photo");
+        facts.set(
+            &photo.file_path,
+            MediaFacts {
+                taken_at: Some(
+                    DateTime::parse_from_rfc3339(taken_at)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                ),
+                ..MediaFacts::default()
+            },
+        );
+
+        (photo.hash_sha256, temp_image)
     }
 
     async fn setup_test_photo(
@@ -1415,26 +1456,49 @@ mod tests {
         db_pool: DbPool,
         cache_dir: PathBuf,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
+        build_test_routes_with_facts(db_pool, cache_dir, Arc::new(MediaFactsIndex::new()))
+    }
+
+    /// Same route set, but serving capture facts from `facts` — the tests that
+    /// assert a date or coordinates must seed the index themselves.
+    fn build_test_routes_with_facts(
+        db_pool: DbPool,
+        cache_dir: PathBuf,
+        facts: Arc<MediaFactsIndex>,
+    ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
         let data_path = cache_dir
             .parent()
             .map(|p| p.join("data"))
             .unwrap_or_else(|| cache_dir.join("data"));
-        build_photo_routes(db_pool, CacheManager::new(cache_dir), data_path)
+        build_photo_routes(db_pool, facts, CacheManager::new(cache_dir), data_path)
             .recover(handle_rejection)
     }
 
     #[tokio::test]
     async fn test_map_photos_returns_all_matches_beyond_page_limit() {
         let db_pool = create_in_memory_pool().await.expect("db");
-        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
+        // Coordinates live in the index now (the file is their only home).
+        let facts = Arc::new(crate::media_facts::MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            PathBuf::from("/tmp/turbo-pix-test-cache"),
+            facts.clone(),
+        );
 
         for index in 0..120 {
-            let mut photo = crate::db::tests::create_test_photo(
+            let photo = crate::db::tests::create_test_photo(
                 format!("map_{index}.jpg"),
                 format!("map{index:03}"),
             );
-            photo.metadata = json!({ "location": { "latitude": 48.1, "longitude": 11.5 } });
             photo.create(&db_pool).await.unwrap();
+            facts.set(
+                &photo.file_path,
+                crate::media_facts::MediaFacts {
+                    taken_at: Some(Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap()),
+                    latitude: Some(48.1),
+                    longitude: Some(11.5),
+                },
+            );
         }
 
         let response = warp::test::request()
@@ -1452,28 +1516,24 @@ mod tests {
     #[tokio::test]
     async fn test_map_photos_applies_filters_and_sort() {
         let db_pool = create_in_memory_pool().await.expect("db");
-        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
-
-        let mut older = crate::db::tests::create_test_photo_with_date(
-            &"a".repeat(64),
-            "older.jpg",
-            chrono::DateTime::parse_from_rfc3339("2020-05-25T10:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
+        let facts = Arc::new(crate::media_facts::test_facts_with_coords(&[
+            ("./test/older.jpg", "2020-05-25T10:00:00Z", 52.5, 13.4),
+            ("./test/newer.jpg", "2024-05-25T10:00:00Z", 52.5, 13.4),
+        ]));
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            PathBuf::from("/tmp/turbo-pix-test-cache"),
+            facts.clone(),
         );
-        older.metadata =
-            json!({ "location": { "city": "Berlin", "latitude": 52.5, "longitude": 13.4 } });
+
+        let mut older =
+            crate::db::tests::create_test_photo("older.jpg".to_string(), "a".repeat(64));
+        older.metadata = json!({ "location": { "city": "Berlin" } });
         older.create(&db_pool).await.unwrap();
 
-        let mut newer = crate::db::tests::create_test_photo_with_date(
-            &"b".repeat(64),
-            "newer.jpg",
-            chrono::DateTime::parse_from_rfc3339("2024-05-25T10:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-        );
-        newer.metadata =
-            json!({ "location": { "city": "Berlin", "latitude": 52.5, "longitude": 13.4 } });
+        let mut newer =
+            crate::db::tests::create_test_photo("newer.jpg".to_string(), "b".repeat(64));
+        newer.metadata = json!({ "location": { "city": "Berlin" } });
         newer.create(&db_pool).await.unwrap();
 
         let response = warp::test::request()
@@ -1542,7 +1602,8 @@ mod tests {
             .await
             .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let (photo_hash, temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let facts = Arc::new(MediaFactsIndex::new());
 
         let update_req = MetadataUpdateRequest {
             taken_at: Some("2024-03-15T14:30:00Z".to_string()),
@@ -1550,36 +1611,31 @@ mod tests {
             longitude: Some(-74.0060),
         };
 
-        let result = update_photo_metadata(photo_hash.clone(), update_req, db_pool.clone()).await;
+        let result = update_photo_metadata(
+            photo_hash.clone(),
+            update_req,
+            db_pool.clone(),
+            facts.clone(),
+        )
+        .await;
         assert!(result.is_ok(), "Handler should succeed");
 
-        let updated_photo = Photo::find_by_hash(&db_pool, &photo_hash)
-            .await
-            .expect("Failed to query database")
-            .expect("Photo should exist");
-
-        assert!(updated_photo.taken_at.is_some());
-        let taken_at = updated_photo.taken_at.unwrap();
+        // The file is the only place the date and coordinates live now: they
+        // must be readable back from it.
+        let file_facts = crate::media_facts::read_media_facts(&temp_image);
+        let taken_at = file_facts.taken_at.expect("date written to the file");
         assert_eq!(taken_at.year(), 2024);
         assert_eq!(taken_at.month(), 3);
         assert_eq!(taken_at.day(), 15);
+        assert!((file_facts.latitude.expect("latitude in the file") - 40.7128).abs() < 1e-4);
+        assert!((file_facts.longitude.expect("longitude in the file") - (-74.0060)).abs() < 1e-4);
 
-        assert_eq!(
-            updated_photo
-                .metadata
-                .get("location")
-                .and_then(|l| l.get("latitude"))
-                .and_then(|v| v.as_f64()),
-            Some(40.7128)
-        );
-        assert_eq!(
-            updated_photo
-                .metadata
-                .get("location")
-                .and_then(|l| l.get("longitude"))
-                .and_then(|v| v.as_f64()),
-            Some(-74.0060)
-        );
+        // AND: the index was reloaded from the file, so the very next read
+        // reflects the save.
+        let published = facts
+            .get(&temp_image.to_string_lossy())
+            .expect("index reloaded");
+        assert_eq!(published.taken_at, Some(taken_at));
     }
 
     #[tokio::test]
@@ -1599,7 +1655,13 @@ mod tests {
         };
 
         // Call the handler
-        let result = update_photo_metadata(photo_hash, update_req, db_pool).await;
+        let result = update_photo_metadata(
+            photo_hash,
+            update_req,
+            db_pool,
+            Arc::new(MediaFactsIndex::new()),
+        )
+        .await;
 
         // Verify the result is an error
         assert!(
@@ -1625,7 +1687,13 @@ mod tests {
         };
 
         // Call the handler
-        let result = update_photo_metadata(photo_hash, update_req, db_pool).await;
+        let result = update_photo_metadata(
+            photo_hash,
+            update_req,
+            db_pool,
+            Arc::new(MediaFactsIndex::new()),
+        )
+        .await;
 
         // Verify the result is an error
         assert!(
@@ -1710,14 +1778,27 @@ mod tests {
             .await
             .expect("Failed to create test database");
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().to_path_buf());
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().to_path_buf(),
+            facts.clone(),
+        );
 
         for (hash, filename, taken_at) in [
             ("a", "mar2012.jpg", "2012-03-15T10:00:00Z"),
             ("b", "aug2015.jpg", "2015-08-31T23:30:00Z"),
             ("c", "sep2015.jpg", "2015-09-01T00:00:00Z"),
         ] {
-            create_dated_photo_row(&db_pool, &temp_dir, &hash.repeat(64), filename, taken_at).await;
+            create_photo_row_at(
+                &db_pool,
+                &facts,
+                &temp_dir,
+                &hash.repeat(64),
+                filename,
+                taken_at,
+            )
+            .await;
         }
 
         let response = warp::test::request()

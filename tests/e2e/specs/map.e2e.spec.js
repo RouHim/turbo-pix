@@ -184,7 +184,13 @@ test.describe('Map view', () => {
   });
 
   test('cluster click separates the cluster into individual markers', async ({ page }) => {
-    await TestHelpers.goto(page, '/map');
+    // Scoped to images: the branch's quicktime-keys fixture carries its own
+    // container coordinates in Wien, so an unfiltered fit spans two continents
+    // — clicking the image cluster zooms in far enough that the Wien marker
+    // leaves the viewport, and the location-marker count never grows. The
+    // seeded pair's cluster is images, so the scope restores the premise this
+    // test owns (clicking a cluster reveals more markers than before).
+    await TestHelpers.goto(page, '/map?q=type%3Aimage');
     // The skip below is about the library, not about the load still running.
     await waitForMapFeatures(page);
 

@@ -120,9 +120,12 @@ test.describe('Video metadata editing', () => {
     const sizeBefore = statSync(file).size;
     await openMetadataEditor(page, video);
 
-    // WHEN: the date field is set to a past date and saved. 2015 keeps the
-    // edited video behind every other seeded video, so no other spec's first
-    // video card moves.
+    // WHEN: the date field is set to a past date and saved. 2015 drops the
+    // edited video to last place in the videos view, so from here on that
+    // view's first card is the Matroska fixture — fine: the only spec that
+    // opens a video card by index asserts generically (viewer opens, the video
+    // element is visible, the card carries an id), and every other video spec
+    // resolves its fixture by filename or hash.
     await page.fill('#edit-taken-at', '2015-06-01T12:00');
     // The form submits `new Date(<input value>).toISOString()`, read in the
     // browser's own zone — derive the expectation the same way instead of
@@ -211,9 +214,20 @@ test.describe('Video metadata editing', () => {
     const currentTimeBefore = await handle.evaluate((element) => element.currentTime);
     const srcBefore = await handle.getAttribute('src');
 
-    // WHEN: the same route the UI uses saves a new capture date mid-playback
+    // WHEN: the same route the UI uses saves a new capture date mid-playback.
+    // The instant is derived from the row as it is *now* — an hour later, whole
+    // seconds, because the container keeps the QuickTime epoch value in seconds —
+    // so a Playwright retry (same server, same DB, same file; globalSetup does
+    // not re-run) writes a fresh value instead of re-saving the one a previous
+    // attempt already stored, which would be a no-op these assertions could not
+    // observe.
+    const rowBefore = await (await page.request.get(`/api/photos/${video.hash_sha256}`)).json();
+    const baseMs = rowBefore.taken_at
+      ? Date.parse(rowBefore.taken_at)
+      : Date.parse('2017-03-04T10:00:00.000Z');
+    const targetTakenAt = new Date(Math.floor(baseMs / 1000) * 1000 + 60 * 60 * 1000).toISOString();
     const response = await page.request.patch(`/api/photos/${video.hash_sha256}/metadata`, {
-      data: { taken_at: '2017-03-04T10:00:00.000Z' },
+      data: { taken_at: targetTakenAt },
     });
 
     // THEN: the save lands
@@ -240,7 +254,7 @@ test.describe('Video metadata editing', () => {
     expect(statSync(file).mtimeMs).toBe(before.mtimeMs);
     expect(fileIdentity(file).sha256).not.toBe(before.sha256);
     expect(instantOf(probe(file, 'format_tags').format.tags.creation_time)).toBe(
-      '2017-03-04T10:00:00.000Z'
+      new Date(targetTakenAt).toISOString()
     );
   });
 

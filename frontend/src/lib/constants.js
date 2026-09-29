@@ -20,6 +20,9 @@ const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'f
 
 // Media Constants
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
+// Containers whose in-file metadata the PATCH endpoint can actually write.
+// Deliberately narrower than VIDEO_EXTENSIONS (playback support).
+const METADATA_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v'];
 const RAW_EXTENSIONS = [
   '.cr2',
   '.cr3',
@@ -43,6 +46,7 @@ export const APP_CONSTANTS = {
   MONTH_KEYS,
   WEEKDAY_KEYS,
   VIDEO_EXTENSIONS,
+  METADATA_VIDEO_EXTENSIONS,
   RAW_EXTENSIONS,
   DEFAULT_BATCH_SIZE,
 };

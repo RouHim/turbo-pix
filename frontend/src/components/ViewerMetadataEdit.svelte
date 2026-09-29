@@ -3,7 +3,8 @@
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { isFormatSupported } from '../lib/utils.js';
+  import { isMetadataEditable, isVideoFile } from '../lib/utils.js';
+  import { METADATA_ERROR_KEYS } from '../lib/metadataErrors.js';
   import Icon from './Icon.svelte';
 
   const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
@@ -24,8 +25,11 @@
   // below doesn't steal focus to the (hidden) edit button on initial mount.
   let wasOpen = false;
 
+  // The editor serves photos and writable videos alike; only the heading differs.
+  const videoTarget = $derived(photo ? isVideoFile(photo.filename) : false);
+
   function openModal() {
-    if (!photo || !isFormatSupported(photo)) return;
+    if (!photo || !isMetadataEditable(photo)) return;
     saveToken++;
     wasOpen = true;
     editTargetHash = photo.hash_sha256;
@@ -239,6 +243,13 @@
 
       closeModal();
     } catch (error) {
+      // A refusal the backend identified by code gets its translated message;
+      // anything else (network failure, unexpected shape) keeps the raw text.
+      const refusalKey = error?.errorCode ? METADATA_ERROR_KEYS[error.errorCode] : undefined;
+      if (refusalKey) {
+        errorMessage = get(t)(refusalKey);
+        return;
+      }
       let msg = get(t)('ui.metadata.edit_error', { default: 'Failed to update metadata' });
       if (error.message) {
         const match = error.message.match(/HTTP \d+: (.+)/);
@@ -285,7 +296,11 @@
     <div class="modal-content">
       <div class="modal-header">
         <h2 id="metadata-edit-title">
-          {$t('ui.metadata.edit_modal_title', { default: 'Edit Photo Metadata' })}
+          {#if videoTarget}
+            {$t('ui.metadata.edit_modal_title_video', { default: 'Edit Video Metadata' })}
+          {:else}
+            {$t('ui.metadata.edit_modal_title', { default: 'Edit Photo Metadata' })}
+          {/if}
         </h2>
         <button
           type="button"

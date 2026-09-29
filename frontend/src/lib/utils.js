@@ -50,6 +50,20 @@ export function isFormatSupported(p) {
 }
 
 /**
+ * True for records whose metadata can be written by the PATCH endpoint:
+ * the photo formats above, plus videos in a container the endpoint can
+ * rewrite (MP4/MOV/M4V). Other video containers play back but stay read-only.
+ * @param {object|null} p - Photo record with mime_type and/or filename
+ * @returns {boolean}
+ */
+export function isMetadataEditable(p) {
+  if (isFormatSupported(p)) return true;
+  if (!p?.filename) return false;
+  const ext = p.filename.toLowerCase().substring(p.filename.lastIndexOf('.'));
+  return APP_CONSTANTS.METADATA_VIDEO_EXTENSIONS.includes(ext);
+}
+
+/**
  * Format a file size in bytes to a human-readable string.
  * @param {number} bytes
  * @returns {string}

@@ -48,7 +48,24 @@ class TurboPixAPI {
             statusText: response.statusText,
           });
         }
-        throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+        // The metadata endpoint answers refusals as JSON
+        // ({"error": "...", "error_code": "..."}). Keep the message text
+        // identical to the raw-body case (the edit modal extracts it with a
+        // regex) but carry the code along so callers can localize it.
+        let message = errorText || response.statusText;
+        let errorCode;
+        try {
+          const body = JSON.parse(errorText);
+          if (body && typeof body.error === 'string') {
+            message = body.error;
+            if (typeof body.error_code === 'string') errorCode = body.error_code;
+          }
+        } catch {
+          // Not JSON — fall through with the raw text, as before.
+        }
+        const apiError = new Error(`HTTP ${response.status}: ${message}`);
+        if (errorCode !== undefined) apiError.errorCode = errorCode;
+        throw apiError;
       }
 
       if (logger) {

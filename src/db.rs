@@ -51,7 +51,10 @@ pub struct Photo {
 
     // === METADATA (JSON blob) ===
     /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
-    /// location{latitude,longitude}, video{codec,audio_codec,bitrate,frame_rate}
+    /// location{city,...}, video{codec,audio_codec,bitrate,frame_rate}. The
+    /// coordinates in `location` are response-only: [`MediaFactsIndex::enrich`]
+    /// merges them in from the file, and [`stored_metadata`] strips them again
+    /// before any write.
     #[serde(deserialize_with = "deserialize_json_value")]
     pub metadata: serde_json::Value,
 
@@ -94,6 +97,25 @@ where
             D::Error::custom("invalid JSON")
         })
         .or(Ok(json!({})))
+}
+
+/// The single serializer for `photos.metadata`: the value to store in a row.
+///
+/// Capture coordinates are file facts (the DB stores none), so the two
+/// coordinate keys are stripped from `location` on every write. `location`
+/// itself is kept — city and any other key survive, and an emptied
+/// `location` object is deliberately not collapsed (removing a key is not a
+/// reason to change the shape other code reads).
+fn stored_metadata(metadata: &serde_json::Value) -> String {
+    let mut sanitized = metadata.clone();
+    if let Some(location) = sanitized
+        .get_mut("location")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        location.remove("latitude");
+        location.remove("longitude");
+    }
+    sanitized.to_string()
 }
 
 /// Parses a timestamp, accepting both RFC3339 ("2026-01-04T16:17:10Z")
@@ -472,15 +494,6 @@ impl Photo {
         self.metadata.get("settings")?.get("flash_used")?.as_bool()
     }
 
-    // Location
-    pub fn latitude(&self) -> Option<f64> {
-        self.metadata.get("location")?.get("latitude")?.as_f64()
-    }
-
-    pub fn longitude(&self) -> Option<f64> {
-        self.metadata.get("location")?.get("longitude")?.as_f64()
-    }
-
     // Video
     pub fn video_codec(&self) -> Option<&str> {
         self.metadata.get("video")?.get("codec")?.as_str()
@@ -530,54 +543,6 @@ impl Photo {
     }
 
     // ===== DATABASE OPERATIONS =====
-
-    /// Update photo fields from extracted metadata
-    /// Preserves existing fields that are not part of the extracted metadata
-    pub fn update_from_extracted(&mut self, extracted: crate::metadata_extractor::PhotoMetadata) {
-        // Update computational fields
-        self.taken_at = extracted.taken_at;
-        self.width = extracted.width.map(|w| w as i32);
-        self.height = extracted.height.map(|h| h as i32);
-        self.orientation = extracted.orientation;
-        self.duration = extracted.duration;
-
-        // Build metadata JSON from extracted fields
-        self.metadata = json!({
-            "camera": {
-                "make": extracted.camera_make,
-                "model": extracted.camera_model,
-                "lens_make": extracted.lens_make,
-                "lens_model": extracted.lens_model,
-            },
-            "settings": {
-                "iso": extracted.iso,
-                "aperture": extracted.aperture,
-                "shutter_speed": extracted.shutter_speed,
-                "focal_length": extracted.focal_length,
-                "color_space": extracted.color_space,
-                "white_balance": extracted.white_balance,
-                "exposure_mode": extracted.exposure_mode,
-                "metering_mode": extracted.metering_mode,
-                "flash_used": extracted.flash_used,
-            },
-            "location": {
-                "latitude": extracted.latitude,
-                "longitude": extracted.longitude,
-            },
-            "video": {
-                "codec": extracted.video_codec,
-                "audio_codec": extracted.audio_codec,
-                "bitrate": extracted.bitrate,
-                "frame_rate": extracted.frame_rate,
-                "profile": extracted.video_profile,
-                "bit_depth": extracted.bit_depth,
-                "container": extracted.container,
-            }
-        });
-
-        // Update timestamp
-        self.updated_at = Utc::now();
-    }
 
     /// Update photo (convenience wrapper)
     pub async fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
@@ -759,7 +724,7 @@ impl Photo {
         .bind(&self.blurhash)
         .bind(self.is_favorite.unwrap_or(false))
         .bind(self.semantic_vector_indexed.unwrap_or(false))
-        .bind(self.metadata.to_string())
+        .bind(stored_metadata(&self.metadata))
         .bind(self.date_modified.to_rfc3339())
         .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
@@ -808,7 +773,7 @@ impl Photo {
         .bind(&self.blurhash)
         .bind(self.is_favorite.unwrap_or(false))
         .bind(self.semantic_vector_indexed.unwrap_or(false))
-        .bind(self.metadata.to_string())
+        .bind(stored_metadata(&self.metadata))
         .bind(self.date_modified.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(&self.hash_sha256)
@@ -860,7 +825,7 @@ impl Photo {
         .bind(&self.blurhash)
         .bind(self.is_favorite.unwrap_or(false))
         .bind(self.semantic_vector_indexed.unwrap_or(false))
-        .bind(self.metadata.to_string())
+        .bind(stored_metadata(&self.metadata))
         .bind(self.date_modified.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(old_hash)
@@ -1039,7 +1004,7 @@ impl Photo {
                 .unwrap_or(false),
         )
         .bind(self.semantic_vector_indexed.unwrap_or(false))
-        .bind(self.metadata.to_string())
+        .bind(stored_metadata(&self.metadata))
         .bind(self.date_modified.to_rfc3339())
         .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
@@ -1287,14 +1252,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             settings.insert("flash_used".to_string(), json!(flash_used));
         }
 
-        let mut location = serde_json::Map::new();
-        if let Some(lat) = processed.latitude {
-            location.insert("latitude".to_string(), json!(lat));
-        }
-        if let Some(lng) = processed.longitude {
-            location.insert("longitude".to_string(), json!(lng));
-        }
-
         let mut video = serde_json::Map::new();
         if let Some(codec) = processed.video_codec {
             video.insert("codec".to_string(), json!(codec));
@@ -1329,9 +1286,6 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
         }
         if !settings.is_empty() {
             metadata.insert("settings".to_string(), json!(settings));
-        }
-        if !location.is_empty() {
-            metadata.insert("location".to_string(), json!(location));
         }
         if !video.is_empty() {
             metadata.insert("video".to_string(), json!(video));
@@ -2044,6 +1998,206 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         assert!(updated_at.is_some(), "rescan upsert must keep updated_at");
+    }
+
+    /// The schema contract: no stored capture date and no index for one.
+    /// `taken_at` survives on `Photo` only as a response-side field that
+    /// `MediaFactsIndex::enrich` fills from the file.
+    #[tokio::test]
+    async fn test_photos_schema_has_no_taken_at_column() {
+        let pool = create_test_db_pool().await.unwrap();
+
+        let columns: Vec<String> = sqlx::query("PRAGMA table_info(photos)")
+            .map(|row: sqlx::sqlite::SqliteRow| row.get::<String, _>("name"))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !columns.iter().any(|name| name == "taken_at"),
+            "photos must not store a capture date, found columns {columns:?}"
+        );
+
+        let taken_at_index: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_photos_taken_at'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            taken_at_index.is_none(),
+            "idx_photos_taken_at must be dropped"
+        );
+    }
+
+    /// Coordinates are file facts too: `location` keeps its city (search and
+    /// the UI need it) but never the coordinate pair, on any write path.
+    #[tokio::test]
+    async fn test_db_writes_never_store_coordinates() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut photo = create_test_photo("coords.jpg".to_string(), "d".repeat(64));
+        photo.metadata = json!({
+            "location": { "latitude": 48.1, "longitude": 11.5, "city": "Munich" }
+        });
+        photo.create(&pool).await.unwrap();
+
+        let stored = read_photo_metadata(&pool, &photo.file_path).await;
+        assert!(
+            stored["location"].get("latitude").is_none(),
+            "create stored latitude: {stored}"
+        );
+        assert!(
+            stored["location"].get("longitude").is_none(),
+            "create stored longitude: {stored}"
+        );
+        assert_eq!(stored["location"]["city"], "Munich");
+
+        // An enriched copy (the response-side shape, coordinates merged in
+        // from the file) must not smuggle them back in on update.
+        let facts =
+            test_facts_with_coords(&[(&photo.file_path, "2024-05-25T10:00:00Z", 48.1, 11.5)]);
+        let mut enriched = photo.clone();
+        facts.enrich(&mut enriched);
+        assert!(
+            enriched.metadata["location"].get("latitude").is_some(),
+            "enrich must have merged the file's coordinates into the copy"
+        );
+        enriched.update(&pool).await.unwrap();
+
+        let stored = read_photo_metadata(&pool, &photo.file_path).await;
+        assert!(
+            stored["location"].get("latitude").is_none(),
+            "update stored latitude: {stored}"
+        );
+        assert!(
+            stored["location"].get("longitude").is_none(),
+            "update stored longitude: {stored}"
+        );
+        assert_eq!(stored["location"]["city"], "Munich");
+
+        // The scan path (`batch_write_photos` -> the UPSERT) is the other
+        // production writer; it must sanitize too.
+        let mut rescanned = photo.clone();
+        rescanned.metadata = enriched.metadata.clone();
+        rescanned.create_or_update(&pool).await.unwrap();
+
+        let stored = read_photo_metadata(&pool, &photo.file_path).await;
+        assert!(
+            stored["location"].get("latitude").is_none(),
+            "upsert stored latitude: {stored}"
+        );
+        assert!(
+            stored["location"].get("longitude").is_none(),
+            "upsert stored longitude: {stored}"
+        );
+        assert_eq!(stored["location"]["city"], "Munich");
+    }
+
+    /// The migration must clean existing rows, not just future writes: a
+    /// legacy database carrying a date column and coordinate keys comes out of
+    /// it without either. This is the only test that pins the row cleanup —
+    /// every other pool is built by the migrator from an already-current
+    /// schema.
+    #[tokio::test]
+    async fn test_migration_drops_stored_dates_and_coordinates() {
+        // Migration 2 creates a `vec0` virtual table and registration is
+        // process-global and applies at connection-open time, so load the
+        // extension here instead of hoping another test ran first.
+        crate::db_pool::register_vector_extension();
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let db_path = temp_dir.path().join("legacy.db");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true),
+            )
+            .await
+            .expect("legacy pool");
+
+        // The ten migrations that shipped before this one, in order (plain DDL).
+        for migration in [
+            include_str!("../migrations/20250101000001_create_photos_table.sql"),
+            include_str!("../migrations/20250101000002_create_vector_tables.sql"),
+            include_str!("../migrations/20250101000003_create_video_metadata_table.sql"),
+            include_str!("../migrations/20250101000004_create_collages_table.sql"),
+            include_str!("../migrations/20250101000005_create_indexes.sql"),
+            include_str!("../migrations/20250101000006_create_housekeeping_candidates_table.sql"),
+            include_str!("../migrations/20250101000007_add_geo_location_resolved.sql"),
+            include_str!("../migrations/20250101000008_create_saved_searches_table.sql"),
+            include_str!("../migrations/20250101000009_saved_search_range.sql"),
+            include_str!("../migrations/20250101000010_create_manual_albums.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+
+        sqlx::query(
+            "INSERT INTO photos (hash_sha256, file_path, filename, file_size, taken_at, metadata, file_modified)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("a".repeat(64))
+        .bind("/legacy/photo.jpg")
+        .bind("photo.jpg")
+        .bind(1024_i64)
+        .bind("2012-03-15T10:00:00Z")
+        .bind(
+            json!({
+                "location": { "latitude": 48.1, "longitude": 11.5, "city": "Munich" },
+                "camera": { "make": "Canon" }
+            })
+            .to_string(),
+        )
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!(
+            "../migrations/20260928000001_drop_taken_at_and_location_coordinates.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("the new migration must apply to a legacy database");
+
+        let columns: Vec<String> = sqlx::query("PRAGMA table_info(photos)")
+            .map(|row: sqlx::sqlite::SqliteRow| row.get::<String, _>("name"))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !columns.iter().any(|name| name == "taken_at"),
+            "migration left the column: {columns:?}"
+        );
+
+        let taken_at_index: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_photos_taken_at'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            taken_at_index.is_none(),
+            "idx_photos_taken_at survived the migration"
+        );
+
+        let metadata: String =
+            sqlx::query_scalar("SELECT metadata FROM photos WHERE file_path = ?")
+                .bind("/legacy/photo.jpg")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert!(
+            metadata["location"].get("latitude").is_none(),
+            "migration left latitude: {metadata}"
+        );
+        assert!(
+            metadata["location"].get("longitude").is_none(),
+            "migration left longitude: {metadata}"
+        );
+        assert_eq!(metadata["location"]["city"], "Munich");
+        assert_eq!(metadata["camera"]["make"], "Canon");
     }
 
     #[tokio::test]

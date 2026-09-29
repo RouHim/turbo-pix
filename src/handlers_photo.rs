@@ -552,20 +552,6 @@ pub async fn update_photo_metadata(
         }
     };
 
-    // Parse taken_at if provided
-    let taken_at = if let Some(ref dt_str) = metadata_req.taken_at {
-        match dt_str.parse::<DateTime<Utc>>() {
-            Ok(dt) => Some(dt),
-            Err(e) => {
-                return Err(reject::custom(ValidationError {
-                    message: format!("Invalid date format: {}", e),
-                }));
-            }
-        }
-    } else {
-        None
-    };
-
     // Videos carry their metadata in the container, not in EXIF, and a
     // container save is a `moov` rewrite plus a row mirror rather than an
     // EXIF append. The photo path below stays what it always was.
@@ -574,6 +560,21 @@ pub async fn update_photo_metadata(
         .as_deref()
         .is_some_and(|m| m.starts_with("video/"))
     {
+        // Parsed here rather than in the shared block below, so that an
+        // unparsable date can name itself (`invalid_date`) the way the
+        // container's own range check does, instead of falling back to the
+        // code-less validation error.
+        let taken_at = match metadata_req.taken_at.as_deref() {
+            Some(dt_str) => match dt_str.parse::<DateTime<Utc>>() {
+                Ok(dt) => Some(dt),
+                Err(e) => {
+                    log::error!("Refused video metadata edit: unparsable date {dt_str:?}: {e}");
+                    return Err(video_metadata_rejection(Mp4MetadataError::InvalidDate));
+                }
+            },
+            None => None,
+        };
+
         return apply_video_metadata_edit(
             photo,
             VideoMetadataEdit {
@@ -585,6 +586,20 @@ pub async fn update_photo_metadata(
         )
         .await;
     }
+
+    // Parse taken_at if provided
+    let taken_at = if let Some(dt_str) = &metadata_req.taken_at {
+        match dt_str.parse::<DateTime<Utc>>() {
+            Ok(dt) => Some(dt),
+            Err(e) => {
+                return Err(reject::custom(ValidationError {
+                    message: format!("Invalid date format: {}", e),
+                }));
+            }
+        }
+    } else {
+        None
+    };
 
     // Get file path
     let file_path = Path::new(&photo.file_path);
@@ -2598,6 +2613,67 @@ mod tests {
             let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
             assert_eq!(body["error_code"], expected_code);
         }
+    }
+
+    /// FR-010 names an unparsable date as a refusal class of its own, so a
+    /// video row answers with the code the frontend localizes; FR-011 keeps the
+    /// photo path's bare validation error exactly as it was.
+    #[tokio::test]
+    async fn an_unparsable_date_is_coded_on_the_video_path_only() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+
+        let video_hash = "a00000000000000000000000000000000000000000000000000000000000000a";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            video_hash,
+            "test-data/test_video_with_date.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, video_hash)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", video_hash))
+            .json(&json!({ "taken_at": "not-a-date" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "invalid_date");
+
+        // Refused before the container or the row was touched.
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        let after_row = Photo::find_by_hash(&db_pool, video_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_row.taken_at, before_row.taken_at);
+        assert_eq!(after_row.metadata, before_row.metadata);
+        assert_eq!(after_row.updated_at, before_row.updated_at);
+
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", photo_hash))
+            .json(&json!({ "taken_at": "not-a-date" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert!(
+            body.get("error_code").is_none(),
+            "unexpected error_code: {body}"
+        );
     }
 
     /// Pins the whole refusal table. Three rows of it (fragmented/no-room,

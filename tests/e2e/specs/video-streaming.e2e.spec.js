@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { fetchAllPhotos } from '../setup/photo-pages.js';
 
 /**
  * Fixtures (see test-data/, generated with ffmpeg):
@@ -15,10 +16,12 @@ import { TestHelpers } from '../setup/test-helpers.js';
  */
 
 async function findVideoByFilename(page, filename) {
-  const response = await page.request.get('/api/photos?q=type:video&limit=200');
-  expect(response.ok()).toBeTruthy();
-  const data = await response.json();
-  const photo = (data.photos || []).find((p) => p.filename === filename);
+  const photos = await fetchAllPhotos(async (requestPath) => {
+    const response = await page.request.get(requestPath);
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  }, '/api/photos?q=type:video');
+  const photo = photos.find((p) => p.filename === filename);
   expect(photo, `${filename} must be seeded and indexed`).toBeTruthy();
   return photo;
 }

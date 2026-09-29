@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { fetchAllPhotos } from '../setup/photo-pages.js';
 
 async function deleteAllAlbums(page) {
   const res = await page.request.get('/api/albums');
@@ -12,11 +13,12 @@ async function deleteAllAlbums(page) {
 }
 
 async function hashesByFilenamePrefix(page, prefix) {
-  const res = await page.request.get('/api/photos?limit=200');
-  const data = await res.json();
-  return (data.photos || [])
-    .filter((p) => p.filename?.startsWith(prefix))
-    .map((p) => p.hash_sha256);
+  const photos = await fetchAllPhotos(async (requestPath) => {
+    const response = await page.request.get(requestPath);
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  });
+  return photos.filter((p) => p.filename?.startsWith(prefix)).map((p) => p.hash_sha256);
 }
 
 async function createAlbumViaApi(page, name, initial_hashes = []) {
@@ -28,10 +30,12 @@ async function createAlbumViaApi(page, name, initial_hashes = []) {
 }
 
 async function albumHashesViaApi(page, id) {
-  const res = await page.request.get(`/api/albums/${id}/photos?limit=200`);
-  expect(res.status()).toBe(200);
-  const data = await res.json();
-  return (data.photos || []).map((p) => p.hash_sha256);
+  const photos = await fetchAllPhotos(async (requestPath) => {
+    const response = await page.request.get(requestPath);
+    expect(response.status()).toBe(200);
+    return response.json();
+  }, `/api/albums/${id}/photos`);
+  return photos.map((p) => p.hash_sha256);
 }
 
 async function cardHashes(page, count) {

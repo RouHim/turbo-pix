@@ -149,6 +149,12 @@ test.describe('Playable originals are never converted', () => {
     // specific delivery register their own handler later, which takes
     // precedence over this pass-through.
     await page.route(/\/api\/photos\/[^/]+\/video/, (route) => route.continue());
+    // Every test here drives a real playback (and often a conversion) against
+    // the shared server; under a fully loaded suite run the 30 s default is
+    // not enough for the setup waits alone. The inner assertion bounds are
+    // untouched, so a regression still fails — this is only the budget the
+    // whole test may take (the sibling video-streaming spec sets the same).
+    test.setTimeout(60_000);
     await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
   });

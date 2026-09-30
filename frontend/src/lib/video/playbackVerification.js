@@ -63,8 +63,10 @@ const normalizeTokens = (value) => {
  * @returns {string[]}
  */
 export const verifiedCodecs = () => {
-  if (typeof localStorage === 'undefined') return [];
   try {
+    // The property read itself throws in a document whose storage access is
+    // denied, so the `typeof` test belongs inside the guard as well.
+    if (typeof localStorage === 'undefined') return [];
     const stored = localStorage.getItem(VERIFIED_CODECS_STORAGE_KEY);
     return stored === null ? [] : normalizeTokens(JSON.parse(stored));
   } catch {
@@ -84,12 +86,14 @@ export const markCodecVerified = (token) => {
   const current = verifiedCodecs();
   if (!CODEC_TOKENS.includes(token) || current.includes(token)) return current;
   const next = [...current, token];
-  if (typeof localStorage !== 'undefined') {
-    try {
+  try {
+    // Same as the reader: the property access is what a denied document
+    // throws on, so it sits inside the guard too.
+    if (typeof localStorage !== 'undefined') {
       localStorage.setItem(VERIFIED_CODECS_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // A denied write must not discard the verdict the caller just observed.
     }
+  } catch {
+    // A denied write must not discard the verdict the caller just observed.
   }
   return next;
 };

@@ -102,6 +102,22 @@ async function waitForOriginalPlayback(page, photo, timeout = 5000) {
   );
 }
 
+/**
+ * The codec tokens the page has recorded for proved playbacks — the store
+ * `playbackVerification.js` writes through `markCodecVerified` (key
+ * `turbopix_verified_video_codecs`).
+ *
+ * It is the only witness a verdict leaves behind: a token credited to the
+ * wrong photo changes no request URL, so the wire the rest of this file reads
+ * cannot see it.
+ */
+async function verifiedCodecTokens(page) {
+  return page.evaluate(() => {
+    const stored = localStorage.getItem('turbopix_verified_video_codecs');
+    return stored === null ? [] : JSON.parse(stored);
+  });
+}
+
 /** Rewrite the decision into the conversion the client must NOT obey on faith. */
 async function underReportDecision(page, { codec } = {}) {
   await page.route('**/video?decision*', async (route) => {
@@ -160,16 +176,28 @@ test.describe('Playable originals are never converted', () => {
     expect(wholeFileRequests).toHaveLength(0);
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
 
-    // AND the server's own answer is untouched: no artifact was written behind
-    // the playback. `page.request` bypasses `page.route`, so this reads the
-    // real server, not the rewritten decision the page was served.
+    // AND the server's own answer is untouched, and no artifact was written
+    // behind the playback. `page.request` bypasses `page.route`, so this reads
+    // the real server, not the rewritten decision the page was served. The
+    // decision's own `cached` flag cannot carry that claim: the Direct arm
+    // hard-codes `cached: false` and never consults an artifact, so even a
+    // viewer that ran a full conversion would be told `false` here — the cache
+    // itself is the witness.
     const probe = await page.request.get(
       `/api/photos/${photo.hash_sha256}/video?decision&client=h264-8%2Caac`
     );
     expect(probe.ok()).toBeTruthy();
     const realDecision = await probe.json();
     expect(realDecision.action).toBe('direct');
-    expect(realDecision.cached).toBe(false);
+    // The list is read UNFILTERED: `conversionCacheEntries` reports finished
+    // artifacts and the temp file of a conversion still in flight (a whole-file
+    // job's `…mp4.tmp`, a remux fill's `…{pid}.{seq}.tmp`). This is an INVARIANT
+    // check — nothing converted behind this playback — not a witness for a
+    // plan-obeying viewer: that viewer starts no attempt at all, so it fails the
+    // plain-request wait and the request-count assertions above and never reaches
+    // this read.
+    const cacheEntries = await TestHelpers.conversionCacheEntries(photo.hash_sha256);
+    expect(cacheEntries).toHaveLength(0);
 
     // AND reopening replays the original, still without a notice
     await TestHelpers.closeViewer(page);
@@ -334,11 +362,12 @@ test.describe('Playable originals are never converted', () => {
   test('a slow-but-delivering original is not converted', async ({ page }) => {
     // GIVEN a delivery whose first byte takes LONGER than the grace window
     // itself. A delay inside the window (a 3 s one) could not tell this design
-    // apart from a fixed deadline: a regression that expired the attempt
-    // without re-arming on progress would still deliver the frame in time. At
-    // 6.5 s, only a window that the delivery's own `progress` re-arms survives —
-    // the element's `stalled` freezes the deadline at first, and the resume is
-    // what clears it (FR-004/SC-005).
+    // apart from a deadline armed once and never re-armed: the frame would land
+    // inside either. At 6.5 s the frame only lands because the window is still
+    // open — the watchdog re-arms the deadline on every tick while no stall is
+    // pending, and the element's `stalled` (~4 s in) then freezes it a grace
+    // window later (~9 s), past the 6.5 s resume. That freeze, not the resume's
+    // own `progress`, is what covers the frame here (FR-004/SC-005).
     const photo = await findVideoByFilename(page, 'test_video.mp4');
     await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
     await page.route(PLAIN_VIDEO, async (route) => {
@@ -447,43 +476,126 @@ test.describe('Playable originals are never converted', () => {
   });
 
   test('a switch away from a pending attempt leaves nothing behind', async ({ page }) => {
-    // GIVEN an attempt that is still pending (its delivery takes 8 s) when the
-    // user moves on
-    const photo = await findVideoByFilename(page, 'test_video.mp4');
+    // GIVEN an attempt that is still pending when the user moves on. The photo
+    // is the 10-BIT one on purpose: this test's claim is attributed by a codec
+    // token, and `test_video.mp4` shares its token (`h264-8`) with the photo
+    // that follows it (`test_video_multitrack.mp4` is h264 8-bit too), so a
+    // verdict credited to the abandoned photo would be indistinguishable from
+    // the next photo's own — the assertion below could not fail. This photo
+    // maps to `h264-10` and the one that replaces it to `h264-8`; both are read
+    // from the decisions the viewer itself was served, below.
+    const photo = await findVideoByFilename(page, 'test_video_10bit.mp4');
     await TestHelpers.clearCachedConversions(page, photo.hash_sha256);
+    // The verdict store, cleared before the open: every token in it afterwards
+    // was recorded by a playback this test covers.
+    await page.evaluate(() => localStorage.removeItem('turbopix_verified_video_codecs'));
+    // The delivery is HELD, so the attempt can never settle from its own bytes
+    // and is still pending when the switch comes — that pending attempt is what
+    // the cancellation has to tear down, and what a regressed teardown leaves
+    // listening. The hold is an order the test can wait on (the plain request
+    // asserted below) instead of a sleep; the follower's own plain request is a
+    // different hash, so its route is answered without delay.
     await page.route(PLAIN_VIDEO, async (route) => {
       if (!route.request().url().includes(photo.hash_sha256)) return route.continue();
-      await new Promise((resolve) => setTimeout(resolve, 8000));
+      await new Promise((resolve) => setTimeout(resolve, 12000));
       await route.continue().catch(() => {});
     });
+    const plainRequests = collectRequests(page, PLAIN_VIDEO);
     const streamRequests = collectRequests(page, STREAM_VIDEO);
     const wholeFileRequests = collectRequests(page, WHOLE_FILE);
-    const plainRequests = collectRequests(page, PLAIN_VIDEO);
 
     await openVideo(page, photo);
     // The attempt must be ARMED before the switch, and that is observed rather
     // than assumed: the pending `?client=` request for this photo is the
-    // evidence, and its 8 s-delayed route keeps it pending across the switch. A
-    // fixed sleep could fire before the decision round-trip finished, leaving
-    // `displayVideo` to arm nothing once the newer photo bails it — and every
+    // evidence, and its held route keeps it pending across the switch. A fixed
+    // sleep could fire before the decision round-trip finished, leaving
+    // `displayVideo` to arm nothing once the newer photo bails it — and the
     // "nothing left behind" assertion would then hold over a cancellation path
     // that never ran.
     await waitForRequest(plainRequests, photo.hash_sha256);
 
-    // WHEN the viewer moves to the next photo
-    await page.keyboard.press('ArrowRight');
-    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(photo.hash_sha256);
-    await page.waitForTimeout(1000);
-
-    // THEN the abandoned attempt left no notice and no conversion behind, and
-    // the photo now on screen is unaffected.
-    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+    // AND it is still PENDING at the moment of the switch — the second half of
+    // that premise, and the one nothing else asserts: `waitForRequest` proves
+    // only that the request was issued. A held delivery does not stay pending
+    // forever (the element reports `stalled` ~4 s in, which freezes the
+    // watchdog, and the grace window then expires the attempt ~9 s after
+    // arming); an attempt that expired before the switch settles `unplayable`
+    // and hands over to the plan, which for this 10-bit file is a conversion.
+    // A conversion request for THIS photo before the switch is therefore the
+    // witness that the attempt was already gone — and without this check the
+    // test could pass with the cancellation path it exists for never exercised
+    // (a settled attempt detaches its own listeners; only a pending one needs
+    // `cancelOriginalAttempt`).
     expect(
-      streamRequests.filter((request) => request.url.includes(photo.hash_sha256))
+      streamRequests.filter((request) => request.url.includes(photo.hash_sha256)),
+      'the abandoned attempt must still be pending: a settled one hands over to a conversion'
     ).toHaveLength(0);
     expect(
       wholeFileRequests.filter((request) => request.url.includes(photo.hash_sha256))
     ).toHaveLength(0);
+
+    // WHEN the viewer moves to the next photo
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(photo.hash_sha256);
+    const nextHash = await TestHelpers.getCurrentPhotoHash(page);
+
+    // AND the abandoned attempt recorded no verdict behind. The element is
+    // shared, and a still-armed attempt observes ITS events (`FRAME_EVENTS` in
+    // `originalAttempt.js`): the photo now on screen decoding its own first
+    // frame would settle the stale attempt `playable`, and that continuation
+    // records the token captured BY VALUE when the stale attempt was armed —
+    // the ABANDONED photo's — through `recordVerifiedCodec` (FR-007). The
+    // cancellation is what detaches that listener set, so the store is the
+    // witness, and it is read AFTER the next photo's own verdict landed, which
+    // is what makes the absence below a claim about a live store rather than an
+    // empty one: that frame event IS the settle trigger, and the stale attempt
+    // is settled ahead of the new one (its listeners were attached first), so
+    // its token would already be stored by the time the new photo's appears.
+    //
+    // The claim is about the OUTCOME (no verdict for the photo that was left
+    // behind) rather than about a call site: the switch tears the attempt down
+    // in `displayPhoto` for every photo change, and `displayVideo` re-states
+    // the same idempotent cancellation at its own entry. The mutant this test
+    // must fail is that teardown removed — `cancelOriginalAttempt()` deleted,
+    // plus both guards dropped from the continuation armed in
+    // `armOriginalAttempt` (`PhotoViewer.svelte`) — after which the stale
+    // attempt settles on the next photo's frame event and credits `h264-10`
+    // into the store read below.
+    const abandonedDecision = await (
+      await page.request.get(`/api/photos/${photo.hash_sha256}/video?decision&client=h264-8%2Caac`)
+    ).json();
+    const nextDecision = await (
+      await page.request.get(`/api/photos/${nextHash}/video?decision&client=h264-8%2Caac`)
+    ).json();
+    // `codecTokenFor` maps these SOURCE facts — reported identically for every
+    // delivery of a file — to the tokens the store can hold: h264 10-bit →
+    // `h264-10`, h264 8-bit → `h264-8`. Asserted, so the two literals below can
+    // never drift into a pair that shares one token, which is exactly the pair
+    // `test_video.mp4` / `test_video_multitrack.mp4` is.
+    expect(abandonedDecision.codec).toBe('h264');
+    expect(abandonedDecision.bit_depth).toBe(10);
+    expect(nextDecision.codec).toBe('h264');
+    expect(nextDecision.bit_depth).toBe(8);
+    // The order is load-bearing: the photo now on screen proves its own
+    // playback FIRST — its token is the recorded evidence of the frame event
+    // that is also the stale attempt's settle trigger — and only then is the
+    // abandoned token's absence read, so that absence is a claim about a live
+    // store rather than one that never saw the event at all.
+    await expect.poll(() => verifiedCodecTokens(page), { timeout: 10000 }).toContain('h264-8');
+    // THEN nothing the abandoned attempt observed is recorded: a verdict
+    // credited to it would have been written by that same frame event.
+    expect(await verifiedCodecTokens(page)).not.toContain('h264-10');
+
+    // AND the photo now on screen is unaffected: it still owns the element and
+    // holds a delivery of its own.
+    await expect.poll(() => videoHandle(page).getAttribute('data-photo-hash')).toBe(nextHash);
+    await expect
+      .poll(async () => {
+        const src = await videoHandle(page).getAttribute('src');
+        if (!src) return false;
+        return src.startsWith('blob:') || src.includes(`/api/photos/${nextHash}/video?`);
+      })
+      .toBe(true);
     await expect(page.locator(TestHelpers.selectors.viewer)).toHaveClass(/active/);
   });
 

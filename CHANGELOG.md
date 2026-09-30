@@ -1,3 +1,23 @@
+# [2.46.0](https://github.com/RouHim/turbo-pix/compare/2.45.0...2.46.0) (2026-09-30)
+
+
+### Bug Fixes
+
+* **video:** guard the storage property read in the verified-codec store ([0949dc8](https://github.com/RouHim/turbo-pix/commit/0949dc80141e8395d402df8fe054011d904cac27))
+* **viewer:** capture the attempt's codec token by value ([ca46ce4](https://github.com/RouHim/turbo-pix/commit/ca46ce45af7bccdd95bdbe654c7d5fc93664157f))
+* **viewer:** only a real slot refusal claims the conversion pool is busy ([ac5caf3](https://github.com/RouHim/turbo-pix/commit/ac5caf344365d34e5cfb2267013c0109d98c2b0c))
+* **viewer:** play a cached direct answer as a file and escalate its failures ([62c4ade](https://github.com/RouHim/turbo-pix/commit/62c4adee2000c4c85ff941f17edd942e94c472eb))
+* **viewer:** report post-attempt errors and convert direct-plan failures ([c55017a](https://github.com/RouHim/turbo-pix/commit/c55017a6e5c58508631160d8160a1d23057bfa4e))
+
+
+### Features
+
+* **video:** attempt the original before any conversion rung ([abadaae](https://github.com/RouHim/turbo-pix/commit/abadaae6ae5f4377a8ca244cfe660e70c20e88f1))
+* **video:** derive the capability declaration from real answers ([be10d42](https://github.com/RouHim/turbo-pix/commit/be10d42f4fdfb5e235a668b4847435675c29751f))
+* **video:** remember codecs an actual playback proved ([2679d64](https://github.com/RouHim/turbo-pix/commit/2679d644a58e733c70e773f72093f4f955832a17))
+* **video:** report source codec facts on the playback decision ([3e74e7a](https://github.com/RouHim/turbo-pix/commit/3e74e7a12294010ce0a3ce0136f954ca43f8281d))
+* **viewer:** play the original first and convert only after a failure ([d351ad2](https://github.com/RouHim/turbo-pix/commit/d351ad2c6002050754dd45dbb2f81e4240cd63bc))
+
 # [2.45.0](https://github.com/RouHim/turbo-pix/compare/2.44.2...2.45.0) (2026-09-29)
 
 

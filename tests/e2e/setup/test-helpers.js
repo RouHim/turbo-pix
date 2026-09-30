@@ -349,17 +349,21 @@ export class TestHelpers {
 
   /**
    * Make the ORIGINAL attempt fail, so the planned rung is what runs. The
-   * predicate is disjoint from the decision and stream URLs on purpose: those
-   * keep reaching their own route mocks. The `decision` exclusion is what makes
-   * it disjoint — the decision request for the same hash carries `client` too,
-   * and 404-ing it would replace the plan this helper exists to hand over to.
+   * predicate is disjoint from the decision, stream and whole-file conversion
+   * URLs on purpose: those keep reaching their own route mocks. The `decision`
+   * exclusion is what makes it disjoint from the plan — the decision request
+   * for the same hash carries `client` too, and 404-ing it would replace the
+   * plan this helper exists to hand over to. `transcode=true` is excluded for
+   * the same reason on the other side: it is a conversion byte delivery, not an
+   * attempt, and 404-ing it would fail the ladder's last rung.
    */
   static async failOriginalAttempt(page, hash) {
     await page.route(
       (url) =>
         url.pathname === `/api/photos/${hash}/video` &&
         url.searchParams.has('client') &&
-        !url.searchParams.has('decision'),
+        !url.searchParams.has('decision') &&
+        !url.searchParams.has('transcode'),
       (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'no original' })
     );
   }

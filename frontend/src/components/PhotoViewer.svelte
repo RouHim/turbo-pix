@@ -832,7 +832,11 @@
       return;
     }
     if (originalFailures.has(photo.hash_sha256)) {
-      // Known to fail in this session: the window is not repeated (FR-009).
+      // Known to fail in this session: the window is not repeated (FR-009). The
+      // refutation was an earlier open's, so no URL travels with it: the cached
+      // answer this may reach names a delivery THAT attempt never fetched (its
+      // remux run filled the sidecar afterwards), which is what keeps a second
+      // open from re-encoding a copy the server already holds.
       startPlannedDelivery(photo, decision);
       return;
     }
@@ -905,7 +909,10 @@
       }
       if (verdict === 'cancelled') return;
       originalFailures.record(photo.hash_sha256);
-      startPlannedDelivery(photo, decision);
+      // The URL this attempt fetched travels with the handover: a cached answer
+      // naming exactly those bytes is not a delivery this open has any evidence
+      // for, and must escalate instead of replaying what just failed.
+      startPlannedDelivery(photo, decision, url);
     });
   }
 
@@ -914,8 +921,16 @@
    * original attempt failed, or because this session already watched that file
    * fail. The plan is no longer a guess the viewer obeys, so nothing here runs
    * before that evidence exists.
+   *
+   * `refutedUrl` is the byte URL THIS open's attempt fetched and settled
+   * `unplayable` on, when there was one: the Direct arm needs it to tell a
+   * cached answer that is a genuinely different delivery from one that names
+   * exactly the bytes that just failed (see the gate there). It is deliberately
+   * NOT passed for a remembered failure: that refutation happened in an earlier
+   * open, on whatever delivery existed then — the case the cached branch exists
+   * for is precisely a later sidecar the failed attempt never saw.
    */
-  async function startPlannedDelivery(photo, decision) {
+  async function startPlannedDelivery(photo, decision, refutedUrl = null) {
     if (decision.action === 'stream') {
       // The upcoming run's own header is authoritative for this playback.
       activeEncoder = null;
@@ -934,20 +949,41 @@
       return;
     }
     if (decision.action === 'direct') {
-      // A cached conversion is a file: serve it as one, no job needed — and the
-      // decision is the only place its encoder can come from (a file delivery
-      // carries no response header the client can read).
-      if (decision.cached && decision.url.includes('transcode=true')) {
-        activeEncoder = decision.encoder ?? null;
-        setVideoSource(photo, decision.url);
-        return;
-      }
-      // The Direct plan has no rung of its own: the byte endpoint ignores
-      // `transcode=true` for a directly playable source and would serve the very
-      // bytes the attempt just refuted (a 200 with no warning, so the viewer
-      // would point the element at the same file and fail twice). The stream
-      // endpoint re-plans server-side and answers a Direct plan with its full
-      // transcode, so that is the one path to a conversion for this file.
+      // A `cached` direct answer is a FILE delivery worth playing, so it is
+      // gated on `cached` alone and never on the URL: the server marks two arms
+      // cached — a finished whole-file conversion (served under
+      // `transcode=true`) and a faststart remux sidecar (a lossless copy served
+      // under the plain byte URL) — and the fallback below would re-encode a
+      // file the server already holds a better copy of. The decision is the
+      // only place the encoder can come from (a file delivery carries no
+      // response header the client can read); a sidecar delivery omits it,
+      // which is exactly what `?? null` keeps hidden.
+      //
+      // The one cached answer that must NOT be played is the one naming the very
+      // byte URL this open's attempt already fetched and refuted. The
+      // faststart-remux arm returns the plain `?client=` byte URL — the URL
+      // `armOriginalAttempt` builds — and a plain byte request on a
+      // `StreamRemux` delivery is answered with the sidecar, so replaying it
+      // points the element at the same bytes that just failed: a second failure,
+      // the global "conversion failed" toast although nothing is converting, and
+      // no notice and no "play original anyway" button, so reopening repeats the
+      // dead end. The attempt URL never carries `transcode=true`, so equality
+      // here means "nothing but what the plain byte request serves": a cached
+      // whole-file artifact is a different delivery (`…&transcode=true`) and is
+      // still played as a file.
+      const replaysRefutedBytes = refutedUrl !== null && decision.url === refutedUrl;
+
+      // The Direct plan has no rung of its own, and neither has the refuted
+      // cached answer above: the byte endpoint ignores `transcode=true` for a
+      // directly playable source and would serve the very bytes the attempt just
+      // refuted (a 200 with no warning, so the viewer would point the element at
+      // the same file and fail twice). The stream endpoint re-plans server-side
+      // and answers a Direct plan with its full transcode, so that is the one
+      // path to a conversion for this file — the only rung that can play source
+      // codecs the browser cannot decode. It is also the escalation a cached
+      // FILE the element refuses gets (below): an `error` on that delivery is
+      // the same evidence a failed attempt is, and a `direct` decision has no
+      // rung behind it.
       const fallback = {
         url: `/api/photos/${photo.hash_sha256}/video/stream?client=${encodeURIComponent(
           videoCodecSupport.getClientCodecsString()
@@ -956,14 +992,38 @@
         duration: decision.duration,
         mode: 'transcode',
       };
-      if (mseSupported(fallback.mime)) {
-        playStream(photo, fallback);
+      const playFallback = () => {
+        if (mseSupported(fallback.mime)) {
+          playStream(photo, fallback);
+          return;
+        }
+        showTranscodeToast(
+          get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
+          true
+        );
+      };
+      if (decision.cached && !replaysRefutedBytes) {
+        activeEncoder = decision.encoder ?? null;
+        setVideoSource(photo, decision.url);
+        // A cached FILE delivery is a promise, not a verdict: the server holds
+        // these bytes (a lossless remux sidecar, a finished whole-file artifact)
+        // and a browser that still cannot decode them leaves the viewer on
+        // `setVideoSource`'s bare global "conversion failed" toast although
+        // nothing is converting — no notice, no "play original anyway" button,
+        // no request. On a remembered failure the plan is reached WITHOUT an
+        // attempt (`displayVideo` skips it for this session), so that dead end
+        // would repeat for the rest of the session where the same open ran the
+        // planned stream before the cached gate was widened. The element's own
+        // error is therefore answered with the Direct arm's fallback, and the
+        // handler `setVideoSource` just installed is replaced rather than
+        // stacked, so the failure is never reported twice.
+        videoEl.onerror = () => {
+          if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
+          playFallback();
+        };
         return;
       }
-      showTranscodeToast(
-        get(t)('video.transcoding.failed', { default: 'Video conversion failed' }),
-        true
-      );
+      playFallback();
       return;
     }
     showTranscodeToast(

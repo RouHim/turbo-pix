@@ -43,7 +43,7 @@ Firefox runs on the user's machine and plays HEVC natively (Firefox 134+ on Wind
 The "waiting for a free conversion slot" text currently also comes from a slow-start timer, so a video that simply takes a moment to produce its first bytes claims to be queued for a busy conversion pool.
 
 **Acceptance**
-1. Given a conversion job is waiting for a free worker slot, When the player waits, Then the queued notice is shown and the escape hatch is offered.
+1. Given a saturated pool holds a conversion request, When the player waits, Then the preparing notice is shown with no escape hatch; once the server refuses the slot (503), Then the queued notice is shown and the escape hatch is offered.
 2. Given a slot was granted and the run is merely slow to produce its first bytes, Then the queued/saturated-pool notice is never shown; a "preparing" state is shown instead.
 3. Given a video plays from the original, Then no conversion, preparing, or queued notice appears at all.
 
@@ -63,7 +63,7 @@ The "waiting for a free conversion slot" text currently also comes from a slow-s
 - **FR-012**: The queued notice may only be shown when the server really held the request for a free worker slot; a granted-but-slow run shows the preparing state instead.
 - **FR-013**: A direct playback leaves no conversion traces: no conversion process is spawned, no conversion status entry is created, and no conversion cache artifact is written for that hash.
 - **FR-014**: All new or changed user-visible strings are added to both language bundles (parity enforced by the i18n integrity test) and use the existing icon set; no hardcoded text and no emojis.
-- **FR-015**: The existing escape hatch to play the original while a conversion is pending or has failed stays available.
+- **FR-015**: The existing escape hatch to play the original stays available once a conversion was refused a free slot (503) or has failed; while the server merely holds the request, the preparing notice is shown without it.
 
 ## Key Entities
 
@@ -92,7 +92,7 @@ The "waiting for a free conversion slot" text currently also comes from a slow-s
 - `ffprobe` of that file: HEVC Main (`hvc1`), level 5.2, 3840x2160 at 60 fps, 8-bit yuv420p, AAC-LC stereo, `moov` at the start, 119 MB / 22.6 s — nothing in the file itself requires processing.
 - https://www.firefox.com/en-US/firefox/136.0/releasenotes/ and https://www.phoronix.com/news/Firefox-137-Beta — HEVC playback is enabled by default in Firefox 134 (Windows), 136 (macOS) and 137 (Linux/Android); a user-agent veto for HEVC is therefore stale and produces exactly the reported over-conversion.
 - Local throwaway probe (headless Chromium 153 via Playwright, clip served from /tmp, nothing added to the repository): `canPlayType` for `hvc1.1.6.*` answers `""`, `MediaSource.isTypeSupported` false, `mediaCapabilities.decodingInfo` `supported:false`, and the original errors immediately (`MEDIA_ELEMENT_ERROR: Format error`, code 4) — so for a truly unsupported codec the direct attempt resolves within milliseconds and delays the conversion by practically nothing.
-- Code anchors: `frontend/src/lib/utils.js` (user-agent HEVC veto plus memoized declaration), `frontend/src/components/PhotoViewer.svelte` (goes straight into the conversion stream; escape hatch gated on error/queued state), `frontend/src/lib/video/msePlayer.js` (1.5 s slow-start timer emits the queued state), `src/video_capability.rs::plan()` (direct play requires a declared codec and `moov_at_start == Some(true)`), `src/handlers_video.rs` (a plain byte request for any non-direct delivery serves the original — which is why the escape hatch works).
+- Code anchors: `frontend/src/lib/video/capabilities.js` (the declaration from the browser's real capability answers; `canPlayHEVC()` has no user-agent veto), `frontend/src/lib/video/originalAttempt.js` and `frontend/src/components/PhotoViewer.svelte`'s `armOriginalAttempt`/`startPlannedDelivery` (the original is attempted first, and only a failed verdict or a session-remembered failure reaches the planned rung), `frontend/src/components/PhotoViewer.svelte`'s 503 handling in `handleStreamFailure` (the refusal-driven queued notice and escape hatch), `src/video_capability.rs::plan()` (direct play requires a declared codec and `moov_at_start == Some(true)`), `src/handlers_video.rs` (a plain byte request for any non-direct delivery serves the original — which is why the escape hatch works).
 
 ## Assumptions
 
@@ -101,7 +101,7 @@ The "waiting for a free conversion slot" text currently also comes from a slow-s
 - "Fast backend probe upfront" means the existing side-effect-free decision call: it stays, starts nothing, and never replaces the original attempt.
 - The verification memory lives in the browser (no new server state) and does not modify a video's capability record.
 - The failed-video fact is session-scoped rather than persisted, so a transient failure never condemns a file permanently.
-- The "play original anyway" escape hatch is kept as-is.
+- The "play original anyway" escape hatch is reworked rather than kept as-is: it runs through the same attempt machinery (cancel the live stream/attempt, record the frame-proved codec, clear the session failure, then attempt the original with the audio gate open), and the deleted `hasUserChosenOriginal` suppression flag is not reintroduced.
 - Server-side planning, the capability record and the conversion implementations are unchanged; only the declaration becomes truthful and the client stops converting files it can play.
 
 ## Success Criteria

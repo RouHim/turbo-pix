@@ -83,3 +83,18 @@ test('malformed or unreadable storage reads as empty and never throws', () => {
   assert.deepEqual(verifiedCodecs(), []);
   assert.deepEqual(markCodecVerified('hevc'), ['hevc'], 'the answer survives a denied write');
 });
+
+test('a document that denies the storage PROPERTY reads as empty and never throws', () => {
+  // `typeof` does not suppress an exception thrown by a property getter: in a
+  // document whose storage access is denied, reading `window.localStorage`
+  // throws a `SecurityError`, so the property read itself has to sit inside
+  // the guard. The methods of a readable store throwing is the case above.
+  Object.defineProperty(globalThis, 'localStorage', {
+    get() {
+      throw new Error('SecurityError: access to this document is denied');
+    },
+    configurable: true,
+  });
+  assert.deepEqual(verifiedCodecs(), []);
+  assert.deepEqual(markCodecVerified('hevc'), ['hevc'], 'the answer survives the property throw');
+});

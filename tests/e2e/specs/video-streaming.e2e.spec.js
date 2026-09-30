@@ -108,6 +108,87 @@ function mp4PrefixLength(body, targetBytes) {
   return offset;
 }
 
+/**
+ * The decision the server makes for the web client's declaration — the tokens
+ * the viewer's own probes clear on this machine (`h264-8,aac`).
+ *
+ * `page.request` bypasses the page's routes, so this reads the real server
+ * whatever the test is intercepting.
+ */
+async function decisionFor(page, hash) {
+  const response = await page.request.get(`/api/photos/${hash}/video?decision&client=h264-8%2Caac`);
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+}
+
+/**
+ * Leave a FINISHED `remux/` sidecar for `photo` in the conversion cache, and
+ * return only once the server serves it.
+ *
+ * The cache is filled by the run that produced it: a full (`start` 0) remux
+ * stream that ends cleanly publishes the lossless faststart copy
+ * (`spawn_cache_fill`, src/handlers_video.rs). Asking the endpoint for exactly
+ * that run — through `page.request`, so no page route interferes, and reading
+ * the whole body, so the run really ends and the fill really starts — is what
+ * seeds the artifact; the poll that follows is the server's own view of it, and
+ * it is the answer the test's open will get: `direct` + `cached` on the PLAIN
+ * byte URL, with no `encoder`.
+ */
+async function seedRemuxSidecar(page, photo) {
+  const response = await page.request.get(
+    `/api/photos/${photo.hash_sha256}/video/stream?client=h264-8%2Caac&mode=remux`
+  );
+  expect(response.ok()).toBeTruthy();
+  await expect
+    .poll(async () => (await decisionFor(page, photo.hash_sha256)).cached === true, {
+      timeout: 30_000,
+      message: 'the remux run must fill the lossless sidecar',
+    })
+    .toBe(true);
+}
+
+/**
+ * Refuse the FIRST plain byte request for `hash` (a 404: nothing to serve for
+ * it) and let every later one through.
+ *
+ * A `StreamRemux` source shares ONE URL between the original attempt and a
+ * cached sidecar delivery, so a spec that needs the attempt — and only the
+ * attempt — to fail cannot use `TestHelpers.failOriginalAttempt`, which refuses
+ * that URL unconditionally and would fail the delivery under test too.
+ */
+async function failFirstOriginalAttempt(page, hash) {
+  let refused = false;
+  await page.route(
+    (url) =>
+      url.pathname === `/api/photos/${hash}/video` &&
+      url.searchParams.has('client') &&
+      !url.searchParams.has('decision') &&
+      !url.searchParams.has('transcode'),
+    async (route) => {
+      if (refused) return route.continue();
+      refused = true;
+      await route.fulfill({ status: 404, contentType: 'text/plain', body: 'no original' });
+    }
+  );
+}
+
+/** The element holds a FILE delivery of `photo` and has decoded a frame of it. */
+async function waitForFilePlayback(page, photo, timeout = 10_000) {
+  await page.waitForFunction(
+    (hash) => {
+      const el = document.querySelector('#viewer-video');
+      if (!el || el.dataset.photoHash !== hash) return false;
+      const src = el.currentSrc || el.getAttribute('src') || '';
+      // A `blob:` source is an MSE run, i.e. a conversion — not a file delivery.
+      if (src.startsWith('blob:')) return false;
+      if (!src.includes(`/api/photos/${hash}/video?`) || !src.includes('client=')) return false;
+      return el.readyState >= 2 && el.videoWidth > 0;
+    },
+    photo.hash_sha256,
+    { timeout }
+  );
+}
+
 test.describe('On-the-fly streaming playback', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -477,6 +558,253 @@ test.describe('On-the-fly streaming playback', () => {
       ),
       'the cached conversion must be served as a file'
     ).toBe(true);
+  });
+
+  test('a cached remux sidecar is played as a file when the attempt did not refute it', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    await seedRemuxSidecar(page, mkv);
+
+    // The answer the viewer is about to be served: the cached remux arm — the
+    // PLAIN byte URL, `cached: true`, and no encoder (a file delivery carries no
+    // track that encodes the video).
+    const decision = await decisionFor(page, mkv.hash_sha256);
+    expect(decision.action).toBe('direct');
+    expect(decision.cached).toBe(true);
+    expect(decision.url).toContain(`/api/photos/${mkv.hash_sha256}/video?client=`);
+    expect(decision.url).not.toContain('transcode=true');
+    expect(decision.url).not.toContain('/video/stream');
+    expect(decision.encoder).toBeUndefined();
+
+    // GIVEN this session already watched that file's original fail. The first
+    // open refutes it (a 404) and hands over to the plan — which, with the
+    // sidecar on disk, is a cached answer naming exactly the refused URL, so
+    // this open is also the F25 escalation (`startPlannedDelivery`'s guard).
+    // Its runs are answered with a delivery this browser cannot decode, so the
+    // ladder settles at its end instead of leaving a real conversion in flight
+    // across the reopen below (the fallback's `transcode` is the last rung).
+    await failFirstOriginalAttempt(page, mkv.hash_sha256);
+    await page.route('**/video/stream*', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'video/mp4' },
+        body: UNDECODABLE_MP4,
+      })
+    );
+    const firstStreamRequests = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/video/stream')) firstStreamRequests.push(request.url());
+    });
+    await openVideo(page, mkv);
+    // The handover is the failure being REMEMBERED: the record is written before
+    // the plan runs, and the stream request is what proves the plan ran.
+    await expect.poll(() => firstStreamRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await TestHelpers.closeViewer(page);
+
+    // WHEN the same file is opened again. The failed attempt is remembered for
+    // the session, so no new attempt is armed and the plan is followed directly
+    // — the case this cached branch exists for: THIS open has fetched nothing,
+    // so it has refuted nothing, and a cached answer is played as the file it
+    // names. (The remembered refutation belongs to an earlier open, and the URL
+    // it fetched is deliberately not carried across: the delivery the server
+    // offers now is a LATER one — the sidecar a remux run filled after that
+    // attempt failed — and replaying the old verdict against it would re-encode
+    // a copy the server already holds.) This is also the byte request the reopen
+    // must reach the real server with: a repeated media `src` is served from the
+    // byte response's year-long cache with NO request event, and a later route
+    // takes precedence over the first open's one-shot refusal.
+    await page.route(/\/api\/photos\/[^/]+\/video/, (route) => route.continue());
+    const streamRequests = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/video/stream')) streamRequests.push(request.url());
+    });
+    await page.locator(TestHelpers.selectors.photoCard(mkv.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    // THEN the cached sidecar is played AS A FILE: the plain byte URL the
+    // decision names, decoded by the element.
+    await waitForFilePlayback(page, mkv);
+    const src = await videoHandle(page).getAttribute('src');
+    expect(src).toContain(`/api/photos/${mkv.hash_sha256}/video?client=`);
+    expect(src).not.toContain('transcode=true');
+    expect(src).not.toContain('blob:');
+    // AND reopening it started no conversion: the gate that plays this delivery
+    // is `cached` alone, and a URL check would send the sidecar to the stream
+    // fallback and re-encode a copy the server already holds.
+    expect(streamRequests).toEqual([]);
+    await expect(page.locator('.transcode-toast')).toHaveCount(0);
+    // AND the premise this case states above — the reopen skipped the attempt —
+    // is asserted here rather than assumed. The verified-codec store is the only
+    // witness a verdict leaves: `armOriginalAttempt`'s continuation records a
+    // token and only for a frame it observed, so a re-armed attempt (the mutant)
+    // would fetch the same plain URL (the sidecar answers it), decode that MP4
+    // and record the mkv's `h264-8` here. This session's own attempt was refused
+    // (404) before any frame, so the shipped path records nothing.
+    const storedCodecs = await page.evaluate(
+      () => localStorage.getItem('turbopix_verified_video_codecs') ?? ''
+    );
+    expect(storedCodecs).not.toContain('h264-8');
+  });
+
+  test('a cached remux sidecar the reopened session cannot decode escalates to a conversion', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    await seedRemuxSidecar(page, mkv);
+    const decision = await decisionFor(page, mkv.hash_sha256);
+    expect(decision.action).toBe('direct');
+    expect(decision.cached).toBe(true);
+    expect(decision.url).toContain(`/api/photos/${mkv.hash_sha256}/video?client=`);
+    expect(decision.url).not.toContain('transcode=true');
+
+    // GIVEN this session already watched that file's original fail: the first
+    // open refutes it (a 404) and hands over to the plan, which names exactly
+    // the refused URL and therefore escalates. Its stream runs are answered with
+    // a delivery this browser cannot decode, so the ladder settles at its end
+    // instead of leaving a real conversion in flight across the reopen.
+    await failFirstOriginalAttempt(page, mkv.hash_sha256);
+    await page.route('**/video/stream*', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'video/mp4' },
+        body: UNDECODABLE_MP4,
+      })
+    );
+    const firstStreamRequests = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/video/stream')) firstStreamRequests.push(request.url());
+    });
+    await openVideo(page, mkv);
+    await expect.poll(() => firstStreamRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await TestHelpers.closeViewer(page);
+
+    // AND the reopen's cached delivery is REFUSED: the sidecar is served, the
+    // element cannot decode it (`UNDECODABLE_MP4` is HEVC bytes handed to the
+    // H.264/AAC element this client declares), and only the FIRST plain byte
+    // request of this open is answered that way — a second fetch of the same URL
+    // (the replay the assertion below rules out) still reaches the real server.
+    // The stream arm goes back to the real server as well: the escalation is
+    // what this test is about, so it must be allowed to play.
+    let deliveryRefused = false;
+    await page.route(
+      (url) =>
+        url.pathname === `/api/photos/${mkv.hash_sha256}/video` &&
+        url.searchParams.has('client') &&
+        !url.searchParams.has('decision') &&
+        !url.searchParams.has('transcode'),
+      async (route) => {
+        if (deliveryRefused) return route.continue();
+        deliveryRefused = true;
+        await route.fulfill({
+          status: 200,
+          headers: { 'content-type': 'video/mp4' },
+          body: UNDECODABLE_MP4,
+        });
+      }
+    );
+    await page.route('**/video/stream*', (route) => route.continue());
+    const byteRequests = [];
+    const streamRequests = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (!url.includes(mkv.hash_sha256)) return;
+      if (url.includes('/video/stream')) streamRequests.push(url);
+      else if (url.includes('/video?') && !url.includes('decision')) byteRequests.push(url);
+    });
+
+    // WHEN the same file is opened again. Its failure is remembered for the
+    // session, so no attempt is armed: the plan runs directly, answers `cached`
+    // on the plain byte URL, and the element refuses that delivery.
+    await page.locator(TestHelpers.selectors.photoCard(mkv.hash_sha256)).click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    // THEN the refused file delivery escalates to the stream fallback instead of
+    // dead-ending on `setVideoSource`'s bare "conversion failed" toast: a
+    // `direct` decision has no rung of its own, and dropping the element's error
+    // here would leave the viewer with no stream request, no notice and no
+    // escape hatch for the rest of the session.
+    await expect.poll(() => streamRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    expect(new URL(streamRequests[0]).searchParams.get('mode')).toBe('transcode');
+    // AND the escalated run plays, replacing the bytes the element refused.
+    await page.waitForFunction(
+      (hash) => {
+        const el = document.querySelector('#viewer-video');
+        if (!el || el.dataset.photoHash !== hash) return false;
+        const src = el.currentSrc || el.getAttribute('src') || '';
+        return src.startsWith('blob:') && el.readyState >= 2 && el.currentTime > 0;
+      },
+      mkv.hash_sha256,
+      { timeout: 30_000 }
+    );
+    // AND the refused file was fetched exactly once: a second byte request would
+    // be a replay of the delivery the element just rejected.
+    expect(byteRequests).toHaveLength(1);
+  });
+
+  test('a cached remux sidecar the attempt just refuted escalates to a conversion', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
+    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
+    await seedRemuxSidecar(page, mkv);
+    const decision = await decisionFor(page, mkv.hash_sha256);
+    expect(decision.action).toBe('direct');
+    expect(decision.cached).toBe(true);
+    expect(decision.url).toContain(`/api/photos/${mkv.hash_sha256}/video?client=`);
+    expect(decision.url).not.toContain('transcode=true');
+
+    // GIVEN the attempt's own byte request is refused ONCE. The sidecar
+    // delivery and the attempt share that one URL, so only the first request
+    // may fail — a delivery that never gets to answer is not what this test is
+    // about.
+    await failFirstOriginalAttempt(page, mkv.hash_sha256);
+    const byteRequests = [];
+    const streamRequests = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (!url.includes(mkv.hash_sha256)) return;
+      if (url.includes('/video/stream')) streamRequests.push(url);
+      else if (url.includes('/video?') && !url.includes('decision')) byteRequests.push(url);
+    });
+
+    // WHEN the viewer opens it
+    await openVideo(page, mkv);
+
+    // THEN the cached answer is NOT replayed: it names exactly the bytes this
+    // open's attempt fetched and refuted (the plain byte request on a
+    // `StreamRemux` delivery is answered with the very sidecar), so playing it
+    // as a file would hand the element the delivery that just failed — and
+    // because a sidecar omits `encoder` and a `direct` file delivery carries no
+    // warning to raise, that dead end ends on a toast with no conversion, no
+    // notice and no escape hatch.
+    await expect.poll(() => streamRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    // The Direct fallback: the stream endpoint re-plans server-side and answers
+    // with its full transcode — the only rung that can play source codecs the
+    // browser cannot decode, which is what a cached copy the browser refused
+    // still needs.
+    expect(new URL(streamRequests[0]).searchParams.get('mode')).toBe('transcode');
+    // AND the byte URL was fetched exactly once — the attempt. A second fetch
+    // would be the replay, and it would SUCCEED (the sidecar is on disk), so
+    // nothing else in this test would notice it.
+    expect(byteRequests).toHaveLength(1);
+    // AND the escalated run is what plays: the file delivery this browser
+    // refused is replaced by converted bytes that decode.
+    await page.waitForFunction(
+      (hash) => {
+        const el = document.querySelector('#viewer-video');
+        if (!el || el.dataset.photoHash !== hash) return false;
+        const src = el.currentSrc || el.getAttribute('src') || '';
+        return src.startsWith('blob:') && el.readyState >= 2 && el.currentTime > 0;
+      },
+      mkv.hash_sha256,
+      { timeout: 30_000 }
+    );
   });
 
   test('a failed remux stream escalates one step and recovers', async ({ page }) => {

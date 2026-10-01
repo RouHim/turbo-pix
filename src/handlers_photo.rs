@@ -585,6 +585,7 @@ pub async fn update_photo_metadata(
                 longitude: metadata_req.longitude,
             },
             &db_pool,
+            &facts,
         )
         .await;
     }
@@ -768,39 +769,34 @@ fn applied_edit(
     })
 }
 
-/// True when a save's APPLIED position differs from the one the row holds —
-/// i.e. when the container's coordinates are actually being moved.
+/// True when a save's APPLIED position differs from the one the file held
+/// before the save — i.e. when the container's coordinates are actually being
+/// moved.
 ///
-/// This is the save-side twin of the rule the scan's upsert applies to a
-/// changed file ([`crate::db::Photo::create_or_update_with_transaction`]): the
-/// row's `location.city` was geocoded from the coordinates it holds, so a
-/// save that replaces them invalidates the name and has to re-arm the
+/// The row's `location.city` was geocoded from the coordinates the file held,
+/// so a save that replaces them invalidates the name and has to re-arm the
 /// resolver, which otherwise skips the row forever (its
-/// `geo_location_resolved` is already 1) while the next scan takes the
-/// unchanged branch and keeps the stale name next to the new pin.
+/// `geo_location_resolved` is already 1) and would pair the old name with the
+/// new pin. The position the file held is a file fact, never a stored column,
+/// so it comes from the facts index entry captured before the write.
 ///
 /// The APPLIED values decide, not the request: the carriers keep their own
 /// representation (16.16 fixed point, four decimals of ISO 6709 — about 11 m
 /// at that width), so a request can ask for more precision than the container
-/// holds and land on the position the row already has. Comparing the request
+/// holds and land on the position the file already has. Comparing the request
 /// would report a move that never happened and drop a name that is still the
 /// right one, re-queueing a row the resolver would answer with the same
-/// string. `applied_edit` is what the row is mirrored from, so this asks the
-/// same question that question's answer creates. A request that carried no
-/// pair moves nothing.
-fn applied_position_moves_the_row(photo: &Photo, applied: &VideoMetadataEdit) -> bool {
+/// string. `applied` is what the file is mirrored from, so this asks the same
+/// question that answer creates. A request that carried no pair moves nothing.
+fn applied_position_moves_the_file(
+    previous: Option<(f64, f64)>,
+    applied: &VideoMetadataEdit,
+) -> bool {
     let (Some(latitude), Some(longitude)) = (applied.latitude, applied.longitude) else {
         return false;
     };
-    let stored = photo.metadata.get("location");
-    let stored_coordinate = |key: &str| {
-        stored
-            .and_then(|location| location.get(key))
-            .and_then(|v| v.as_f64())
-    };
-    // A row that holds no position at all is being given one, which is a move.
-    stored_coordinate("latitude") != Some(latitude)
-        || stored_coordinate("longitude") != Some(longitude)
+    // A file that held no position at all is being given one, which is a move.
+    previous != Some((latitude, longitude))
 }
 
 /// Puts `time` on the file at `path`.
@@ -922,17 +918,21 @@ fn patch_container(
     Ok((pre_write_modified, write, applied))
 }
 
-/// Apply a metadata edit to a video's container and mirror the result into
-/// `photo`'s row.
+/// Apply a metadata edit to a video's container and record the row-side facts
+/// of the save.
 ///
 /// The container is the source of truth: the file is rewritten first (every
 /// refusal [`mp4_metadata::write_metadata`] can decide is decided before a byte
-/// is written), then the row records what the file now says — its `taken_at`
-/// and location plus, when the row already described the patched file, the
-/// scanner's identity of it. A container that turns out to hold no date carrier
-/// is refused right after the write, with the file rolled back first. When the
-/// row write fails, the file is rolled back through the write's undo token, so
-/// a 500 never leaves the file changed without the row that describes it.
+/// is written), and the row then records only what the file cannot: its
+/// `updated_at`, the scanner's identity of the patched file (only when the row
+/// already described that file), and — when the save moved the position — the
+/// derived place name and the resolver gate. The date and the coordinates are
+/// NOT written to the row: they are file facts, served from
+/// [`MediaFactsIndex`], which is reloaded here so the response carries what the
+/// container now holds. A container that turns out to hold no date carrier is
+/// refused right after the write, with the file rolled back first. When the row
+/// write fails, the file is rolled back through the write's undo token, so a
+/// 500 never leaves the file changed without the row that describes it.
 ///
 /// A rollback that could not run is never the same answer as a clean one: the
 /// 422 becomes a 500 naming the failed rollback, because "nothing was written"
@@ -942,6 +942,7 @@ async fn apply_video_metadata_edit(
     photo: Photo,
     edit: VideoMetadataEdit,
     db_pool: &DbPool,
+    facts: &MediaFactsIndex,
 ) -> Result<warp::reply::Json, Rejection> {
     // FR-013: an empty request must not rewrite the container. Nothing was
     // asked for, so the row comes back as it was read.
@@ -969,6 +970,17 @@ async fn apply_video_metadata_edit(
         }
     };
 
+    // The position the file held before the write is a file fact (the DB stores
+    // no coordinates), so capture it from the index now: the patch below
+    // replaces whatever the container carries.
+    let previous_position =
+        facts
+            .get(&photo.file_path)
+            .and_then(|facts| match (facts.latitude, facts.longitude) {
+                (Some(latitude), Some(longitude)) => Some((latitude, longitude)),
+                _ => None,
+            });
+
     // The container is patched on the blocking pool for the reason
     // `patch_container` documents. This task keeps holding the edit lock across
     // the await, so the critical section is unchanged.
@@ -988,7 +1000,7 @@ async fn apply_video_metadata_edit(
     // stored document also holds members no file carries — a resolved place
     // name, which belongs to the resolver and only leaves the row when the
     // position it was derived from is the one being replaced.
-    let position_moved = applied_position_moves_the_row(&photo, &applied);
+    let position_moved = applied_position_moves_the_file(previous_position, &applied);
     if position_moved {
         // Drop it from the response copy too, so the caller is handed the state
         // that was committed instead of a new pin next to the old place name.
@@ -1000,40 +1012,6 @@ async fn apply_video_metadata_edit(
             location.remove("city");
         }
     }
-    let mut saved_location = serde_json::Map::new();
-    if let Some(lat) = applied.latitude {
-        saved_location.insert("latitude".to_string(), json!(lat));
-    }
-    if let Some(lon) = applied.longitude {
-        saved_location.insert("longitude".to_string(), json!(lon));
-    }
-    let metadata_patch =
-        (!saved_location.is_empty()).then(|| json!({ "location": saved_location.clone() }));
-
-    if let Some(dt) = applied.taken_at {
-        photo.taken_at = Some(dt);
-    }
-
-    // GPS coordinates are stored inside the metadata JSON object; make sure the
-    // stored value is actually an object before mutating it.
-    if !photo.metadata.is_object() {
-        photo.metadata = json!({});
-    }
-    if !saved_location.is_empty() {
-        let mut location = photo
-            .metadata
-            .get("location")
-            .and_then(|v| v.as_object())
-            .cloned()
-            .unwrap_or_default();
-        location.extend(saved_location);
-        photo
-            .metadata
-            .as_object_mut()
-            .unwrap()
-            .insert("location".to_string(), json!(location));
-    }
-
     // Record the patched file's identity only when the row already describes
     // that file. The rewrite preserves the byte length and the modification
     // time, so `write.fingerprint` is the identity of the file at this path
@@ -1079,19 +1057,19 @@ async fn apply_video_metadata_edit(
     // here, before the rollback's await below can hold this handler's future
     // across a non-`Send` value, which warp's `and_then` refuses to build a
     // route from.
-    let row_write = Photo::mirror_video_metadata_edit(
-        db_pool,
-        &photo.hash_sha256,
-        applied.taken_at,
-        metadata_patch.as_ref(),
-        position_moved,
-        identity,
-    )
-    .await
-    .map_err(|error| error.to_string());
+    let row_write = Photo::record_video_edit(db_pool, &photo.hash_sha256, position_moved, identity)
+        .await
+        .map_err(|error| error.to_string());
 
     match row_write {
-        Ok(()) => Ok(warp::reply::json(&photo)),
+        Ok(()) => {
+            // The container just changed and the row stores neither the date
+            // nor the coordinates: re-read the file's facts so the response
+            // carries what it now holds.
+            facts.reload(&photo.file_path);
+            facts.enrich(&mut photo);
+            Ok(warp::reply::json(&photo))
+        }
         Err(db_error) => {
             log::error!("Database error after a video metadata write: {}", db_error);
             // The container is already rewritten; putting it back keeps the
@@ -2660,7 +2638,12 @@ mod tests {
     async fn patch_metadata_edits_a_video_file_and_the_row() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "1000000000000000000000000000000000000000000000000000000000000001";
         // The keys fixture has a location carrier, so the date AND the position
         // can both be written into the container itself.
@@ -2705,18 +2688,28 @@ mod tests {
             Some("+52.5200+013.4050/")
         );
 
-        // The row mirrors that file, including the scanner's identity fields.
+        // The row mirrors the file's scanner identity, while the date and the
+        // coordinates it now carries are served from the facts index — the DB
+        // stores neither.
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(
-            row.taken_at.unwrap().to_rfc3339(),
-            "2024-07-04T12:00:00+00:00"
-        );
+        assert!(row.taken_at.is_none());
+        assert!(row.metadata["location"].get("latitude").is_none());
+        assert!(row.metadata["location"].get("longitude").is_none());
         assert_eq!(row.file_size, before.file_size);
         let on_disk = fs::metadata(&video).unwrap().modified().unwrap();
         assert_eq!(
             row.date_modified.timestamp(),
             DateTime::<Utc>::from(on_disk).timestamp()
         );
+        let entry = facts
+            .get(&row.file_path)
+            .expect("the save must publish the file's facts");
+        assert_eq!(
+            entry.taken_at.unwrap().to_rfc3339(),
+            "2024-07-04T12:00:00+00:00"
+        );
+        assert_eq!(entry.latitude, Some(52.52));
+        assert_eq!(entry.longitude, Some(13.405));
     }
 
     /// A save must not stamp the patched file's identity onto a row that
@@ -2969,7 +2962,12 @@ mod tests {
     async fn patch_metadata_mirrors_the_values_the_carrier_actually_stored() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "1100000000000000000000000000000000000000000000000000000000000011";
         // The keys fixture's location carrier keeps four decimals.
         let video = create_video_row(
@@ -3022,26 +3020,37 @@ mod tests {
             serde_json::to_value(applied_taken_at).unwrap()
         );
 
-        // AND: the row carries the same applied values — what a later
-        // extraction of this file derives from the carrier.
+        // AND: the row stores neither the date nor the coordinates — both are
+        // file facts, and the index is what a later read serves them from.
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(row.taken_at, Some(applied_taken_at));
-        assert_eq!(row.metadata["location"]["latitude"], applied_latitude);
-        assert_eq!(row.metadata["location"]["longitude"], applied_longitude);
+        assert!(row.taken_at.is_none());
+        assert!(row.metadata["location"].get("latitude").is_none());
+        assert!(row.metadata["location"].get("longitude").is_none());
+        let entry = facts
+            .get(&row.file_path)
+            .expect("the save must publish the file's facts");
+        assert_eq!(entry.taken_at, Some(applied_taken_at));
+        assert_eq!(entry.latitude, Some(applied_latitude));
+        assert_eq!(entry.longitude, Some(applied_longitude));
     }
 
-    /// The place name in a row was geocoded from the coordinates that row
-    /// holds. A save that moves the photo replaces them, and nothing else would
-    /// ever correct the name: the save restates the file's fingerprint, so the
-    /// next scan takes the unchanged branch that keeps the name, and the
-    /// resolver skips the row for as long as its flag says it is resolved. So
-    /// the save drops the name it invalidates, re-queues the row, and reports
-    /// the same state — a new pin next to the old city's name would be a lie.
+    /// The place name in a row was geocoded from the coordinates the file
+    /// held. A save that moves the photo replaces them, and nothing else would
+    /// ever correct the name: the save restates the file's fingerprint, so
+    /// nothing downstream of the scan would, and the resolver skips the row for
+    /// as long as its flag says it is resolved. So the save drops the name it
+    /// invalidates, re-queues the row, and reports the same state — a new pin
+    /// next to the old city's name would be a lie.
     #[tokio::test]
     async fn patch_metadata_drops_the_resolved_name_when_the_save_moves_the_video() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "1300000000000000000000000000000000000000000000000000000000000013";
         create_video_row(
             &db_pool,
@@ -3088,14 +3097,18 @@ mod tests {
             body["metadata"]
         );
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(row.metadata["location"]["latitude"], 52.52);
+        // The row stores neither the date nor the coordinates: they are file
+        // facts, and the response above already carries them.
+        assert!(row.taken_at.is_none());
+        assert!(row.metadata["location"].get("latitude").is_none());
+        assert!(row.metadata["location"].get("longitude").is_none());
         assert!(
             row.metadata["location"]["city"].is_null(),
             "a name geocoded from the position this save replaced must not survive it: {}",
             row.metadata
         );
         assert_eq!(
-            crate::db::get_photos_needing_geo_resolution(&db_pool)
+            crate::db::get_photos_needing_geo_resolution(&db_pool, &facts)
                 .await
                 .expect("candidates"),
             vec![(file_path.clone(), 52.52, 13.405)],
@@ -3112,7 +3125,12 @@ mod tests {
     async fn patch_metadata_keeps_the_resolved_name_when_the_save_holds_the_position() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "1400000000000000000000000000000000000000000000000000000000000014";
         create_video_row(
             &db_pool,
@@ -3156,8 +3174,10 @@ mod tests {
         assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
         assert_eq!(row.metadata["location"]["city"], "Vienna");
+        // The row stores no coordinates: they are file facts.
+        assert!(row.metadata["location"].get("latitude").is_none());
         assert!(
-            crate::db::get_photos_needing_geo_resolution(&db_pool)
+            crate::db::get_photos_needing_geo_resolution(&db_pool, &facts)
                 .await
                 .expect("candidates")
                 .is_empty(),
@@ -3177,7 +3197,12 @@ mod tests {
     ) {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "1500000000000000000000000000000000000000000000000000000000000015";
         create_video_row(
             &db_pool,
@@ -3207,7 +3232,6 @@ mod tests {
 
         // WHEN: a save asks for that very pin with more precision than the
         // carrier can hold, so what lands in the file is the stored pin
-        let stored_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
         let rounded = warp::test::request()
             .method("PATCH")
             .path(&format!("/api/photos/{}/metadata", hash))
@@ -3229,10 +3253,11 @@ mod tests {
         );
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
         assert_eq!(row.metadata["location"]["city"], "Vienna");
-        assert_eq!(row.metadata["location"]["latitude"], 48.2082);
-        assert_eq!(stored_row.metadata["location"]["latitude"], 48.2082);
+        // The row stores no coordinates: they are file facts, and the response
+        // above already carries the applied pin.
+        assert!(row.metadata["location"].get("latitude").is_none());
         assert!(
-            crate::db::get_photos_needing_geo_resolution(&db_pool)
+            crate::db::get_photos_needing_geo_resolution(&db_pool, &facts)
                 .await
                 .expect("candidates")
                 .is_empty(),
@@ -3241,13 +3266,14 @@ mod tests {
         );
     }
 
-    /// The response and the row must describe the SAME stored state. A client
-    /// that diffs the PATCH answer against a refetch — or hands the answer
-    /// straight to a state store and reconciles later — must not see the
+    /// A client that diffs the PATCH answer against a refetch — or hands the
+    /// answer straight to a state store and reconciles later — must not see the
     /// dropped place name as a JSON `null` in one representation and as an
-    /// absent member in the other.
+    /// absent member in the other: both sides drop the member. The response
+    /// additionally carries the file's date and coordinates from the facts
+    /// index, which the row never stores.
     #[tokio::test]
-    async fn patch_metadata_answers_with_exactly_the_stored_metadata() {
+    async fn patch_metadata_answers_with_the_dropped_name_absent_on_both_sides() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
         let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
@@ -3286,19 +3312,20 @@ mod tests {
             .reply(&routes)
             .await;
 
-        // THEN: the two representations are byte-for-byte the same document
+        // THEN: the response serves the file's facts and the row stores none
+        // of them
         assert_eq!(moved.status(), 200);
         let body: serde_json::Value = serde_json::from_slice(moved.body()).unwrap();
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(
-            body["metadata"], row.metadata,
-            "the PATCH answer and a refetch must not disagree: a member one of them keeps and the other drops reads as a change the client never made"
-        );
+        assert_eq!(body["metadata"]["location"]["latitude"], 52.52);
+        assert_eq!(body["metadata"]["location"]["longitude"], 13.405);
+        assert!(row.metadata["location"].get("latitude").is_none());
+        assert!(row.metadata["location"].get("longitude").is_none());
         // The name is ABSENT on both sides, not a JSON null the client has to
-        // filter: the response drops the member and RFC 7396's explicit null
-        // removes it from the row, which is what makes the deep-equal above
-        // hold. A future "keep the key, set it null" on either side alone
-        // would show up here as one of them carrying `"city": null`.
+        // filter: RFC 7396's explicit null removes the member from the row, and
+        // the response mirrors the row's document for it. A future "keep the
+        // key, set it null" on either side alone would show up here as one of
+        // them carrying `"city": null`.
         for (side, location) in [
             ("response", &body["metadata"]["location"]),
             ("row", &row.metadata["location"]),
@@ -3344,6 +3371,7 @@ mod tests {
         .await
         .expect("trigger");
 
+        let facts = MediaFactsIndex::new();
         let rejection = match apply_video_metadata_edit(
             photo,
             crate::mp4_metadata::VideoMetadataEdit {
@@ -3351,6 +3379,7 @@ mod tests {
                 ..Default::default()
             },
             &db_pool,
+            &facts,
         )
         .await
         {
@@ -3536,7 +3565,12 @@ mod tests {
     async fn concurrent_saves_do_not_interleave() {
         let db_pool = create_in_memory_pool().await.expect("db");
         let temp_dir = TempDir::new().unwrap();
-        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
         let hash = "6000000000000000000000000000000000000000000000000000000000000006";
         let video = create_video_row(
             &db_pool,
@@ -3573,16 +3607,22 @@ mod tests {
             Some("+52.5200+013.4050/")
         );
 
-        // The row carries both saves too: the second one merges into the row
-        // the first one committed instead of overwriting it with its own
-        // pre-lock snapshot.
+        // The facts index carries both saves too: the second handler's reload
+        // sees the file the first one committed. The row stores neither the
+        // date nor the coordinates.
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert!(row.taken_at.is_none());
+        assert!(row.metadata["location"].get("latitude").is_none());
+        assert!(row.metadata["location"].get("longitude").is_none());
+        let entry = facts
+            .get(&row.file_path)
+            .expect("a save must publish the file's facts");
         assert_eq!(
-            row.taken_at.unwrap().to_rfc3339(),
+            entry.taken_at.unwrap().to_rfc3339(),
             "2024-07-04T12:00:00+00:00"
         );
-        assert_eq!(row.metadata["location"]["latitude"], 52.52);
-        assert_eq!(row.metadata["location"]["longitude"], 13.405);
+        assert_eq!(entry.latitude, Some(52.52));
+        assert_eq!(entry.longitude, Some(13.405));
     }
 
     #[tokio::test]

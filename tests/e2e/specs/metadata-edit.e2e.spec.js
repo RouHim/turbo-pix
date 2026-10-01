@@ -398,15 +398,22 @@ test.describe('Metadata edit', () => {
     await expect(marker).toHaveAttribute('data-map-location-count', String(locationCount));
   });
 
-  test('a video cannot be edited and the interface says so', async ({ page }) => {
-    // GIVEN a video fixture open in the viewer
+  test('a video in a writable container can be edited, a foreign one cannot', async ({ page }) => {
+    // GIVEN a writable video fixture open in the viewer
     const video = await getPhotoByFilename(page, 'test_video.mp4');
     await openViewerMetadata(page, video.hash_sha256);
 
-    // THEN the edit control is disabled and its accessible name states the
-    // limitation (metadata_writer refuses video/RAW/WebP)
+    // THEN the edit control is offered: the container path of the PATCH route
+    // rewrites MP4/MOV/M4V in place (src/mp4_metadata.rs), so a video is not a
+    // read-only file type any more
     const editButton = page.locator('#metadata-edit-btn');
+    await expect(editButton).toBeEnabled();
+
+    // AND a container the writer refuses keeps the limitation visible: the
+    // control is disabled and its accessible name names the format
+    const foreign = await getPhotoByFilename(page, 'test_video_long.mkv');
+    await openViewerMetadata(page, foreign.hash_sha256);
     await expect(editButton).toBeDisabled();
-    await expect(editButton).toHaveAccessibleName(/not supported/i);
+    await expect(editButton).toHaveAccessibleName(/Matroska/i);
   });
 });

@@ -419,6 +419,24 @@ async function seedTestMedia() {
     console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
   }
 
+  // Metadata-editing fixture (video-metadata.e2e.spec.js): the only seeded
+  // video that already carries a QuickTime location carrier, so a coordinate
+  // save exercises replacing a carrier instead of the absence of one. Seeded
+  // byte-for-byte — it is already faststart, and pinning its date through the
+  // container (pinVideoDate) would remux it and move or drop the carriers. Its
+  // `taken_at` comes from its own `com.apple.quicktime.creationdate`
+  // (2024-05-01), older than every video pinned in VIDEO_FIXTURES, so it cannot
+  // displace the first video card; the mtime below only keys the conversion
+  // cache.
+  const keysVideoSrc = path.join('test-data', 'test_video_quicktime_keys.mp4');
+  const keysVideoDest = path.join(photosDir, 'test_video_quicktime_keys.mp4');
+  if (existsSync(keysVideoSrc)) {
+    await copyFile(keysVideoSrc, keysVideoDest);
+    const date = videoDate(CLUSTER_DAYS_AGO + 6);
+    await utimes(keysVideoDest, date, date);
+  } else {
+    console.warn(`Video fixture not found at ${keysVideoSrc}`);
+  }
 
   // Second metadata-editing fixture (video-metadata.e2e.spec.js): FR-001
   // accepts MOV next to MP4 and M4V, and a renamed copy proves that gate end

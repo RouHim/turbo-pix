@@ -4,7 +4,7 @@
 
 **Goal:** `PATCH /api/photos/{hash}/metadata` edits MP4/MOV/M4V files in place (capture date + location) and mirrors the result into the `photos` row, refusing anything it cannot patch without touching media bytes.
 
-**Architecture:** A new `src/mp4_metadata.rs` module owns all ISO-BMFF knowledge: it locates `moov` by walking top-level box headers with `seek` (never reading `mdat`), parses the box tree, and rewrites **only the `moov` region in a single write of unchanged length** — fixed-width `creation_time` fields in `mvhd`/`tkhd`/`mdhd` plus recognized text carriers (mdta `keys`+`ilst` items, `©day`/`©xyz`). Refusals are decided before any byte is written, so a refused save leaves the file byte-identical. The handler branches on the row's `mime_type`, maps refusal variants to distinct 4xx `error_code`s, and mirrors the result into the row with `taken_at`, merged `location`, and the stat-derived fingerprint; the file's mtime is restored after the patch so every size+mtime-keyed cache (thumbnail, transcode, remux) stays valid.
+**Architecture:** A new `src/mp4_metadata.rs` module owns all ISO-BMFF knowledge: it locates `moov` by walking top-level box headers with `seek` (never reading `mdat`), parses the box tree, and rewrites **only the `moov` region in a single write of unchanged length** — fixed-width `creation_time` fields in `mvhd`/`tkhd`/`mdhd` plus recognized carriers (mdta `keys`+`ilst` items, `©day`/`©xyz`, the ISO/3GPP `udta/loci` pair). Refusals are decided before any byte is written — except one the readback can only prove after the write (a container that holds no date carrier): that one is refused right after the write with the file rolled back — so a refused save leaves the file byte-identical. The handler branches on the row's `mime_type`, maps refusal variants to distinct 4xx `error_code`s, and mirrors the result into the row with `taken_at`, merged `location`, and the stat-derived fingerprint; the file's mtime is restored after the patch so every size+mtime-keyed cache (thumbnail, transcode, remux) stays valid.
 
 **Tech Stack:** Rust (warp, sqlx/SQLite, chrono, tokio), hand-rolled ISO-BMFF byte parsing (no new crate), Svelte 5 runes frontend, Playwright E2E.
 
@@ -156,7 +156,7 @@ Implementation notes (these are decisions, not suggestions):
 - Text carriers, resolved from the tree:
   - mdta: read `moov/udta/meta/keys`, build `index → key string` (key bytes = entry body after the 8-byte prefix, trailing NUL stripped), then for each `moov/udta/meta/ilst` child whose 4-byte type is a big-endian index, read its `data` child's payload (payload starts 8 bytes after the `data` box header: 4-byte type indicator + 4-byte locale).
   - date carriers: mdta key `com.apple.quicktime.creationdate` or `creation_time`, item type `©day`, or a direct `moov/udta/©day` child.
-  - location carriers: mdta key `com.apple.quicktime.location.ISO6709` or `location`, item type `©xyz`, or a direct `moov/udta/©xyz` child.
+  - location carriers: mdta key `com.apple.quicktime.location.ISO6709` or `location`, item type `©xyz`, a direct `moov/udta/©xyz` child, or the ISO/3GPP `moov/udta/loci` box (longitude then latitude, each a 16.16 fixed-point `i32` — the carrier ffmpeg's own MP4 muxer writes for a location tag).
   - `creation_date_text`/`location_iso6709` are the verbatim first hit in the order listed.
 - `parse_iso6709`: accept `[+-]D+(.D+)?[+-]D+(.D+)?[+-]D+(.D+)?/?` (altitude optional, trailing `/` optional), validate `-90..=90` / `-180..=180`, return `None` otherwise.
 - Every failure path returns an `Err`; no `unwrap`/`expect` on file data.
@@ -563,7 +563,7 @@ Expected: FAIL — the video cases currently answer 500 (`Unsupported file exten
   1. Empty edit (all three `None`) ⇒ respond `warp::reply::json(&photo)` **without** touching file or DB (FR-013) and log at debug.
   2. `let _guard = VIDEO_EDIT_LOCK.lock().await;` with `static VIDEO_EDIT_LOCK: LazyLock<tokio::sync::Mutex<()>>` near the handler — serializes saves so two requests cannot interleave reads and writes of the same or another file.
   3. `let write = write_metadata(Path::new(&photo.file_path), &edit)` — on `Err`, map through `video_metadata_rejection` (log the message; the response body carries the code).
-  4. Mirror into the loaded row exactly like the photo path does for location (`src/handlers_photo.rs:573-607`): `taken_at`, merged `location` object, then `file_size`/`date_modified` from `write.fingerprint`, `updated_at = Utc::now()`.
+  4. Mirror into the loaded row exactly like the photo path does for location (`src/handlers_photo.rs:573-607`): `taken_at`, merged `location` object, then `file_size`/`date_modified` from `write.fingerprint` when the row already describes that file (a row whose file was replaced behind its back keeps its stale fingerprint, so the next scan re-extracts the file instead of skipping it forever), `updated_at = Utc::now()`. A requested date the readback finds in no carrier at all is refused as `unrepresentable_value` with the file rolled back first, never mirrored.
   5. `photo.update(&db_pool).await` — on `Err`, call `mp4_metadata::restore(&write.undo)` (log a warning if that also fails) and return `DatabaseError` (500).
   6. Respond `warp::reply::json(&photo)`.
 - `video_metadata_rejection` maps the variant table above into `VideoMetadataError`; `handle_rejection` gains an arm **before** the `ValidationError` arm that replies with that status and the shared JSON body (now including `error_code`). Do not change the photo path's `ValidationError`/`DatabaseError` behaviour.
@@ -741,7 +741,24 @@ git commit -m "feat(ui): offer video metadata editing with localized refusal mes
 
 **Files:**
 - Create: `tests/e2e/specs/video-metadata.e2e.spec.js`
-- Modify: `tests/e2e/setup/global-setup.js` (seed `test_video_quicktime_keys.mp4` with the existing pinned-date pattern), `tests/e2e/specs/map.e2e.spec.js` (its "videos carry no GPS" premise changes once the located fixture is indexed)
+- Modify: `tests/e2e/setup/global-setup.js` (seed `test_video_quicktime_keys.mp4` with the existing pinned-date pattern)
+- Modify: `tests/e2e/specs/map.e2e.spec.js` (its "videos carry no GPS" premise changes once the located fixture is indexed)
+- Modify: `tests/e2e/specs/map-filters.e2e.spec.js` (same two-continent reason, one layer up: its located-video case is scoped to the video it seeds itself, not to the quicktime fixture)
+
+Why the two map specs: the located fixture is real library data from Step 1, so it shows up in every
+unfiltered map listing as a point in Vienna. Each affected case was narrowed to the media type it is
+actually about, which keeps its own premise and only removes the foreign point:
+- `map.e2e.spec.js`: the empty-state case asks for `?q=type%3Avideo test_video.mp4` (its own "no
+  markers at all" premise, scoped to the videos it seeds), and the cluster-count / location-marker
+  cases ask for `?q=type%3Aimage` — with the located video in the listing the fit spans two
+  continents, and `focusLocation` then clicks a cluster whose zoom animation has detached the element.
+- `map-filters.e2e.spec.js`: a video-scoped query narrowed to the seeded file —
+  `?q=type%3Avideo%20test_video.mp4`, the same query the map shell spec uses for its own
+  empty-state case — for the same reason: the quicktime fixture brings its own container
+  coordinates in Vienna, so an unfiltered map holds a second location, the fit spans two
+  continents, and the case's `focusLocation` call would have to click the Berlin+Wien cluster,
+  a zoom whose animation detaches the element under the click. Its premise is "a video WITH
+  coordinates is plotted and opens in the viewer", not the library's whole geometry.
 
 **Interfaces:**
 - Consumes: everything above; `TestHelpers` as-is.
@@ -790,6 +807,38 @@ test('GIVEN a Matroska video WHEN the viewer is opened THEN the editor offers no
   // #metadata-edit-btn is disabled and its title names Matroska; no modal opens on click.
 });
 ```
+
+The four scenarios above are the UI-level evidence; the review pass added the
+cases the acceptance criteria ask for and these four do not reach:
+
+- **Scenario 3 AC4 — the returned row.** `captureMetadataPatch` re-issues the
+  request with `route.fetch()` and fulfills the route with that very response,
+  so the response body the page received is assertable. The date save pins
+  `taken_at`, `file_size` and `file_modified` to the patched file's own identity
+  (the row described that file, so the handler restates the fingerprint and the
+  next scan sees no change — the other half of SC-004), the location save pins
+  `metadata.location`. The replaced-file branch, where the row disagrees with
+  the file and keeps its stale fingerprint on purpose, stays in the handler's
+  unit test: an e2e version would have to overwrite a shared fixture in place
+  and restore it.
+- **Scenario 1 AC3 / SC-002 — nothing else is lost.** `payloadDigest` skips the
+  `moov` region, which is the region the save rewrites, so the date case reads
+  the full `format_tags`/`stream_tags` map minus `creation_time` before and
+  after the save and compares them: `encoder`, `comment` and the brand entries
+  must all still be there.
+- **Scenario 4 AC1 — the conversion overlap.** A sixth test takes
+  `test_video_10bit.mp4` (the matrix's converting fixture: h264 High 10, so a
+  Chromium client gets a conversion), claims the whole-file conversion with
+  `?transcode=true`, waits for `InProgress`, saves the capture date while that
+  job runs and waits for `Completed`. The artifact is still served cached, the
+  row and the file carry the new instant, the payload outside `moov` is
+  unchanged — and the finished artifact decodes in the viewer, because a
+  conversion truncated by the write still renders a `<video>` and would pass a
+  presence-only assertion.
+- **Scenario 2 AC1 — the surfaces.** The location case also reads `#meta-gps` in
+  the still-open viewer and plots the video on a `q=`-scoped map (stubbed
+  tiles), so "the viewer shows the new coordinates" is observed instead of
+  inferred from the row.
 
 - [ ] **Step 3: Run the spec to verify it fails**
 
@@ -860,8 +909,8 @@ git commit -m "docs: record in-place video metadata editing learnings"
 
 ## Self-review
 
-**Spec coverage.** FR-001 → T5 (route branch by `video/*`) + T7 (button enabled for `.mp4/.mov/.m4v`); FR-002 → T5 (rollback on DB failure, refusal before write); FR-003 → T2 (single same-length `moov` write, mdat byte proof, moov-at-end test); FR-004 → T2 (mvhd/tkhd/mdhd) + T3 (every text date carrier); FR-005 → T4; FR-006 → T2 (`UndoToken`, refusal-before-write tests in every task); FR-007 → T6 (container location extraction + merge-preserving upsert) and T2/T3/T4 (read-back via `read_metadata`); FR-008 → T2 (mtime restore + stat-derived fingerprint) + T6 (`capability_version` survives); FR-009 → T5 (edit lock, concurrent test) + T2/T7 (mdat untouched, playback during save); FR-010 → T5 (seven distinct codes and statuses) + T7 (localized strings); FR-011 → T5 (photo path untouched) + T6 (photo upsert semantics unchanged except preservation); FR-012 → T7; FR-013 → T5 (empty request no-op) + T7 (clearing keeps today's client behaviour); FR-014 → T3/T4 (shape-preserving rendering, NUL padding, refusal instead of truncation). Scenarios 1-4 and SC-001..SC-005 each map onto the tasks above; SC-005's "existing suites pass" is T9.
+**Spec coverage.** FR-001 → T5 (route branch by `video/*`) + T7 (button enabled for `.mp4/.mov/.m4v`); FR-002 → T5 (rollback on DB failure, refusal before write); FR-003 → T2 (single same-length `moov` write, mdat byte proof, moov-at-end test); FR-004 → T2 (mvhd/tkhd/mdhd) + T3 (every text date carrier); FR-005 → T4; FR-006 → T2 (`UndoToken`, refusal-before-write tests in every task); FR-007 → T6 (container location extraction + merge-preserving upsert) and T2/T3/T4 (read-back via `read_metadata`); FR-008 → T2 (mtime restore + stat-derived fingerprint) + T6 (`capability_version` survives); FR-009 → T5 (edit lock, concurrent test) + T2/T7 (mdat untouched, playback during save); FR-010 → T5 (eight distinct codes and statuses) + T7 (localized strings); FR-011 → T5 (photo path untouched) + T6 (photo upsert semantics unchanged except preservation); FR-012 → T7; FR-013 → T5 (empty request no-op) + T7 (clearing keeps today's client behaviour); FR-014 → T3/T4 (shape-preserving rendering, NUL padding, refusal instead of truncation). Scenarios 1-4 and SC-001..SC-005 each map onto the tasks above; SC-005's "existing suites pass" is T9.
 
 **Type consistency.** `Mp4MetadataError` variants, `VideoMetadataEdit`, `VideoMetadataWrite`, `Fingerprint`, `UndoToken`, `render_date_in_shape`, `render_iso6709_in_shape`, `isMetadataEditable`, `METADATA_ERROR_KEYS` and the eight `error_code` strings are used with identical names and shapes in every task that references them.
 
-**Open decisions made here (not left to the implementer).** mtime is restored after a save; a shorter text value is NUL-padded inside the existing payload slot; `moov` is always rebuilt to its original byte length as `children' || free(pad)` so a render that grows is paid for only out of the file's own free room inside `moov` (a leftover of 1-7 bytes is `NoRoom`, never a malformed box or a media shift); the fingerprint stored in the row is the post-write stat truncated to whole seconds; the empty request is a 200 no-op; refusals for fragmented layouts and for exhausted room share the `no_writable_slot` code; `test_video_quicktime_keys.mp4` is generated with `+faststart` so the indexing pass cannot remux its QuickTime keys away.
+**Open decisions made here (not left to the implementer).** mtime is restored after a save; a shorter text value is NUL-padded inside the existing payload slot; `moov` is always rebuilt to its original byte length as `children' || free(pad)` so a render that grows is paid for only out of the file's own free room inside `moov` (a leftover of 1-7 bytes is `NoRoom`, never a malformed box or a media shift); the fingerprint stored in the row is the post-write stat truncated to whole seconds, adopted only when the row already described the patched file (a row whose file was replaced behind its back keeps its stale fingerprint so the next scan re-extracts it); a requested date the readback finds in no carrier at all is refused as `unrepresentable_value` (the file is rolled back first); the empty request is a 200 no-op; refusals for fragmented layouts and for exhausted room share the `no_writable_slot` code; `test_video_quicktime_keys.mp4` is generated with `+faststart` so the indexing pass cannot remux its QuickTime keys away.

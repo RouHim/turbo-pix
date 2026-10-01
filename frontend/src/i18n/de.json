@@ -143,7 +143,7 @@
       "edit_save": "Speichern",
       "edit_success": "Metadaten erfolgreich aktualisiert",
       "edit_error": "Metadaten konnten nicht aktualisiert werden",
-      "edit_error_invalid_date": "Das Datum wird nicht unterstützt (1990 oder später).",
+      "edit_error_invalid_date": "Das Datum wird nicht unterstützt (es muss zwischen 1990-01-01T00:00:00Z und 2040-02-06T06:28:15Z liegen).",
       "edit_error_invalid_coordinates": "Die Koordinaten sind ungültig.",
       "edit_error_unsupported_container": "Die Bearbeitung von Metadaten wird nur für MP4-, MOV- und M4V-Videos unterstützt.",
       "edit_error_no_location_carrier": "Dieses Video hat kein Ortsfeld, das aktualisiert werden kann.",

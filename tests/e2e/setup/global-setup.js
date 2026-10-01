@@ -420,6 +420,25 @@ async function seedTestMedia() {
   }
 
 
+  // Second metadata-editing fixture (video-metadata.e2e.spec.js): FR-001
+  // accepts MOV next to MP4 and M4V, and a renamed copy proves that gate end
+  // to end — the editor offers the file, the request reaches the writer and
+  // ffprobe reads the new instant back out of the container — without adding a
+  // binary to the repository. test_video.mp4 again: it carries no location
+  // carrier and no date carrier, so the copy stays out of the map's marker
+  // set (only the API-derived unlocated count moves) and out of the date
+  // carriers the metadata cases assert. Its `taken_at` has to be pinned in
+  // updateTestPhotoDates, see there.
+  const movSrc = path.join('test-data', 'test_video.mp4');
+  const movDest = path.join(photosDir, 'test_video_mov.mov');
+  if (existsSync(movSrc)) {
+    await copyFile(movSrc, movDest);
+    const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 10) * 24 * 60 * 60 * 1000);
+    await utimes(movDest, date, date);
+  } else {
+    console.warn(`Video fixture not found at ${movSrc}`);
+  }
+
   console.log('Generated test media ready');
 }
 

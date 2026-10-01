@@ -106,6 +106,23 @@
       settings.color_space
   );
   const hasLocation = $derived(location.latitude != null || location.longitude != null);
+  // ONE message for the tooltip and the accessible name. A screen reader on a
+  // disabled button announces the `aria-label`, not the `title`, so a
+  // format-specific `title` beside a generic `aria-label` would hide the
+  // format from assistive tech and make the two disagree.
+  const editDisabledLabel = $derived.by(() =>
+    photo?.mime_type
+      ? $t('ui.metadata.edit_unsupported_format', {
+          values: { format: getFormatName(photo) },
+          default: 'Editing {format} files is not supported',
+        })
+      : $t('ui.metadata.edit_unsupported', {
+          default: 'Editing this file type is not supported',
+        })
+  );
+  const editLabel = $derived(
+    showEditBtn ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' }) : editDisabledLabel
+  );
 </script>
 
 <div class="photo-info">
@@ -113,30 +130,24 @@
     <h3 id="photo-title">{title}</h3>
     <div style="display: flex; gap: var(--space-2); align-items: center;">
       {#if !isCollage}
-        <button
-          type="button"
-          id="metadata-edit-btn"
-          class="btn-icon"
-          disabled={!showEditBtn}
-          title={showEditBtn
-            ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
-            : photo?.mime_type
-              ? $t('ui.metadata.edit_unsupported_format', {
-                  values: { format: getFormatName(photo) },
-                  default: 'Editing {format} files is not supported',
-                })
-              : $t('ui.metadata.edit_unsupported', {
-                  default: 'Editing this file type is not supported',
-                })}
-          aria-label={showEditBtn
-            ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
-            : $t('ui.metadata.edit_unsupported', {
-                default: 'Editing this file type is not supported',
-              })}
-          onclick={onEditMetadata}
-        >
-          <Icon name="edit-2" width={16} height={16} />
-        </button>
+        <!-- A `disabled` button cannot show its own tooltip: it takes no
+             pointer events and, being disabled, no focus, so the format it
+             cannot edit never reaches the user. The wrapper is never disabled
+             and carries the same reason, which is the one surface that can
+             still surface it. -->
+        <span class="edit-btn-wrap" title={showEditBtn ? undefined : editLabel}>
+          <button
+            type="button"
+            id="metadata-edit-btn"
+            class="btn-icon"
+            disabled={!showEditBtn}
+            title={editLabel}
+            aria-label={editLabel}
+            onclick={onEditMetadata}
+          >
+            <Icon name="edit-2" width={16} height={16} />
+          </button>
+        </span>
       {/if}
       <button
         type="button"
@@ -562,5 +573,11 @@
   .btn-icon:disabled:hover {
     background: none;
     color: var(--text-muted);
+  }
+
+  /* The hover surface for a disabled control. `inline-flex` keeps the wrapper's
+     box identical to the button's, so the header's spacing does not move. */
+  .edit-btn-wrap {
+    display: inline-flex;
   }
 </style>

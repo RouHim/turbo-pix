@@ -185,11 +185,12 @@ test.describe('Map view', () => {
 
   test('cluster click separates the cluster into individual markers', async ({ page }) => {
     // Scoped to images: the branch's quicktime-keys fixture carries its own
-    // container coordinates in Wien, so an unfiltered fit spans two continents
-    // — clicking the image cluster zooms in far enough that the Wien marker
-    // leaves the viewport, and the location-marker count never grows. The
-    // seeded pair's cluster is images, so the scope restores the premise this
-    // test owns (clicking a cluster reveals more markers than before).
+    // container coordinates in Vienna, 524 km from the seeded Berlin pair, so
+    // an unfiltered fit is bounded by two clusters instead of the one these
+    // assertions describe — clicking the image cluster zooms in far enough
+    // that the Vienna marker leaves the viewport, and the location-marker
+    // count never grows. The scope restores the premise this test owns
+    // (clicking a cluster reveals more markers than before).
     await TestHelpers.goto(page, '/map?q=type%3Aimage');
     // The skip below is about the library, not about the load still running.
     await waitForMapFeatures(page);
@@ -308,7 +309,8 @@ test.describe('Map view', () => {
   test('cluster markers expand on click and on Enter', async ({ page }) => {
     // Scoped to images: the library's other geo-located photo — the
     // quicktime-keys video, whose position comes from its own container — sits
-    // in Vienna, so an unfiltered fit spans two continents and legitimately
+    // 524 km away in Vienna, so an unfiltered fit is bounded by two clusters
+    // instead of the single one the count below describes, and legitimately
     // renders this cluster without it. The seeded pair is images, so the scope
     // restores the premise the count below describes.
     await TestHelpers.goto(page, '/map?q=type%3Aimage');

@@ -1,4 +1,6 @@
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -14,7 +16,7 @@ use crate::image_editor::{self, RotationAngle};
 use crate::media_facts::MediaFactsIndex;
 use crate::metadata_writer;
 use crate::mimetype_detector;
-use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit};
+use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit, VideoMetadataWrite};
 use crate::warp_helpers::{
     handle_rejection, with_cache, with_db, with_facts, DatabaseError, NotFoundError,
     PermissionError, ValidationError, VideoMetadataError,
@@ -704,15 +706,238 @@ fn video_metadata_rejection(err: Mp4MetadataError) -> Rejection {
     })
 }
 
+/// The values the container actually holds after a successful write, in the
+/// representation a later extraction reads back.
+///
+/// The carriers keep their own shape: a position is re-rendered in the ISO 6709
+/// shape the carrier already had (a fixed decimal count, so a request with more
+/// precision is rounded — about 11 m at four decimals), and an instant is whole
+/// seconds in the `mvhd`/`tkhd`/`mdhd` fields with text carriers re-rendered at
+/// their own fraction width. A field that was not asked for stays `None`, so a
+/// save never restates a value the user did not touch.
+///
+/// A readback that fails keeps the requested value: the write already
+/// succeeded, so this is the mirror's reporting step, not a second validation.
+/// A readback that succeeds and finds no carrier holding a requested instant is
+/// the one answer that is not a report: `Err` says the container cannot
+/// represent the value, and the caller rolls the file back and refuses rather
+/// than mirroring an instant the file does not carry (a text carrier that
+/// cannot be parsed is still a carrier and stays on the reporting path).
+fn applied_edit(
+    path: &Path,
+    requested: VideoMetadataEdit,
+) -> Result<VideoMetadataEdit, Mp4MetadataError> {
+    let stored = match mp4_metadata::read_metadata(path) {
+        Ok(stored) => stored,
+        Err(err) => {
+            log::warn!(
+                "Could not read {} back after a metadata write ({err}); keeping the requested values",
+                path.display()
+            );
+            return Ok(requested);
+        }
+    };
+    // Every carrier the writer renders has been written before this read, so a
+    // readback that holds neither the binary time boxes nor a text item with
+    // the instant proves the container has no date carrier at all: the write
+    // patched nothing date-shaped, and answering the request would claim a date
+    // the patched file does not have.
+    if requested.taken_at.is_some()
+        && stored.creation_time.is_none()
+        && stored.creation_date_text.is_none()
+    {
+        return Err(Mp4MetadataError::Unrepresentable("date"));
+    }
+    let position = stored
+        .location_iso6709
+        .as_deref()
+        .and_then(mp4_metadata::parse_iso6709);
+
+    Ok(VideoMetadataEdit {
+        // The instant the binary time boxes carry — what a later ffprobe
+        // reports as `format.tags.creation_time`.
+        taken_at: requested
+            .taken_at
+            .map(|requested| stored.creation_time.unwrap_or(requested)),
+        latitude: requested
+            .latitude
+            .map(|requested| position.map_or(requested, |(latitude, _)| latitude)),
+        longitude: requested
+            .longitude
+            .map(|requested| position.map_or(requested, |(_, longitude)| longitude)),
+    })
+}
+
+/// True when a save's APPLIED position differs from the one the row holds —
+/// i.e. when the container's coordinates are actually being moved.
+///
+/// This is the save-side twin of the rule the scan's upsert applies to a
+/// changed file ([`crate::db::Photo::create_or_update_with_transaction`]): the
+/// row's `location.city` was geocoded from the coordinates it holds, so a
+/// save that replaces them invalidates the name and has to re-arm the
+/// resolver, which otherwise skips the row forever (its
+/// `geo_location_resolved` is already 1) while the next scan takes the
+/// unchanged branch and keeps the stale name next to the new pin.
+///
+/// The APPLIED values decide, not the request: the carriers keep their own
+/// representation (16.16 fixed point, four decimals of ISO 6709 — about 11 m
+/// at that width), so a request can ask for more precision than the container
+/// holds and land on the position the row already has. Comparing the request
+/// would report a move that never happened and drop a name that is still the
+/// right one, re-queueing a row the resolver would answer with the same
+/// string. `applied_edit` is what the row is mirrored from, so this asks the
+/// same question that question's answer creates. A request that carried no
+/// pair moves nothing.
+fn applied_position_moves_the_row(photo: &Photo, applied: &VideoMetadataEdit) -> bool {
+    let (Some(latitude), Some(longitude)) = (applied.latitude, applied.longitude) else {
+        return false;
+    };
+    let stored = photo.metadata.get("location");
+    let stored_coordinate = |key: &str| {
+        stored
+            .and_then(|location| location.get(key))
+            .and_then(|v| v.as_f64())
+    };
+    // A row that holds no position at all is being given one, which is a move.
+    stored_coordinate("latitude") != Some(latitude)
+        || stored_coordinate("longitude") != Some(longitude)
+}
+
+/// Puts `time` on the file at `path`.
+fn set_modified(path: &Path, time: SystemTime) -> Result<(), Mp4MetadataError> {
+    File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(time))
+        .map_err(Mp4MetadataError::Io)
+}
+
+/// Puts a patched container back through the write's undo token.
+///
+/// [`mp4_metadata::restore`] refuses unless the file's modification time is the
+/// one the token recorded, and that equality rests on `write_moov_region`'s own
+/// `set_modified` call, which only WARNS when the kernel refuses it. A save
+/// whose clock was not wound back would therefore leave the container patched
+/// while the token refuses to undo it — the file and the row permanently
+/// disagreeing, the split FR-006 forbids and no later scan repairs, because the
+/// row's fingerprint still matches the patched file. So the instant the file
+/// carried before the write is put back and the undo retried: the retry
+/// succeeding IS the proof that the token recorded that instant, since
+/// `restore` accepts nothing else.
+///
+/// A retry that still refuses means the token names some other instant — the
+/// file moved between our read and the write — so the time goes back to the
+/// value it was found with (our own repair attempt is not left on the file)
+/// and the failure is reported. Nothing here claims a file was repaired that
+/// was not.
+fn roll_back_container(
+    path: &Path,
+    write: &VideoMetadataWrite,
+    pre_write_modified: Option<SystemTime>,
+) -> Result<(), Mp4MetadataError> {
+    let found_modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+    let rearmed = match (pre_write_modified, found_modified) {
+        (Some(pre), Some(found)) if pre != found => {
+            set_modified(path, pre)?;
+            true
+        }
+        _ => false,
+    };
+    match mp4_metadata::restore(&write.undo) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if rearmed {
+                if let Some(found) = found_modified {
+                    if let Err(put_back) = set_modified(path, found) {
+                        log::error!(
+                            "Could not hand the modification time of {} back after a refused rollback: {}",
+                            path.display(),
+                            put_back
+                        );
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+/// The container half of a save: the instant the file carried before the write,
+/// the write, and the readback of what the file actually holds afterwards.
+///
+/// Every blocking file operation a save performs lives here, in the order the
+/// row write's rollback needs them, so the caller can hand the whole thing to
+/// the blocking pool: the file is opened and its `moov` region read twice — up
+/// to 64 MiB — and a runtime worker must never sit in that. The edit lock is
+/// held by the calling task across the await, so the critical section is
+/// exactly as long as it was when these calls were inline.
+///
+/// A readback that finds no date carrier rolls the file back HERE, before the
+/// refusal leaves this function, so no caller can forget the rollback that
+/// keeps a refused save from leaving a patched file behind.
+fn patch_container(
+    path: &Path,
+    requested: VideoMetadataEdit,
+) -> Result<(Option<SystemTime>, VideoMetadataWrite, VideoMetadataEdit), Rejection> {
+    // The undo token's guard is the file's modification time, so the rollbacks
+    // need the instant the file carried before the write.
+    let pre_write_modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+
+    let write = match mp4_metadata::write_metadata(path, &requested) {
+        Ok(write) => write,
+        Err(err) => return Err(video_metadata_rejection(err)),
+    };
+
+    // The container keeps the carrier's own representation, not the request's:
+    // mirroring the request would leave the row (and this response) claiming
+    // precision the file does not hold, and `metadata_extractor` re-derives
+    // both fields from those carriers — so the next scan of a changed file
+    // would silently move the stored values by the rounding error. Read back
+    // what the write actually left.
+    let applied = match applied_edit(path, requested) {
+        Ok(applied) => applied,
+        Err(err) => {
+            // The readback proved the container holds no carrier for the
+            // requested instant. Put the file back (the write may still have
+            // patched a location carrier) so the refusal leaves the file and
+            // the row in agreement.
+            if let Err(rollback) = roll_back_container(path, &write, pre_write_modified) {
+                log::error!(
+                    "Could not roll back {} after refusing a date with no carrier: {}",
+                    path.display(),
+                    rollback
+                );
+                return Err(reject::custom(DatabaseError {
+                    message: format!(
+                        "Video metadata rollback failed for {}: {}",
+                        path.display(),
+                        rollback
+                    ),
+                }));
+            }
+            return Err(video_metadata_rejection(err));
+        }
+    };
+
+    Ok((pre_write_modified, write, applied))
+}
+
 /// Apply a metadata edit to a video's container and mirror the result into
 /// `photo`'s row.
 ///
 /// The container is the source of truth: the file is rewritten first (every
-/// refusal is decided by `write_metadata` before a byte is written), then the
-/// row records what the file now says — its `taken_at` and location plus the
-/// scanner's identity of the new file. When the row write fails, the file is
-/// rolled back through the write's undo token, so a 500 never leaves the file
-/// changed without the row that describes it.
+/// refusal [`mp4_metadata::write_metadata`] can decide is decided before a byte
+/// is written), then the row records what the file now says — its `taken_at`
+/// and location plus, when the row already described the patched file, the
+/// scanner's identity of it. A container that turns out to hold no date carrier
+/// is refused right after the write, with the file rolled back first. When the
+/// row write fails, the file is rolled back through the write's undo token, so
+/// a 500 never leaves the file changed without the row that describes it.
+///
+/// A rollback that could not run is never the same answer as a clean one: the
+/// 422 becomes a 500 naming the failed rollback, because "nothing was written"
+/// over a container that still holds the values is the one answer a client
+/// cannot recover from.
 async fn apply_video_metadata_edit(
     photo: Photo,
     edit: VideoMetadataEdit,
@@ -744,36 +969,64 @@ async fn apply_video_metadata_edit(
         }
     };
 
-    let write = match mp4_metadata::write_metadata(Path::new(&photo.file_path), &edit) {
-        Ok(write) => write,
-        Err(err) => return Err(video_metadata_rejection(err)),
-    };
+    // The container is patched on the blocking pool for the reason
+    // `patch_container` documents. This task keeps holding the edit lock across
+    // the await, so the critical section is unchanged.
+    let (pre_write_modified, write, applied) = tokio::task::spawn_blocking({
+        let path = PathBuf::from(&photo.file_path);
+        move || patch_container(&path, edit)
+    })
+    .await
+    .map_err(|error| {
+        log::error!("Video metadata save task panicked: {}", error);
+        reject::custom(DatabaseError {
+            message: "Failed to update video metadata".to_string(),
+        })
+    })??;
 
-    if let Some(dt) = edit.taken_at {
+    // The save owns the position the container now holds and nothing else: the
+    // stored document also holds members no file carries — a resolved place
+    // name, which belongs to the resolver and only leaves the row when the
+    // position it was derived from is the one being replaced.
+    let position_moved = applied_position_moves_the_row(&photo, &applied);
+    if position_moved {
+        // Drop it from the response copy too, so the caller is handed the state
+        // that was committed instead of a new pin next to the old place name.
+        if let Some(location) = photo
+            .metadata
+            .get_mut("location")
+            .and_then(|v| v.as_object_mut())
+        {
+            location.remove("city");
+        }
+    }
+    let mut saved_location = serde_json::Map::new();
+    if let Some(lat) = applied.latitude {
+        saved_location.insert("latitude".to_string(), json!(lat));
+    }
+    if let Some(lon) = applied.longitude {
+        saved_location.insert("longitude".to_string(), json!(lon));
+    }
+    let metadata_patch =
+        (!saved_location.is_empty()).then(|| json!({ "location": saved_location.clone() }));
+
+    if let Some(dt) = applied.taken_at {
         photo.taken_at = Some(dt);
     }
 
     // GPS coordinates are stored inside the metadata JSON object; make sure the
     // stored value is actually an object before mutating it.
     if !photo.metadata.is_object() {
-        photo.metadata = serde_json::json!({});
+        photo.metadata = json!({});
     }
-
-    if edit.latitude.is_some() || edit.longitude.is_some() {
+    if !saved_location.is_empty() {
         let mut location = photo
             .metadata
             .get("location")
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
-
-        if let Some(lat) = edit.latitude {
-            location.insert("latitude".to_string(), json!(lat));
-        }
-        if let Some(lon) = edit.longitude {
-            location.insert("longitude".to_string(), json!(lon));
-        }
-
+        location.extend(saved_location);
         photo
             .metadata
             .as_object_mut()
@@ -781,31 +1034,96 @@ async fn apply_video_metadata_edit(
             .insert("location".to_string(), json!(location));
     }
 
-    // The rewrite preserves the file's byte length and its modification time,
-    // so these are the values the scanner will compare against on its next
-    // pass — recording them here keeps the row "unchanged" for
-    // `find_unchanged_photo`.
-    photo.file_size = write.fingerprint.file_size as i64;
-    photo.date_modified = write.fingerprint.file_modified;
+    // Record the patched file's identity only when the row already describes
+    // that file. The rewrite preserves the byte length and the modification
+    // time, so `write.fingerprint` is the identity of the file at this path
+    // before the patch as well as after it: a row whose stored fingerprint
+    // equals it describes exactly the file that was patched, and restating it
+    // keeps the row "unchanged" for `find_unchanged_photo`. A row that
+    // disagrees describes a DIFFERENT file — the video at this path was
+    // replaced since the last scan (a re-export, a copy from another tool) —
+    // and stamping the new bytes' identity here would erase the mismatch the
+    // change detection keys on: every later scan would skip the file while the
+    // row kept the previous file's facts (`metadata.video.*`, width/height/
+    // duration/orientation). The stale fingerprint stays, so the next scan
+    // re-extracts the file; the save's values live in the container, which is
+    // where that extraction re-derives them from.
+    // The equal case is a no-op by construction — both assignments restate what
+    // the condition just proved — so the branch exists to carry that asymmetry,
+    // not to protect the row: DO NOT collapse it into an unconditional stamp,
+    // which would erase the mismatch the change detection keys on and let
+    // every later scan skip a file whose row still describes the previous one.
+    let row_describes_patched_file = photo.file_size == write.fingerprint.file_size as i64
+        && photo.date_modified == write.fingerprint.file_modified;
+    if row_describes_patched_file {
+        photo.file_size = write.fingerprint.file_size as i64;
+        photo.date_modified = write.fingerprint.file_modified;
+    } else {
+        log::debug!(
+            "Row for {} still describes the file it was scanned from; keeping its fingerprint so the next scan re-extracts {}",
+            photo.hash_sha256,
+            photo.file_path
+        );
+    }
     photo.updated_at = Utc::now();
 
-    match photo.update(db_pool).await {
+    // Only what the save wrote: the row may have taken a commit since it was
+    // re-read, and a replacement of the whole document would revert it.
+    let identity = row_describes_patched_file.then_some((
+        write.fingerprint.file_size as i64,
+        write.fingerprint.file_modified,
+    ));
+
+    // The row write's error is a boxed, non-`Send` value, and a `match`
+    // scrutinee lives until the end of the match — so render it into a message
+    // here, before the rollback's await below can hold this handler's future
+    // across a non-`Send` value, which warp's `and_then` refuses to build a
+    // route from.
+    let row_write = Photo::mirror_video_metadata_edit(
+        db_pool,
+        &photo.hash_sha256,
+        applied.taken_at,
+        metadata_patch.as_ref(),
+        position_moved,
+        identity,
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    match row_write {
         Ok(()) => Ok(warp::reply::json(&photo)),
-        Err(e) => {
-            log::error!("Database error after a video metadata write: {}", e);
+        Err(db_error) => {
+            log::error!("Database error after a video metadata write: {}", db_error);
             // The container is already rewritten; putting it back keeps the
-            // file and the row in agreement. A failed rollback is loud but
-            // still answered with the generic 500.
-            if let Err(rollback) = mp4_metadata::restore(&write.undo) {
-                log::warn!(
-                    "Could not roll back {} after a failed row write: {}",
-                    photo.file_path,
-                    rollback
-                );
-            }
-            Err(reject::custom(DatabaseError {
-                message: format!("Database error: {}", e),
-            }))
+            // file and the row in agreement. That rollback is container I/O
+            // like the patch above, so it runs on the same pool.
+            let file_path = PathBuf::from(&photo.file_path);
+            let rollback = tokio::task::spawn_blocking(move || {
+                roll_back_container(&file_path, &write, pre_write_modified)
+            })
+            .await;
+            let message = match rollback {
+                Ok(Ok(())) => format!("Database error: {}", db_error),
+                Ok(Err(rollback)) => {
+                    log::error!(
+                        "Could not roll back {} after a failed row write: {}",
+                        photo.file_path,
+                        rollback
+                    );
+                    format!(
+                        "Database error: {}; the container could not be put back ({})",
+                        db_error, rollback
+                    )
+                }
+                Err(error) => {
+                    log::error!("Video metadata rollback task panicked: {}", error);
+                    format!(
+                        "Database error: {}; the container could not be put back ({})",
+                        db_error, error
+                    )
+                }
+            };
+            Err(reject::custom(DatabaseError { message }))
         }
     }
 }
@@ -1574,9 +1892,61 @@ mod tests {
         temp_image
     }
 
-    /// Insert a row backed by a temp copy of a video fixture. `file_size` is
-    /// the copy's real byte length, so the row starts out describing the file
-    /// exactly as the scanner would have stored it.
+    /// The fingerprint the scanner stores for a file: byte length plus the
+    /// modification time truncated to whole seconds (`src/file_scanner.rs`),
+    /// which is exactly what `find_unchanged_photo` compares.
+    fn scanner_identity(path: &Path) -> (i64, DateTime<Utc>) {
+        let metadata = fs::metadata(path).expect("file metadata");
+        let seconds = metadata
+            .modified()
+            .expect("mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("mtime after the epoch")
+            .as_secs();
+        (
+            metadata.len() as i64,
+            DateTime::from_timestamp(seconds as i64, 0).expect("mtime in range"),
+        )
+    }
+
+    /// Insert a row for a file that already exists, carrying the fingerprint
+    /// the scanner would have stored for it, so the row starts out describing
+    /// the file exactly.
+    async fn create_row_for_file(db_pool: &DbPool, path: &Path, hash: &str, mime_type: &str) {
+        let (file_size, date_modified) = scanner_identity(path);
+        let photo = Photo {
+            hash_sha256: hash.to_string(),
+            file_path: path.to_str().unwrap().to_string(),
+            filename: path.file_name().unwrap().to_string_lossy().to_string(),
+            file_size,
+            mime_type: Some(mime_type.to_string()),
+            taken_at: None,
+            width: None,
+            height: None,
+            orientation: None,
+            duration: None,
+            thumbnail_path: None,
+            has_thumbnail: Some(false),
+            blurhash: None,
+            is_favorite: Some(false),
+            semantic_vector_indexed: Some(false),
+            metadata: json!({}),
+            date_modified,
+            date_indexed: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        photo
+            .create(db_pool)
+            .await
+            .expect("Failed to create test row");
+    }
+
+    /// Insert a row backed by a temp copy of a video fixture. Size and
+    /// modification time are the copy's own (the scanner's fingerprint), so the
+    /// row starts out describing the file exactly as the scanner would have
+    /// stored it.
     async fn create_video_row(
         db_pool: &DbPool,
         temp_dir: &TempDir,
@@ -1591,37 +1961,28 @@ mod tests {
             .to_string();
         let temp_video = temp_dir.path().join(&filename);
         fs::copy(fixture, &temp_video).expect("Failed to copy test video");
-        let file_size = fs::metadata(&temp_video).unwrap().len() as i64;
-
-        let photo = Photo {
-            hash_sha256: hash.to_string(),
-            file_path: temp_video.to_str().unwrap().to_string(),
-            filename,
-            file_size,
-            mime_type: Some(mime_type.to_string()),
-            taken_at: None,
-            width: None,
-            height: None,
-            orientation: None,
-            duration: None,
-            thumbnail_path: None,
-            has_thumbnail: Some(false),
-            blurhash: None,
-            is_favorite: Some(false),
-            semantic_vector_indexed: Some(false),
-            metadata: json!({}),
-            date_modified: Utc::now(),
-            date_indexed: Some(Utc::now()),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-
-        photo
-            .create(db_pool)
-            .await
-            .expect("Failed to create test video row");
-
+        create_row_for_file(db_pool, &temp_video, hash, mime_type).await;
         temp_video
+    }
+
+    /// A minimal ISO-BMFF file whose `moov` holds no `mvhd`/`tkhd`/`mdhd` and
+    /// no text date item: the container with no carrier an instant could go
+    /// into, which `write_metadata` accepts (it has nothing to patch) and the
+    /// readback then finds dateless.
+    fn mp4_without_a_date_carrier() -> Vec<u8> {
+        fn box_bytes(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut out = Vec::with_capacity(8 + body.len());
+            out.extend_from_slice(&u32::try_from(8 + body.len()).unwrap().to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            out
+        }
+
+        let mut bytes = box_bytes(b"ftyp", b"isom\x00\x00\x02\x00isomiso2mp41");
+        let mut moov = box_bytes(b"free", &[0u8; 16]);
+        moov.extend_from_slice(&box_bytes(b"udta", &box_bytes(b"free", &[0u8; 8])));
+        bytes.extend_from_slice(&box_bytes(b"moov", &moov));
+        bytes
     }
 
     /// Same fixture as `create_photo_row`, and additionally seeds the photo's
@@ -2355,6 +2716,657 @@ mod tests {
         assert_eq!(
             row.date_modified.timestamp(),
             DateTime::<Utc>::from(on_disk).timestamp()
+        );
+    }
+
+    /// A save must not stamp the patched file's identity onto a row that
+    /// describes a DIFFERENT file. When the video at this path was replaced
+    /// since the last scan (a re-export, a copy from another tool), recording
+    /// the new bytes here would erase the mismatch `find_unchanged_photo` keys
+    /// on: every later scan would skip the file while the row kept the
+    /// PREVIOUS file's facts (`metadata.video.*`, width/height/duration/
+    /// orientation) forever. The stale fingerprint has to survive so the next
+    /// scan re-extracts the file — the save's values live in the container,
+    /// which is where that extraction re-derives them from.
+    #[tokio::test]
+    async fn a_video_save_does_not_stamp_a_file_replaced_behind_the_rows_back() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+
+        // One row whose file was replaced by another video (size AND mtime
+        // differ), and one whose file was re-copied (same bytes, a different
+        // mtime — the scan compares both fields, so that mismatch counts too).
+        let replaced_path = temp_dir.path().join("replaced.mp4");
+        fs::copy("test-data/test_video_quicktime_keys.mp4", &replaced_path).unwrap();
+        let replaced_hash = "1300000000000000000000000000000000000000000000000000000000000013";
+        create_row_for_file(&db_pool, &replaced_path, replaced_hash, "video/mp4").await;
+        let described = Photo::find_by_hash(&db_pool, replaced_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        fs::copy("test-data/test_video_with_date.mp4", &replaced_path).unwrap();
+        assert_ne!(
+            fs::metadata(&replaced_path).unwrap().len() as i64,
+            described.file_size
+        );
+
+        let recopied_path = temp_dir.path().join("recopied.mp4");
+        fs::copy("test-data/test_video_quicktime_keys.mp4", &recopied_path).unwrap();
+        let recopied_hash = "1400000000000000000000000000000000000000000000000000000000000014";
+        create_row_for_file(&db_pool, &recopied_path, recopied_hash, "video/mp4").await;
+        let recopied_described = Photo::find_by_hash(&db_pool, recopied_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        // Move the file's mtime a minute back, as a re-copy out of an archive
+        // would: the bytes are the same, the row's timestamp no longer is.
+        let shifted = fs::metadata(&recopied_path).unwrap().modified().unwrap()
+            - std::time::Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&recopied_path)
+            .unwrap()
+            .set_modified(shifted)
+            .unwrap();
+        assert_ne!(
+            scanner_identity(&recopied_path).1,
+            recopied_described.date_modified
+        );
+
+        for hash in [replaced_hash, recopied_hash] {
+            let response = warp::test::request()
+                .method("PATCH")
+                .path(&format!("/api/photos/{}/metadata", hash))
+                .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+                .reply(&routes)
+                .await;
+            assert_eq!(response.status(), 200, "{hash}");
+        }
+
+        // The containers really did take the date...
+        for path in [&replaced_path, &recopied_path] {
+            assert_eq!(
+                crate::mp4_metadata::read_metadata(path)
+                    .unwrap()
+                    .creation_time
+                    .unwrap()
+                    .to_rfc3339(),
+                "2024-07-04T12:00:00+00:00"
+            );
+        }
+
+        // ...but neither row was handed the new bytes' identity, so both files
+        // still read as changed and the next scan re-extracts them.
+        let row = Photo::find_by_hash(&db_pool, replaced_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.file_size, described.file_size);
+        assert_eq!(row.date_modified, described.date_modified);
+        let row = Photo::find_by_hash(&db_pool, recopied_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.file_size, recopied_described.file_size);
+        assert_eq!(row.date_modified, recopied_described.date_modified);
+
+        for path in [&replaced_path, &recopied_path] {
+            let (size, mtime) = scanner_identity(path);
+            assert!(
+                Photo::find_unchanged_photo(&db_pool, path.to_str().unwrap(), size, mtime)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{} must still read as changed after the save",
+                path.display()
+            );
+        }
+    }
+
+    /// The other half of that rule: an ordinary save — the row already
+    /// describes the file at that path — records the patched file's identity,
+    /// which is what keeps `find_unchanged_photo` matching (no re-extraction,
+    /// no thumbnail regeneration, no transcode cache invalidation) afterwards.
+    #[tokio::test]
+    async fn a_video_save_on_a_row_that_describes_the_file_records_its_identity() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1500000000000000000000000000000000000000000000000000000000000015";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), 200);
+
+        let (size, mtime) = scanner_identity(&video);
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(row.file_size, size);
+        assert_eq!(row.date_modified, mtime);
+        assert!(
+            Photo::find_unchanged_photo(&db_pool, row.file_path.as_str(), size, mtime)
+                .await
+                .unwrap()
+                .is_some(),
+            "an ordinary save must leave the row matching the file"
+        );
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["file_size"], size);
+    }
+
+    /// A date save on a container whose `moov` holds no date carrier must not
+    /// report the requested instant: nothing date-shaped was written, so the
+    /// row and the response would otherwise claim a date the file does not
+    /// have. The save is refused with an existing code and the file rolled back
+    /// to where it was, leaving it and the row in agreement.
+    #[tokio::test]
+    async fn a_date_save_on_a_container_without_a_date_carrier_is_refused() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1600000000000000000000000000000000000000000000000000000000000016";
+        let video = temp_dir.path().join("no_date_carrier.mp4");
+        fs::write(&video, mp4_without_a_date_carrier()).unwrap();
+        create_row_for_file(&db_pool, &video, hash, "video/mp4").await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 422);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error_code"], "unrepresentable_value");
+
+        // The refusal left the file and the row exactly as they were.
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(after_row.taken_at, before_row.taken_at);
+        assert_eq!(after_row.metadata, before_row.metadata);
+        assert_eq!(after_row.file_size, before_row.file_size);
+        assert_eq!(after_row.date_modified, before_row.date_modified);
+        assert_eq!(after_row.updated_at, before_row.updated_at);
+    }
+
+    /// `mp4_metadata::restore` refuses unless the file still carries the exact
+    /// modification time the write recorded, and that equality rests on the
+    /// writer's own `set_modified`, which only WARNS when the kernel refuses it.
+    /// A save whose clock was not wound back would leave the container patched
+    /// while the undo refuses to run — the file and the row permanently
+    /// disagreeing, and no later scan repairs it, because the row's fingerprint
+    /// still matches the patched file. So the rollback puts the pre-write
+    /// instant back and retries: the retry succeeding IS the proof that the
+    /// token recorded that instant, since `restore` accepts nothing else.
+    #[tokio::test]
+    async fn a_rollback_re_arms_the_modification_time_the_write_recorded() {
+        let temp_dir = TempDir::new().unwrap();
+        let video = temp_dir.path().join("rearm_clock.mp4");
+        fs::copy("test-data/test_video_with_date.mp4", &video).expect("fixture");
+        let before_bytes = fs::read(&video).unwrap();
+        let before_modified = fs::metadata(&video).unwrap().modified().unwrap();
+
+        // GIVEN: a real write, so the token holds this file's real pre-write
+        // clock, and a file whose clock the kernel did not wind back
+        let edit = crate::mp4_metadata::VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse::<DateTime<Utc>>().unwrap()),
+            latitude: None,
+            longitude: None,
+        };
+        let write = crate::mp4_metadata::write_metadata(&video, &edit).expect("write");
+        assert_ne!(
+            fs::read(&video).unwrap(),
+            before_bytes,
+            "the fixture must carry a date this write replaces, or nothing was patched"
+        );
+        set_modified(&video, before_modified + std::time::Duration::from_secs(7))
+            .expect("the kernel refused the clock the writer needs");
+
+        // THEN: the plain restore refuses — the token's guard is real
+        assert!(
+            crate::mp4_metadata::restore(&write.undo).is_err(),
+            "restore must refuse a file whose clock moved, or it would graft an \
+             old `moov` onto whatever is there now"
+        );
+
+        // AND: the rollback re-arms the recorded clock and undoes the write
+        roll_back_container(&video, &write, Some(before_modified)).expect("rollback");
+        assert_eq!(
+            fs::read(&video).unwrap(),
+            before_bytes,
+            "the container must be byte-identical to where it started"
+        );
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_modified,
+            "the file's own identity must be what the row still describes"
+        );
+    }
+
+    /// The container keeps the carrier's own representation, and the row (and
+    /// this response) must describe the file, not the request: a position is
+    /// re-rendered in the shape the carrier already had (four decimals here, so
+    /// it rounds — about 11 m at that width) and an instant is whole seconds in
+    /// the binary boxes. `metadata_extractor` re-derives both from those
+    /// carriers, so a row holding the request would silently move on the next
+    /// scan of a changed file.
+    #[tokio::test]
+    async fn patch_metadata_mirrors_the_values_the_carrier_actually_stored() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1100000000000000000000000000000000000000000000000000000000000011";
+        // The keys fixture's location carrier keeps four decimals.
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+
+        let requested_latitude = 52.123456789;
+        let requested_longitude = 13.405678901;
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({
+                "taken_at": "2024-07-04T12:00:00.840000Z",
+                "latitude": requested_latitude,
+                "longitude": requested_longitude,
+            }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+
+        // What the container holds is the answer, not what was asked for.
+        let stored = crate::mp4_metadata::read_metadata(&video).unwrap();
+        let (applied_latitude, applied_longitude) =
+            crate::mp4_metadata::parse_iso6709(stored.location_iso6709.as_deref().unwrap())
+                .expect("the written carrier must parse");
+        assert_ne!(
+            applied_latitude, requested_latitude,
+            "the fixture's carrier must round the request, or this test proves nothing"
+        );
+        let applied_taken_at = stored.creation_time.expect("the write set `mvhd`");
+        let requested_taken_at = "2024-07-04T12:00:00.840000Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        assert_ne!(
+            applied_taken_at, requested_taken_at,
+            "the sub-second the container cannot hold must not be mirrored"
+        );
+
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["metadata"]["location"]["latitude"], applied_latitude);
+        assert_eq!(body["metadata"]["location"]["longitude"], applied_longitude);
+        assert_eq!(
+            body["taken_at"],
+            serde_json::to_value(applied_taken_at).unwrap()
+        );
+
+        // AND: the row carries the same applied values — what a later
+        // extraction of this file derives from the carrier.
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(row.taken_at, Some(applied_taken_at));
+        assert_eq!(row.metadata["location"]["latitude"], applied_latitude);
+        assert_eq!(row.metadata["location"]["longitude"], applied_longitude);
+    }
+
+    /// The place name in a row was geocoded from the coordinates that row
+    /// holds. A save that moves the photo replaces them, and nothing else would
+    /// ever correct the name: the save restates the file's fingerprint, so the
+    /// next scan takes the unchanged branch that keeps the name, and the
+    /// resolver skips the row for as long as its flag says it is resolved. So
+    /// the save drops the name it invalidates, re-queues the row, and reports
+    /// the same state — a new pin next to the old city's name would be a lie.
+    #[tokio::test]
+    async fn patch_metadata_drops_the_resolved_name_when_the_save_moves_the_video() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1300000000000000000000000000000000000000000000000000000000000013";
+        create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let file_path = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_path;
+
+        // GIVEN: a located video the resolver named
+        let located = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 48.2082, "longitude": 16.3737 }))
+            .reply(&routes)
+            .await;
+        assert_eq!(located.status(), 200);
+        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
+            .await
+            .expect("resolve");
+
+        // WHEN: a save moves it to a new position
+        let moved = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 52.52, "longitude": 13.405 }))
+            .reply(&routes)
+            .await;
+
+        // THEN: the name is gone from the response and from the row, and the
+        // row is queued for the resolver again with the NEW position
+        assert_eq!(moved.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(moved.body()).unwrap();
+        assert_eq!(body["metadata"]["location"]["latitude"], 52.52);
+        assert!(
+            body["metadata"]["location"]["city"].is_null(),
+            "the response must not pair the new position with the old name: {}",
+            body["metadata"]
+        );
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(row.metadata["location"]["latitude"], 52.52);
+        assert!(
+            row.metadata["location"]["city"].is_null(),
+            "a name geocoded from the position this save replaced must not survive it: {}",
+            row.metadata
+        );
+        assert_eq!(
+            crate::db::get_photos_needing_geo_resolution(&db_pool)
+                .await
+                .expect("candidates"),
+            vec![(file_path.clone(), 52.52, 13.405)],
+            "nothing else would ever queue this row again"
+        );
+    }
+
+    /// The counterpart: a save that does not move the photo leaves its resolved
+    /// name alone. The date-only save the editor sends for an untouched
+    /// position is the case that matters — the coordinates are the very ones
+    /// the name was geocoded for, and re-queuing the row would only cost a
+    /// reverse-geocode request for a name the row already carries.
+    #[tokio::test]
+    async fn patch_metadata_keeps_the_resolved_name_when_the_save_holds_the_position() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1400000000000000000000000000000000000000000000000000000000000014";
+        create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let file_path = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_path;
+
+        // GIVEN: a located video the resolver named
+        let located = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 48.2082, "longitude": 16.3737 }))
+            .reply(&routes)
+            .await;
+        assert_eq!(located.status(), 200);
+        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
+            .await
+            .expect("resolve");
+
+        // WHEN: a save changes nothing but the date
+        let dated = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "taken_at": "2024-07-04T12:00:00Z" }))
+            .reply(&routes)
+            .await;
+
+        // THEN: the name is still there, in the response and in the row, and
+        // the row stays out of the resolver's queue
+        assert_eq!(dated.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(dated.body()).unwrap();
+        assert_eq!(body["metadata"]["location"]["city"], "Vienna");
+        assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(row.metadata["location"]["city"], "Vienna");
+        assert!(
+            crate::db::get_photos_needing_geo_resolution(&db_pool)
+                .await
+                .expect("candidates")
+                .is_empty(),
+            "a save that held the position must not invalidate its name: {}",
+            row.metadata
+        );
+    }
+
+    /// The container, not the request, decides whether the pin moved. This
+    /// fixture's location carrier keeps four decimals, so a request carrying
+    /// more precision than that rounds back to the position the row already
+    /// holds. Deciding from the request would report a move that never
+    /// happened: the name of that position is still correct, and dropping it
+    /// costs a reverse-geocode request that resolves to the same string.
+    #[tokio::test]
+    async fn patch_metadata_keeps_the_resolved_name_when_the_request_rounds_back_to_the_stored_position(
+    ) {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1500000000000000000000000000000000000000000000000000000000000015";
+        create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let file_path = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_path;
+
+        // GIVEN: a located video the resolver named
+        let located = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 48.2082, "longitude": 16.3737 }))
+            .reply(&routes)
+            .await;
+        assert_eq!(located.status(), 200);
+        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
+            .await
+            .expect("resolve");
+
+        // WHEN: a save asks for that very pin with more precision than the
+        // carrier can hold, so what lands in the file is the stored pin
+        let stored_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        let rounded = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({
+                "latitude": 48.2082 + 0.000000004,
+                "longitude": 16.3737 + 0.000000004,
+            }))
+            .reply(&routes)
+            .await;
+
+        // THEN: the applied position is the stored one, so nothing moved
+        assert_eq!(rounded.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(rounded.body()).unwrap();
+        assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
+        assert_eq!(
+            body["metadata"]["location"]["city"], "Vienna",
+            "a request that rounds back to the stored pin moved nothing: {}",
+            body["metadata"]
+        );
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(row.metadata["location"]["city"], "Vienna");
+        assert_eq!(row.metadata["location"]["latitude"], 48.2082);
+        assert_eq!(stored_row.metadata["location"]["latitude"], 48.2082);
+        assert!(
+            crate::db::get_photos_needing_geo_resolution(&db_pool)
+                .await
+                .expect("candidates")
+                .is_empty(),
+            "the pin did not move, so the name must not be re-queued: {}",
+            row.metadata
+        );
+    }
+
+    /// The response and the row must describe the SAME stored state. A client
+    /// that diffs the PATCH answer against a refetch — or hands the answer
+    /// straight to a state store and reconciles later — must not see the
+    /// dropped place name as a JSON `null` in one representation and as an
+    /// absent member in the other.
+    #[tokio::test]
+    async fn patch_metadata_answers_with_exactly_the_stored_metadata() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let routes = build_test_routes(db_pool.clone(), temp_dir.path().join("cache"));
+        let hash = "1600000000000000000000000000000000000000000000000000000000000016";
+        create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let file_path = Photo::find_by_hash(&db_pool, hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_path;
+
+        // GIVEN: a located video the resolver named
+        let located = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 48.2082, "longitude": 16.3737 }))
+            .reply(&routes)
+            .await;
+        assert_eq!(located.status(), 200);
+        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
+            .await
+            .expect("resolve");
+
+        // WHEN: a save moves it, which is the path that drops the name
+        let moved = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({ "latitude": 52.52, "longitude": 13.405 }))
+            .reply(&routes)
+            .await;
+
+        // THEN: the two representations are byte-for-byte the same document
+        assert_eq!(moved.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(moved.body()).unwrap();
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert_eq!(
+            body["metadata"], row.metadata,
+            "the PATCH answer and a refetch must not disagree: a member one of them keeps and the other drops reads as a change the client never made"
+        );
+        // The name is ABSENT on both sides, not a JSON null the client has to
+        // filter: the response drops the member and RFC 7396's explicit null
+        // removes it from the row, which is what makes the deep-equal above
+        // hold. A future "keep the key, set it null" on either side alone
+        // would show up here as one of them carrying `"city": null`.
+        for (side, location) in [
+            ("response", &body["metadata"]["location"]),
+            ("row", &row.metadata["location"]),
+        ] {
+            assert!(
+                location.get("city").is_none(),
+                "the {side} must carry no `city` member at all: {location}"
+            );
+        }
+    }
+
+    /// A row deleted between `find_by_hash` and the mirror (another window
+    /// deleting the same video) must not answer 200 with values no row holds:
+    /// the container is rewritten by then, so the update has to fail and let
+    /// the rollback put the file back.
+    #[tokio::test]
+    async fn a_row_deleted_during_the_save_fails_and_rolls_the_file_back() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let hash = "1200000000000000000000000000000000000000000000000000000000000012";
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let before_bytes = fs::read(&video).unwrap();
+        let before_mtime = fs::metadata(&video).unwrap().modified().unwrap();
+        let photo = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+
+        // The handler re-reads the row under its own lock, so a row that is
+        // already gone takes `find_by_hash`'s 404 path. The hazard is the row
+        // that vanishes between that read and the write: a `BEFORE UPDATE`
+        // trigger that deletes it makes exactly that happen — the container is
+        // already rewritten, and the mirror then matches no row.
+        sqlx::query(
+            "CREATE TRIGGER delete_row_at_write BEFORE UPDATE ON photos \
+             BEGIN DELETE FROM photos WHERE hash_sha256 = OLD.hash_sha256; END",
+        )
+        .execute(&db_pool)
+        .await
+        .expect("trigger");
+
+        let rejection = match apply_video_metadata_edit(
+            photo,
+            crate::mp4_metadata::VideoMetadataEdit {
+                taken_at: Some("2024-07-04T12:00:00Z".parse().unwrap()),
+                ..Default::default()
+            },
+            &db_pool,
+        )
+        .await
+        {
+            Ok(_) => panic!("a row that no longer exists must not answer 200"),
+            Err(rejection) => rejection,
+        };
+        assert!(
+            rejection.find::<DatabaseError>().is_some(),
+            "the mirror failure must take the generic 500 path, not a coded refusal"
+        );
+
+        // AND: the file is exactly as the scanner last saw it
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_mtime
         );
     }
 

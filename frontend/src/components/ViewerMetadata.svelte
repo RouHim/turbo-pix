@@ -5,14 +5,14 @@
     formatFileSize,
     formatDuration,
     isCollagePhoto,
-    isFormatSupported,
+    isMetadataEditable,
     isVideoFile,
   } from '../lib/utils.js';
   import Icon from './Icon.svelte';
 
   const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
 
-  const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isFormatSupported(photo));
+  const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isMetadataEditable(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
   const isCollage = $derived(photo ? isCollagePhoto(photo) : false);
 
@@ -33,7 +33,12 @@
       'image/avif': 'AVIF',
       'video/mp4': 'video',
       'video/quicktime': 'video',
-      'video/x-msvideo': 'video',
+      'video/x-m4v': 'video',
+      // Containers the viewer plays but the metadata endpoint cannot rewrite:
+      // the disabled tooltip must name the format, not a vague "video".
+      'video/x-matroska': 'Matroska',
+      'video/webm': 'WebM',
+      'video/x-msvideo': 'AVI',
     };
     return map[mimeType] || mimeType.replace('image/', '').toUpperCase();
   }
@@ -83,6 +88,11 @@
   );
 
   const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
+  // `flash_used` is a boolean, so its presence cannot be read as truthiness —
+  // but the scanner now states every settings member explicitly and writes
+  // `null` for one the file does not have, so "present and not null" is the
+  // check that means "the file carries a flash verdict".
+  const hasFlash = $derived(settings.flash_used != null);
   const hasSettings = $derived(
     settings.iso ||
       settings.aperture ||
@@ -91,11 +101,28 @@
       settings.exposure_mode ||
       settings.metering_mode ||
       settings.white_balance ||
-      settings.flash_used !== undefined ||
+      hasFlash ||
       photo?.orientation ||
       settings.color_space
   );
   const hasLocation = $derived(location.latitude != null || location.longitude != null);
+  // ONE message for the tooltip and the accessible name. A screen reader on a
+  // disabled button announces the `aria-label`, not the `title`, so a
+  // format-specific `title` beside a generic `aria-label` would hide the
+  // format from assistive tech and make the two disagree.
+  const editDisabledLabel = $derived.by(() =>
+    photo?.mime_type
+      ? $t('ui.metadata.edit_unsupported_format', {
+          values: { format: getFormatName(photo) },
+          default: 'Editing {format} files is not supported',
+        })
+      : $t('ui.metadata.edit_unsupported', {
+          default: 'Editing this file type is not supported',
+        })
+  );
+  const editLabel = $derived(
+    showEditBtn ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' }) : editDisabledLabel
+  );
 </script>
 
 <div class="photo-info">
@@ -103,30 +130,24 @@
     <h3 id="photo-title">{title}</h3>
     <div style="display: flex; gap: var(--space-2); align-items: center;">
       {#if !isCollage}
-        <button
-          type="button"
-          id="metadata-edit-btn"
-          class="btn-icon"
-          disabled={!showEditBtn}
-          title={showEditBtn
-            ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
-            : photo?.mime_type
-              ? $t('ui.metadata.edit_unsupported_format', {
-                  values: { format: getFormatName(photo) },
-                  default: 'Editing {format} files is not supported',
-                })
-              : $t('ui.metadata.edit_unsupported', {
-                  default: 'Editing this file type is not supported',
-                })}
-          aria-label={showEditBtn
-            ? $t('ui.metadata.edit_button', { default: 'Edit Metadata' })
-            : $t('ui.metadata.edit_unsupported', {
-                default: 'Editing this file type is not supported',
-              })}
-          onclick={onEditMetadata}
-        >
-          <Icon name="edit-2" width={16} height={16} />
-        </button>
+        <!-- A `disabled` button cannot show its own tooltip: it takes no
+             pointer events and, being disabled, no focus, so the format it
+             cannot edit never reaches the user. The wrapper is never disabled
+             and carries the same reason, which is the one surface that can
+             still surface it. -->
+        <span class="edit-btn-wrap" title={showEditBtn ? undefined : editLabel}>
+          <button
+            type="button"
+            id="metadata-edit-btn"
+            class="btn-icon"
+            disabled={!showEditBtn}
+            title={editLabel}
+            aria-label={editLabel}
+            onclick={onEditMetadata}
+          >
+            <Icon name="edit-2" width={16} height={16} />
+          </button>
+        </span>
       {/if}
       <button
         type="button"
@@ -298,9 +319,9 @@
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.flash', { default: 'Flash:' })}</span><span
             id="meta-flash"
-            style="opacity: {fieldOpacity(settings.flash_used !== undefined)}"
+            style="opacity: {fieldOpacity(hasFlash)}"
             >{setField(
-              settings.flash_used !== undefined
+              hasFlash
                 ? settings.flash_used
                   ? $t('ui.yes', { default: 'Yes' })
                   : $t('ui.no', { default: 'No' })
@@ -552,5 +573,11 @@
   .btn-icon:disabled:hover {
     background: none;
     color: var(--text-muted);
+  }
+
+  /* The hover surface for a disabled control. `inline-flex` keeps the wrapper's
+     box identical to the button's, so the header's spacing does not move. */
+  .edit-btn-wrap {
+    display: inline-flex;
   }
 </style>

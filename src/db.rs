@@ -552,6 +552,87 @@ impl Photo {
         Ok(())
     }
 
+    /// Writes what a video metadata save owns into the row — and nothing else.
+    ///
+    /// A save re-reads its row, spends a container write and a readback on the
+    /// file, and only then records what the container ended up holding, so
+    /// flushing the struct it read reverts whatever was committed in that
+    /// window — and a resolved place name is lost for good that way, because
+    /// its `geo_location_resolved` flag is already 1, so nothing ever derives
+    /// the name again. This statement therefore names the save's own members
+    /// and merges them into the row AS IT IS NOW (RFC 7396, like
+    /// [`Self::persist_capability_and_duration`]).
+    ///
+    /// `fingerprint` is optional because a save owns only what it actually
+    /// wrote: a row that does not describe the file being patched must keep its
+    /// stale fingerprint — that staleness is what makes the next scan
+    /// re-extract the file, see [`Self::find_unchanged_photo`].
+    ///
+    /// `rearm_geo_resolution` is the caller's statement that this save moved
+    /// the photo's coordinates: the place name was geocoded from the position
+    /// that is GONE, so it is dropped with an explicit null and
+    /// `geo_location_resolved` goes back to 0. The flag matters twice over —
+    /// `get_photos_needing_geo_resolution` selects exactly the rows with it
+    /// clear, and a save restates the file's fingerprint, so nothing downstream
+    /// of the scan would correct a stale name left next to the new pin. A save
+    /// that did not move the photo passes `false` and leaves both alone.
+    ///
+    /// Fails when no row matched: `UPDATE ... WHERE hash_sha256 = ?` reports
+    /// success even when it touched nothing, and a caller that already rewrote
+    /// the container must not answer 200 while no row describes the file it
+    /// patched. The caller's rollback path then puts the file back.
+    pub async fn record_video_edit(
+        pool: &DbPool,
+        hash_sha256: &str,
+        rearm_geo_resolution: bool,
+        fingerprint: Option<(i64, DateTime<Utc>)>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (file_size, file_modified) = fingerprint
+            .map(|(size, modified)| (size, modified.to_rfc3339()))
+            .unzip();
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"
+            UPDATE photos SET
+                -- The save writes no date and no coordinates: both are file
+                -- facts (`MediaFactsIndex`), and `stored_metadata` strips the
+                -- coordinate pair from this document on every write anyway. The
+                -- only stored member the save invalidates is the place name
+                -- geocoded from the position it replaced.
+                metadata = CASE WHEN ? THEN json_patch(
+                                    CASE WHEN json_type(metadata) = 'object' THEN metadata ELSE '{}' END,
+                                    '{"location":{"city":null}}')
+                               ELSE metadata END,
+                geo_location_resolved = CASE WHEN ? THEN 0 ELSE geo_location_resolved END,
+                file_size = COALESCE(?, file_size),
+                file_modified = COALESCE(?, file_modified),
+                updated_at = ?
+            WHERE hash_sha256 = ?
+            "#,
+        )
+        .bind(rearm_geo_resolution)
+        .bind(rearm_geo_resolution)
+        .bind(file_size)
+        .bind(&file_modified)
+        .bind(Utc::now().to_rfc3339())
+        .bind(hash_sha256)
+        .execute(&mut *tx)
+        .await?;
+        let affected = sqlx::query("SELECT changes()")
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get::<i64, _>(0)?;
+        if affected == 0 {
+            return Err(format!(
+                "Photo with hash {} no longer exists (deleted while it was being edited?) — update matched 0 rows",
+                hash_sha256
+            )
+            .into());
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Create or update photo (convenience wrapper)
     /// Use `batch_write_photos` in production for better performance
     #[cfg(test)]
@@ -971,6 +1052,7 @@ impl Photo {
                 filename = excluded.filename,
                 file_size = excluded.file_size,
                 mime_type = excluded.mime_type,
+
                 width = excluded.width,
                 height = excluded.height,
                 orientation = excluded.orientation,
@@ -1252,32 +1334,38 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             settings.insert("flash_used".to_string(), json!(flash_used));
         }
 
+        // Video members are stated only for a video row: a photo must not
+        // acquire a `video` object it never had. `codec`, `audio_codec`,
+        // `bit_depth` and `container` are what `ResolvedCapabilities::from_record`
+        // reads back; `bitrate`, `frame_rate` and `profile` are display facts
+        // the scan owns just as much, so they must not outlive the file's own
+        // values either.
         let mut video = serde_json::Map::new();
-        if let Some(codec) = processed.video_codec {
-            video.insert("codec".to_string(), json!(codec));
-        }
-        if let Some(audio_codec) = processed.audio_codec {
-            video.insert("audio_codec".to_string(), json!(audio_codec));
-        }
-        if let Some(bitrate) = processed.bitrate {
-            video.insert("bitrate".to_string(), json!(bitrate));
-        }
-        if let Some(frame_rate) = processed.frame_rate {
-            video.insert("frame_rate".to_string(), json!(frame_rate));
-        }
-        if let Some(profile) = processed.video_profile {
-            video.insert("profile".to_string(), json!(profile));
-        }
-        if let Some(bit_depth) = processed.bit_depth {
-            video.insert("bit_depth".to_string(), json!(bit_depth));
-        }
-        if let Some(container) = processed.container {
-            video.insert("container".to_string(), json!(container));
-        }
-        // Only record moov_at_start when false — absence means true, which
-        // avoids bloating every record.
-        if !processed.moov_at_start {
-            video.insert("moov_at_start".to_string(), json!(false));
+        if processed
+            .mime_type
+            .as_deref()
+            .is_some_and(|mime| mime.starts_with("video/"))
+        {
+            video.insert("codec".to_string(), json!(processed.video_codec));
+            video.insert("audio_codec".to_string(), json!(processed.audio_codec));
+            video.insert("bitrate".to_string(), json!(processed.bitrate));
+            video.insert("frame_rate".to_string(), json!(processed.frame_rate));
+            video.insert("profile".to_string(), json!(processed.video_profile));
+            video.insert("bit_depth".to_string(), json!(processed.bit_depth));
+            video.insert("container".to_string(), json!(processed.container));
+            // `moov_at_start` keeps its "absence means true" idiom: the
+            // scanner's own fallback for a failed layout pass is `true`
+            // (`photo_processor`), and a persisted `true` is exactly what
+            // `stored_moov_at_start` trusts for `Delivery::Direct` — the
+            // scenario `video_probe` warns about. Absent stays "never
+            // established", which no playback decision reads as progressive.
+            // That leaves a stored `false` on bytes that are gone with nothing
+            // to replace it, so the upsert drops it (and the capability marker
+            // that would keep it trusted) for a row whose file changed — see
+            // `create_or_update_with_transaction`.
+            if !processed.moov_at_start {
+                video.insert("moov_at_start".to_string(), json!(false));
+            }
         }
 
         let mut metadata = serde_json::Map::new();
@@ -1480,6 +1568,58 @@ pub(crate) mod tests {
         let mut photo = create_test_photo(filename.to_string(), hash.to_string());
         photo.metadata = metadata;
         photo
+    }
+
+    /// The row a scan writes, built through the production JSON builder
+    /// (`ProcessedPhoto` → `Photo`) rather than hand-made JSON: that builder is
+    /// the only definition of the stored metadata shape, so tests that bypass
+    /// it cannot catch a shape change. `latitude`/`longitude` stand for what
+    /// the extraction found — `None` means the file carries no position.
+    fn scanned_photo(
+        filename: &str,
+        hash: &str,
+        mime_type: &str,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> crate::indexer::ProcessedPhoto {
+        crate::indexer::ProcessedPhoto {
+            file_path: format!("./test/{}", filename),
+            filename: filename.to_string(),
+            file_size: 1024,
+            mime_type: Some(mime_type.to_string()),
+            taken_at: Some(Utc::now()),
+            date_modified: Utc::now(),
+            camera_make: None,
+            camera_model: None,
+            lens_make: None,
+            lens_model: None,
+            iso: None,
+            aperture: None,
+            shutter_speed: None,
+            focal_length: None,
+            width: Some(1920),
+            height: Some(1080),
+            color_space: None,
+            white_balance: None,
+            exposure_mode: None,
+            metering_mode: None,
+            orientation: None,
+            flash_used: None,
+            latitude,
+            longitude,
+            hash_sha256: Some(hash.to_string()),
+            blurhash: None,
+            duration: None,
+            video_codec: None,
+            audio_codec: None,
+            bitrate: None,
+            frame_rate: None,
+            video_profile: None,
+            bit_depth: None,
+            container: None,
+            moov_at_start: true,
+            semantic_vector_indexed: Some(false),
+        }
     }
 
     async fn read_photo_metadata(pool: &DbPool, file_path: &str) -> serde_json::Value {
@@ -2198,6 +2338,392 @@ pub(crate) mod tests {
         );
         assert_eq!(metadata["location"]["city"], "Munich");
         assert_eq!(metadata["camera"]["make"], "Canon");
+    }
+
+    /// A scan owns the video facts it writes, so the document it stores holds
+    /// exactly those facts: a row's identity is the PATH hash, so replacing the
+    /// file in place at the same path writes the fresh extraction's document
+    /// wholesale and never has to DELETE the row first. An omitted member
+    /// therefore clears the stored value, `capability_version` no longer keeps
+    /// `record_is_complete` true, and `video_probe::resolve` re-probes instead
+    /// of short-circuiting to `ResolvedCapabilities::from_record` — trusting
+    /// facts the file no longer has.
+    #[tokio::test]
+    async fn scan_upsert_clears_stale_video_facts_so_the_record_is_reprobed() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-stale");
+        // GIVEN: an mp4 once probed as h264 with audio
+        let mut existing = create_test_photo("replaced.mp4".to_string(), hash.clone());
+        existing.metadata = json!({
+            "video": {
+                "codec": "h264",
+                "audio_codec": "aac",
+                "bit_depth": 10,
+                "container": "mp4",
+                "frame_rate": 30.0,
+                "capability_version": 1
+            }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the path now holds an audio-only mp4 and the scan writes what
+        // the extraction found — no video-stream facts at all
+        let mut extracted = scanned_photo("replaced.mp4", &hash, "video/mp4", None, None);
+        extracted.container = Some("mp4".to_string());
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: every stale fact is gone
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.video_codec().is_none(),
+            "stale codec survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.audio_codec().is_none(),
+            "stale audio codec survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.bit_depth().is_none(),
+            "stale bit depth survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.frame_rate().is_none(),
+            "stale frame rate survived: {}",
+            stored.metadata
+        );
+        // AND: what the file does have is recorded
+        assert_eq!(stored.metadata["video"]["container"], "mp4");
+        // AND: the record no longer looks probed, so the next request re-probes
+        assert!(
+            !crate::video_probe::record_is_complete(&stored),
+            "a record whose video facts are gone must be re-probed: {}",
+            stored.metadata
+        );
+    }
+
+    /// Same mechanism for the EXIF-owned members: a photo whose EXIF was
+    /// stripped must not keep showing the camera and settings it had, and a
+    /// photo row must not acquire a `video` object.
+    #[tokio::test]
+    async fn scan_upsert_clears_camera_and_settings_the_file_no_longer_has() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-builder-exif");
+        let mut existing = create_test_photo("stripped.jpg".to_string(), hash.clone());
+        existing.metadata = json!({
+            "camera": { "make": "Canon", "model": "Canon EOS 40D" },
+            "settings": { "iso": 400, "aperture": 4.0, "flash_used": true }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the file is replaced by one whose EXIF carries none of that
+        let fresh: Photo = scanned_photo("stripped.jpg", &hash, "image/jpeg", None, None).into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the stale EXIF members are cleared
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.camera_make().is_none(),
+            "stale camera make survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.camera_model().is_none(),
+            "stale camera model survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.iso().is_none(),
+            "stale iso survived: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.aperture().is_none(),
+            "stale aperture survived: {}",
+            stored.metadata
+        );
+        assert!(!stored.flash_used().unwrap_or(false));
+        // AND: a photo row still carries no video object
+        assert!(
+            stored.metadata.get("video").is_none(),
+            "{}",
+            stored.metadata
+        );
+    }
+
+    /// A stored `moov` verdict describes the bytes it was taken from. A scan
+    /// of a changed file stores the fresh extraction's document wholesale, so
+    /// an extraction that states no layout (the scanner's `true` is either an
+    /// established progressive layout or its failed-pass fallback, so the
+    /// builder cannot state it) leaves the row with no verdict at all — and the
+    /// capability marker goes with it, or `video_probe::record_is_complete`
+    /// stays true, `resolve` short-circuits and `plan` reads a dropped layout
+    /// as "never established" forever instead of probing once and persisting an
+    /// honest verdict.
+    #[tokio::test]
+    async fn scan_upsert_drops_a_stale_moov_verdict_for_a_changed_file() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-moov-changed");
+        // GIVEN: an mp4 probed as moov-at-end, on bytes that are now gone
+        let mut existing = create_test_photo("changed.mp4".to_string(), hash.clone());
+        existing.mime_type = Some("video/mp4".to_string());
+        existing.metadata = json!({
+            "video": {
+                "codec": "h264",
+                "audio_codec": "aac",
+                "capability_version": 1,
+                "moov_at_start": false
+            }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the file changed and the fresh extraction states no layout
+        // (this is what the builder produces for a faststart file: the layout
+        // member is only ever stated in the false direction)
+        let mut rescan = existing.clone();
+        rescan.file_size += 1;
+        rescan.metadata = json!({
+            "video": { "codec": "h264", "audio_codec": "aac", "container": "mp4" }
+        });
+        let mut tx = pool.begin().await.expect("tx");
+        rescan
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the verdict on the old bytes is gone, and the marker that kept
+        // playback from re-probing goes with it
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.metadata["video"].get("moov_at_start").is_none(),
+            "a verdict on the old bytes must not survive: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.metadata["video"].get("capability_version").is_none(),
+            "the record must read as unprobed so the layout is probed once: {}",
+            stored.metadata
+        );
+        assert!(
+            !crate::video_probe::record_is_complete(&stored),
+            "{}",
+            stored.metadata
+        );
+        // AND: the facts the fresh extraction does own landed
+        assert_eq!(stored.metadata["video"]["container"], "mp4");
+        assert_eq!(stored.metadata["video"]["audio_codec"], "aac");
+    }
+
+    /// The `video` object is the extraction's to write: a photo's fresh
+    /// extraction carries no video facts, so the document stored for a photo
+    /// row never acquires one from a scan (the builder states a `video` object
+    /// only for a video mime type).
+    #[tokio::test]
+    async fn scan_upsert_never_gives_a_row_a_video_object_it_did_not_extract() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-moov-photo");
+        // GIVEN: a photo row holding unrelated metadata
+        let mut existing = create_test_photo("still_a_photo.jpg".to_string(), hash.clone());
+        existing.metadata = json!({
+            "location": { "latitude": 48.2082, "longitude": 16.3737, "city": "Vienna" }
+        });
+        existing.create(&pool).await.expect("create");
+
+        // WHEN: the extraction writes what the file has — no video facts
+        let mut extracted = scanned_photo("still_a_photo.jpg", &hash, "image/jpeg", None, None);
+        extracted.file_size += 1;
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the fresh extraction landed and no video object appeared
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(
+            stored.file_size,
+            existing.file_size + 1,
+            "the row must describe the bytes the scan just read"
+        );
+        assert!(
+            stored.metadata.get("video").is_none(),
+            "a photo row must not acquire a video object: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.metadata["location"].get("city").is_none(),
+            "the name described coordinates the changed file no longer has: {}",
+            stored.metadata
+        );
+    }
+
+    /// A video save re-reads its row, rewrites the container and only then
+    /// records what the container holds, so the row can take a commit in
+    /// between. Writing the snapshot the request was read against would revert
+    /// it, and a resolved place name is lost for good that way: its
+    /// `geo_location_resolved` flag is already 1, so nothing ever derives the
+    /// name again. `record_video_edit` therefore names only the save's own
+    /// members and merges them into the row as it is NOW.
+    #[tokio::test]
+    async fn video_metadata_mirror_keeps_a_commit_that_landed_after_the_row_was_read() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-mirror");
+        let photo = create_test_photo("mirror.mp4".to_string(), hash.clone());
+        photo.create(&pool).await.expect("create");
+        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
+            .await
+            .expect("resolve");
+
+        // GIVEN: the row as the save read it, before the container was written
+        let snapshot = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+
+        // WHEN: the resolver commits while the container is being written
+        update_photo_city(&pool, &photo.file_path, Some("Cologne"))
+            .await
+            .expect("resolve again");
+
+        // THEN: the save's own member lands and that commit survives. The save
+        // reports no move, exactly as the handler does for a date-only save, so
+        // the name the resolver derived for the position stays valid.
+        Photo::record_video_edit(
+            &pool,
+            &hash,
+            false,
+            Some((snapshot.file_size, snapshot.date_modified)),
+        )
+        .await
+        .expect("record");
+
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(
+            stored.metadata["location"]["city"], "Cologne",
+            "the name committed after the row was read is not the save's to overwrite: {}",
+            stored.metadata
+        );
+        // The save stores neither the date nor the coordinates: both are file
+        // facts the response carries from the index.
+        assert!(stored.taken_at.is_none());
+        assert!(stored.metadata["location"].get("latitude").is_none());
+        assert!(stored.metadata["location"].get("longitude").is_none());
+    }
+
+    /// A video save restates the file's fingerprint, so nothing downstream of
+    /// the scan would correct a name geocoded from a position the save
+    /// replaced: the resolver skips the row (its `geo_location_resolved` is
+    /// already 1). The save therefore has to drop the name and re-queue the row
+    /// itself, and the queue reads the NEW position from the facts index.
+    #[tokio::test]
+    async fn video_metadata_mirror_rearms_the_resolver_when_the_save_moves_the_photo() {
+        // GIVEN: a resolved row, named for the coordinates it held
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-rearm");
+        let photo = create_test_photo("rearm.mp4".to_string(), hash.clone());
+        photo.create(&pool).await.expect("create");
+        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
+            .await
+            .expect("resolve");
+        let fingerprint = (photo.file_size, photo.date_modified);
+        // The file now carries the position the save wrote; coordinates live in
+        // the index, which is what the resolver reads.
+        let facts =
+            test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 48.2082, 16.3737)]);
+
+        // WHEN: a save reports it moved the position
+        Photo::record_video_edit(&pool, &hash, true, Some(fingerprint))
+            .await
+            .expect("record");
+
+        // THEN: the name it belonged to is gone and the row reaches the
+        // resolver again, carrying the NEW position
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.metadata["location"]["city"].is_null(),
+            "the name of the position the save replaced must not survive it: {}",
+            stored.metadata
+        );
+        assert_eq!(
+            get_photos_needing_geo_resolution(&pool, &facts)
+                .await
+                .expect("candidates"),
+            vec![(photo.file_path.clone(), 48.2082, 16.3737)],
+            "only a cleared flag queues the row, and the queue carries the NEW position"
+        );
+    }
+
+    /// The counterpart: a save that did not move the photo keeps its resolved
+    /// name and stays out of the queue. A date-only save restates the file's
+    /// fingerprint exactly like a positional one, so nothing downstream of the
+    /// scan would ever correct a name dropped here for no reason.
+    #[tokio::test]
+    async fn video_metadata_mirror_keeps_the_resolved_name_when_the_save_holds_the_position() {
+        // GIVEN: the same resolved row
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-keep-name");
+        let photo = create_test_photo("keep_name.mp4".to_string(), hash.clone());
+        photo.create(&pool).await.expect("create");
+        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
+            .await
+            .expect("resolve");
+        let fingerprint = (photo.file_size, photo.date_modified);
+        let facts =
+            test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 52.52, 13.405)]);
+
+        // WHEN: a save reports no move
+        Photo::record_video_edit(&pool, &hash, false, Some(fingerprint))
+            .await
+            .expect("record");
+
+        // THEN: the name survives and the row is not re-queued
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(stored.metadata["location"]["city"], "Berlin");
+        assert!(
+            get_photos_needing_geo_resolution(&pool, &facts)
+                .await
+                .expect("candidates")
+                .is_empty(),
+            "a save that held the position must not invalidate its name: {}",
+            stored.metadata
+        );
     }
 
     #[tokio::test]

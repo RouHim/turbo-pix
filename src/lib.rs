@@ -28,6 +28,7 @@ pub mod media_facts;
 pub mod metadata_extractor;
 pub mod metadata_writer;
 pub mod mimetype_detector;
+pub mod mp4_metadata;
 pub mod photo_processor;
 pub mod raw_processor;
 pub mod saved_searches;

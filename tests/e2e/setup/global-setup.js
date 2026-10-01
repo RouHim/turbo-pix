@@ -419,6 +419,44 @@ async function seedTestMedia() {
     console.warn(`HEVC video fixture not found at ${hevcVideoSrc}`);
   }
 
+  // Metadata-editing fixture (video-metadata.e2e.spec.js): the only seeded
+  // video that already carries a QuickTime location carrier, so a coordinate
+  // save exercises replacing a carrier instead of the absence of one. Seeded
+  // byte-for-byte — it is already faststart, and pinning its date through the
+  // container (pinVideoDate) would remux it and move or drop the carriers. Its
+  // `taken_at` comes from its own `com.apple.quicktime.creationdate`
+  // (2024-05-01), older than every video pinned in VIDEO_FIXTURES, so it cannot
+  // displace the first video card; the mtime below only keys the conversion
+  // cache.
+  const keysVideoSrc = path.join('test-data', 'test_video_quicktime_keys.mp4');
+  const keysVideoDest = path.join(photosDir, 'test_video_quicktime_keys.mp4');
+  if (existsSync(keysVideoSrc)) {
+    await copyFile(keysVideoSrc, keysVideoDest);
+    const date = videoDate(CLUSTER_DAYS_AGO + 6);
+    await utimes(keysVideoDest, date, date);
+  } else {
+    console.warn(`Video fixture not found at ${keysVideoSrc}`);
+  }
+
+  // Second metadata-editing fixture (video-metadata.e2e.spec.js): FR-001
+  // accepts MOV next to MP4 and M4V, and a renamed copy proves that gate end
+  // to end — the editor offers the file, the request reaches the writer and
+  // ffprobe reads the new instant back out of the container — without adding a
+  // binary to the repository. test_video.mp4 again: it carries no location
+  // carrier and no date carrier, so the copy stays out of the map's marker
+  // set (only the API-derived unlocated count moves) and out of the date
+  // carriers the metadata cases assert. Its `taken_at` has to be pinned in
+  // updateTestPhotoDates, see there.
+  const movSrc = path.join('test-data', 'test_video.mp4');
+  const movDest = path.join(photosDir, 'test_video_mov.mov');
+  if (existsSync(movSrc)) {
+    await copyFile(movSrc, movDest);
+    const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 10) * 24 * 60 * 60 * 1000);
+    await utimes(movDest, date, date);
+  } else {
+    console.warn(`Video fixture not found at ${movSrc}`);
+  }
+
   console.log('Generated test media ready');
 }
 

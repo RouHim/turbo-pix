@@ -972,7 +972,12 @@ impl Photo {
     ///    path hash; content changes at the same path keep the hash, so cache
     ///    invalidation is handled by the size+mtime content version in the
     ///    thumbnail/transcode/collage keys, NOT by this branch)
-    /// 2. Uses UPSERT to insert if new, or update if `hash_sha256` already exists
+    /// 2. Uses UPSERT to insert if new, or update if `hash_sha256` already exists,
+    ///    merging the scan's metadata document into the row's (RFC 7396) rather
+    ///    than replacing it: the scan owns the members it writes, and the
+    ///    resolved place name and the video probe record survive a rescan. A row
+    ///    whose fingerprint is not the file's describes other bytes, so its
+    ///    place name and probe record are cleared with the same statement.
     ///
     /// # Safety
     ///
@@ -1062,7 +1067,72 @@ impl Photo {
                 blurhash = excluded.blurhash,
                 is_favorite = COALESCE(photos.is_favorite, excluded.is_favorite),
                 semantic_vector_indexed = excluded.semantic_vector_indexed,
-                metadata = excluded.metadata,
+                -- RFC 7396 (SQLite `json_patch`), not a replacement: the scan's
+                -- document names the facts it owns and every other member the
+                -- row holds survives it — the resolved place name
+                -- (`$.location.city`) and the video probe record
+                -- (`$.video.capability_version`) among them. Replacing the
+                -- document wholesale dropped both on every pass, and every
+                -- resume re-upserts even the rows the unchanged-file fast path
+                -- built; neither member is ever re-derived, because
+                -- `get_photos_needing_geo_resolution` selects only the rows with
+                -- `geo_location_resolved = 0` (the name is lost for good when
+                -- that flag is already 1) and a dropped `capability_version`
+                -- makes `video_probe::record_is_complete` force a re-probe on
+                -- the next playback.
+                --
+                -- A row whose fingerprint is not the file's holds facts about
+                -- DIFFERENT bytes, so the groups the scan owns are dropped out
+                -- of it first (the same wholesale clearing, narrowed to the rows
+                -- it is right for): the place name was geocoded from a position
+                -- the changed file may no longer carry, and the probe record is
+                -- a verdict on the old layout, which would otherwise keep
+                -- `record_is_complete` true while `plan` reads its dropped
+                -- `moov_at_start` as "never established". `json_remove` rather
+                -- than null members, so a row that carried none of these keys
+                -- does not acquire emptied ones (RFC 7396 creates the member for
+                -- a nested patch).
+                metadata = json_remove(
+                    CASE
+                        WHEN photos.file_size = excluded.file_size
+                             AND photos.file_modified = excluded.file_modified
+                        THEN json_patch(
+                                 CASE WHEN json_type(photos.metadata) = 'object'
+                                      THEN photos.metadata
+                                      ELSE '{}' END,
+                                 excluded.metadata)
+                        ELSE json_patch(
+                                 json_remove(
+                                     CASE WHEN json_type(photos.metadata) = 'object'
+                                          THEN photos.metadata
+                                          ELSE '{}' END,
+                                     '$.camera', '$.settings', '$.video', '$.location.city'),
+                                 excluded.metadata)
+                    END,
+                    -- Coordinates are file facts (`MediaFactsIndex`) and never
+                    -- stored, so `stored_metadata` strips the pair out of what
+                    -- the scan writes and this clears one a legacy row kept: the
+                    -- file is authoritative for its own position.
+                    '$.location.latitude',
+                    '$.location.longitude'),
+                -- The place name that branch drops was geocoded from the
+                -- position the changed file may no longer carry, so the gate
+                -- that makes the resolver look at the row again goes back to 0
+                -- with it: `get_photos_needing_geo_resolution` selects exactly
+                -- the rows with it clear, and a row left at 1 would keep no
+                -- name and never be handed to `geo_location::resolve_batch` —
+                -- losing the map label and the `location:` search hits for
+                -- good. An unchanged row keeps both the name the merge above
+                -- preserves and its flag, deliberately: its coordinates are
+                -- still the ones the file carries, which is the same pairing
+                -- `record_video_edit` makes for a save (it re-arms only when
+                -- the save moved the position).
+                geo_location_resolved = CASE
+                    WHEN photos.file_size = excluded.file_size
+                         AND photos.file_modified = excluded.file_modified
+                    THEN geo_location_resolved
+                    ELSE 0
+                END,
                 file_modified = excluded.file_modified,
                 updated_at = excluded.updated_at
             "#,
@@ -2581,6 +2651,199 @@ pub(crate) mod tests {
         assert!(
             stored.metadata["location"].get("city").is_none(),
             "the name described coordinates the changed file no longer has: {}",
+            stored.metadata
+        );
+    }
+
+    /// The plan's T6 acceptance: the scan's document is MERGED into the row, so
+    /// the members the scan does not own survive a rescan. Both are otherwise
+    /// lost for good — `get_photos_needing_geo_resolution` selects only the rows
+    /// with `geo_location_resolved = 0`, so a dropped place name is never
+    /// re-derived (the map loses its label and `location:` search its hits), and
+    /// a dropped `capability_version` makes `video_probe::record_is_complete`
+    /// re-probe on every playback (FR-008). Every resume re-upserts even the
+    /// rows the unchanged-file fast path built, so this is not a corner case.
+    ///
+    /// A member the file no longer describes still goes: coordinates are file
+    /// facts the DB never stores, so a pair a legacy row kept is cleared with
+    /// the document rather than left describing a position the file does not
+    /// carry. An unchanged file's coordinates are still the ones its name was
+    /// geocoded from, so that clear does not reach the `geo_location_resolved`
+    /// gate either — the row stays out of the resolver's queue.
+    #[tokio::test]
+    async fn scan_upsert_merges_so_the_place_name_and_probe_record_survive() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-scan-merge");
+        // GIVEN: a video row a previous scan wrote, with the name the resolver
+        // derived and the probe's record on top of it.
+        let mut existing = create_test_photo("rescan.mp4".to_string(), hash.clone());
+        existing.mime_type = Some("video/mp4".to_string());
+        existing.metadata = json!({
+            "location": { "city": "Vienna" },
+            "video": { "codec": "h264", "capability_version": 1 }
+        });
+        existing.create(&pool).await.expect("create");
+        mark_photo_geo_resolved(&pool, &existing.file_path)
+            .await
+            .expect("resolved flag");
+        // AND: a coordinate pair a legacy write left in the row — `stored_metadata`
+        // strips them from anything the app writes, so only raw SQL can put one
+        // there, which is exactly the row the merge has to repair.
+        sqlx::query(
+            "UPDATE photos SET metadata = json_set(metadata, '$.location.latitude', 48.2, \
+             '$.location.longitude', 16.4) WHERE hash_sha256 = ?",
+        )
+        .bind(&hash)
+        .execute(&pool)
+        .await
+        .expect("seed legacy coordinates");
+
+        // WHEN: the scan writes what it found for the file the row describes —
+        // the fingerprint the unchanged-file fast path carries over
+        let mut extracted = scanned_photo("rescan.mp4", &hash, "video/mp4", None, None);
+        extracted.file_size = existing.file_size;
+        extracted.date_modified = existing.date_modified;
+        extracted.video_codec = Some("h264".to_string());
+        extracted.container = Some("mp4".to_string());
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        // THEN: the members the scan does not own are still there
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(
+            stored.metadata["location"]["city"], "Vienna",
+            "the rescan dropped the resolved place name: {}",
+            stored.metadata
+        );
+        assert_eq!(
+            stored.metadata["video"]["capability_version"], 1,
+            "the rescan dropped the probe record: {}",
+            stored.metadata
+        );
+        assert!(
+            crate::video_probe::record_is_complete(&stored),
+            "a rescan of an unchanged file must not force a re-probe: {}",
+            stored.metadata
+        );
+        // AND: the facts the scan does own landed
+        assert_eq!(stored.metadata["video"]["codec"], "h264");
+        assert_eq!(stored.metadata["video"]["container"], "mp4");
+        // AND: the coordinates the file no longer claims are gone
+        assert!(
+            stored.metadata["location"].get("latitude").is_none()
+                && stored.metadata["location"].get("longitude").is_none(),
+            "stored coordinates survived a scan of the file: {}",
+            stored.metadata
+        );
+        // AND: the gate the name was derived under is untouched, so the row
+        // stays out of the resolver's queue: an unchanged file's coordinates
+        // are the ones the name was geocoded from.
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?"
+            )
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .expect("read flag"),
+            1,
+            "a rescan of an unchanged file must not re-queue its resolved name"
+        );
+    }
+
+    /// A row that described DIFFERENT bytes than the file now does holds facts
+    /// about the bytes that are gone, so the merge clears them before the fresh
+    /// document lands: a place name geocoded from a position the changed file
+    /// may not have, and a probe record whose `capability_version` would keep
+    /// `record_is_complete` true while `plan` reads its dropped `moov_at_start`
+    /// as "never established". This is the wholesale replace's behaviour,
+    /// narrowed to the rows it is right for.
+    #[tokio::test]
+    async fn scan_upsert_clears_the_facts_a_replaced_file_no_longer_supports() {
+        let pool = create_in_memory_pool().await.expect("pool");
+        let hash = format!("{:0<64}", "hash-scan-changed");
+        let mut existing = create_test_photo("replaced.mp4".to_string(), hash.clone());
+        existing.mime_type = Some("video/mp4".to_string());
+        existing.metadata = json!({
+            "location": { "city": "Vienna" },
+            "video": { "codec": "h264", "capability_version": 1, "moov_at_start": false }
+        });
+        existing.create(&pool).await.expect("create");
+        // AND: the resolver has already named the row's position
+        mark_photo_geo_resolved(&pool, &existing.file_path)
+            .await
+            .expect("resolved flag");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?"
+            )
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .expect("read flag"),
+            1,
+            "the row has to start out of the resolver's queue for this to mean anything"
+        );
+
+        // WHEN: the row's fingerprint no longer describes the file — the bytes
+        // at this path were replaced since the last scan
+        let mut extracted = scanned_photo("replaced.mp4", &hash, "video/mp4", None, None);
+        extracted.file_size = existing.file_size + 1;
+        let fresh: Photo = extracted.into();
+        let mut tx = pool.begin().await.expect("tx");
+        fresh
+            .create_or_update_with_transaction(&mut tx)
+            .await
+            .expect("upsert");
+        tx.commit().await.expect("commit");
+
+        let stored = Photo::find_by_hash(&pool, &hash)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            stored.metadata["location"].get("city").is_none(),
+            "the name described a position the changed file may not have: {}",
+            stored.metadata
+        );
+        // The name is dropped, so the gate that makes the resolver look at the
+        // row has to go back to 0 with it: the resolver is fed by
+        // `get_photos_needing_geo_resolution`, which selects exactly the rows
+        // with it clear, so a row left at 1 would keep no name and never be
+        // handed its new coordinates — its label and `location:` hits gone for
+        // good.
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT geo_location_resolved FROM photos WHERE hash_sha256 = ?"
+            )
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .expect("read flag"),
+            0,
+            "a row whose file changed has to reach the resolver again"
+        );
+        assert!(
+            stored.metadata["video"].get("capability_version").is_none(),
+            "a probe record on bytes that are gone must not survive: {}",
+            stored.metadata
+        );
+        assert!(
+            stored.metadata["video"].get("moov_at_start").is_none(),
+            "a layout verdict on bytes that are gone must not survive: {}",
+            stored.metadata
+        );
+        assert!(
+            !crate::video_probe::record_is_complete(&stored),
+            "the changed row has to be re-probed: {}",
             stored.metadata
         );
     }

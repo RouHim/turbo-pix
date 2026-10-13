@@ -939,18 +939,23 @@ fn patch_container(
 /// over a container that still holds the values is the one answer a client
 /// cannot recover from.
 async fn apply_video_metadata_edit(
-    photo: Photo,
+    mut photo: Photo,
     edit: VideoMetadataEdit,
     db_pool: &DbPool,
     facts: &MediaFactsIndex,
 ) -> Result<warp::reply::Json, Rejection> {
     // FR-013: an empty request must not rewrite the container. Nothing was
-    // asked for, so the row comes back as it was read.
+    // asked for, so the row comes back as it was read — enriched from the facts
+    // index exactly the way the save path's answer is, because the row stores
+    // neither the date nor the coordinates (they are file facts) and handing it
+    // back untouched is the one representation of this video in the API that
+    // has neither, for a file whose container carries both.
     if edit.taken_at.is_none() && edit.latitude.is_none() && edit.longitude.is_none() {
         log::debug!(
             "Empty metadata request for video {}; file and row left untouched",
             photo.hash_sha256
         );
+        facts.enrich(&mut photo);
         return Ok(warp::reply::json(&photo));
     }
 
@@ -3507,6 +3512,82 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&after_row).unwrap(),
             serde_json::to_value(&before_row).unwrap()
+        );
+    }
+
+    /// The empty request is the one answer the save path's branch leaves
+    /// un-enriched, and the row stores neither the date nor the coordinates —
+    /// they are file facts the index holds. So it was the one representation of
+    /// a video in the API without them: `{}` answered `taken_at: null` and no
+    /// coordinate pair for a file whose container carries both, while the save
+    /// path's answer for the same video has them. Nothing may be written while
+    /// fixing that: the file and the row are only read.
+    #[tokio::test]
+    async fn an_empty_video_request_answers_with_the_files_own_facts() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().unwrap();
+        let facts = Arc::new(MediaFactsIndex::new());
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            temp_dir.path().join("cache"),
+            facts.clone(),
+        );
+        let hash = "b00000000000000000000000000000000000000000000000000000000000000b";
+        // The keys fixture carries a position AND an instant the extraction
+        // resolves, so the empty answer has something the row cannot hold.
+        let video = create_video_row(
+            &db_pool,
+            &temp_dir,
+            hash,
+            "test-data/test_video_quicktime_keys.mp4",
+            "video/mp4",
+        )
+        .await;
+        let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        let extracted = crate::media_facts::read_media_facts(&video);
+        assert_eq!(
+            (extracted.latitude, extracted.longitude),
+            (Some(48.2082), Some(16.3737)),
+            "the fixture has to carry the position this asserts on"
+        );
+        facts.set(&row.file_path, extracted);
+
+        let before_bytes = fs::read(&video).unwrap();
+        let before_mtime = fs::metadata(&video).unwrap().modified().unwrap();
+        let response = warp::test::request()
+            .method("PATCH")
+            .path(&format!("/api/photos/{}/metadata", hash))
+            .json(&json!({}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
+        assert_eq!(body["metadata"]["location"]["longitude"], 16.3737);
+        // The instant, not its spelling: the index holds a `DateTime` and the
+        // response serializes it in its own style. The extraction has one only
+        // when ffprobe answered (the fixture's `com.apple.quicktime.creationdate`
+        // is a format tag), and either way the answer has to be what the index
+        // holds rather than the row's `null`.
+        assert_eq!(
+            body["taken_at"]
+                .as_str()
+                .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                .map(|parsed| parsed.with_timezone(&Utc)),
+            facts.get(&row.file_path).expect("the seed").taken_at,
+            "the empty answer has to carry the date the file's facts hold: {body}"
+        );
+
+        // And nothing was written: the row keeps no date and no coordinates,
+        // the file is byte-identical, and its clock did not move.
+        let after_row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
+        assert!(after_row.taken_at.is_none());
+        assert!(after_row.metadata["location"].get("latitude").is_none());
+        assert_eq!(fs::read(&video).unwrap(), before_bytes);
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_mtime
         );
     }
 

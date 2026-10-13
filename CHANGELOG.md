@@ -1,3 +1,29 @@
+# [2.47.0](https://github.com/RouHim/turbo-pix/compare/2.46.10...2.47.0) (2026-10-13)
+
+
+### Bug Fixes
+
+* **e2e:** pin the MOV fixture and align the metadata spec notes ([640d634](https://github.com/RouHim/turbo-pix/commit/640d63419834f33205c9165b4cd0391f11e10ce4))
+* **ui:** keep the unsupported-format tooltip true for videos ([8b776fb](https://github.com/RouHim/turbo-pix/commit/8b776fb6dbab45f990d90e85c8593e80218d39b3))
+* **video:** harden in-place video metadata editing after review ([13e7201](https://github.com/RouHim/turbo-pix/commit/13e7201e5adfbf31e430406058d00a39ff80da58)), closes [#80](https://github.com/RouHim/turbo-pix/issues/80)
+* **video:** harden the in-place container write after review ([f8586aa](https://github.com/RouHim/turbo-pix/commit/f8586aa1e470d32a142967195f8854ea898dabca))
+* **video:** merge rescan metadata and re-arm geo resolution ([c783915](https://github.com/RouHim/turbo-pix/commit/c783915d0c086537d04bbe7b5bb3927f246bacfc))
+* **video:** reject wrapped 64-bit box sizes in the ISO-BMFF walk ([226b9ba](https://github.com/RouHim/turbo-pix/commit/226b9ba3e3ce044bf1618f71882e7212d5b289d5))
+* **video:** report an unparsable video date as invalid_date ([adc28f6](https://github.com/RouHim/turbo-pix/commit/adc28f645552f2d2297ffb930ceef44abd20fc38))
+* **video:** state absent coordinates as null so a rescan clears stale positions ([0b8fb7a](https://github.com/RouHim/turbo-pix/commit/0b8fb7a4164cb0b2ce9d01284a2fd65b2993b3e4))
+* **video:** state every scan-owned metadata member so stale facts are cleared ([6bb310e](https://github.com/RouHim/turbo-pix/commit/6bb310e05cc93bdd694f2716e8005c9af9b13cf6))
+
+
+### Features
+
+* **ui:** offer video metadata editing with localized refusal messages ([fb84ef4](https://github.com/RouHim/turbo-pix/commit/fb84ef4a500d21360eb2ec5cbfde0a895bac4019))
+* **video:** edit video metadata over the photo PATCH route ([6726233](https://github.com/RouHim/turbo-pix/commit/672623304ca23e437f1bd65e41cb0cb33728df35))
+* **video:** extract location from the container and keep scan metadata merges lossless ([97e8e0f](https://github.com/RouHim/turbo-pix/commit/97e8e0f3d55d8efdff28521469988c0000626d32))
+* **video:** patch moov timestamps in place with an undo token ([2940e56](https://github.com/RouHim/turbo-pix/commit/2940e561c01dfb9a6bbd0ff5644d6063744aed30))
+* **video:** preserve QuickTime date text representations on save ([a4b1d26](https://github.com/RouHim/turbo-pix/commit/a4b1d264c0caa24328181765bb5c6813ef4d1280))
+* **video:** read ISO-BMFF and QuickTime metadata carriers ([02a4879](https://github.com/RouHim/turbo-pix/commit/02a4879de6faa47d0d5c2dc8df21ff4b1cad5761))
+* **video:** write ISO6709 location into the file's own carrier ([cc17547](https://github.com/RouHim/turbo-pix/commit/cc1754766b43ad082803d232f98d044e15534481))
+
 ## [2.46.10](https://github.com/RouHim/turbo-pix/compare/2.46.9...2.46.10) (2026-10-13)
 
 ## [2.46.9](https://github.com/RouHim/turbo-pix/compare/2.46.8...2.46.9) (2026-10-10)

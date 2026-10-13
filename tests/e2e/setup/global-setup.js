@@ -57,6 +57,12 @@ const VIDEO_FIXTURES = [
 // seeded progressive.
 const NON_PROGRESSIVE_FIXTURE = 'test_video_moov_end.mp4';
 
+// The MOV metadata-editing fixture is pinned like the videos above but seeded
+// separately (its source is `test_video.mp4` under a different name), so it
+// keeps its own offset here and the file-level tag check below names it.
+const MOV_FIXTURE = 'test_video_mov.mov';
+const MOV_FIXTURE_DAYS_AGO = CLUSTER_DAYS_AGO + 10;
+
 function videoDate(daysAgo) {
   return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
 }
@@ -228,7 +234,18 @@ function verifyPinnedVideoFiles() {
       );
     }
   }
-  console.log(`Pinned container dates verified in ${VIDEO_FIXTURES.length} video files`);
+  // The renamed MOV fixture is pinned through the same helper but seeded apart
+  // from VIDEO_FIXTURES, so it is checked by name: unpinned it would carry no
+  // tag at all and the scan would date it from its birth time.
+  const movPath = path.join(TEST_DATA_DIR, 'photos', MOV_FIXTURE);
+  const expectedMovPrefix = videoDate(MOV_FIXTURE_DAYS_AGO).toISOString().split('T')[0];
+  const movTag = probeVideoDate(movPath);
+  if (!movTag.startsWith(expectedMovPrefix)) {
+    throw new Error(
+      `Pinned container date missing in ${MOV_FIXTURE}: expected ${expectedMovPrefix}, got '${movTag || '(no tag)'}'`
+    );
+  }
+  console.log(`Pinned container dates verified in ${VIDEO_FIXTURES.length + 1} video files`);
 }
 
 /**
@@ -442,16 +459,24 @@ async function seedTestMedia() {
   // accepts MOV next to MP4 and M4V, and a renamed copy proves that gate end
   // to end — the editor offers the file, the request reaches the writer and
   // ffprobe reads the new instant back out of the container — without adding a
-  // binary to the repository. test_video.mp4 again: it carries no location
-  // carrier and no date carrier, so the copy stays out of the map's marker
-  // set (only the API-derived unlocated count moves) and out of the date
-  // carriers the metadata cases assert. Its `taken_at` has to be pinned in
-  // updateTestPhotoDates, see there.
+  // binary to the repository. test_video.mp4 again, under a `.mov` name, pinned
+  // through `pinVideoDate` like the VIDEO_FIXTURES above. A bare copy would be
+  // wrong: it carries no date carrier at all, so the scanner derives its date
+  // from the file's birth time — the seed instant — which on any btime-capable
+  // filesystem makes this fixture the newest item in the library, ahead of the
+  // cluster photos in `photos[0]` and ahead of the videos view's first card
+  // that video-metadata.e2e.spec.js documents as the Matroska fixture, while on
+  // a filesystem without btime the same fixture lands last. Pinned at the
+  // oldest video date it sorts deterministically behind every other video, and
+  // it still carries no location carrier, so it stays out of the map's marker
+  // set (only the API-derived unlocated count moves). `verifyTestPhotoDates`
+  // covers the pin — its regex counts `.mov` — and `verifyPinnedVideoFiles`
+  // reads the tag back off the file.
   const movSrc = path.join('test-data', 'test_video.mp4');
-  const movDest = path.join(photosDir, 'test_video_mov.mov');
+  const movDest = path.join(photosDir, MOV_FIXTURE);
   if (existsSync(movSrc)) {
-    await copyFile(movSrc, movDest);
-    const date = new Date(Date.now() - (CLUSTER_DAYS_AGO + 10) * 24 * 60 * 60 * 1000);
+    const date = videoDate(MOV_FIXTURE_DAYS_AGO);
+    pinVideoDate(movSrc, movDest, date);
     await utimes(movDest, date, date);
   } else {
     console.warn(`Video fixture not found at ${movSrc}`);
@@ -692,11 +717,13 @@ async function verifyTestPhotoDates(baseURL) {
   // newest entry of VIDEO_FIXTURES (test_video.mp4) sorts first. Checked here
   // because a remux that silently failed to write the tag would leave the
   // fixture with its birth time — the regression this assertion exists to
-  // catch, and one a photos-only verification would not see. That the tag also
-  // survives in the FILE (which this API check cannot see) is asserted by
+  // catch, and one a photos-only verification would not see. `.mov` is part of
+  // the pattern for the same reason: the renamed MOV fixture is pinned the same
+  // way, and unpinned it would sort by its birth time instead. That the tag
+  // also survives in the FILE (which this API check cannot see) is asserted by
   // verifyPinnedVideoFiles.
   const [newestVideo, newestVideoDaysAgo] = VIDEO_FIXTURES[0];
-  const firstVideo = photos.find((photo) => /\.(mp4|mkv|avi)$/i.test(photo.filename ?? ''));
+  const firstVideo = photos.find((photo) => /\.(mp4|mov|mkv|avi)$/i.test(photo.filename ?? ''));
   if (!firstVideo) {
     throw new Error('No video fixture in the indexed library');
   }

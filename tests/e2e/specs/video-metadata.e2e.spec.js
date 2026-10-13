@@ -7,9 +7,20 @@ import { TestHelpers } from '../setup/test-helpers.js';
 
 /**
  * Fixtures (see test-data/, all seeded by global-setup):
- *   test_video.mp4                h264 + aac, `mvhd` creation 0, no location carrier
- *   test_video_mov.mov             test_video.mp4 under a `.mov` name (global-setup copies
- *                                 it) — FR-001's MOV acceptance, no new binary needed
+ *   test_video.mp4                h264 + aac, no location carrier. The seeded copy is
+ *                                 produced by `pinVideoDate` (`ffmpeg -c copy -metadata
+ *                                 creation_time=<pinned> -movflags +faststart`), so it
+ *                                 already carries a creation instant in the format tag and
+ *                                 in both streams' tag sets: the date case REPLACES date
+ *                                 carriers rather than creating them.
+ *   test_video_mov.mov             test_video.mp4 under a `.mov` name, pinned by global-setup
+ *                                 through the same `pinVideoDate` route as the other videos:
+ *                                 its `mvhd`/`tkhd`/`mdhd` creation fields hold the pinned seed
+ *                                 instant (the source's are 0) and it carries no location
+ *                                 carrier. FR-001's MOV acceptance, no new binary needed.
+ *                                 The pin is what keeps its sort position deterministic — an
+ *                                 unpinned copy's date is its birth time, which makes it the
+ *                                 newest item in the library.
  *   test_video_quicktime_keys.mp4 h264 + aac carrying `com.apple.quicktime.creationdate`
  *                                 and `com.apple.quicktime.location.ISO6709`, moov-first
  *   test_video_long.mkv           Matroska — the viewer plays it, the writer cannot rewrite it
@@ -165,7 +176,12 @@ test.describe('Video metadata editing', () => {
   test('GIVEN an MP4 video WHEN the capture date is saved THEN the file, the row and the grid agree', async ({
     page,
   }) => {
-    // GIVEN: test_video.mp4 (h264 + aac, `mvhd` creation 0, no location carrier)
+    // GIVEN: test_video.mp4 (h264 + aac, no location carrier). Its seeded copy
+    // carries the pinned instant in the format tag and in both streams' tags,
+    // so this case replaces date carriers the file already has — and so does
+    // the MOV case below, whose fixture is pinned the same way; writing into a
+    // creation field that is still 0 is covered by the writer's synthetic
+    // tests.
     const video = await findVideoByFilename(page, 'test_video.mp4');
     const rowBefore = await (await page.request.get(`/api/photos/${video.hash_sha256}`)).json();
     const file = fixturePath('test_video.mp4');
@@ -299,10 +315,11 @@ test.describe('Video metadata editing', () => {
   }) => {
     // GIVEN: test_video_mov.mov — FR-001 accepts MOV next to MP4 and M4V, and
     // until now only the writer's extension list said so. The fixture is
-    // test_video.mp4 under a `.mov` name (no location carrier, no date
-    // carrier), so this case is about the gate and the in-place write, not
-    // about QuickTime's own box layout — that is covered by the writer's own
-    // synthetic `.mov` tests.
+    // test_video.mp4 under a `.mov` name with the pinned seed instant in its
+    // `mvhd`/`tkhd`/`mdhd` fields (no location carrier), so this case is about
+    // the gate and the in-place write — replacing the date carriers the pin
+    // wrote — not about QuickTime's own box layout; writing into a creation
+    // field that is still 0 is covered by the writer's own synthetic tests.
     const video = await findVideoByFilename(page, 'test_video_mov.mov');
     const rowBefore = await (await page.request.get(`/api/photos/${video.hash_sha256}`)).json();
     const file = fixturePath('test_video_mov.mov');

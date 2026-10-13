@@ -154,7 +154,7 @@ Implementation notes (these are decisions, not suggestions):
 - `mvex` anywhere inside `moov` ⇒ `Fragmented`.
 - `creation_time` = the `mvhd` creation field decoded from the QuickTime epoch (`1904-01-01T00:00:00Z`); a value of 0 stays `Some`ly decodable but the reader returns `None` for it (0 means "never set", matching ffprobe).
 - Text carriers, resolved from the tree:
-  - mdta: read `moov/udta/meta/keys`, build `index → key string` (key bytes = entry body after the 8-byte prefix, trailing NUL stripped), then for each `moov/udta/meta/ilst` child whose 4-byte type is a big-endian index, read its `data` child's payload (payload starts 8 bytes after the `data` box header: 4-byte type indicator + 4-byte locale).
+  - mdta: read the `keys`/`ilst` pair, from the `meta` box a `moov` holds directly (`moov/meta/…`, the placement Apple writes — a measured iPhone `.MOV` carries it with no `udta` at all) or, failing that, one level down (`moov/udta/meta/…`, what ffmpeg writes); the placement is chosen by the pair it carries — the direct box wins when it holds both `keys` and `ilst`, otherwise the `udta` one, otherwise the direct one as before (a `meta` box is legal with nothing but its mandatory `hdlr`, so its presence alone says nothing) — and the writer resolves through the same lookup so the pair a save patches is the pair the reader read. Build `index → key string` (key bytes = entry body after the 8-byte prefix, trailing NUL stripped), then for each `ilst` child whose 4-byte type is a big-endian index, read its `data` child's payload (payload starts 8 bytes after the `data` box header: 4-byte type indicator + 4-byte locale).
   - date carriers: mdta key `com.apple.quicktime.creationdate` or `creation_time`, item type `©day`, or a direct `moov/udta/©day` child.
   - location carriers: mdta key `com.apple.quicktime.location.ISO6709` or `location`, item type `©xyz`, a direct `moov/udta/©xyz` child, or the ISO/3GPP `moov/udta/loci` box (longitude then latitude, each a 16.16 fixed-point `i32` — the carrier ffmpeg's own MP4 muxer writes for a location tag).
   - `creation_date_text`/`location_iso6709` are the verbatim first hit in the order listed.
@@ -743,22 +743,19 @@ git commit -m "feat(ui): offer video metadata editing with localized refusal mes
 - Create: `tests/e2e/specs/video-metadata.e2e.spec.js`
 - Modify: `tests/e2e/setup/global-setup.js` (seed `test_video_quicktime_keys.mp4` with the existing pinned-date pattern)
 - Modify: `tests/e2e/specs/map.e2e.spec.js` (its "videos carry no GPS" premise changes once the located fixture is indexed)
-- Modify: `tests/e2e/specs/map-filters.e2e.spec.js` (same two-continent reason, one layer up: its located-video case is scoped to the video it seeds itself, not to the quicktime fixture)
 
-Why the two map specs: the located fixture is real library data from Step 1, so it shows up in every
-unfiltered map listing as a point in Vienna. Each affected case was narrowed to the media type it is
-actually about, which keeps its own premise and only removes the foreign point:
-- `map.e2e.spec.js`: the empty-state case asks for `?q=type%3Avideo test_video.mp4` (its own "no
-  markers at all" premise, scoped to the videos it seeds), and the cluster-count / location-marker
-  cases ask for `?q=type%3Aimage` — with the located video in the listing the fit spans two
-  continents, and `focusLocation` then clicks a cluster whose zoom animation has detached the element.
-- `map-filters.e2e.spec.js`: a video-scoped query narrowed to the seeded file —
-  `?q=type%3Avideo%20test_video.mp4`, the same query the map shell spec uses for its own
-  empty-state case — for the same reason: the quicktime fixture brings its own container
-  coordinates in Vienna, so an unfiltered map holds a second location, the fit spans two
-  continents, and the case's `focusLocation` call would have to click the Berlin+Wien cluster,
-  a zoom whose animation detaches the element under the click. Its premise is "a video WITH
-  coordinates is plotted and opens in the viewer", not the library's whole geometry.
+Why the map spec: the located fixture is real library data from Step 1, so it shows up in every
+unfiltered map listing as a point in Vienna. The affected cases were narrowed to the media type they
+are actually about, which keeps their own premises and only removes the foreign point:
+- `map.e2e.spec.js`: the empty-state case became video-scoped on its own fixture
+  (`?q=type%3Avideo test_video.mp4` — a video the spec seeds and that carries no coordinates), and
+  the cluster-count / location-marker cases became image-scoped (`?q=type%3Aimage`) — with the
+  located video in the listing the fit spans two continents. It is also the spec that plots the
+  quicktime fixture, which contradicts its old "Videos carry no file-level coordinates, so a video
+  can never be plotted" comment; that comment went with the case it described.
+- `map-filters.e2e.spec.js` is NOT touched: it has no located-video case at all (its own comment
+  still reads "Videos carry no file-level coordinates, so a video can never be plotted"), so the
+  located fixture never reaches one of its assertions.
 
 **Interfaces:**
 - Consumes: everything above; `TestHelpers` as-is.
@@ -849,7 +846,7 @@ Expected: FAIL at the first test — `#metadata-edit-btn` is disabled today (`is
 
 `map.e2e.spec.js`'s "filters with matching photos but no coordinates show the empty state" currently uses `q=type:video`; the located fixture now plots, so target a video that still has no coordinates (free-text `test_video.mp4`) and keep asserting the empty state.
 
-Run: `npm run test:e2e -- tests/e2e/specs/video-metadata.e2e.spec.js tests/e2e/specs/map.e2e.spec.js tests/e2e/specs/map-filters.e2e.spec.js`
+Run: `npm run test:e2e -- tests/e2e/specs/video-metadata.e2e.spec.js tests/e2e/specs/map.e2e.spec.js`
 Expected: PASS.
 
 - [ ] **Step 5: Run the whole suite**

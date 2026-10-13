@@ -6,9 +6,10 @@
 //! write:
 //!
 //! - `moov/mvhd` creation time (seconds from the 1904-01-01 QuickTime epoch),
-//! - the mdta pair `moov/udta/meta/keys` (key names) + `moov/udta/meta/ilst`
-//!   (values indexed into those names),
-//! - legacy `©day` / `©xyz` item types in `moov/udta/meta/ilst`,
+//! - the mdta pair `keys` (key names) + `ilst` (values indexed into those
+//!   names), either directly under the `moov` (`moov/meta/...`, the shape Apple
+//!   writes) or one level down (`moov/udta/meta/...`, what ffmpeg writes),
+//! - legacy `©day` / `©xyz` item types in that `ilst`,
 //! - a direct `moov/udta/©day` / `moov/udta/©xyz` child,
 //! - an ISO/3GPP `moov/udta/loci` location (a 16.16 fixed-point pair).
 //!
@@ -625,10 +626,53 @@ fn mvhd_creation_time(
         .ok_or(Mp4MetadataError::InvalidDate)
 }
 
-/// Key names of `moov/udta/meta/keys`, in file order: the value at position `n`
-/// is indexed by the item type `n + 1`.
+/// The `meta` box a container's mdta `keys`/`ilst` pair hangs off.
+///
+/// QTFF states metadata "can be stored within a movie atom (`moov`), a track
+/// atom (`trak`) or a media atom (`mdia`)", and the movie-level pair is written
+/// in two placements by different writers: directly under the `moov`
+/// (`moov/meta/keys` + `moov/meta/ilst`, the shape a measured iPhone `.MOV`
+/// carries, with no `udta` at all) and one level down under `udta`
+/// (`moov/udta/meta/keys` + `moov/udta/meta/ilst`, what ffmpeg and older
+/// writers produce). Resolving only the `udta` placement leaves a file whose
+/// pair is a direct child of `moov` with no key names at all — a video's only
+/// coordinate carrier becomes invisible to both the scan and a location save,
+/// and a date save leaves the mdta carrier holding the previous instant.
+///
+/// A file may carry both placements; the direct `moov/meta` pair then wins, and
+/// the reader and the writer resolve through this one lookup, so the pair a
+/// value is read back from is exactly the pair a save patches.
+///
+/// The placement is chosen by the pair it carries, not by the `meta` box being
+/// there at all: a `meta` box is legal with nothing but its mandatory `hdlr`
+/// (the body this module's own fixtures write in front of their pair), so a
+/// container whose direct `moov/meta` holds no pair at all — beside a
+/// `moov/udta/meta` pair one level down — would resolve to nothing, losing the
+/// pair a save is meant to patch. The direct box therefore wins only when it
+/// carries `keys` and `ilst`; otherwise the `udta` one does, and a container
+/// whose `meta` boxes both lack the pair is read through the direct one as it
+/// was before the placement was consulted at all.
+fn mdta_meta(moov: &BoxSpan) -> Option<&BoxSpan> {
+    let direct = find_child(moov, &META_BOX);
+    let under_udta = find_path(moov, &[*b"udta", META_BOX]);
+    [direct, under_udta]
+        .into_iter()
+        .flatten()
+        .find(|meta| carries_mdta_pair(meta))
+        .or(direct.or(under_udta))
+}
+
+/// Whether a `meta` box carries the mdta `keys`/`ilst` pair a value is resolved
+/// through — the only thing that makes one placement answer for a pair the
+/// other cannot (see [`mdta_meta`]).
+fn carries_mdta_pair(meta: &BoxSpan) -> bool {
+    find_child(meta, b"keys").is_some() && find_child(meta, b"ilst").is_some()
+}
+
+/// Key names of the container's mdta `keys` box (see [`mdta_meta`]), in file
+/// order: the value at position `n` is indexed by the item type `n + 1`.
 fn mdta_keys(buf: &[u8], moov: &BoxSpan) -> Vec<String> {
-    let Some(keys) = find_path(moov, &[*b"udta", META_BOX, *b"keys"]) else {
+    let Some(keys) = mdta_meta(moov).and_then(|meta| find_child(meta, b"keys")) else {
         return Vec::new();
     };
     let body = keys.offset + header_len(buf, keys.offset);
@@ -672,19 +716,19 @@ fn mdta_keys(buf: &[u8], moov: &BoxSpan) -> Vec<String> {
     names
 }
 
-/// One item of `moov/udta/meta/ilst`.
+/// One item of the container's mdta `ilst` (see [`mdta_meta`]).
 struct ItemValue {
     /// The item type: an mdta key index or a `©`-prefixed legacy type.
     kind: [u8; 4],
     text: String,
 }
 
-/// Values of `moov/udta/meta/ilst`, in file order.
+/// Values of the container's mdta `ilst`, in file order.
 ///
 /// An item wraps a `data` box whose payload opens with a 4-byte type indicator
 /// and a 4-byte locale ahead of the value.
 fn ilst_items(buf: &[u8], moov: &BoxSpan) -> Vec<ItemValue> {
-    let Some(ilst) = find_path(moov, &[*b"udta", META_BOX, *b"ilst"]) else {
+    let Some(ilst) = mdta_meta(moov).and_then(|meta| find_child(meta, b"ilst")) else {
         return Vec::new();
     };
     ilst.children
@@ -724,13 +768,30 @@ struct MdtaIndex {
 // finished, not that the item list was read once, and an index a test builds
 // for itself says nothing about the index the code under test builds. They are
 // thread-local so tests running in parallel never share a count, and separate
-// because the two paths count different things — a read indexes the values it
-// finds, while a save indexes the carriers it resolves, and only the second
-// says whether the resolution went through the index at all.
+// because the paths count different things — a read indexes the values it finds
+// ([`ITEMS_WALKED`], in [`MdtaIndex::of`]), a save builds its carrier index once
+// ([`ITEMS_INDEXED`], in [`IlstIndex::of`], the one pass either collector
+// shares) and is handed the items it resolves out of it ([`CARRIERS_RESOLVED`],
+// in [`IlstIndex::items`]).
 #[cfg(test)]
 thread_local! {
     static ITEMS_WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ITEMS_INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static CARRIERS_RESOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Whether the next fingerprint readback is to fail, per thread.
+//
+// The readback is the one refusal on the way out of a save that is not decided
+// before a byte is written, so its rollback is the one a test cannot reach by
+// handing it a path that is not there — the save opens its own path a moment
+// earlier. The flag stands in for the stat that lost its file (a rename, an I/O
+// error, a share that dropped) so the save's own call site runs, rather than the
+// helper behind it; it is set and spent on one thread and compiled out of every
+// other build.
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_FINGERPRINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl MdtaIndex {
@@ -793,13 +854,23 @@ struct IlstIndex<'a> {
 impl<'a> IlstIndex<'a> {
     /// Indexes the items of `moov`'s `ilst`; an empty index when it holds none.
     fn of(moov: &'a BoxSpan) -> Self {
-        let Some(ilst) = find_path(moov, &[*b"udta", META_BOX, *b"ilst"]) else {
+        let Some(ilst) = mdta_meta(moov).and_then(|meta| find_child(meta, b"ilst")) else {
             return Self {
                 by_kind: HashMap::new(),
             };
         };
         let mut by_kind: HashMap<[u8; 4], Vec<&BoxSpan>> = HashMap::new();
         for item in &ilst.children {
+            // The pass itself, counted where it happens: the one walk the name
+            // of [`a_key_named_in_hundreds_of_positions_is_written_in_one_pass`]
+            // is about. An index rebuilt inside the per-key loop never comes
+            // through here once — it comes through once per key position — and
+            // the count says so, where the items the collectors are handed
+            // (counted in [`Self::items`]) would not: each key position names
+            // exactly one item, so a per-position rebuild hands out the same
+            // total either way.
+            #[cfg(test)]
+            ITEMS_INDEXED.with(|indexed| indexed.set(indexed.get() + 1));
             by_kind.entry(item.kind).or_default().push(item);
         }
         Self { by_kind }
@@ -1228,8 +1299,11 @@ impl MoovEdit {
 /// the file is opened for writing, and the write itself is a single `write_all`
 /// of the `moov` region, which is verified against the bytes it was measured
 /// from, put back if it fails, and given its modification time back either way
-/// ([`write_moov_region`]). No byte outside `moov` is ever touched, and the file
-/// is never truncated or grown.
+/// ([`write_moov_region`]). The fingerprint is read back off the path after the
+/// write, and a readback that fails puts the region back the same way
+/// ([`rollback_written_region`]) — so every `Err` out of this function means no
+/// byte changed. No byte outside `moov` is ever touched, and the file is never
+/// truncated or grown.
 ///
 /// An instant no box in the container carries is refused, the way a position
 /// without a carrier is ([`Mp4MetadataError::NoLocationCarrier`]): a save that
@@ -1263,12 +1337,24 @@ pub fn write_metadata(
     let original_moov = read_moov(&mut source, moov_offset, moov_size)?;
     drop(source);
     let patched = patch_moov(&original_moov, edit)?;
+    // The undo token is built before the region is replaced, because it is also
+    // what puts the region back when the fingerprint readback behind the write
+    // fails ([`rollback_written_region`]): every `Err` out of this function has
+    // to mean no byte changed.
+    let undo = UndoToken {
+        path: path.to_path_buf(),
+        moov_offset,
+        moov_bytes: original_moov,
+        edit: *edit,
+        modified: original_modified,
+        file_len: original_metadata.len(),
+    };
 
     // An edit that names no value is answered from the file as it is: the
     // replacement is still rendered and length-checked above, so a container
     // that cannot hold it is refused as it is for a real edit, but the file is
     // never opened for writing.
-    if requests_a_write(edit) {
+    let mut target = if requests_a_write(edit) {
         let mut target = OpenOptions::new()
             .read(true)
             .write(true)
@@ -1277,34 +1363,92 @@ pub fn write_metadata(
         write_moov_region(
             &mut target,
             moov_offset,
-            &original_moov,
+            &undo.moov_bytes,
             &patched,
             original_modified,
             path,
         )?;
-        drop(target);
-    }
+        Some(target)
+    } else {
+        None
+    };
 
+    let fingerprint = match fingerprint_after_write(path) {
+        Ok(fingerprint) => fingerprint,
+        Err(err) => {
+            // Nothing was written when the request named no value, so only a
+            // save that opened the file for writing has a region to put back.
+            return Err(match target.as_mut() {
+                Some(target) => rollback_written_region(target, &undo, err),
+                None => err,
+            });
+        }
+    };
+    Ok(VideoMetadataWrite { fingerprint, undo })
+}
+
+/// The fingerprint a save hands back: the length and clock of the file the
+/// write closed, read from the path.
+///
+/// The clock is truncated to whole seconds — the resolution the change detection
+/// stores — and `None` from that truncation would mean the filesystem could not
+/// store what it stored a moment ago, which is not a fingerprint this module can
+/// report either. Either way the caller has to roll the region back: see
+/// [`rollback_written_region`].
+fn fingerprint_after_write(path: &Path) -> Result<Fingerprint, Mp4MetadataError> {
+    // A test drives the save's rollback by failing the readback the way a stat
+    // whose path is gone does; no other build carries the hook.
+    #[cfg(test)]
+    if FAIL_NEXT_FINGERPRINT.with(|fail| fail.replace(false)) {
+        return Err(Mp4MetadataError::Io(std::io::Error::other(
+            "the fingerprint readback was made to fail",
+        )));
+    }
     let written = std::fs::metadata(path).map_err(Mp4MetadataError::Io)?;
-    Ok(VideoMetadataWrite {
-        fingerprint: Fingerprint {
-            file_size: written.len(),
-            // The clock the guard above accepted, read back from the file the
-            // write closed: `None` now would mean the filesystem could not
-            // store what it stored a moment ago, which is not a fingerprint
-            // this can report either.
-            file_modified: truncate_to_seconds(written.modified().map_err(Mp4MetadataError::Io)?)
-                .ok_or(Mp4MetadataError::Unrepresentable("modification time"))?,
-        },
-        undo: UndoToken {
-            path: path.to_path_buf(),
-            moov_offset,
-            moov_bytes: original_moov,
-            edit: *edit,
-            modified: original_modified,
-            file_len: original_metadata.len(),
-        },
+    Ok(Fingerprint {
+        file_size: written.len(),
+        file_modified: truncate_to_seconds(written.modified().map_err(Mp4MetadataError::Io)?)
+            .ok_or(Mp4MetadataError::Unrepresentable("modification time"))?,
     })
+}
+
+/// Puts a replaced `moov` region back after the fingerprint readback that
+/// follows a write failed, and answers with `readback`.
+///
+/// The region is the one thing this function writes *after* the module's own
+/// pre-write decisions, and the stat that follows it is the one refusal on the
+/// way out that is not decided before a byte is written: a path another process
+/// renamed or deleted inside that window, an I/O error, a share that dropped. It
+/// used to return without putting the region back, so the client was told the
+/// save failed while the file held the new instant and position — no
+/// `UndoToken` was ever handed out to take it back, and because the write
+/// preserves the file's length and modification time the next scan found the
+/// row's fingerprint matching, skipped the file, and never repaired the split.
+///
+/// So the region is put back with the same write an undo performs
+/// ([`restore_region`], over the token the write built), and the modification
+/// time with it. A rollback that fails too is the one outcome the file does not
+/// survive intact, and it is reported the way a failed undo's is: the client has
+/// to know the region is a mix of the two.
+fn rollback_written_region(
+    target: &mut File,
+    token: &UndoToken,
+    readback: Mp4MetadataError,
+) -> Mp4MetadataError {
+    match restore_region(target, token) {
+        Ok(()) => readback,
+        Err(rollback) => {
+            log::error!(
+                "could not put the moov region of {} back after its fingerprint could not be \
+                 read ({rollback}); the file may be damaged and will be re-examined on the next \
+                 scan",
+                token.path.display()
+            );
+            Mp4MetadataError::Io(std::io::Error::other(format!(
+                "{readback}; the moov region could not be put back ({rollback})"
+            )))
+        }
+    }
 }
 
 /// True when `edit` asks for a value to be written at all.
@@ -2485,7 +2629,15 @@ impl Padding {
 
     fn collect(&mut self, span: &BoxSpan) {
         if is_padding(&span.kind) {
+            // A padding box is dropped whole by the rebuild (`emit_children`
+            // skips it and its bytes are re-emitted as one filler box), so its
+            // own size is all it offers. Walking into it would count a padding
+            // box nested inside it twice — the payload of an `ilst` child is
+            // parsed as boxes, so a `free` box holding another `free` is a tree
+            // a real file can have — and a save would then be refused for
+            // growth the file's padding does not actually cover.
             self.total += span.size;
+            return;
         }
         for child in &span.children {
             self.collect(child);
@@ -2657,6 +2809,186 @@ mod tests {
             Some("2024-05-01T10:00:00+0200")
         );
         assert_eq!(m.creation_time, None); // mvhd creation_time is 0 in this fixture
+    }
+
+    #[test]
+    fn resolves_the_mdta_pair_a_moov_holds_directly() {
+        // Apple writes the movie-level mdta pair as a direct child of `moov`
+        // (`moov/meta/keys`, `moov/meta/ilst`) — the placement QTFF states for a
+        // movie atom, and the one a measured iPhone `.MOV` carries, with no
+        // `udta` at all. A reader that only knows `moov/udta/meta/...` reports a
+        // file carrying both a position and an instant as carrying neither: the
+        // scan indexes the video with no coordinates, a location save is refused
+        // `NoLocationCarrier`, and a date save leaves the mdta carrier holding
+        // the previous instant while it patches only `mvhd`/`tkhd`/`mdhd`.
+        let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags (the ISO form)
+        meta_body.extend_from_slice(&mdta_hdlr());
+        meta_body.extend_from_slice(&keys_box(&[
+            MDTA_LOCATION_KEYS[0],
+            MDTA_CREATION_DATE_KEYS[0],
+        ]));
+        let mut ilst = text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/");
+        ilst.extend_from_slice(&text_item_box(
+            &2u32.to_be_bytes(),
+            b"2024-05-01T10:00:00+0200",
+        ));
+        meta_body.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        let (_dir, path) = synthetic_file_with_udta(&box_bytes(&META_BOX, &meta_body), 0);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.location_iso6709.as_deref(),
+            Some("+48.2082+016.3737/"),
+            "the position a direct `moov/meta` carries has to reach the reader"
+        );
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "and so does the instant its `keys`/`ilst` pair names"
+        );
+
+        // And the save lands in those carriers, not only in the header fields:
+        // the writer resolves the pair through the same lookup, so what the
+        // reader reports back is the value the save wrote.
+        let before = fs::read(&path).unwrap();
+        let out = write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+                latitude: Some(48.25),
+                longitude: Some(16.5),
+            },
+        )
+        .unwrap();
+        assert_eq!(out.fingerprint.file_size, before.len() as u64);
+        let after = read_metadata(&path).unwrap();
+        assert_eq!(
+            after.location_iso6709.as_deref(),
+            Some("+48.2500+016.5000/"),
+            "the save has to patch the direct `moov/meta` location carrier"
+        );
+        assert_eq!(
+            after.creation_date_text.as_deref(),
+            // Rendered in the carrier's own shape: 03:04:05 UTC in a +0200 text.
+            Some("2025-01-02T05:04:05+0200"),
+            "and the direct `moov/meta` date carrier"
+        );
+    }
+
+    #[test]
+    fn the_direct_moov_meta_pair_wins_when_a_file_carries_both() {
+        // A file may carry both placements. The direct `moov/meta` pair is the
+        // one resolved — and, because the writer resolves through the same
+        // lookup, the one a save patches — so the pair the reader answers from
+        // and the pair the writer rewrites can never be two different pairs.
+        let mut direct_body = vec![0u8, 0, 0, 0]; // version + flags
+        direct_body.extend_from_slice(&mdta_hdlr());
+        direct_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        direct_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/"),
+        ));
+        let mut udta_body = vec![0u8, 0, 0, 0]; // version + flags
+        udta_body.extend_from_slice(&mdta_hdlr());
+        udta_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        udta_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"+49.3717+017.2082/"),
+        ));
+        let mut udta = box_bytes(&META_BOX, &direct_body);
+        udta.extend_from_slice(&box_bytes(b"udta", &box_bytes(&META_BOX, &udta_body)));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 16);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.location_iso6709.as_deref(),
+            Some("+48.2082+016.3737/"),
+            "the direct `moov/meta` pair is the one that wins"
+        );
+
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(48.25),
+                longitude: Some(16.5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+48.2500+016.5000/"),
+            "the save patches the pair the reader resolved"
+        );
+    }
+
+    #[test]
+    fn a_direct_meta_carrying_no_pair_falls_back_to_the_udta_one() {
+        // A `meta` box is legal with nothing but its mandatory `hdlr` — the body
+        // this module's own fixtures write in front of their `keys`/`ilst` — so
+        // a container can carry a direct `moov/meta` that holds no pair at all
+        // beside the `moov/udta/meta` pair ffmpeg and older writers produce.
+        // Choosing the placement by the box rather than by the pair resolves the
+        // empty one: the `©xyz` item one level down is never opened, so the read
+        // reports no position and no instant, a location save is refused
+        // `NoLocationCarrier` although the file carries a carrier (FR-005), and a
+        // date save patches `mvhd`/`tkhd`/`mdhd` while leaving the `©day` item
+        // behind at the previous instant.
+        let mut udta_body = vec![0u8, 0, 0, 0]; // version + flags (the ISO form)
+        udta_body.extend_from_slice(&mdta_hdlr());
+        udta_body.extend_from_slice(&keys_box(&[
+            MDTA_LOCATION_KEYS[0],
+            MDTA_CREATION_DATE_KEYS[0],
+        ]));
+        let mut ilst = text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/");
+        ilst.extend_from_slice(&text_item_box(
+            &2u32.to_be_bytes(),
+            b"2024-05-01T10:00:00+0200",
+        ));
+        udta_body.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        // The direct `moov/meta` carries its `hdlr` and nothing else.
+        let mut direct_body = vec![0u8, 0, 0, 0];
+        direct_body.extend_from_slice(&mdta_hdlr());
+        let mut udta = box_bytes(&META_BOX, &direct_body);
+        udta.extend_from_slice(&box_bytes(b"udta", &box_bytes(&META_BOX, &udta_body)));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 16);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.location_iso6709.as_deref(),
+            Some("+48.2082+016.3737/"),
+            "the pair the direct `meta` cannot answer for is one level down"
+        );
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "and so is the instant its `keys`/`ilst` pair names"
+        );
+
+        // The save resolves the pair through the same lookup, so it patches the
+        // carriers the reader answered from and leaves nothing behind at the
+        // previous instant.
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+                latitude: Some(48.25),
+                longitude: Some(16.5),
+            },
+        )
+        .unwrap();
+        let after = read_metadata(&path).unwrap();
+        assert_eq!(
+            after.location_iso6709.as_deref(),
+            Some("+48.2500+016.5000/"),
+            "the save has to patch the `udta` placement's location carrier"
+        );
+        assert_eq!(
+            after.creation_date_text.as_deref(),
+            // Rendered in the carrier's own shape: 03:04:05 UTC in a +0200 text.
+            Some("2025-01-02T05:04:05+0200"),
+            "and the `udta` placement's date carrier"
+        );
     }
 
     #[test]
@@ -3102,29 +3434,35 @@ mod tests {
 
     #[test]
     fn a_keys_box_names_only_what_it_can_hold() {
-        // The entry count of `moov/udta/meta/keys` is a field in the file, and an
+        // The entry count of a `keys` box is a field in the file, and an
         // entry costs as little as eight bytes, so a count walked as it reads is
         // a `String` per eight bytes of `moov` — on every read of every video on
         // every scan, on top of what the 64 MiB region already costs. The walk
         // is bounded by what the box holds and by the number of names an `ilst`
         // could index at all.
-        let keys_declaring = |entries: usize| {
+        // The entries of one `keys` box, as raw bytes, so a case can splice a
+        // malformed entry among the well-formed ones.
+        let keys_of = |declared: u32, entries: &[Vec<u8>]| {
             let mut body = vec![0u8, 0, 0, 0]; // version + flags
-            body.extend_from_slice(&u32::MAX.to_be_bytes()); // entry count
-            for _ in 0..entries {
-                // The smallest entry there is: a size covering itself and the
-                // namespace, and no key bytes behind it.
-                body.extend_from_slice(&box_bytes(b"mdta", &[]));
+            body.extend_from_slice(&declared.to_be_bytes()); // entry count
+            for entry in entries {
+                body.extend_from_slice(entry);
             }
             let mut meta = vec![0u8, 0, 0, 0]; // version + flags
             meta.extend_from_slice(&box_bytes(b"keys", &body));
             box_bytes(b"moov", &box_bytes(b"udta", &box_bytes(b"meta", &meta)))
         };
-        let names = |entries: usize| {
-            let bytes = keys_declaring(entries);
-            let tree = parse_box_tree(&bytes, 0, bytes.len(), &[]).unwrap();
-            mdta_keys(&bytes, tree.first().unwrap())
+        let keys_declaring = |entries: usize| {
+            // The smallest entry there is: a size covering itself and the
+            // namespace, and no key bytes behind it.
+            let packed = vec![box_bytes(b"mdta", &[]); entries];
+            keys_of(u32::MAX, &packed)
         };
+        let names_of = |bytes: &[u8]| {
+            let tree = parse_box_tree(bytes, 0, bytes.len(), &[]).unwrap();
+            mdta_keys(bytes, tree.first().unwrap())
+        };
+        let names = |entries: usize| names_of(&keys_declaring(entries));
 
         // GIVEN a box that declares `u32::MAX` entries over three of them
         assert_eq!(
@@ -3139,6 +3477,32 @@ mod tests {
             MAX_MDTA_KEYS,
             "the walk stops at the name budget, not at the declared count"
         );
+
+        // AND one whose entries are malformed: the per-entry guard is what
+        // keeps the walk's name slice inside the box. An entry declaring a size
+        // below `MIN_MDTA_ENTRY_BYTES` would slice its name from past its own
+        // end — `&buf[offset + 8..offset + 4]` panics — and one declaring more
+        // bytes than the box holds would read the following box's bytes as a
+        // name, or run off the buffer (which is where this box ends). Both stop
+        // the walk at the malformed entry rather than take the reader down, and
+        // the entries the box really holds are still named.
+        let well_formed = || box_bytes(b"mdta", &[]);
+        let declaring = |size: u32| {
+            let mut entry = size.to_be_bytes().to_vec();
+            entry.extend_from_slice(b"mdta");
+            entry
+        };
+        for (shape, size) in [("undersized", 4u32), ("overlong", 4096u32)] {
+            let bytes = keys_of(
+                3,
+                &[well_formed(), declaring(size), well_formed(), well_formed()],
+            );
+            assert_eq!(
+                names_of(&bytes).len(),
+                1,
+                "the walk stops at the {shape} entry instead of slicing past it"
+            );
+        }
 
         // The read that pays for it: a file carrying that box still answers, and
         // the eight-byte entries it is packed with are not a date.
@@ -3920,6 +4284,66 @@ mod tests {
         // 24 - 17 = 7 and 24 - 25 = -1: no box fits, and there is no room.
         assert!(matches!(rebuilt(17), Err(Mp4MetadataError::NoRoom("test"))));
         assert!(matches!(rebuilt(25), Err(Mp4MetadataError::NoRoom("test"))));
+    }
+
+    #[test]
+    fn a_padding_box_holding_another_prices_the_growth_once() {
+        // A rebuild drops a padding box whole — its bytes are re-emitted as the
+        // one filler box the growth leaves behind — so only the box's own size
+        // pays for a growth. Walking into it counts a padding box nested inside
+        // it a second time, and the filler is then priced from the inflated
+        // total: the rebuild emits a `moov` longer than the original and
+        // `patch_moov` refuses a save whose growth the file's own padding does
+        // cover. A padding box only gains children where its enclosing box is an
+        // `ilst` — `free`/`skip` are not containers, so the pair has to sit
+        // inside the item list for the nested box to be parsed at all — which is
+        // why no other fixture reaches this branch.
+        let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags
+        meta_body.extend_from_slice(&mdta_hdlr());
+        meta_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        let mut ilst = text_item_box(&1u32.to_be_bytes(), b"+8.2082+016.3737/");
+        // An 8-byte `free` inside a 16-byte one inside a 24-byte one: the
+        // 24-byte box is the padding, and the 16 bytes it holds are part of
+        // those bytes, not padding of their own.
+        ilst.extend_from_slice(&box_bytes(b"free", &box_bytes(b"free", &[0u8; 8])));
+        meta_body.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        let (_dir, path) =
+            synthetic_file_with_udta(&box_bytes(b"udta", &box_bytes(&META_BOX, &meta_body)), 0);
+        let before = fs::read(&path).unwrap();
+
+        // The file's padding is the boxes a rebuild drops — the 24-byte one
+        // inside the item list and the 8-byte one the skeleton appended.
+        let tree = parse_box_tree(&before, 0, before.len(), &[]).unwrap();
+        let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+        assert_eq!(
+            Padding::of(moov).total,
+            8 + 24,
+            "the padding is the boxes themselves, the one inside the other included"
+        );
+        assert_eq!(trailing_free_box_size(&before), 8);
+
+        // WHEN: a save needs one byte more than its slot holds — the render
+        // "+52.5200+013.4050/" is 18 bytes where the stored 17 are — and the
+        // 24-byte padding box covers that.
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(52.52),
+                longitude: Some(13.405),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // THEN: the save landed, the `moov` kept its length, and the filler is
+        // the 32 bytes of padding less the one the growth took.
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after.len(), before.len(), "the file length is unchanged");
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+52.5200+013.4050/")
+        );
+        assert_eq!(trailing_free_box_size(&after), 31);
     }
 
     #[test]
@@ -4816,14 +5240,12 @@ mod tests {
     #[test]
     fn a_key_named_in_hundreds_of_positions_is_written_in_one_pass() {
         // The same container as the read path's one-pass case, saved rather than
-        // read: the writer resolved its carriers the same way — the whole item
-        // list rescanned once per named position — and a save pays it twice
-        // over, because `restore_region` renders the same region again to
-        // check what the first render wrote. For this file that is a quarter of
-        // a million comparisons to land one instant, and a file ten times this
-        // size two and a half million. The index is built in a single pass over
-        // the items and shared by both collectors, so the cost is bounded by
-        // the file rather than by its square.
+        // read: the writer resolved its carriers by rescanning the whole item
+        // list once per named position, and the shared index replaced that with
+        // one build both collectors read by hash probe. For this file the
+        // rescanning version is a quarter of a million comparisons to land one
+        // instant, and a file ten times this size two and a half million. The
+        // cost of the index is bounded by the file rather than by its square.
         const POSITIONS: usize = 512;
         let names = vec![MDTA_CREATION_DATE_KEYS[0]; POSITIONS];
         let mut meta_body = vec![0u8, 0, 0, 0]; // version + flags
@@ -4864,13 +5286,22 @@ mod tests {
             "every named position took the new instant"
         );
 
-        // And the resolution cost one pass over the item list. The count comes
-        // from the save that just ran and is taken where a collector reaches an
-        // item at all — the index's own door — not from a clock and not from an
-        // index the test builds for itself. A resolution that went back to
-        // walking the item list per named position would produce the very same
-        // file above while handing itself {POSITIONS}² items, and a wall clock
-        // would only say the work finished.
+        // And the resolution built one index over that list — the pass the cost
+        // argument rests on. The count comes from the save that just ran and is
+        // taken where the index is built, not where it is read: a resolution
+        // that rebuilt it inside the per-key loop hands out the same items
+        // (each key position here names exactly one of them, so {POSITIONS}
+        // either way) but comes through the build {POSITIONS} times, and a wall
+        // clock would only say the work finished.
+        assert_eq!(
+            take_items_indexed(),
+            POSITIONS,
+            "the save indexed the {POSITIONS} items once, not once per named position"
+        );
+        // And each carrier it resolved came through the index's own door, so
+        // the items were read once rather than rescanned per position: the same
+        // file above would come out of a per-position rescan too, but that
+        // resolution would hand itself {POSITIONS}² items.
         assert_eq!(
             take_carriers_resolved(),
             POSITIONS,
@@ -6100,6 +6531,16 @@ mod tests {
                     .unwrap()
                     .as_secs(),
             );
+        // The truncation the undo's comparison exists for has to be exercised
+        // here: on a filesystem that stores whole-second mtimes the token's own
+        // clock is already whole, so re-arming the file with `whole_seconds`
+        // changes nothing and an undo comparing raw `SystemTime`s would pass
+        // this test too. Skip where the premise cannot hold rather than report a
+        // tolerance the run never demonstrated.
+        if out.undo.modified == whole_seconds {
+            eprintln!("Skipping: this filesystem keeps whole-second mtimes");
+            return;
+        }
         // The clock is re-armed to whole seconds deliberately: the point of the
         // test is that the undo survives a stat the filesystem has already
         // rounded, and on a host that stores nanoseconds the file's own
@@ -6328,6 +6769,162 @@ mod tests {
             target.bytes, original,
             "and what is there is still not the original region either"
         );
+        // The clock moves with the damage, deliberately: the region could not be
+        // put back, so claiming the file is unchanged would hand the next scan a
+        // fingerprint it trusts for bytes that changed. The modification time
+        // therefore stays where the failed undo left it, exactly as a failed
+        // patch's does.
+        assert_eq!(
+            target.restored_modified, None,
+            "a file whose region was never put back must not claim to be unchanged"
+        );
+    }
+
+    #[test]
+    fn a_failed_fingerprint_readback_puts_the_region_back() {
+        // The fingerprint is the one thing `write_metadata` reads AFTER the
+        // region is replaced, and it reads it off the PATH: a stat that fails
+        // there — the path renamed or unlinked inside that window, an I/O error,
+        // a share that dropped — used to return without putting the region back.
+        // The client was told the save failed while the file held the new
+        // instant, no `UndoToken` was ever handed out, and because the write
+        // preserves the length and the clock the next scan found the row's
+        // fingerprint matching and never repaired the split. So an `Err` out of
+        // the save has to mean no byte changed, and this drives that rollback on
+        // a real file.
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let edit = date_edit();
+        let before = fs::read(&path).unwrap();
+        let (at, len) = locate_moov_in(&before).unwrap();
+        let original_moov = before[at..at + len].to_vec();
+        let token = UndoToken {
+            path: path.clone(),
+            moov_offset: at as u64,
+            moov_bytes: original_moov.clone(),
+            edit,
+            modified: fs::metadata(&path).unwrap().modified().unwrap(),
+            file_len: before.len() as u64,
+        };
+
+        // GIVEN: the write already happened — the region holds the patch
+        let patched = patch_moov(&original_moov, &edit).unwrap();
+        let mut target = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        target.seek(SeekFrom::Start(at as u64)).unwrap();
+        target.write_all(&patched).unwrap();
+        assert_ne!(fs::read(&path).unwrap(), before, "the region was replaced");
+
+        // WHEN: the fingerprint readback fails on the way out
+        let readback = Mp4MetadataError::Io(std::io::Error::other("the path is gone"));
+        let err = rollback_written_region(&mut target, &token, readback);
+
+        // THEN: the region is back, byte for byte, and the clock with it — and
+        // the caller still hears the readback's own error, not a clean answer.
+        // The clock is compared verbatim, not by whole seconds: the token's
+        // value came off this same filesystem a moment earlier, so it is
+        // representable here — and a rollback whose success path never restored
+        // the modification time would leave the file's mtime in the same whole
+        // second as the copy's on every run that does not cross a second
+        // boundary, which is nearly all of them.
+        assert!(matches!(err, Mp4MetadataError::Io(_)), "{err}");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "every Err out of the save has to mean no byte changed"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            token.modified,
+            "the write's clock has to go back with the region, verbatim"
+        );
+    }
+
+    #[test]
+    fn a_failed_fingerprint_readback_reports_a_rollback_it_could_not_run() {
+        // The one outcome the file does not survive intact, reported the way a
+        // failed undo's is: the caller has to know the region is a mix of the
+        // two, or "nothing was written" is answered over a file that changed.
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let edit = date_edit();
+        let before = fs::read(&path).unwrap();
+        let (at, len) = locate_moov_in(&before).unwrap();
+        let original_moov = before[at..at + len].to_vec();
+        let token = UndoToken {
+            path: path.clone(),
+            moov_offset: at as u64,
+            moov_bytes: original_moov.clone(),
+            edit,
+            modified: fs::metadata(&path).unwrap().modified().unwrap(),
+            file_len: before.len() as u64,
+        };
+        // The region is NOT the one the write left (something else claimed it),
+        // so the rollback refuses to graft the token's bytes onto it — and that
+        // refusal has to reach the caller.
+        let mut other = before.clone();
+        other[at + 4..at + 8].copy_from_slice(b"free");
+        fs::write(&path, &other).unwrap();
+
+        let readback = Mp4MetadataError::Io(std::io::Error::other("the path is gone"));
+        let mut target = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let err = rollback_written_region(&mut target, &token, readback);
+        assert!(
+            matches!(&err, Mp4MetadataError::Io(io) if io.to_string().contains("could not be put back")),
+            "{err}"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            other,
+            "the undo is not grafted onto a region that is not the token's"
+        );
+    }
+
+    #[test]
+    fn a_save_whose_readback_fails_leaves_no_byte_changed() {
+        // The same guarantee, at the one place able to produce the split state
+        // the rollback exists for: the SAVE itself. The readback is the last
+        // thing `write_metadata` does, and it reads the path rather than the
+        // handle the write closed, so a stat that fails there leaves the region
+        // patched with no `UndoToken` handed out — and because the write
+        // preserves the length and the clock, the next scan finds the row's
+        // fingerprint matching, skips the file, and never repairs it. Every
+        // `Err` out of the save therefore has to mean no byte changed, and this
+        // drives the save's own call site rather than `rollback_written_region`
+        // directly: reverting that call site to a bare `return err` has to fail
+        // here.
+        let (_dir, path) = temp_copy("clip.mp4", "test-data/test_video_with_date.mp4");
+        let before = fs::read(&path).unwrap();
+        let before_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        // WHEN: the region is written and the fingerprint readback behind it
+        // fails
+        FAIL_NEXT_FINGERPRINT.with(|fail| fail.set(true));
+        let err = write_metadata(&path, &date_edit()).unwrap_err();
+
+        // THEN: the region is back, byte for byte, and the clock with it, while
+        // the caller still hears the readback's own error.
+        assert!(
+            matches!(&err, Mp4MetadataError::Io(io) if io.to_string().contains("made to fail")),
+            "{err}"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "every Err out of the save has to mean no byte changed"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            before_mtime,
+            "the write's clock goes back with the region, verbatim"
+        );
+        // The flag was spent by the readback it was set for.
+        FAIL_NEXT_FINGERPRINT.with(|fail| assert!(!fail.get(), "the flag is spent, not sticky"));
     }
 
     #[cfg(unix)]
@@ -6690,6 +7287,17 @@ mod tests {
     /// thread last asked, and starts the count again.
     fn take_items_walked() -> usize {
         ITEMS_WALKED.with(|walked| walked.replace(0))
+    }
+
+    /// Answers how many `ilst` items a save indexed since this thread last
+    /// asked, and starts the count again.
+    ///
+    /// Counted at [`IlstIndex::of`] — the single shared build of the save path —
+    /// so a resolution that rebuilds the index per key position (the quadratic
+    /// cost the one-pass test exists to prevent) reports one walk per position
+    /// instead of one for the save.
+    fn take_items_indexed() -> usize {
+        ITEMS_INDEXED.with(|indexed| indexed.replace(0))
     }
 
     /// Answers how many `ilst` items a save's carrier resolution was handed

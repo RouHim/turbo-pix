@@ -5,6 +5,7 @@ use exif::{In, Tag, Value};
 use log::debug;
 
 use crate::mimetype_detector;
+use crate::mp4_metadata::{EARLIEST_SUPPORTED_UNIX_SECONDS, LATEST_SUPPORTED_UNIX_SECONDS};
 
 /// Metadata extracted from EXIF/video files
 /// This is the raw extraction layer - will be transformed into JSON for storage
@@ -563,7 +564,15 @@ impl MetadataExtractor {
                     .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
             })?;
 
-        if parsed.year() < 1990 {
+        // A creation time the app's date model does not support is not a date:
+        // the writer cannot represent anything outside the window, and a
+        // corrupt carrier (a `mvhd` claiming year 97411) must fall through to
+        // the file's next carrier instead of entering the date views — a single
+        // such value stretched the desktop timeline's model span to ~95,000
+        // years, leaving its decade ruler unreadable and unselectable.
+        if !(EARLIEST_SUPPORTED_UNIX_SECONDS..=LATEST_SUPPORTED_UNIX_SECONDS)
+            .contains(&parsed.timestamp())
+        {
             return None;
         }
 
@@ -1443,6 +1452,57 @@ mod tests {
 
         assert!(result.is_some(), "1990-01-01 should be accepted (boundary)");
         assert_eq!(result.unwrap().year(), 1990);
+    }
+
+    #[test]
+    fn test_parse_video_creation_time_rejects_dates_beyond_the_supported_range() {
+        // GIVEN: the app's latest supported instant and the values around it.
+        // A version-1 `mvhd` can encode any year; one claiming 97411 was seen
+        // in the wild and stretched the desktop timeline's model span to
+        // ~95,000 years, degenerating its decade ruler.
+        let at_ceiling = MetadataExtractor::parse_video_creation_time("2040-02-06T06:28:15Z");
+        let past_ceiling = MetadataExtractor::parse_video_creation_time("2040-02-06T06:28:16Z");
+        let absurd = MetadataExtractor::parse_video_creation_time("97411-06-05T04:49:24.000000Z");
+
+        // THEN: only instants the app's date model supports survive
+        assert!(
+            at_ceiling.is_some(),
+            "the ceiling itself is a supported date"
+        );
+        assert!(
+            past_ceiling.is_none(),
+            "one second past the ceiling is not a date"
+        );
+        assert!(
+            absurd.is_none(),
+            "a value the writer cannot represent is not a date"
+        );
+    }
+
+    #[test]
+    fn test_corrupt_format_creation_time_falls_through_to_the_stream_tag() {
+        // GIVEN: the shape of a Google-muxed file whose `mvhd` creation_time
+        // decodes to year 97411 while its audio stream carries the capture date
+        let json_str = r#"{
+            "format": { "tags": { "creation_time": "97411-06-05T04:49:24.000000Z" } },
+            "streams": [
+                { "tags": { "creation_time": "2016-11-26T20:48:07.000000Z" } }
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        // WHEN: the file's date is resolved from the ffprobe output
+        let taken_at = MetadataExtractor::extract_taken_at_from_ffprobe_json(&parsed);
+
+        // THEN: the corrupt carrier is skipped, not reported
+        assert_eq!(
+            taken_at,
+            Some(
+                "2016-11-26T20:48:07Z"
+                    .parse::<DateTime<Utc>>()
+                    .expect("fixture date is valid RFC 3339")
+            )
+        );
     }
 
     #[test]

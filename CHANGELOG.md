@@ -1,3 +1,10 @@
+## [2.47.3](https://github.com/RouHim/turbo-pix/compare/2.47.2...2.47.3) (2026-10-14)
+
+
+### Bug Fixes
+
+* **viewer:** keep long paths and filenames inside the detail panel ([937f29e](https://github.com/RouHim/turbo-pix/commit/937f29e4ad15caa9bb1176c1aa53f89e57fd4047))
+
 ## [2.47.2](https://github.com/RouHim/turbo-pix/compare/2.47.1...2.47.2) (2026-10-14)
 
 ## [2.47.1](https://github.com/RouHim/turbo-pix/compare/2.47.0...2.47.1) (2026-10-13)

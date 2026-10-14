@@ -585,7 +585,7 @@ pub async fn update_photo_metadata(
                 longitude: metadata_req.longitude,
             },
             &db_pool,
-            &facts,
+            Arc::clone(&facts),
         )
         .await;
     }
@@ -861,10 +861,12 @@ fn roll_back_container(
 /// The container half of a save: the instant the file carried before the write,
 /// the write, and the readback of what the file actually holds afterwards.
 ///
-/// Every blocking file operation a save performs lives here, in the order the
-/// row write's rollback needs them, so the caller can hand the whole thing to
-/// the blocking pool: the file is opened and its `moov` region read twice — up
-/// to 64 MiB — and a runtime worker must never sit in that. The edit lock is
+/// Every blocking file operation of this half of a save lives here, in the order
+/// the row write's rollback needs them, so the caller can hand the whole thing
+/// to the blocking pool: the file is opened and its `moov` region read twice —
+/// up to 64 MiB — and a runtime worker must never sit in that. The save's other
+/// blocking file work, the facts reload behind the row write, is handed to the
+/// same pool by the caller for the same reason. The edit lock is
 /// held by the calling task across the await, so the critical section is
 /// exactly as long as it was when these calls were inline.
 ///
@@ -929,10 +931,13 @@ fn patch_container(
 /// derived place name and the resolver gate. The date and the coordinates are
 /// NOT written to the row: they are file facts, served from
 /// [`MediaFactsIndex`], which is reloaded here so the response carries what the
-/// container now holds. A container that turns out to hold no date carrier is
-/// refused right after the write, with the file rolled back first. When the row
-/// write fails, the file is rolled back through the write's undo token, so a
-/// 500 never leaves the file changed without the row that describes it.
+/// container now holds. That reload reads the container (extraction plus a
+/// `moov` read), so it runs on the blocking pool like the patch above — only
+/// the in-memory enrichment stays on this task. A container that turns out to
+/// hold no date carrier is refused right after the write, with the file rolled
+/// back first. When the row write fails, the file is rolled back through the
+/// write's undo token, so a 500 never leaves the file changed without the row
+/// that describes it.
 ///
 /// A rollback that could not run is never the same answer as a clean one: the
 /// 422 becomes a 500 naming the failed rollback, because "nothing was written"
@@ -942,7 +947,7 @@ async fn apply_video_metadata_edit(
     mut photo: Photo,
     edit: VideoMetadataEdit,
     db_pool: &DbPool,
-    facts: &MediaFactsIndex,
+    facts: Arc<MediaFactsIndex>,
 ) -> Result<warp::reply::Json, Rejection> {
     // FR-013: an empty request must not rewrite the container. Nothing was
     // asked for, so the row comes back as it was read — enriched from the facts
@@ -1048,7 +1053,12 @@ async fn apply_video_metadata_edit(
             photo.file_path
         );
     }
-    photo.updated_at = Utc::now();
+    // One instant for the row and for the reply: the row is stamped with the
+    // same `updated_at` the response carries, so a client that compares them
+    // never sees the reply older than the save that committed it. A second
+    // `Utc::now()` inside the row write would be that older-by-a-hair reply.
+    let updated_at = Utc::now();
+    photo.updated_at = updated_at;
 
     // Only what the save wrote: the row may have taken a commit since it was
     // re-read, and a replacement of the whole document would revert it.
@@ -1062,18 +1072,46 @@ async fn apply_video_metadata_edit(
     // here, before the rollback's await below can hold this handler's future
     // across a non-`Send` value, which warp's `and_then` refuses to build a
     // route from.
-    let row_write = Photo::record_video_edit(db_pool, &photo.hash_sha256, position_moved, identity)
-        .await
-        .map_err(|error| error.to_string());
+    let row_write = Photo::record_video_edit(
+        db_pool,
+        &photo.hash_sha256,
+        position_moved,
+        identity,
+        updated_at,
+    )
+    .await
+    .map_err(|error| error.to_string());
 
     match row_write {
         Ok(()) => {
             // The container just changed and the row stores neither the date
             // nor the coordinates: re-read the file's facts so the response
-            // carries what it now holds.
-            facts.reload(&photo.file_path);
-            facts.enrich(&mut photo);
-            Ok(warp::reply::json(&photo))
+            // carries what it now holds. Reading them is container I/O — an
+            // extractor pass and a `moov` read — so it runs on the blocking
+            // pool, the same rule the patch above follows. Only the in-memory
+            // enrichment is left here.
+            let reload = tokio::task::spawn_blocking({
+                let facts = Arc::clone(&facts);
+                let path = photo.file_path.clone();
+                move || facts.reload(&path)
+            })
+            .await;
+            match reload {
+                Ok(_) => {
+                    facts.enrich(&mut photo);
+                    Ok(warp::reply::json(&photo))
+                }
+                Err(error) => {
+                    log::error!(
+                        "Video metadata facts reload task panicked for {}: {}",
+                        photo.file_path,
+                        error
+                    );
+                    Err(reject::custom(DatabaseError {
+                        message: "Failed to read back the video's metadata".to_string(),
+                    }))
+                }
+            }
         }
         Err(db_error) => {
             log::error!("Database error after a video metadata write: {}", db_error);
@@ -3376,7 +3414,7 @@ mod tests {
         .await
         .expect("trigger");
 
-        let facts = MediaFactsIndex::new();
+        let facts = Arc::new(MediaFactsIndex::new());
         let rejection = match apply_video_metadata_edit(
             photo,
             crate::mp4_metadata::VideoMetadataEdit {
@@ -3384,7 +3422,7 @@ mod tests {
                 ..Default::default()
             },
             &db_pool,
-            &facts,
+            Arc::clone(&facts),
         )
         .await
         {

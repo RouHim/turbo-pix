@@ -577,6 +577,12 @@ impl Photo {
     /// of the scan would correct a stale name left next to the new pin. A save
     /// that did not move the photo passes `false` and leaves both alone.
     ///
+    /// `updated_at` is the instant the caller stamps into the row. It is taken
+    /// once, by the caller, so the row and the response it hands back carry the
+    /// same instant: stamping a second `Utc::now()` here would leave the reply
+    /// behind the committed row, which says the save happened at a moment it
+    /// did not.
+    ///
     /// Fails when no row matched: `UPDATE ... WHERE hash_sha256 = ?` reports
     /// success even when it touched nothing, and a caller that already rewrote
     /// the container must not answer 200 while no row describes the file it
@@ -586,6 +592,7 @@ impl Photo {
         hash_sha256: &str,
         rearm_geo_resolution: bool,
         fingerprint: Option<(i64, DateTime<Utc>)>,
+        updated_at: DateTime<Utc>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (file_size, file_modified) = fingerprint
             .map(|(size, modified)| (size, modified.to_rfc3339()))
@@ -614,7 +621,7 @@ impl Photo {
         .bind(rearm_geo_resolution)
         .bind(file_size)
         .bind(&file_modified)
-        .bind(Utc::now().to_rfc3339())
+        .bind(updated_at.to_rfc3339())
         .bind(hash_sha256)
         .execute(&mut *tx)
         .await?;
@@ -2884,6 +2891,7 @@ pub(crate) mod tests {
             &hash,
             false,
             Some((snapshot.file_size, snapshot.date_modified)),
+            Utc::now(),
         )
         .await
         .expect("record");
@@ -2926,7 +2934,7 @@ pub(crate) mod tests {
             test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 48.2082, 16.3737)]);
 
         // WHEN: a save reports it moved the position
-        Photo::record_video_edit(&pool, &hash, true, Some(fingerprint))
+        Photo::record_video_edit(&pool, &hash, true, Some(fingerprint), Utc::now())
             .await
             .expect("record");
 
@@ -2969,7 +2977,7 @@ pub(crate) mod tests {
             test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 52.52, 13.405)]);
 
         // WHEN: a save reports no move
-        Photo::record_video_edit(&pool, &hash, false, Some(fingerprint))
+        Photo::record_video_edit(&pool, &hash, false, Some(fingerprint), Utc::now())
             .await
             .expect("record");
 

@@ -325,9 +325,12 @@ fn is_container(kind: &[u8; 4], enclosing: &[[u8; 4]]) -> bool {
 /// ISO-BMFF declares `meta` a FullBox, so its payload opens with a version/flags
 /// word and the first child header follows 4 bytes in. QuickTime omits that word
 /// and starts the payload with the child header itself. The payload is told
-/// apart by looking at it: the version/flags word of a real `meta` box is 0,
-/// which can never be a box's size field (no box is smaller than 8 bytes), so a
-/// plausible child header at the payload start means the QuickTime form.
+/// apart by looking at it: the version/flags word of a real `meta` box is 0 —
+/// a legal size field only for the "to the end of the enclosing box" form, so
+/// it proves nothing on its own — but the four bytes after it are the first
+/// child's size field, whose leading NUL bytes are not type bytes, so the type
+/// check of [`looks_like_box_header`] rejects an ISO payload start while a
+/// QuickTime child header there states its type directly and passes it.
 fn meta_children_offset(buf: &[u8], body: usize, end: usize) -> usize {
     if looks_like_box_header(buf, body, end) {
         0
@@ -338,11 +341,18 @@ fn meta_children_offset(buf: &[u8], body: usize, end: usize) -> usize {
 
 /// Whether a child box header starts at `offset`, within the region that ends
 /// at `end`.
+///
+/// A size field of 0 ("to the end of the enclosing box") and of 1 (the 64-bit
+/// `largesize` form, whose real size follows the type) are both legal encodings
+/// of a header, so they count as plausible here; only a declared size between
+/// the two — below the 8-byte header floor without naming either escape —
+/// rules the header out. Whether such a header really fits its region is
+/// [`parse_region`]'s judgement, not this predicate's.
 fn looks_like_box_header(buf: &[u8], offset: usize, end: usize) -> bool {
     if offset + 8 > end {
         return false;
     }
-    if size_field(buf, offset).is_none_or(|size| size < 8) {
+    if size_field(buf, offset).is_none_or(|size| size > 1 && size < 8) {
         return false;
     }
     buf.get(offset + 4..offset + 8)
@@ -626,11 +636,13 @@ fn mvhd_creation_time(
         .ok_or(Mp4MetadataError::InvalidDate)
 }
 
-/// The `meta` box a container's mdta `keys`/`ilst` pair hangs off.
+/// Every `meta` box at or below `moov` a read resolves values from and a save
+/// has to keep in step, in resolution order: the direct `moov/meta` placement
+/// first, then `moov/udta/meta`.
 ///
 /// QTFF states metadata "can be stored within a movie atom (`moov`), a track
-/// atom (`trak`) or a media atom (`mdia`)", and the movie-level pair is written
-/// in two placements by different writers: directly under the `moov`
+/// atom (`trak`) or a media atom (`mdia`)", and the movie-level mdta pair is
+/// written in two placements by different writers: directly under the `moov`
 /// (`moov/meta/keys` + `moov/meta/ilst`, the shape a measured iPhone `.MOV`
 /// carries, with no `udta` at all) and one level down under `udta`
 /// (`moov/udta/meta/keys` + `moov/udta/meta/ilst`, what ffmpeg and older
@@ -639,40 +651,34 @@ fn mvhd_creation_time(
 /// coordinate carrier becomes invisible to both the scan and a location save,
 /// and a date save leaves the mdta carrier holding the previous instant.
 ///
-/// A file may carry both placements; the direct `moov/meta` pair then wins, and
-/// the reader and the writer resolve through this one lookup, so the pair a
-/// value is read back from is exactly the pair a save patches.
+/// A container may carry BOTH placements, each with its own `keys`/`ilst` pair
+/// and its own items. A reader that resolves one of them, and a writer that
+/// patches only that one, leaves the other holding the previous value — bytes
+/// an independent reader concatenates (ffprobe reports the `udta` item beside
+/// the direct one), which is exactly the value FR-004 says no reader may
+/// observe after a save. Both sides walk this list: the reader answers from the
+/// first placement holding the value a field resolves to ([`text_carriers`]),
+/// and the writer patches every placement ([`collect_text_date_edits`],
+/// [`collect_location_edits`]) — so a value a save lands in is always one this
+/// reader resolves back.
 ///
-/// The placement is chosen by the pair it carries, not by the `meta` box being
-/// there at all: a `meta` box is legal with nothing but its mandatory `hdlr`
-/// (the body this module's own fixtures write in front of their pair), so a
-/// container whose direct `moov/meta` holds no pair at all — beside a
-/// `moov/udta/meta` pair one level down — would resolve to nothing, losing the
-/// pair a save is meant to patch. The direct box therefore wins only when it
-/// carries `keys` and `ilst`; otherwise the `udta` one does, and a container
-/// whose `meta` boxes both lack the pair is read through the direct one as it
-/// was before the placement was consulted at all.
-fn mdta_meta(moov: &BoxSpan) -> Option<&BoxSpan> {
-    let direct = find_child(moov, &META_BOX);
-    let under_udta = find_path(moov, &[*b"udta", META_BOX]);
-    [direct, under_udta]
+/// A placement this list names but that carries no pair — a bare `meta` with
+/// nothing but its mandatory `hdlr` (the body this module's own fixtures write
+/// in front of their pair) — resolves to no key names and no items, and both
+/// sides skip it exactly the way they skip a placement whose `ilst` is empty:
+/// nothing it holds can answer, and the pair a save is meant to patch is the
+/// one the other placement carries.
+fn mdta_placements(moov: &BoxSpan) -> impl Iterator<Item = &BoxSpan> {
+    find_child(moov, &META_BOX)
         .into_iter()
-        .flatten()
-        .find(|meta| carries_mdta_pair(meta))
-        .or(direct.or(under_udta))
+        .chain(find_path(moov, &[*b"udta", META_BOX]))
 }
 
-/// Whether a `meta` box carries the mdta `keys`/`ilst` pair a value is resolved
-/// through — the only thing that makes one placement answer for a pair the
-/// other cannot (see [`mdta_meta`]).
-fn carries_mdta_pair(meta: &BoxSpan) -> bool {
-    find_child(meta, b"keys").is_some() && find_child(meta, b"ilst").is_some()
-}
-
-/// Key names of the container's mdta `keys` box (see [`mdta_meta`]), in file
-/// order: the value at position `n` is indexed by the item type `n + 1`.
-fn mdta_keys(buf: &[u8], moov: &BoxSpan) -> Vec<String> {
-    let Some(keys) = mdta_meta(moov).and_then(|meta| find_child(meta, b"keys")) else {
+/// Key names of one mdta placement's `keys` box (see [`mdta_placements`] for
+/// the placements a read and a save cover), in file order: the value at
+/// position `n` is indexed by the item type `n + 1`.
+fn mdta_keys(buf: &[u8], meta: &BoxSpan) -> Vec<String> {
+    let Some(keys) = find_child(meta, b"keys") else {
         return Vec::new();
     };
     let body = keys.offset + header_len(buf, keys.offset);
@@ -716,19 +722,20 @@ fn mdta_keys(buf: &[u8], moov: &BoxSpan) -> Vec<String> {
     names
 }
 
-/// One item of the container's mdta `ilst` (see [`mdta_meta`]).
+/// One item of the container's mdta `ilst` (see [`mdta_placements`]).
 struct ItemValue {
     /// The item type: an mdta key index or a `©`-prefixed legacy type.
     kind: [u8; 4],
     text: String,
 }
 
-/// Values of the container's mdta `ilst`, in file order.
+/// Values of one mdta placement's `ilst`, in file order (see
+/// [`mdta_placements`]).
 ///
 /// An item wraps a `data` box whose payload opens with a 4-byte type indicator
 /// and a 4-byte locale ahead of the value.
-fn ilst_items(buf: &[u8], moov: &BoxSpan) -> Vec<ItemValue> {
-    let Some(ilst) = mdta_meta(moov).and_then(|meta| find_child(meta, b"ilst")) else {
+fn ilst_items(buf: &[u8], meta: &BoxSpan) -> Vec<ItemValue> {
+    let Some(ilst) = find_child(meta, b"ilst") else {
         return Vec::new();
     };
     ilst.children
@@ -770,9 +777,9 @@ struct MdtaIndex {
 // thread-local so tests running in parallel never share a count, and separate
 // because the paths count different things — a read indexes the values it finds
 // ([`ITEMS_WALKED`], in [`MdtaIndex::of`]), a save builds its carrier index once
-// ([`ITEMS_INDEXED`], in [`IlstIndex::of`], the one pass either collector
-// shares) and is handed the items it resolves out of it ([`CARRIERS_RESOLVED`],
-// in [`IlstIndex::items`]).
+// per placement ([`ITEMS_INDEXED`], in [`IlstIndex::of`], the one pass either
+// collector shares) and is handed the items it resolves out of it
+// ([`CARRIERS_RESOLVED`], in [`IlstIndex::items`]).
 #[cfg(test)]
 thread_local! {
     static ITEMS_WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -828,9 +835,10 @@ impl MdtaIndex {
     }
 }
 
-/// The `ilst` items of a `moov`, indexed by the item type each of them
-/// carries — the writer's counterpart to [`MdtaIndex`], built in the same one
-/// pass and read by hash probe afterwards.
+/// The `ilst` items of one mdta placement, indexed by the item type each of
+/// them carries — the writer's counterpart to [`MdtaIndex`], built in the same
+/// one pass and read by hash probe afterwards. One index per placement a save
+/// covers (see [`mdta_carriers`]), shared by the collectors of that save.
 ///
 /// Resolving a carrier used to cost the key list times the item list: both
 /// collectors walked every named key position and rescanned the whole item
@@ -852,9 +860,10 @@ struct IlstIndex<'a> {
 }
 
 impl<'a> IlstIndex<'a> {
-    /// Indexes the items of `moov`'s `ilst`; an empty index when it holds none.
-    fn of(moov: &'a BoxSpan) -> Self {
-        let Some(ilst) = mdta_meta(moov).and_then(|meta| find_child(meta, b"ilst")) else {
+    /// Indexes the items of one `meta` placement's `ilst`; an empty index when
+    /// it holds none.
+    fn of(meta: &'a BoxSpan) -> Self {
+        let Some(ilst) = find_child(meta, b"ilst") else {
             return Self {
                 by_kind: HashMap::new(),
             };
@@ -1108,23 +1117,56 @@ fn iso6709_field(value: f64, degrees_width: usize) -> String {
 /// direct children and the `loci` pair — so a value a save lands in is always a
 /// value this reader resolves back, and an empty slot is skipped on both sides
 /// alike.
+///
+/// Every mdta placement [`mdta_placements`] covers is resolved, in the order
+/// that list yields them — the direct `moov/meta` pair first, then
+/// `moov/udta/meta` — so the pair a save lands in is one of the pairs this
+/// reader answers from. Resolving only the placement that wins would hand back
+/// a file whose other placement was patched: a container whose winning pair
+/// carries no carrier of the field asked for, beside a placement that does,
+/// would take the new value into a placement no read ever opens.
+///
+/// The carrier precedence is the kind's first and the placement's second: an
+/// mdta key value out of either placement beats a legacy item, which beats a
+/// direct `udta` child, which beats the `loci` pair — so where both placements
+/// carry a value the direct one still wins the read, exactly as it did when the
+/// reader resolved one placement.
 fn text_carriers(buf: &[u8], moov: &BoxSpan) -> (Option<String>, Option<String>) {
-    let keys = mdta_keys(buf, moov);
-    let items = ilst_items(buf, moov);
-    // Indexed once for both lookups below: the item list is the one that is
-    // worth walking once.
-    let index = MdtaIndex::of(&items);
-    let date = first_non_empty([
-        mdta_value(&index, &keys, &MDTA_CREATION_DATE_KEYS),
-        legacy_item_value(&items, &DAY_BOX),
-        direct_udta_value(buf, moov, &DAY_BOX),
-    ]);
-    let location = first_non_empty([
-        mdta_value(&index, &keys, &MDTA_LOCATION_KEYS),
-        legacy_item_value(&items, &XYZ_BOX),
-        direct_udta_value(buf, moov, &XYZ_BOX),
-        loci_location(buf, moov),
-    ]);
+    // One entry per placement: its key names, its items, and the index over
+    // them. The index is built once here and read by both lookups below — the
+    // item list is the one that is worth walking once, not once per key set.
+    let mut placements = Vec::new();
+    for meta in mdta_placements(moov) {
+        let keys = mdta_keys(buf, meta);
+        let items = ilst_items(buf, meta);
+        let index = MdtaIndex::of(&items);
+        placements.push((keys, items, index));
+    }
+    let date = first_non_empty(
+        placements
+            .iter()
+            .map(|(keys, _, index)| mdta_value(index, keys, &MDTA_CREATION_DATE_KEYS))
+            .chain(
+                placements
+                    .iter()
+                    .map(|(_, items, _)| legacy_item_value(items, &DAY_BOX)),
+            )
+            .chain([direct_udta_value(buf, moov, &DAY_BOX)]),
+    );
+    let location = first_non_empty(
+        placements
+            .iter()
+            .map(|(keys, _, index)| mdta_value(index, keys, &MDTA_LOCATION_KEYS))
+            .chain(
+                placements
+                    .iter()
+                    .map(|(_, items, _)| legacy_item_value(items, &XYZ_BOX)),
+            )
+            .chain([
+                direct_udta_value(buf, moov, &XYZ_BOX),
+                loci_location(buf, moov),
+            ]),
+    );
     (date, location)
 }
 
@@ -1263,8 +1305,33 @@ pub(crate) const EARLIEST_SUPPORTED_UNIX_SECONDS: i64 = 631_152_000; // 1990-01-
 /// stretch every date view to absurd ranges.
 pub(crate) const LATEST_SUPPORTED_UNIX_SECONDS: i64 = 2_212_122_495; // 2040-02-06T06:28:15Z
 
-/// FullBoxes whose payload opens with a creation (and modification) time.
-const TIME_BOXES: [[u8; 4]; 3] = [*b"mvhd", *b"tkhd", *b"mdhd"];
+/// The FullBoxes whose payload opens with a creation (and modification) time,
+/// each paired with the chain of ancestors from the walked `moov` down to the
+/// box it hangs off: a `mvhd` is a creation carrier as a direct child of that
+/// `moov`, a `tkhd` under a `trak` of it, an `mdhd` under a `trak`'s `mdia`.
+///
+/// The chain is half of the carrier, not just the parent kind. A file may spend
+/// any of those four characters on a box of its own — a QuickTime text atom
+/// under `udta` is one — and `is_container` parses every box named `moov` as a
+/// container wherever it sits, so a text atom inside a nested box that borrows
+/// that name would answer for the `mvhd` parent alone. Only the exact chain
+/// reaches the field a reader resolves, and a writer matching anything less
+/// rewrites bytes no reader resolves: the new instant lands in the offending
+/// box's body+4, and one whose payload is shorter than the field fails the
+/// whole save.
+const TIME_CARRIERS: [(&[[u8; 4]], [u8; 4]); 3] = [
+    (&[*b"moov"], *b"mvhd"),
+    (&[*b"moov", *b"trak"], *b"tkhd"),
+    (&[*b"moov", *b"trak", *b"mdia"], *b"mdhd"),
+];
+
+/// Whether a `kind` box at the end of the ancestor chain `carriers` — which
+/// starts at the walked `moov` and grows down — is one of [`TIME_CARRIERS`].
+fn is_time_carrier(kind: &[u8; 4], carriers: &[[u8; 4]]) -> bool {
+    TIME_CARRIERS
+        .iter()
+        .any(|(chain, carrier)| carrier == kind && *chain == carriers)
+}
 
 /// One region of the `moov` a carrier replaces, and what replaces it.
 ///
@@ -2164,6 +2231,31 @@ fn rebuild_moov(
     apply_edits(original, moov, carriers(original, moov, edit)?)
 }
 
+/// The carrier resolution of one mdta `keys`/`ilst` placement a save covers:
+/// the key names that placement carries and an index over its items.
+///
+/// One per placement ([`mdta_carriers`]), built once and shared by both
+/// collectors rather than rebuilt per key position.
+struct MdtaCarriers<'a> {
+    keys: Vec<String>,
+    ilst: IlstIndex<'a>,
+}
+
+/// The carrier resolution of every mdta placement a save has to keep in step
+/// ([`mdta_placements`]), in resolution order.
+///
+/// A placement the walk covers but that carries no pair resolves to no key
+/// names and no items, and both collectors skip it the way they skip a
+/// placement whose `ilst` is empty: nothing it holds can answer.
+fn mdta_carriers<'a>(buf: &[u8], moov: &'a BoxSpan) -> Vec<MdtaCarriers<'a>> {
+    mdta_placements(moov)
+        .map(|meta| MdtaCarriers {
+            keys: mdta_keys(buf, meta),
+            ilst: IlstIndex::of(meta),
+        })
+        .collect()
+}
+
 /// Every carrier this writer renders, as regions of `original`.
 ///
 /// The fixed-width creation fields, the text carriers a save has to keep in
@@ -2175,10 +2267,11 @@ fn rebuild_moov(
 /// location is ([`Mp4MetadataError::NoLocationCarrier`]): a save that rendered
 /// no date carrier would otherwise report an instant the file does not hold.
 ///
-/// The `ilst` index is built once here and shared: both collectors resolve
-/// their carriers against the same item list, and each building its own would
-/// walk that list twice over on a save carrying both values. A save that names
-/// no value resolves no carrier, so it never builds one.
+/// The mdta `keys`/`ilst` resolution is built once per placement here and
+/// shared: both collectors resolve their carriers against the same placements,
+/// and each building its own would walk the item lists twice over on a save
+/// carrying both values. A save that names no value resolves no carrier, so it
+/// never builds one.
 fn carriers(
     buf: &[u8],
     moov: &BoxSpan,
@@ -2188,12 +2281,12 @@ fn carriers(
     if edit.taken_at.is_none() && edit.latitude.is_none() {
         return Ok(edits);
     }
-    let ilst = IlstIndex::of(moov);
+    let placements = mdta_carriers(buf, moov);
     if let Some(taken_at) = edit.taken_at {
         let seconds = quicktime_seconds(taken_at).ok_or(Mp4MetadataError::InvalidDate)?;
         let dated = edits.len();
-        collect_time_edits(buf, moov, seconds, &mut edits, false)?;
-        collect_text_date_edits(buf, moov, &ilst, taken_at, &mut edits)?;
+        collect_time_edits(buf, moov, seconds, &mut edits, false, &mut Vec::new())?;
+        collect_text_date_edits(buf, moov, &placements, taken_at, &mut edits)?;
         if edits.len() == dated {
             return Err(Mp4MetadataError::Unrepresentable(DATE_CARRIER));
         }
@@ -2201,13 +2294,19 @@ fn carriers(
     // `validate_edit` has already refused a position whose pair is incomplete,
     // so a latitude here always has its longitude.
     if let (Some(latitude), Some(longitude)) = (edit.latitude, edit.longitude) {
-        collect_location_edits(buf, moov, &ilst, latitude, longitude, &mut edits)?;
+        collect_location_edits(buf, moov, &placements, latitude, longitude, &mut edits)?;
     }
     Ok(edits)
 }
 
 /// Collects the replacement of every text date carrier at or below `moov`: the
-/// mdta keys, the `©day` `ilst` item and the direct `udta/©day` child.
+/// mdta keys of every placement, the `©day` `ilst` item of every placement and
+/// the direct `udta/©day` child.
+///
+/// Every placement a file carries is walked, not only the one the reader
+/// resolves: an item left at the previous instant in the placement the reader
+/// did not pick is a value a third-party reader concatenating both placements
+/// still observes, which is what FR-004 forbids.
 ///
 /// All of them are rendered here, before anything is written, so that a carrier
 /// whose value cannot be read as a date — or that cannot hold the rendering —
@@ -2218,15 +2317,18 @@ fn carriers(
 fn collect_text_date_edits(
     buf: &[u8],
     moov: &BoxSpan,
-    ilst: &IlstIndex<'_>,
+    placements: &[MdtaCarriers<'_>],
     taken_at: DateTime<Utc>,
     edits: &mut Vec<MoovEdit>,
 ) -> Result<(), Mp4MetadataError> {
-    // A file with no `ilst` names every key in vain: reading the name list is
-    // the expensive half of resolving a carrier, and no item can answer.
-    if !ilst.is_empty() {
-        let keys = mdta_keys(buf, moov);
-        for (position, key) in keys.iter().enumerate() {
+    for carriers in placements {
+        // A placement with no `ilst` names every key in vain: reading the name
+        // list is the expensive half of resolving a carrier, and no item can
+        // answer.
+        if carriers.ilst.is_empty() {
+            continue;
+        }
+        for (position, key) in carriers.keys.iter().enumerate() {
             let Some(name) = MDTA_CREATION_DATE_KEYS
                 .iter()
                 .find(|name| **name == key.as_str())
@@ -2238,7 +2340,7 @@ fn collect_text_date_edits(
             let Ok(index) = u32::try_from(position + 1) else {
                 continue;
             };
-            for item in ilst.items(index.to_be_bytes()) {
+            for item in carriers.ilst.items(index.to_be_bytes()) {
                 let Some((start, end)) = item_text_slot(buf, item) else {
                     continue;
                 };
@@ -2247,7 +2349,7 @@ fn collect_text_date_edits(
                 }
             }
         }
-        for item in ilst.items(DAY_BOX) {
+        for item in carriers.ilst.items(DAY_BOX) {
             let Some((start, end)) = item_text_slot(buf, item) else {
                 continue;
             };
@@ -2283,8 +2385,15 @@ fn item_text_slot(buf: &[u8], item: &BoxSpan) -> Option<(usize, usize)> {
 }
 
 /// Collects the replacement of every location carrier the file holds: the mdta
-/// keys, the `©xyz` `ilst` item, the direct `udta/©xyz` child and the ISO/3GPP
-/// `udta/loci` pair.
+/// keys of every placement, the `©xyz` `ilst` item of every placement, the
+/// direct `udta/©xyz` child and the ISO/3GPP `udta/loci` pair.
+///
+/// Every placement a file carries is walked, not only the one the reader
+/// resolves: a carrier left at the previous position in the placement the
+/// reader did not pick is a value a third-party reader concatenating both
+/// placements still observes, which is what FR-004 forbids. The `loci` pair and
+/// the direct `udta` children sit outside every `meta`, so each of them is
+/// patched once.
 ///
 /// Every carrier is rendered — in its own shape, so they all end up naming the
 /// same position — or the whole save is refused. A carrier the reader skips
@@ -2294,17 +2403,20 @@ fn item_text_slot(buf: &[u8], item: &BoxSpan) -> Option<(usize, usize)> {
 fn collect_location_edits(
     buf: &[u8],
     moov: &BoxSpan,
-    ilst: &IlstIndex<'_>,
+    placements: &[MdtaCarriers<'_>],
     latitude: f64,
     longitude: f64,
     edits: &mut Vec<MoovEdit>,
 ) -> Result<(), Mp4MetadataError> {
     let mut carriers = 0usize;
-    // A file with no `ilst` names every key in vain: reading the name list is
-    // the expensive half of resolving a carrier, and no item can answer.
-    if !ilst.is_empty() {
-        let keys = mdta_keys(buf, moov);
-        for (position, key) in keys.iter().enumerate() {
+    for placement in placements {
+        // A placement with no `ilst` names every key in vain: reading the name
+        // list is the expensive half of resolving a carrier, and no item can
+        // answer.
+        if placement.ilst.is_empty() {
+            continue;
+        }
+        for (position, key) in placement.keys.iter().enumerate() {
             let Some(name) = MDTA_LOCATION_KEYS
                 .iter()
                 .find(|name| **name == key.as_str())
@@ -2316,7 +2428,7 @@ fn collect_location_edits(
             let Ok(index) = u32::try_from(position + 1) else {
                 continue;
             };
-            for item in ilst.items(index.to_be_bytes()) {
+            for item in placement.ilst.items(index.to_be_bytes()) {
                 let Some((start, end)) = item_text_slot(buf, item) else {
                     continue;
                 };
@@ -2326,7 +2438,7 @@ fn collect_location_edits(
                 }
             }
         }
-        for item in ilst.items(XYZ_BOX) {
+        for item in placement.ilst.items(XYZ_BOX) {
             let Some((start, end)) = item_text_slot(buf, item) else {
                 continue;
             };
@@ -2502,27 +2614,38 @@ fn direct_text_edit(
     Ok(Some(slot_edit(carrier, payload.start, replaced, content)))
 }
 
-/// Collects the replacement of every `mvhd`/`tkhd`/`mdhd` creation field at or
-/// below `span`, and of none inside an `ilst`.
+/// Collects the replacement of every creation field on the path a reader
+/// resolves it on, and of none off it.
 ///
-/// A creation field is a carrier on the path a reader resolves it on: a
-/// `moov`/`mvhd`, a `trak`/`tkhd`, a `mdia`/`mdhd`. An `ilst` child is not on
-/// one — it is a metadata item whose type is a four-character code, and any
-/// file may spend `mvhd` on one of its own. `is_container` parses every such
-/// item as a box, so a writer matching the name alone wrote the new instant
-/// into the item's body+4 — the type field of the `data` box the item is made
-/// of — rewriting bytes no reader resolves and leaving the item unreadable
-/// behind.
+/// A creation field is a carrier where its box hangs off the exact ancestor
+/// chain the field is read under (see [`TIME_CARRIERS`]): a `mvhd` as a direct
+/// child of the `moov` this walk starts at, a `tkhd` under one of its `trak`s,
+/// an `mdhd` under such a `trak`'s `mdia`. A box that merely borrows one of
+/// those names is not on such a chain. An `ilst` child is not on one — it is a
+/// metadata item whose type is a four-character code, and any file may spend
+/// `mvhd` on one of its own — and neither is any other box of that name a file
+/// carries elsewhere: a QuickTime text atom under `udta` named `mvhd` is one,
+/// and so is one inside a nested box that borrows the name `moov`, which
+/// `is_container` parses as a container wherever it sits. A writer matching
+/// anything less than the whole chain wrote the new instant into the offending
+/// box's body+4 — the value the box really holds, rewritten where no reader
+/// resolves it, or a refusal when the payload is shorter than the field.
+///
+/// `carriers` is the chain of ancestor types from the walked `moov` down to
+/// `span`'s parent, empty at the start of the walk; the boxes directly under
+/// the `moov` therefore see a chain of just `[moov]`.
 fn collect_time_edits(
     buf: &[u8],
     span: &BoxSpan,
     seconds: u32,
     edits: &mut Vec<MoovEdit>,
     in_item_list: bool,
+    carriers: &mut Vec<[u8; 4]>,
 ) -> Result<(), Mp4MetadataError> {
-    if !in_item_list && TIME_BOXES.contains(&span.kind) {
+    if !in_item_list && is_time_carrier(&span.kind, carriers) {
         edits.push(time_edit(buf, span, seconds)?);
     }
+    carriers.push(span.kind);
     for child in &span.children {
         collect_time_edits(
             buf,
@@ -2530,8 +2653,10 @@ fn collect_time_edits(
             seconds,
             edits,
             in_item_list || span.kind == *b"ilst",
+            carriers,
         )?;
     }
+    carriers.pop();
     Ok(())
 }
 
@@ -2559,8 +2684,8 @@ fn time_edit(buf: &[u8], span: &BoxSpan, seconds: u32) -> Result<MoovEdit, Mp4Me
     })
 }
 
-/// The name of one of [`TIME_BOXES`], as a failure names the carrier it could
-/// not fill. Only `mvhd`, `tkhd` and `mdhd` are ever passed.
+/// The name of one of [`TIME_CARRIERS`], as a failure names the carrier it
+/// could not fill. Only `mvhd`, `tkhd` and `mdhd` are ever passed.
 fn time_box_name(kind: &[u8; 4]) -> &'static str {
     if *kind == *b"mvhd" {
         "mvhd"
@@ -2885,24 +3010,39 @@ mod tests {
 
     #[test]
     fn the_direct_moov_meta_pair_wins_when_a_file_carries_both() {
-        // A file may carry both placements. The direct `moov/meta` pair is the
-        // one resolved — and, because the writer resolves through the same
-        // lookup, the one a save patches — so the pair the reader answers from
-        // and the pair the writer rewrites can never be two different pairs.
+        // A file may carry both placements. The reader resolves every one of
+        // them, and where both carry a value the direct `moov/meta` pair is the
+        // one that answers, so the pair a value is read back from is known and
+        // stable. The save patches BOTH of them: an independent reader that
+        // concatenates the placements — ffprobe does, reporting the `udta` item
+        // beside the direct one — would otherwise keep observing the previous
+        // value out of the placement the read did not answer from, which is
+        // exactly what FR-004 forbids. So this case is both "which pair wins
+        // the read" and "no placement keeps the previous value".
         let mut direct_body = vec![0u8, 0, 0, 0]; // version + flags
         direct_body.extend_from_slice(&mdta_hdlr());
-        direct_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
-        direct_body.extend_from_slice(&box_bytes(
-            b"ilst",
-            &text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/"),
+        direct_body.extend_from_slice(&keys_box(&[
+            MDTA_LOCATION_KEYS[0],
+            MDTA_CREATION_DATE_KEYS[0],
+        ]));
+        let mut direct_ilst = text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/");
+        direct_ilst.extend_from_slice(&text_item_box(
+            &2u32.to_be_bytes(),
+            b"2024-05-01T10:00:00+0200",
         ));
+        direct_body.extend_from_slice(&box_bytes(b"ilst", &direct_ilst));
         let mut udta_body = vec![0u8, 0, 0, 0]; // version + flags
         udta_body.extend_from_slice(&mdta_hdlr());
-        udta_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
-        udta_body.extend_from_slice(&box_bytes(
-            b"ilst",
-            &text_item_box(&1u32.to_be_bytes(), b"+49.3717+017.2082/"),
+        udta_body.extend_from_slice(&keys_box(&[
+            MDTA_LOCATION_KEYS[0],
+            MDTA_CREATION_DATE_KEYS[0],
+        ]));
+        let mut udta_ilst = text_item_box(&1u32.to_be_bytes(), b"+49.3717+017.2082/");
+        udta_ilst.extend_from_slice(&text_item_box(
+            &2u32.to_be_bytes(),
+            b"2020-01-01T00:00:00+0000",
         ));
+        udta_body.extend_from_slice(&box_bytes(b"ilst", &udta_ilst));
         let mut udta = box_bytes(&META_BOX, &direct_body);
         udta.extend_from_slice(&box_bytes(b"udta", &box_bytes(&META_BOX, &udta_body)));
         let (_dir, path) = synthetic_file_with_udta(&udta, 16);
@@ -2913,21 +3053,67 @@ mod tests {
             Some("+48.2082+016.3737/"),
             "the direct `moov/meta` pair is the one that wins"
         );
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "for the instant too"
+        );
 
         write_metadata(
             &path,
             &VideoMetadataEdit {
+                taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
                 latitude: Some(48.25),
                 longitude: Some(16.5),
-                ..Default::default()
             },
         )
         .unwrap();
+        let after = read_metadata(&path).unwrap();
         assert_eq!(
-            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            after.location_iso6709.as_deref(),
             Some("+48.2500+016.5000/"),
-            "the save patches the pair the reader resolved"
+            "the save patches the pair the reader answered from"
         );
+        assert_eq!(
+            after.creation_date_text.as_deref(),
+            // Rendered in the carrier's own shape: 03:04:05 UTC in a +0200 text.
+            Some("2025-01-02T05:04:05+0200"),
+            "and its date carrier"
+        );
+
+        // AND: the placement the read did not answer from holds the new value
+        // too — the previous one survives nowhere in the file, where an
+        // independent reader concatenating both placements would have found it.
+        let bytes = fs::read(&path).unwrap();
+        let tree = parse_box_tree(&bytes, 0, bytes.len(), &[]).unwrap();
+        let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+        let losing = find_path(moov, &[*b"udta", META_BOX]).unwrap();
+        let items = ilst_items(&bytes, losing)
+            .iter()
+            .map(|item| item.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            items,
+            vec![
+                "+48.2500+016.5000/".to_string(),
+                // Each placement keeps its own shape: the same instant in the
+                // `+0000` text the `udta` item already held.
+                "2025-01-02T03:04:05+0000".to_string()
+            ],
+            "the losing placement's items took the new value"
+        );
+        for stale in [
+            b"+49.3717+017.2082/".as_slice(),
+            b"+48.2082+016.3737/",
+            b"2020-01-01T00:00:00+0000",
+            b"2024-05-01T10:00:00+0200",
+        ] {
+            assert!(
+                !bytes.windows(stale.len()).any(|window| window == stale),
+                "the previous value {:?} survives the save",
+                String::from_utf8_lossy(stale)
+            );
+        }
     }
 
     #[test]
@@ -2996,6 +3182,200 @@ mod tests {
             // Rendered in the carrier's own shape: 03:04:05 UTC in a +0200 text.
             Some("2025-01-02T05:04:05+0200"),
             "and the `udta` placement's date carrier"
+        );
+    }
+
+    #[test]
+    fn a_location_in_the_losing_placement_is_read_back_after_a_save() {
+        // The direct `moov/meta` pair carries `keys` and `ilst`, so it is the
+        // placement the read wins — but this file's only location carrier is
+        // the `moov/udta/meta` pair one level down. Resolving the winning
+        // placement alone reads no position at all, while a save that walks
+        // every placement lands in the carrier no read opens: the previous
+        // value is gone from a file that was modified, and the scan and the
+        // read after the save both report no position — or, worse, whatever
+        // they resolved before it. The read and the write have to cover the
+        // same placements.
+        let mut direct_body = vec![0u8, 0, 0, 0]; // version + flags
+        direct_body.extend_from_slice(&mdta_hdlr());
+        direct_body.extend_from_slice(&keys_box(&[MDTA_CREATION_DATE_KEYS[0]]));
+        direct_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"2024-05-01T10:00:00+0200"),
+        ));
+        let mut udta_body = vec![0u8, 0, 0, 0]; // version + flags
+        udta_body.extend_from_slice(&mdta_hdlr());
+        udta_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        udta_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/"),
+        ));
+        let mut udta = box_bytes(&META_BOX, &direct_body);
+        udta.extend_from_slice(&box_bytes(b"udta", &box_bytes(&META_BOX, &udta_body)));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 16);
+
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+48.2082+016.3737/"),
+            "the only location carrier sits in the placement the read did not win"
+        );
+
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                latitude: Some(48.25),
+                longitude: Some(16.5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+48.2500+016.5000/"),
+            "the save that landed in that carrier has to be visible to the read back"
+        );
+        assert!(
+            !fs::read(&path)
+                .unwrap()
+                .windows(18)
+                .any(|window| window == b"+48.2082+016.3737/"),
+            "the previous position survives the save"
+        );
+    }
+
+    #[test]
+    fn a_date_in_the_losing_placement_is_read_back_and_left_nowhere_behind() {
+        // The same asymmetry on the date side: the pair the read wins carries
+        // `keys`, an `ilst` and a location, and the only date carrier sits in
+        // the other placement. Patching only the winning placement would report
+        // no instant at all after the save, from a file that holds the new one.
+        // Reading and patching the same placements leaves the new instant in
+        // every carrier the file has and the previous one in none of them.
+        let mut direct_body = vec![0u8, 0, 0, 0]; // version + flags
+        direct_body.extend_from_slice(&mdta_hdlr());
+        direct_body.extend_from_slice(&keys_box(&[MDTA_LOCATION_KEYS[0]]));
+        direct_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"+48.2082+016.3737/"),
+        ));
+        let mut udta_body = vec![0u8, 0, 0, 0]; // version + flags
+        udta_body.extend_from_slice(&mdta_hdlr());
+        udta_body.extend_from_slice(&keys_box(&[MDTA_CREATION_DATE_KEYS[0]]));
+        udta_body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"2024-05-01T10:00:00+0200"),
+        ));
+        let mut udta = box_bytes(&META_BOX, &direct_body);
+        udta.extend_from_slice(&box_bytes(b"udta", &box_bytes(&META_BOX, &udta_body)));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 16);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "the only date carrier sits in the placement the read did not win"
+        );
+        assert_eq!(read.location_iso6709.as_deref(), Some("+48.2082+016.3737/"));
+
+        write_metadata(
+            &path,
+            &VideoMetadataEdit {
+                taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Every placement, not only the one the read answers from: the instant
+        // the file came in with survives nowhere.
+        let after = fs::read(&path).unwrap();
+        assert!(
+            !after
+                .windows(24)
+                .any(|window| window == b"2024-05-01T10:00:00+0200"),
+            "a placement still holds the previous instant"
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().creation_date_text.as_deref(),
+            // Rendered in the carrier's own shape, `+0200` as the file had it.
+            Some("2025-01-02T05:04:05+0200"),
+            "the save has to be visible to the read back"
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().location_iso6709.as_deref(),
+            Some("+48.2082+016.3737/"),
+            "a date save leaves the location carriers alone"
+        );
+    }
+
+    #[test]
+    fn no_placement_carrying_the_value_still_refuses_the_save() {
+        // Two placements, each with its own pair — and neither of them a
+        // location carrier. Walking every placement must not turn "the file
+        // holds no location carrier" into "some placement exists, so the
+        // position can land somewhere": the save is refused the way it is for a
+        // single-placement file, and the file is left byte for byte.
+        let pair = |key: &str, item: &[u8]| {
+            let mut body = vec![0u8, 0, 0, 0]; // version + flags
+            body.extend_from_slice(&mdta_hdlr());
+            body.extend_from_slice(&keys_box(&[key]));
+            body.extend_from_slice(&box_bytes(
+                b"ilst",
+                &text_item_box(&1u32.to_be_bytes(), item),
+            ));
+            box_bytes(&META_BOX, &body)
+        };
+        let mut udta = pair(MDTA_CREATION_DATE_KEYS[0], b"2024-05-01T10:00:00+0200");
+        udta.extend_from_slice(&box_bytes(
+            b"udta",
+            &pair(MDTA_CREATION_DATE_KEYS[0], b"2024-05-01T10:00:00+0200"),
+        ));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 0);
+        let before = fs::read(&path).unwrap();
+
+        assert!(matches!(
+            write_metadata(
+                &path,
+                &VideoMetadataEdit {
+                    latitude: Some(48.25),
+                    longitude: Some(16.5),
+                    ..Default::default()
+                }
+            )
+            .unwrap_err(),
+            Mp4MetadataError::NoLocationCarrier
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "the refusal wrote nothing"
+        );
+
+        // And the other half of the same claim: a `moov` whose placements carry
+        // only location carriers, with no `mvhd`/`tkhd`/`mdhd` behind them, has
+        // no date carrier in any placement either.
+        let mut moov = pair(MDTA_LOCATION_KEYS[0], b"+48.2082+016.3737/");
+        moov.extend_from_slice(&box_bytes(
+            b"udta",
+            &pair(MDTA_LOCATION_KEYS[0], b"+48.2082+016.3737/"),
+        ));
+        let (_dir, path) = synthetic_file_with_moov(&moov, MoovSizeForm::Wide32);
+        let before = fs::read(&path).unwrap();
+
+        assert!(matches!(
+            write_metadata(
+                &path,
+                &VideoMetadataEdit {
+                    taken_at: Some("2025-01-02T03:04:05Z".parse().unwrap()),
+                    ..Default::default()
+                }
+            )
+            .unwrap_err(),
+            Mp4MetadataError::Unrepresentable(carrier) if carrier == DATE_CARRIER
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "the refusal wrote nothing"
         );
     }
 
@@ -3122,6 +3502,73 @@ mod tests {
         assert_eq!(
             tree[0].children.iter().map(|c| c.kind).collect::<Vec<_>>(),
             vec![*b"hdlr", *b"keys", *b"ilst"]
+        );
+    }
+
+    #[test]
+    fn a_quicktime_meta_whose_last_child_runs_to_its_end_is_read() {
+        // A QuickTime `meta` states no version/flags word, and a child may
+        // declare a size of 0: "to the end of the enclosing box", the header of
+        // a box that fills the rest of its parent. A single `ilst` holding the
+        // whole payload is exactly that. Reading the payload start as the ISO
+        // form started the walk 4 bytes into the `ilst` header, took its type
+        // bytes for a size field and failed the whole read.
+        let ilst = text_item_box(&DAY_BOX, b"2024-05-01T10:00:00+0200");
+        let udta = box_bytes(
+            b"udta",
+            &box_bytes(&META_BOX, &zero_sized_box(b"ilst", &ilst)),
+        );
+        let (_dir, path) = synthetic_file_with_udta(&udta, 0);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "the child header at the payload start is the QuickTime form"
+        );
+        assert_eq!(read.location_iso6709, None);
+    }
+
+    #[test]
+    fn a_quicktime_meta_whose_first_child_is_largesize_is_read() {
+        // The other legal header that does not state a length in its first four
+        // bytes: size 1, the 64-bit length behind the type. Its type bytes are
+        // where the predicate looks, so the form is still told apart — and
+        // `parse_region` then has to take the `largesize` path inside the meta.
+        let mut body = large_sized_box(b"hdlr", &mdta_hdlr()[8..]);
+        body.extend_from_slice(&keys_box(&[MDTA_CREATION_DATE_KEYS[0]]));
+        body.extend_from_slice(&box_bytes(
+            b"ilst",
+            &text_item_box(&1u32.to_be_bytes(), b"2024-05-01T10:00:00+0200"),
+        ));
+        let udta = box_bytes(b"udta", &box_bytes(&META_BOX, &body));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 0);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200")
+        );
+    }
+
+    #[test]
+    fn an_iso_meta_resolves_its_carriers_unchanged() {
+        // The same payload behind the ISO version/flags word: its 0 is a legal
+        // size field only for the "to the end of the enclosing box" form, but
+        // the bytes that follow it are the first child's size field — NULs,
+        // which no type check accepts — so the form is still the ISO one and
+        // the carriers resolve as before.
+        let ilst = text_item_box(&DAY_BOX, b"2024-05-01T10:00:00+0200");
+        let mut body = vec![0u8, 0, 0, 0]; // version + flags
+        body.extend_from_slice(&zero_sized_box(b"ilst", &ilst));
+        let udta = box_bytes(b"udta", &box_bytes(&META_BOX, &body));
+        let (_dir, path) = synthetic_file_with_udta(&udta, 0);
+
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(
+            read.creation_date_text.as_deref(),
+            Some("2024-05-01T10:00:00+0200"),
+            "the version/flags word is still skipped"
         );
     }
 
@@ -3468,7 +3915,9 @@ mod tests {
         };
         let names_of = |bytes: &[u8]| {
             let tree = parse_box_tree(bytes, 0, bytes.len(), &[]).unwrap();
-            mdta_keys(bytes, tree.first().unwrap())
+            let moov = tree.first().unwrap();
+            let meta = find_path(moov, &[*b"udta", META_BOX]).expect("the fixture carries a meta");
+            mdta_keys(bytes, meta)
         };
         let names = |entries: usize| names_of(&keys_declaring(entries));
 
@@ -3753,6 +4202,113 @@ mod tests {
             read_metadata(&path).unwrap().creation_date_text.as_deref(),
             Some("2024-07-04 12:00:00"),
             "the save still landed on the carrier the reader resolves"
+        );
+    }
+
+    #[test]
+    fn a_text_atom_named_like_a_time_box_is_not_a_creation_carrier() {
+        // The same claim as the test above, for a box outside the item list: a
+        // QuickTime text atom under `udta` may carry any four-character name,
+        // `mvhd` included, and `is_container` parses it as a box like any
+        // other. It is not on the path a reader resolves a creation field on
+        // (`mvhd_creation_time` reads a direct `moov` child, and a `tkhd` or an
+        // `mdhd` hangs off a `trak`/`mdia`), so a writer matching the name at
+        // any depth wrote the new instant into the atom's body+4 — its language
+        // code and the first bytes of its text, under a length field that then
+        // no longer counts them — and one whose payload is shorter than the
+        // field it would patch failed the whole save `InvalidDate`.
+        let text_atoms = [
+            // Short enough that the field the writer would patch does not fit:
+            // this one refused the save outright.
+            qt_text_atom(b"mvhd", b"v"),
+            qt_text_atom(b"tkhd", b"a track's name, not a track header"),
+            qt_text_atom(b"mdhd", b"a media header's name, not a media header"),
+        ]
+        .concat();
+        let (_dir, path) = synthetic_file_with_udta(&box_bytes(b"udta", &text_atoms), 0);
+        let before = fs::read(&path).unwrap();
+        let atoms: Vec<_> = {
+            let tree = parse_box_tree(&before, 0, before.len(), &[]).unwrap();
+            let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+            [*b"mvhd", *b"tkhd", *b"mdhd"]
+                .iter()
+                .map(|kind| {
+                    let atom = find_path(moov, &[*b"udta", *kind]).unwrap();
+                    atom.offset..atom.offset + atom.size
+                })
+                .collect()
+        };
+
+        write_metadata(&path, &date_edit()).unwrap();
+
+        let after = fs::read(&path).unwrap();
+        for atom in atoms {
+            assert_eq!(
+                &after[atom.clone()],
+                &before[atom],
+                "a box that borrows a time box's name off its path is not a carrier"
+            );
+        }
+        let taken_at = date_edit().taken_at.unwrap();
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .creation_time
+                .unwrap()
+                .to_rfc3339(),
+            "2024-07-04T12:00:00+00:00",
+            "the save landed on the real carriers"
+        );
+        assert_eq!(date_fields(&after).len(), 3, "mvhd + tkhd + mdhd");
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3,
+            "every real creation field took the instant"
+        );
+    }
+
+    #[test]
+    fn a_text_atom_named_like_a_time_box_under_a_nested_container_is_not_a_carrier() {
+        // The same claim one level deeper: `is_container` parses any box named
+        // `moov` as a container wherever it sits, so a text atom's parent kind
+        // alone can be made to say `moov` — `moov/udta/moov/mvhd` is a nested
+        // container a file may carry, and the `mvhd` inside it is a QuickTime
+        // text atom. Only the whole chain from the walked `moov` — `[udta,
+        // moov]` here, never `[moov]` — keeps the instant out of its text.
+        let atom = qt_text_atom(b"mvhd", b"a movie header's name, not a movie header");
+        let nested = box_bytes(b"moov", &atom);
+        let (_dir, path) = synthetic_file_with_udta(&box_bytes(b"udta", &nested), 0);
+        let before = fs::read(&path).unwrap();
+        let range = {
+            let tree = parse_box_tree(&before, 0, before.len(), &[]).unwrap();
+            let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
+            let atom = find_path(moov, &[*b"udta", *b"moov", *b"mvhd"]).unwrap();
+            atom.offset..atom.offset + atom.size
+        };
+
+        write_metadata(&path, &date_edit()).unwrap();
+
+        let after = fs::read(&path).unwrap();
+        assert_eq!(
+            &after[range.clone()],
+            &before[range],
+            "a text atom named like a time box in a nested container is not a carrier"
+        );
+        let taken_at = date_edit().taken_at.unwrap();
+        assert_eq!(date_fields(&after).len(), 3, "mvhd + tkhd + mdhd");
+        assert_eq!(
+            count_creation_times(&after, u64::from(quicktime_seconds(taken_at).unwrap())),
+            3,
+            "the real creation fields took the instant"
+        );
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .creation_time
+                .unwrap()
+                .to_rfc3339(),
+            "2024-07-04T12:00:00+00:00",
+            "the save landed on the real carriers"
         );
     }
 
@@ -5285,7 +5841,8 @@ mod tests {
         let after = fs::read(&path).unwrap();
         let tree = parse_box_tree(&after, 0, after.len(), &[]).unwrap();
         let moov = tree.iter().find(|span| span.kind == *b"moov").unwrap();
-        let written = ilst_items(&after, moov)
+        let udta_meta = find_path(moov, &[*b"udta", META_BOX]).unwrap();
+        let written = ilst_items(&after, udta_meta)
             .iter()
             .filter(|item| item.text == "2025-01-02T05:04:05+0200")
             .count();
@@ -7319,24 +7876,38 @@ mod tests {
         CARRIERS_RESOLVED.with(|resolved| resolved.replace(0))
     }
 
-    /// Creation-time field of every `mvhd`/`tkhd`/`mdhd` in a whole-file
-    /// buffer, as `(kind, offset, width)`.
+    /// Creation-time field of every creation carrier in a whole-file buffer, as
+    /// `(kind, offset, width)`.
+    ///
+    /// Matching the writer's own rule ([`TIME_CARRIERS`]), ancestor chain
+    /// included: a box that merely borrows the name of a creation carrier is
+    /// not one, so the fields a save patched are exactly the fields this
+    /// reports.
     fn date_fields(buf: &[u8]) -> Vec<([u8; 4], usize, usize)> {
-        fn walk(buf: &[u8], span: &BoxSpan, out: &mut Vec<([u8; 4], usize, usize)>) {
-            if TIME_BOXES.contains(&span.kind) {
+        fn walk(
+            buf: &[u8],
+            span: &BoxSpan,
+            carriers: &mut Vec<[u8; 4]>,
+            out: &mut Vec<([u8; 4], usize, usize)>,
+        ) {
+            if is_time_carrier(&span.kind, carriers) {
                 let body = span.offset + header_len(buf, span.offset);
                 let width = if buf[body] == 1 { 8 } else { 4 };
                 out.push((span.kind, body + 4, width));
             }
+            carriers.push(span.kind);
             for child in &span.children {
-                walk(buf, child, out);
+                walk(buf, child, carriers, out);
             }
+            carriers.pop();
         }
 
         let tree = parse_box_tree(buf, 0, buf.len(), &[]).unwrap();
         let mut out = Vec::new();
         for span in &tree {
-            walk(buf, span, &mut out);
+            // The walk the writer does starts at the `moov`, so a top-level box
+            // starts with an empty chain, exactly as the tree's root does.
+            walk(buf, span, &mut Vec::new(), &mut out);
         }
         out
     }
@@ -7978,6 +8549,28 @@ mod tests {
         let mut out = Vec::with_capacity(8 + body.len());
         out.extend_from_slice(&u32::try_from(8 + body.len()).unwrap().to_be_bytes());
         out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A box whose size field is 0: "to the end of the enclosing box", legal
+    /// for the last child of a container, and the header a QuickTime `meta` may
+    /// open with when that child is the whole of it.
+    fn zero_sized_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + body.len());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A box in the 64-bit `largesize` form: a size field of 1 with the real
+    /// length in the eight bytes behind the type.
+    fn large_sized_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + body.len());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(&u64::try_from(16 + body.len()).unwrap().to_be_bytes());
         out.extend_from_slice(body);
         out
     }

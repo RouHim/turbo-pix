@@ -433,6 +433,12 @@
     color: var(--text-primary);
     line-height: var(--leading-tight);
     letter-spacing: -0.02em;
+    /* A filename carries no break opportunity, and the header's buttons leave
+       the title only part of the panel: with `break-word` the title box shrank
+       to its min-content width but the text still painted past it, because
+       `break-word` does not affect intrinsic sizing. `anywhere` does, so the
+       name wraps inside the box instead of being clipped at the panel edge. */
+    overflow-wrap: anywhere;
   }
 
   @media (width <= 480px) {
@@ -543,6 +549,11 @@
     font-size: var(--font-base);
     font-weight: var(--font-medium);
     overflow-wrap: break-word;
+    /* A flex item may not shrink below its min-content width, and a file path
+       has no break opportunity to lower it — so the value box grew past the
+       panel and the path was clipped. `min-width: 0` lets it shrink to the
+       column, where the `overflow-wrap` above wraps the path onto more lines. */
+    min-width: 0;
     text-align: right;
     flex: 1;
   }

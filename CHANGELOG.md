@@ -1,3 +1,12 @@
+## [2.47.4](https://github.com/RouHim/turbo-pix/compare/2.47.3...2.47.4) (2026-10-14)
+
+
+### Bug Fixes
+
+* **metadata:** ignore video creation times outside the supported date range ([8393a43](https://github.com/RouHim/turbo-pix/commit/8393a4397605c4f9abdfe9a8ac13e75590e873f7))
+* **video:** keep a video save's facts reload and row timestamp honest ([7375f37](https://github.com/RouHim/turbo-pix/commit/7375f379dbc1c8867771710a5521f9524711bf5c))
+* **video:** patch and resolve every metadata placement in the container ([ac555de](https://github.com/RouHim/turbo-pix/commit/ac555de6c00a3820836e762e0543a67bb21d864b))
+
 ## [2.47.3](https://github.com/RouHim/turbo-pix/compare/2.47.2...2.47.3) (2026-10-14)
 
 

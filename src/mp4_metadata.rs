@@ -1247,14 +1247,21 @@ pub struct UndoToken {
     file_len: u64,
 }
 
-/// Earliest instant the writer accepts, as Unix seconds. The reader rejects
-/// anything before 1990 (`src/metadata_extractor.rs`), so storing one would
-/// hand back a file the reader refuses.
-const MIN_WRITABLE_UNIX_SECONDS: i64 = 631_152_000; // 1990-01-01T00:00:00Z
+/// Earliest instant the app's date model supports, as Unix seconds.
+///
+/// Both ends of the range are enforced by the date reader
+/// (`src/metadata_extractor.rs`) and the writer: storing a date the reader
+/// would refuse hands back a file whose own save does not read back.
+pub(crate) const EARLIEST_SUPPORTED_UNIX_SECONDS: i64 = 631_152_000; // 1990-01-01T00:00:00Z
 
-/// Latest instant the writer accepts, as Unix seconds: the largest version-0
-/// QuickTime timestamp, `u32::MAX` seconds after 1904-01-01T00:00:00Z.
-const MAX_WRITABLE_UNIX_SECONDS: i64 = 2_212_122_495; // 2040-02-06T06:28:15Z
+/// Latest instant the app's date model supports, as Unix seconds: the largest
+/// version-0 QuickTime timestamp, `u32::MAX` seconds after 1904-01-01T00:00:00Z.
+///
+/// A version-1 box can encode more, but not as a capture date: the reader
+/// treats anything later as corrupt and falls through to the file's other date
+/// carriers, so one garbage `mvhd` (a year-97411 value seen in the wild) cannot
+/// stretch every date view to absurd ranges.
+pub(crate) const LATEST_SUPPORTED_UNIX_SECONDS: i64 = 2_212_122_495; // 2040-02-06T06:28:15Z
 
 /// FullBoxes whose payload opens with a creation (and modification) time.
 const TIME_BOXES: [[u8; 4]; 3] = [*b"mvhd", *b"tkhd", *b"mdhd"];
@@ -1726,7 +1733,8 @@ fn restore_region<W: RegionTarget>(
 /// Rejects an edit that could not be written before a byte is touched.
 fn validate_edit(edit: &VideoMetadataEdit) -> Result<(), Mp4MetadataError> {
     if let Some(taken_at) = edit.taken_at {
-        if !(MIN_WRITABLE_UNIX_SECONDS..=MAX_WRITABLE_UNIX_SECONDS).contains(&taken_at.timestamp())
+        if !(EARLIEST_SUPPORTED_UNIX_SECONDS..=LATEST_SUPPORTED_UNIX_SECONDS)
+            .contains(&taken_at.timestamp())
         {
             return Err(Mp4MetadataError::InvalidDate);
         }

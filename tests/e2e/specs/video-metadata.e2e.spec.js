@@ -204,8 +204,9 @@ test.describe('Video metadata editing', () => {
     // misleading failure.
     //
     // The band keeps the two premises the rest of this case rests on: a year
-    // in the 2010s is comfortably inside the writer's window (1990-01-01 to
-    // 2040-02-06, `MIN_WRITABLE_UNIX_SECONDS`) and older than every other
+    // in the 2010s is comfortably inside the app's supported date range
+    // (1990-01-01 to 2040-02-06, `EARLIEST_SUPPORTED_UNIX_SECONDS` ..
+    // `LATEST_SUPPORTED_UNIX_SECONDS`) and older than every other
     // seeded video, which drops the edited video to last place in the videos
     // view — the grid assertion below depends on that. From here on the first
     // card of that view is the Matroska fixture: fine, because the only specs

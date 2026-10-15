@@ -288,6 +288,11 @@
     color: var(--text-primary);
   }
 
+  .nav-item:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
   .nav-item.active {
     background: var(--primary-color);
     color: white;
@@ -311,6 +316,11 @@
         visibility var(--transition-medium);
       z-index: 95;
       width: 280px;
+      /* The drawer floats over the photo mosaic: text on 70% glass over a
+         busy image is unreadable, so the mobile drawer is a solid surface. */
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
 
     .sidebar.open {

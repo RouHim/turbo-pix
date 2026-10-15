@@ -65,13 +65,13 @@
     align-items: center;
     gap: 8px;
     padding: 12px 20px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--glass-bg);
     backdrop-filter: blur(16px) saturate(1.5);
     -webkit-backdrop-filter: blur(16px) saturate(1.5);
     color: var(--text-primary);
     font-size: 14px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--shadow-heavy);
     pointer-events: auto;
     animation: toast-in 0.3s ease-out;
   }
@@ -100,17 +100,33 @@
   .toast-close:hover {
     opacity: 1;
   }
-  .toast-error {
-    border-left: 3px solid var(--error, #e74c3c);
+  /* The type is carried by the leading icon, not a side tab: a colored
+     border-left is the category's default tell (see craft floor). */
+  .toast-error > :global(svg) {
+    color: var(--color-danger);
   }
-  .toast-success {
-    border-left: 3px solid var(--success, #2ecc71);
+  .toast-success > :global(svg) {
+    color: var(--color-success);
   }
-  .toast-warning {
-    border-left: 3px solid var(--warning, #f39c12);
+  .toast-warning > :global(svg) {
+    color: var(--accent-color);
   }
-  .toast-info {
-    border-left: 3px solid var(--accent, #3498db);
+  .toast-info > :global(svg) {
+    color: var(--primary-color);
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+    .toast {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .toast {
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
   }
 
   @keyframes toast-in {

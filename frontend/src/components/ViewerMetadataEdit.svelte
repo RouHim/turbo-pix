@@ -529,7 +529,7 @@
   .close-button {
     background: none;
     border: none;
-    font-size: 28px;
+    font-size: var(--font-4xl);
     line-height: 1;
     color: var(--text-muted);
     cursor: pointer;
@@ -580,17 +580,17 @@
   .form-group :global(input:focus) {
     outline: none;
     border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px oklch(55% 0.08 250deg / 10%);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary-color) 12%, transparent);
   }
 
   .error-message {
-    padding: 12px;
-    background: rgb(239 68 68 / 10%);
-    border: 1px solid rgb(239 68 68 / 30%);
+    padding: var(--space-3);
+    background: color-mix(in oklch, var(--color-danger) 10%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
     border-radius: var(--radius-sm);
-    color: #ef4444;
-    font-size: 14px;
-    margin-bottom: 16px;
+    color: var(--color-danger-ink);
+    font-size: var(--font-base);
+    margin-bottom: var(--space-4);
   }
 
   .modal-actions {

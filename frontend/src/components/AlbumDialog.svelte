@@ -124,7 +124,7 @@
     color: var(--text-primary);
     padding: var(--space-6);
     width: min(420px, 90vw);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-heavy);
   }
   .album-dialog::backdrop {
     background: oklch(0% 0 0deg / 40%);
@@ -136,7 +136,7 @@
   }
   .album-dialog h3 {
     margin: 0 0 var(--space-2);
-    font-family: var(--font-display);
+    font-family: var(--font-heading);
   }
   .album-dialog label {
     font-size: var(--font-sm);
@@ -156,7 +156,7 @@
     border-color: var(--primary-color);
   }
   .album-error {
-    color: var(--danger-color, var(--error-color));
+    color: var(--color-danger-ink);
     font-size: var(--font-sm);
     margin: var(--space-1) 0 0;
   }

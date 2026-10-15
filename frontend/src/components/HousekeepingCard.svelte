@@ -236,7 +236,7 @@
 
   .photo-card.selected .photo-card-selection-badge {
     background: var(--primary-color);
-    color: var(--color-bg, white);
+    color: white;
   }
 
   .photo-card-placeholder {
@@ -247,15 +247,20 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    font-size: 48px;
+    font-size: var(--font-5xl);
   }
 
   .photo-card-placeholder::before {
     content: '';
     display: inline-block;
+    /* A mask, not a background image: `currentColor` cannot resolve inside a
+       data URI, so a background-image icon renders black in every theme. */
     width: var(--space-12);
     height: var(--space-12);
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+    background-color: currentcolor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+      center/contain no-repeat;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
       center/contain no-repeat;
   }
 
@@ -274,6 +279,10 @@
     flex-direction: column;
     justify-content: flex-end;
     padding: var(--space-5);
+    /* Caption band clears the 56px action buttons; the overlay paints above
+       the image (1) and below the open layer (3). */
+    padding-bottom: calc(var(--button-size) + var(--space-4));
+    z-index: 2;
     backdrop-filter: blur(1px);
     -webkit-backdrop-filter: blur(1px);
   }

@@ -163,14 +163,14 @@
     color: var(--text-primary);
     padding: var(--space-6);
     width: min(360px, 90vw);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-heavy);
   }
   .album-picker::backdrop {
     background: oklch(0% 0 0deg / 40%);
   }
   .album-picker h3 {
     margin: 0 0 var(--space-2);
-    font-family: var(--font-display);
+    font-family: var(--font-heading);
   }
   .picker-list {
     max-height: min(40vh, 320px);
@@ -243,7 +243,7 @@
     white-space: nowrap;
   }
   .picker-error {
-    color: var(--danger-color, var(--error-color));
+    color: var(--color-danger-ink);
     font-size: var(--font-sm);
     margin: var(--space-1) 0 0;
   }

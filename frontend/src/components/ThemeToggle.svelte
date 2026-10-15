@@ -76,6 +76,11 @@
     background: var(--background-secondary);
   }
 
+  .theme-toggle:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
   .theme-icon {
     display: flex;
     align-items: center;

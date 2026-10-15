@@ -46,6 +46,12 @@
     border-color: var(--primary-color);
   }
 
+  @media (width <= 768px) {
+    .sort-select {
+      min-height: var(--button-size);
+    }
+  }
+
   @media (width <= 480px) {
     .sort-select {
       width: 100%;

@@ -137,6 +137,11 @@
     background: var(--background-secondary);
   }
 
+  .menu-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
   .mobile-search-btn {
     display: none;
     width: var(--button-size);
@@ -152,6 +157,11 @@
 
   .mobile-search-btn:hover {
     background: var(--background-secondary);
+  }
+
+  .mobile-search-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
   }
   @media (max-width: 768px) {
     .menu-btn,

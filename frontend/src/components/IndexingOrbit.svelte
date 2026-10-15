@@ -765,7 +765,7 @@
   }
 
   .indexing-sheet-title {
-    font-size: 0.95rem;
+    font-size: var(--font-md);
     font-weight: 600;
     color: var(--text-primary);
   }
@@ -862,7 +862,7 @@
 
   .indexing-sheet-current-item {
     padding: 8px 20px 16px;
-    font-size: 0.75rem;
+    font-size: var(--font-xs);
     color: var(--text-tertiary, var(--text-secondary));
     white-space: nowrap;
     overflow: hidden;
@@ -871,7 +871,7 @@
   }
 
   .indexing-phase-errors {
-    font-size: 0.75rem;
+    font-size: var(--font-xs);
     color: var(--color-danger, oklch(55% 0.2 25deg));
     margin-left: auto;
     white-space: nowrap;

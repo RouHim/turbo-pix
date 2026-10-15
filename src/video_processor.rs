@@ -790,6 +790,13 @@ pub fn fix_moov_atom(path: &Path) -> CacheResult<()> {
             path.to_string_lossy().as_ref(),
             "-c",
             "copy",
+            // Copy EVERY stream. Without `-map`, ffmpeg's default stream
+            // selection keeps one stream per type and silently drops the rest:
+            // this in-place rewrite used to strip every extra audio track, so
+            // a two-language source lost one language the first time the scan
+            // touched it.
+            "-map",
+            "0",
             // ffmpeg drops the container's global tags (notably
             // `creation_time`, the only remaining copy of a video's capture
             // date) on a plain remux; `-map_metadata 0` carries them over.
@@ -2144,6 +2151,64 @@ pub(crate) mod tests {
         let after = std::fs::metadata(&moov_start).unwrap().modified().unwrap();
 
         assert_eq!(before, after);
+    }
+
+    /// GIVEN a moov-at-end MP4 carrying a second audio stream
+    /// WHEN fix_moov_atom runs
+    /// THEN has_moov_at_start is true AND every audio stream survives
+    ///
+    /// The scan rewrites every non-progressive video in place. ffmpeg's
+    /// default stream selection keeps one stream per type, so without
+    /// `-map 0` the rewrite silently dropped the extra track: a two-language
+    /// source lost one language the first time it was scanned.
+    #[test]
+    fn test_fix_moov_atom_preserves_extra_audio_streams() {
+        let video_filename = "test_video_multitrack.mp4";
+        if !should_run_video_tests(video_filename) {
+            eprintln!(
+                "Skipping multi-audio MOOV test (prereqs missing or RUN_VIDEO_TESTS not set)"
+            );
+            return;
+        }
+
+        let _env_lock = acquire_test_env_lock();
+
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join(video_filename);
+        std::fs::copy(project_photo_path(video_filename), &target).unwrap();
+
+        // The premise: the fixture is moov-at-end, so the fix actually
+        // rewrites the file instead of returning early.
+        assert!(
+            !has_moov_at_start(&target).unwrap(),
+            "the fixture must be moov-at-end for this test to mean anything"
+        );
+
+        fix_moov_atom(&target).unwrap();
+
+        assert!(has_moov_at_start(&target).unwrap());
+        let output = Command::new(get_ffprobe_path())
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&target)
+            .output()
+            .expect("ffprobe must run");
+        let audio_streams = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+            .count();
+        assert_eq!(
+            audio_streams, 2,
+            "the in-place rewrite must keep every audio stream"
+        );
     }
 
     /// The container's `creation_time` tag as ffprobe reports it (empty when

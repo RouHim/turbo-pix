@@ -31,6 +31,7 @@
   import PhotoViewer from './components/PhotoViewer.svelte';
   import IndexingOrbit from './components/IndexingOrbit.svelte';
   import TimelineSlider from './components/TimelineSlider.svelte';
+  import ConfirmDialog from './components/ConfirmDialog.svelte';
 
   const titleKeys = {
     all: 'ui.all_photos',
@@ -237,6 +238,7 @@
     <SelectionBar />
   {/if}
   <ToastContainer />
+  <ConfirmDialog />
 {:else}
   <div class="app-loading">TurboPix</div>
 {/if}
@@ -303,8 +305,8 @@
     color: var(--primary-color);
   }
   .select-mode-btn:focus-visible {
-    outline: none;
-    border-color: var(--primary-color);
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
   .select-mode-btn :global(svg) {
     width: 16px;
@@ -334,6 +336,11 @@
     color: var(--text-on-accent);
     border: none;
     cursor: pointer;
+  }
+
+  .view-error-retry:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
 
   /* Responsive content header: scoped so these win over the base rules
@@ -366,6 +373,10 @@
     .main-content {
       margin-left: 0;
       padding: var(--space-4);
+    }
+
+    .select-mode-btn {
+      min-height: var(--button-size);
     }
   }
 </style>

@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
+  import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import { api } from '../lib/api.js';
   import {
     addToast,
@@ -133,7 +134,7 @@
       default:
         'Are you sure you want to permanently delete this photo? This action cannot be undone.',
     });
-    if (!confirm(msg)) return;
+    if (!(await askConfirm(msg))) return;
 
     if (busy) return;
     busy = true;

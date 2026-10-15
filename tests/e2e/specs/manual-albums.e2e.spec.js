@@ -174,7 +174,6 @@ test.describe('Manual Albums', () => {
     await page.click('[data-testid="album-open"]');
     await expect(page).toHaveURL(/album=/);
     await TestHelpers.navigateToView(page, 'albums');
-    page.once('dialog', (dialog) => dialog.accept());
     const deleteResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/albums/${album.id}`) &&
@@ -182,6 +181,8 @@ test.describe('Manual Albums', () => {
         response.ok()
     );
     await page.click('[data-testid="album-delete"]');
+    // The confirmation is the app's own dialog, not window.confirm().
+    await page.click('[data-testid="confirm-dialog-accept"]');
     await deleteResponse;
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
     const url = new URL(page.url());
@@ -213,12 +214,13 @@ test.describe('Manual Albums', () => {
     await page.locator('[data-testid="album-row"]').nth(1).click();
     await expect(page.locator('#selection-bar')).toContainText('2 selected');
 
-    page.once('dialog', (dialog) => dialog.accept());
     const deleteResponse = page.waitForResponse(
       (response) =>
         response.url().includes('/api/albums/') && response.request().method() === 'DELETE'
     );
     await page.click('[data-action="batch-delete-albums"]');
+    // The confirmation is the app's own dialog, not window.confirm().
+    await page.click('[data-testid="confirm-dialog-accept"]');
     await deleteResponse;
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
 

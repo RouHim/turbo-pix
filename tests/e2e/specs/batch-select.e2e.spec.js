@@ -168,9 +168,10 @@ test.describe('Batch select + actions', () => {
     await page.locator(TestHelpers.selectors.photoCard(clusterHashes[0])).first().click();
     await page.locator(TestHelpers.selectors.photoCard(clusterHashes[1])).first().click();
     await expect(page.locator(selectionBar)).toContainText('2 selected');
-    page.once('dialog', (dialog) => dialog.accept());
     const deleteResponse = TestHelpers.waitForApiCall(page, '/api/photos/batch/delete');
     await page.click('[data-action="batch-delete"]');
+    // The confirmation is the app's own dialog, not window.confirm().
+    await page.click('[data-testid="confirm-dialog-accept"]');
     await deleteResponse;
 
     // THEN: the cards disappear from the grid and the photos are permanently
@@ -250,9 +251,10 @@ test.describe('Batch select + actions', () => {
     await page.click('[data-action="select-mode"]');
     await page.locator(TestHelpers.selectors.photoCard(rejectHash)).first().click();
     await expect(page.locator(selectionBar)).toContainText('1 selected');
-    page.once('dialog', (dialog) => dialog.accept());
     const rejectResponse = TestHelpers.waitForApiCall(page, '/api/collages/batch-reject');
     await page.click('[data-action="batch-reject"]');
+    // The confirmation is the app's own dialog, not window.confirm().
+    await page.click('[data-testid="confirm-dialog-accept"]');
     await rejectResponse;
 
     // THEN: the rejected card is gone (FR-010 confirmation honored)

@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
+  import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import Icon from './Icon.svelte';
   import AlbumPicker from './AlbumPicker.svelte';
   import { api } from '../lib/api.js';
@@ -151,7 +152,7 @@
         default: 'Permanently delete {count} album(s)? Photos are kept.',
         values: { count: ids.length },
       });
-      if (!confirm(msg)) return;
+      if (!(await askConfirm(msg))) return;
       selectionState.busy = 'deleteAlbums';
       const applied = [];
       const failed = [];
@@ -195,7 +196,7 @@
         default: 'Permanently delete {count} photo(s)? This cannot be undone.',
         values: { count },
       });
-      if (!confirm(msg)) return;
+      if (!(await askConfirm(msg))) return;
       selectionState.busy = 'delete';
       try {
         const res = await api.batchDelete(keys);
@@ -343,7 +344,12 @@
           default: 'Reject {count} collage(s)? This cannot be undone.',
           values: { count },
         });
-        if (!confirm(msg)) return;
+        if (
+          !(await askConfirm(msg, {
+            confirmLabel: $t('ui.reject_collage', { default: 'Reject' }),
+          }))
+        )
+          return;
       }
       selectionState.busy = actionId;
       try {
@@ -413,7 +419,9 @@
   class:busy={!!selectionState.busy}
 >
   <span class="selection-count" data-testid="selection-count">
-    {$t('ui.selected_count', { default: '{count} selected', values: { count } })}
+    {count === 1
+      ? $t('ui.selected_count_one', { default: '1 selected' })
+      : $t('ui.selected_count', { default: '{count} selected', values: { count } })}
   </span>
 
   <button
@@ -432,6 +440,7 @@
     <button
       type="button"
       class="btn batch-action-btn"
+      class:danger={action.id === 'delete' || action.id === 'deleteAlbums'}
       data-action={actionDataName[action.id]}
       disabled={!canAct}
       onclick={() => runAction(action.id)}
@@ -509,7 +518,7 @@
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-lg, 12px);
+    border-radius: var(--radius-lg);
     background: var(--glass-bg, oklch(100% 0 0deg / 10%));
     backdrop-filter: blur(16px) saturate(1.5);
     -webkit-backdrop-filter: blur(16px) saturate(1.5);
@@ -548,6 +557,17 @@
     opacity: 0.6;
     cursor: default;
   }
+
+  .btn.danger {
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+    color: white;
+  }
+
+  .btn.danger:hover:not(:disabled) {
+    background: var(--color-danger-hover);
+    border-color: var(--color-danger-hover);
+  }
   .btn :global(svg) {
     width: 16px;
     height: 16px;
@@ -567,13 +587,35 @@
     cursor: wait;
   }
 
-  /* Narrow screens: keep the bar usable with a horizontal scroll instead of
-     wrapping (scoped rule — global media overrides lose to component rules). */
+  @supports not (backdrop-filter: blur(1px)) {
+    #selection-bar {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    #selection-bar {
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  /* Narrow screens: wrap into rows instead of hiding actions behind an
+     invisible horizontal scroll (scoped rule — global media overrides lose to
+     component rules); every action stays visible and tappable. */
   @media (max-width: 640px) {
     #selection-bar {
       left: var(--space-2);
       right: var(--space-2);
       transform: none;
+      flex-wrap: wrap;
+      justify-content: center;
+      overflow-x: visible;
+    }
+
+    #selection-bar .btn {
+      min-height: var(--button-size);
     }
   }
 </style>

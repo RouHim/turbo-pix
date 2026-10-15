@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { t } from '../lib/i18n.js';
+  import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import Icon from './Icon.svelte';
   import { api } from '../lib/api.js';
   import {
@@ -78,7 +79,12 @@
     const msg = $t('messages.confirm_reject_collage', {
       default: 'Are you sure you want to reject this collage?',
     });
-    if (!confirm(msg)) return;
+    if (
+      !(await askConfirm(msg, {
+        confirmLabel: $t('ui.reject_collage', { default: 'Reject' }),
+      }))
+    )
+      return;
     if (actionBusy) return;
     actionBusy = true;
 
@@ -455,6 +461,6 @@
 
   .photo-card.selected .photo-card-selection-badge {
     background: var(--primary-color);
-    color: var(--color-bg, white);
+    color: white;
   }
 </style>

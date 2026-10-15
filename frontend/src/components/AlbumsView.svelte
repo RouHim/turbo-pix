@@ -14,6 +14,7 @@
     pruneSelection,
   } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
+  import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import { getThumbnailUrl, handleError } from '../lib/utils.js';
   import Icon from './Icon.svelte';
   import AlbumDialog from './AlbumDialog.svelte';
@@ -144,7 +145,7 @@
       default: 'Permanently delete album "{name}"? Photos are kept.',
       values: { name: item.name },
     });
-    if (!confirm(msg)) return;
+    if (!(await askConfirm(msg))) return;
     try {
       await api.deleteAlbum(item.id);
       const idx = albums.findIndex((a) => a.id === item.id);

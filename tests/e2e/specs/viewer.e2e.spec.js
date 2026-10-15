@@ -179,8 +179,9 @@ test.describe('Photo Viewer', () => {
 
     let deletePerformed = false;
     try {
-      page.once('dialog', (dialog) => dialog.accept());
       await page.locator('.delete-photo-btn').click();
+      // The confirmation is the app's own dialog, not window.confirm().
+      await page.click('[data-testid="confirm-dialog-accept"]');
       deletePerformed = true;
 
       // THEN: Photo card is removed from stream immediately (no reload)

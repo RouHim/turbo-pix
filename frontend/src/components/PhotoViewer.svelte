@@ -15,6 +15,7 @@
   } from '../lib/utils.js';
   import { videoCodecSupport } from '../lib/video/capabilities.js';
   import { logger } from '../lib/logger.js';
+  import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
   import {
     ORIGINAL_ATTEMPT_GRACE_MS,
@@ -1966,11 +1967,12 @@
   async function deletePhoto() {
     if (!currentPhoto || isCollagePhoto(currentPhoto)) return;
 
-    const confirmed = window.confirm(
+    const confirmed = await askConfirm(
       get(t)('notifications.confirmDeleteMessage', {
         default:
           'Are you sure you want to permanently delete this photo? This action cannot be undone.',
-      })
+      }),
+      { confirmLabel: get(t)('ui.delete_photo', { default: 'Delete Photo' }) }
     );
     if (!confirmed) return;
 

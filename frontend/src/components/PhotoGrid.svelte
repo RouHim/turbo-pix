@@ -35,6 +35,12 @@
   const hasMore = $derived(photoGridState.hasMore);
   const photos = $derived(photoGridState.photos);
   const currentQuery = $derived(photoGridState.currentQuery);
+  const total = $derived(photoGridState.total);
+
+  /** The grid's empty state offers a way out of a dead-end search result. */
+  function resetSearch() {
+    window.dispatchEvent(new CustomEvent('clearSearchRequest'));
+  }
 
   // --- Scroll container ref ---
   let scrollContainer = null;
@@ -121,6 +127,8 @@
    */
   async function loadSemanticPage(signal) {
     const queryAtStart = photoGridState.currentQuery;
+    // Semantic matches do not report an exact total.
+    photoGridState.total = null;
     const offset = (photoGridState.currentPage - 1) * DEFAULT_BATCH_SIZE;
     const result = await api.semanticSearch(
       photoGridState.currentQuery,
@@ -176,6 +184,8 @@
         { page: photoGridState.currentPage, limit: DEFAULT_BATCH_SIZE, sort, order },
         { signal }
       );
+      // Album listings do not report an exact total.
+      photoGridState.total = null;
       return response.photos || [];
     }
     const { query: viewQuery, ...filters } = buildFilters();
@@ -186,6 +196,9 @@
       ...filters,
     };
     const response = await api.getPhotos(params, { signal });
+    // The regular endpoint reports the exact match count; the grid surfaces it
+    // so a filtered result can never be mistaken for the whole library.
+    photoGridState.total = typeof response.total === 'number' ? response.total : null;
     return response.photos || [];
   }
 
@@ -516,8 +529,25 @@
 <!-- Template                                                                  -->
 <!-- ========================================================================= -->
 
-<div id="photo-grid" class="photo-grid">
+{#if photos.length > 0 && total !== null}
+  <div class="result-count" role="status" aria-live="polite">
+    {total === 1
+      ? $t('ui.photos_count_one', { default: '1 photo' })
+      : $t('ui.photos_count', { values: { count: total }, default: '{count} photos' })}
+  </div>
+{/if}
+
+<div
+  id="photo-grid"
+  class="photo-grid"
+  role="region"
+  aria-label={$t('ui.photo_grid_label', { default: 'Photo grid' })}
+  aria-busy={loading}
+>
   {#if loading && photos.length === 0}
+    <div class="grid-loading-status" role="status">
+      {$t('ui.loading_photos', { default: 'Loading photos…' })}
+    </div>
     <!-- Skeleton loading: items are DIRECT grid children of .photo-grid so the
          skeleton shares the exact tracks of the real cards (a nested grid's fr
          tracks + aspect-ratio items mis-resolve under intrinsic sizing in some
@@ -588,7 +618,11 @@
             {$t('messages.no_photos_indexed', { default: 'No photos have been indexed yet' })}
           {/if}
         </div>
-        {#if !currentQuery && route.album == null}
+        {#if currentQuery && route.album == null}
+          <button class="error-state-button" onclick={resetSearch}>
+            {$t('ui.reset_search', { default: 'Reset search' })}
+          </button>
+        {:else if route.album == null}
           <button class="error-state-button" onclick={() => window.location.reload()}>
             {$t('ui.refresh', { default: 'Refresh' })}
           </button>
@@ -672,6 +706,24 @@
     gap: var(--space-6);
     margin-bottom: var(--space-12);
     min-height: 400px;
+    /* Cards keep their intrinsic height instead of stretching to the row (a
+       lone card used to paint a ~53px empty strip under the photo). */
+    align-items: start;
+  }
+
+  .result-count {
+    margin: 0 0 var(--space-3);
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+  }
+
+  .grid-loading-status {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: var(--font-sm);
   }
 
   .skeleton-item {
@@ -680,11 +732,13 @@
        in Chromium, which inflates 1fr grid tracks (3x199 in a 358px grid).
        min-width: 0 opts the tile out of that sizing. */
     min-width: 0;
+    /* 40% muted over the secondary surface holds ~1.6:1 — the skeleton has to
+       be perceptible, not decorative. */
     background: linear-gradient(
       90deg,
-      var(--divider-color) 25%,
-      transparent 37%,
-      var(--divider-color) 63%
+      color-mix(in oklch, var(--text-muted) 40%, var(--background-secondary)) 25%,
+      var(--background-secondary) 37%,
+      color-mix(in oklch, var(--text-muted) 40%, var(--background-secondary)) 63%
     );
     background-size: 400% 100%;
     animation: skeleton-loading 1.5s ease-in-out infinite;
@@ -715,6 +769,11 @@
 
   .load-more-btn:hover {
     background: var(--primary-dark);
+  }
+
+  .load-more-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
 
   .load-more-btn:disabled {

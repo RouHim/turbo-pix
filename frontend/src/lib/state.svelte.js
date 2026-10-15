@@ -23,6 +23,9 @@ export const photoGridState = $state({
   hasMore: true,
   currentQuery: '',
   semanticSearchMode: false,
+  // Exact result count of the current regular load; null while it is unknown
+  // (semantic search and album pages do not report one).
+  total: null,
 });
 
 /**

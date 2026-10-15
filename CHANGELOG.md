@@ -1,3 +1,21 @@
+# [2.48.0](https://github.com/RouHim/turbo-pix/compare/2.47.4...2.48.0) (2026-10-15)
+
+
+### Bug Fixes
+
+* **cards:** keep captions and actions reachable on touch layouts ([5e272b2](https://github.com/RouHim/turbo-pix/commit/5e272b227e5294516bea7e6c2dd9d7612048906b))
+* **grid:** announce loading and give the empty search an exit ([33a9aa8](https://github.com/RouHim/turbo-pix/commit/33a9aa8e918a362337454acf8bd67424958a7c15))
+* **search:** separate the hint from the suggestion list ([1176f7a](https://github.com/RouHim/turbo-pix/commit/1176f7a48e85be6eb86eb2314aa63660a86b5925))
+* **timeline:** reveal late and keep the photo count visible ([5598378](https://github.com/RouHim/turbo-pix/commit/559837819437ac398461eb1df7f78c5b0fef975e))
+* **ui:** polish focus states, status contrast and touch targets ([602d68b](https://github.com/RouHim/turbo-pix/commit/602d68bb7258df49988709d9578b5b72c737136c))
+* **video:** keep every stream in the scan's faststart rewrite ([229d1b8](https://github.com/RouHim/turbo-pix/commit/229d1b8970743bf6ca12f0e9464870071afb184e))
+
+
+### Features
+
+* **dialog:** replace window.confirm with an in-app confirm dialog ([8ae4e6b](https://github.com/RouHim/turbo-pix/commit/8ae4e6b2963059763f30c754cb9d261556de70c9))
+* **i18n:** add strings for the loading, empty-state and dialog UI ([880d434](https://github.com/RouHim/turbo-pix/commit/880d434c58ab87c26942fb82236a1d1fff7e2ccb))
+
 ## [2.47.4](https://github.com/RouHim/turbo-pix/compare/2.47.3...2.47.4) (2026-10-14)
 
 

@@ -107,8 +107,16 @@
         performSearch(q, true);
       }
     }
+    // The grid's empty state offers a way out of a dead-end search result.
+    function onClearSearchRequest() {
+      clearSearch();
+    }
     window.addEventListener('requestSearch', onRequestSearch);
-    return () => window.removeEventListener('requestSearch', onRequestSearch);
+    window.addEventListener('clearSearchRequest', onClearSearchRequest);
+    return () => {
+      window.removeEventListener('requestSearch', onRequestSearch);
+      window.removeEventListener('clearSearchRequest', onClearSearchRequest);
+    };
   });
 
   function performSearch(q, addToHistory = false) {
@@ -350,6 +358,7 @@
       class="search-input"
       placeholder={$t('ui.search_ai_placeholder', { default: 'AI-powered photo search...' })}
       aria-label={$t('ui.search', { default: 'Search' })}
+      aria-describedby="search-hint"
       bind:value={query}
       bind:this={inputEl}
       onkeydown={onKeydown}
@@ -382,31 +391,40 @@
     </button>
   {/if}
 
-  <!-- Search hint -->
-  <div class="search-hint" class:visible={focused && !query} data-search-hint="true">
-    <Icon name="info" width={14} height={14} class="search-hint-icon" />
-    <span
-      >{$t('ui.search_hint', {
-        default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true',
-      })}</span
+  <!-- One dropdown surface, stacked without overlap: the hint rides above the
+       suggestion list while the query is empty (two translucent panels at the
+       same offset were unreadable). -->
+  <div class="search-dropdown">
+    <div
+      id="search-hint"
+      class="search-hint"
+      class:visible={focused && !query}
+      data-search-hint="true"
     >
-  </div>
-
-  {#if showSuggestions}
-    <div id="search-suggestions" class="search-suggestions show">
-      {#each suggestions as s (s.query + s.icon)}
-        <button type="button" class="suggestion-item" onclick={() => selectSuggestion(s)}>
-          <span class="suggestion-icon">
-            <Icon name={s.icon} width={16} height={16} />
-          </span>
-          <span class="suggestion-text">{s.text}</span>
-          {#if s.subtitle}
-            <span class="suggestion-subtitle">{s.subtitle}</span>
-          {/if}
-        </button>
-      {/each}
+      <Icon name="info" width={14} height={14} class="search-hint-icon" />
+      <span
+        >{$t('ui.search_hint', {
+          default: 'Try: type:video \u00b7 location:city \u00b7 is_favorite:true',
+        })}</span
+      >
     </div>
-  {/if}
+
+    {#if showSuggestions}
+      <div id="search-suggestions" class="search-suggestions show">
+        {#each suggestions as s (s.query + s.icon)}
+          <button type="button" class="suggestion-item" onclick={() => selectSuggestion(s)}>
+            <span class="suggestion-icon">
+              <Icon name={s.icon} width={16} height={16} />
+            </span>
+            <span class="suggestion-text">{s.text}</span>
+            {#if s.subtitle}
+              <span class="suggestion-subtitle">{s.subtitle}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -462,6 +480,7 @@
     outline: none;
     border-color: var(--primary-color);
     background: var(--surface-color);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary-color) 12%, transparent);
   }
 
   .search-btn {
@@ -482,6 +501,11 @@
     background: var(--primary-dark);
   }
 
+  .search-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+
   .save-search-btn {
     display: flex;
     align-items: center;
@@ -500,16 +524,29 @@
     background: var(--background-secondary);
   }
 
-  /* Search hint */
-  .search-hint {
+  .save-search-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+
+  /* Search dropdown stack (hint + suggestions) */
+  .search-dropdown {
     position: absolute;
     top: 100%;
     left: 0;
     right: 0;
-    padding: var(--space-3) var(--space-4);
     margin-top: var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    z-index: var(--z-modal);
+    pointer-events: none;
+  }
+
+  .search-hint {
+    padding: var(--space-3) var(--space-4);
     font-size: var(--font-sm, 13px);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--glass-bg, oklch(100% 0 0deg / 70%));
     backdrop-filter: blur(12px) saturate(1.5);
     -webkit-backdrop-filter: blur(12px) saturate(1.5);
@@ -528,24 +565,34 @@
     opacity: 1;
   }
 
+  @supports not (backdrop-filter: blur(1px)) {
+    .search-hint {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .search-hint {
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
   :global(.search-hint-icon) {
     margin-right: var(--space-2);
     flex-shrink: 0;
     font-size: 14px;
   }
 
-  /* Suggestions dropdown */
+  /* Suggestions dropdown — solid surface: it carries text, so 70% glass let
+     the timeline labels read through it. */
   .search-suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
+    border: 1px solid var(--divider-color);
     border-radius: var(--radius-md);
-    box-shadow: var(--shadow-light);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    background: var(--glass-bg, oklch(100% 0 0deg / 95%));
-    margin-top: var(--space-2);
+    box-shadow: var(--shadow-medium);
+    background: var(--surface-elevated);
+    pointer-events: auto;
     overflow: hidden;
     max-height: 0;
     opacity: 0;
@@ -583,6 +630,11 @@
 
   .suggestion-item:hover {
     background: var(--background-secondary);
+  }
+
+  .suggestion-item:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
   }
 
   .suggestion-icon {

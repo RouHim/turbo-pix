@@ -324,7 +324,7 @@
       filter var(--transition-slow);
     filter: brightness(1) contrast(1) saturate(1);
     opacity: 0;
-    z-index: 2;
+    z-index: 1;
   }
 
   .photo-card-image-container.image-loaded .photo-card-image {
@@ -344,15 +344,20 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    font-size: 48px;
+    font-size: var(--font-5xl);
   }
 
   .photo-card-placeholder::before {
     content: '';
     display: inline-block;
+    /* Mask instead of a background image: `currentColor` cannot resolve
+       inside a data URI, so the icon must take its color from here. */
     width: var(--space-12);
     height: var(--space-12);
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+    background-color: currentcolor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+      center/contain no-repeat;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
       center/contain no-repeat;
   }
 
@@ -371,8 +376,12 @@
     flex-direction: column;
     justify-content: flex-end;
     padding: var(--space-5);
+    /* Keep the caption text out of the action-button band (56px + 8px) so the
+       title/meta are never painted underneath the buttons. */
+    padding-bottom: calc(var(--button-size) + var(--space-4));
     backdrop-filter: blur(1px);
     -webkit-backdrop-filter: blur(1px);
+    z-index: 2;
   }
 
   .photo-card:hover .photo-card-overlay {
@@ -410,7 +419,7 @@
     gap: var(--space-2);
     opacity: 0;
     transition: var(--transition-medium);
-    z-index: 15;
+    z-index: 5;
   }
 
   .photo-card:hover .photo-card-actions {
@@ -435,6 +444,11 @@
     justify-content: center;
     font-size: var(--font-xl);
     box-shadow: var(--shadow-medium);
+  }
+
+  .card-action-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
 
   .card-action-btn:hover {
@@ -517,16 +531,65 @@
   /* Mobile compact grid: must live in scoped styles — global @container rules
      lose the cascade to scoped rules (see AGENTS.md). Triggered by the
      .main-content content container (container-type: inline-size), matching
-     the pre-migration @container (width <= 768px) behavior. */
+     the pre-migration @container (width <= 768px) behavior. The mosaic stays
+     frame-less; the caption and the actions move BELOW the tile instead of
+     being deleted, so metadata and per-photo actions exist on phones too. */
   @container (width <= 768px) {
     .photo-card {
       border-radius: 0;
       border: none;
+      display: flex;
+      flex-direction: column;
     }
 
-    .photo-card-overlay,
+    .photo-card-overlay {
+      position: static;
+      opacity: 1;
+      background: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      padding: var(--space-1) var(--space-1) 0;
+    }
+
+    .photo-card-title {
+      color: var(--text-primary);
+      font-size: var(--font-xs);
+      text-shadow: none;
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .photo-card-meta {
+      display: block;
+      color: var(--text-secondary);
+      font-size: var(--font-xs);
+      text-shadow: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .photo-card-actions {
-      display: none;
+      position: static;
+      transform: none;
+      opacity: 1;
+      justify-content: flex-start;
+      gap: var(--space-1);
+      padding: var(--space-1);
+    }
+
+    .card-action-btn {
+      display: flex;
+      width: var(--button-size);
+      height: var(--button-size);
+      box-shadow: none;
+    }
+
+    .video-play-icon {
+      width: var(--space-8);
+      height: var(--space-8);
     }
   }
 
@@ -558,6 +621,6 @@
 
   .photo-card.selected .photo-card-selection-badge {
     background: var(--primary-color);
-    color: var(--color-bg, white);
+    color: white;
   }
 </style>

@@ -93,10 +93,16 @@
     --primary-color: oklch(55% 0.08 250deg);
     --primary-dark: oklch(45% 0.08 250deg);
     --primary-light: oklch(65% 0.06 250deg);
+
+    /* Slate text on slate-tinted surfaces; the dark theme re-points it. */
+    --primary-ink: oklch(45% 0.08 250deg);
     --accent-color: oklch(75% 0.12 80deg);
     --accent-dark: oklch(65% 0.12 80deg);
     --color-danger: oklch(55% 0.2 25deg);
     --color-danger-hover: oklch(48% 0.2 25deg);
+
+    /* Error text on danger-tinted surfaces; both themes re-point it. */
+    --color-danger-ink: oklch(45% 0.2 25deg);
     --color-success: oklch(65% 0.18 155deg);
     --color-success-hover: oklch(58% 0.18 155deg);
     --background-color: oklch(97.5% 0.005 80deg);
@@ -105,7 +111,7 @@
     --surface-elevated: oklch(100% 0 0deg);
     --text-primary: oklch(20% 0.01 260deg);
     --text-secondary: oklch(45% 0.01 260deg);
-    --text-muted: oklch(60% 0.01 260deg);
+    --text-muted: oklch(50% 0.01 260deg);
     --divider-color: oklch(90% 0.005 260deg / 50%);
 
     /* Shadows */
@@ -147,7 +153,7 @@
     --surface-elevated: oklch(100% 0 0deg);
     --text-primary: oklch(20% 0.01 260deg);
     --text-secondary: oklch(45% 0.01 260deg);
-    --text-muted: oklch(60% 0.01 260deg);
+    --text-muted: oklch(50% 0.01 260deg);
     --divider-color: oklch(90% 0.005 260deg / 50%);
     --shadow-light: 0 1px 2px oklch(0% 0 0deg / 4%), 0 1px 1px oklch(0% 0 0deg / 3%);
     --shadow-medium: 0 2px 8px oklch(0% 0 0deg / 6%), 0 1px 3px oklch(0% 0 0deg / 4%);
@@ -159,6 +165,8 @@
     --viewer-btn-color: oklch(95% 0.005 80deg);
     --viewer-btn-hover-bg: oklch(20% 0.01 260deg / 65%);
     --text-on-accent: oklch(20% 0.01 260deg);
+    --primary-ink: oklch(45% 0.08 250deg);
+    --color-danger-ink: oklch(45% 0.2 25deg);
   }
 
   /* Dark theme variables */
@@ -169,7 +177,7 @@
     --surface-elevated: oklch(25% 0.012 260deg);
     --text-primary: oklch(95% 0.005 80deg);
     --text-secondary: oklch(75% 0.005 80deg);
-    --text-muted: oklch(50% 0.01 260deg);
+    --text-muted: oklch(65% 0.01 260deg);
     --divider-color: oklch(30% 0.01 260deg / 50%);
     --shadow-light: 0 1px 2px oklch(0% 0 0deg / 20%), 0 1px 1px oklch(0% 0 0deg / 15%);
     --shadow-medium: 0 2px 8px oklch(0% 0 0deg / 25%), 0 1px 3px oklch(0% 0 0deg / 20%);
@@ -181,6 +189,11 @@
     --viewer-btn-color: oklch(95% 0.005 80deg);
     --viewer-btn-hover-bg: oklch(15% 0.01 260deg / 70%);
     --text-on-accent: oklch(20% 0.01 260deg);
+
+    /* Slate text that sits on a slate-tinted surface (timeline pills/chips):
+       the dark theme needs the light end of the ramp to stay readable. */
+    --primary-ink: oklch(80% 0.06 250deg);
+    --color-danger-ink: oklch(80% 0.1 25deg);
   }
 } /* end @layer tokens */
 
@@ -210,6 +223,17 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
     background-repeat: repeat;
     background-size: 200px 200px;
+  }
+
+  /* Browser surfaces belong to the design system too: theme the text
+     selection and every placeholder (WCAG AA on the secondary ink). */
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary-color) 25%, transparent);
+  }
+
+  ::placeholder {
+    color: var(--text-secondary);
+    opacity: 1;
   }
 } /* end @layer base */
 
@@ -568,7 +592,7 @@
     filter var(--transition-slow);
   filter: brightness(1) contrast(1) saturate(1);
   opacity: 0;
-  z-index: 2;
+  z-index: 1;
 
   .photo-card-image-container.image-loaded & {
     opacity: 1;
@@ -595,14 +619,20 @@
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  font-size: 48px;
+  font-size: var(--font-5xl);
 
   &::before {
     content: '';
     display: inline-block;
+
+    /* A mask, not a background image: `currentColor` cannot resolve inside a
+       data URI, so a background-image icon renders black in every theme. */
     width: var(--space-12);
     height: var(--space-12);
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+    background-color: currentcolor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
+      center/contain no-repeat;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Ccircle cx='12' cy='13' r='4'%3E%3C/circle%3E%3C/svg%3E")
       center/contain no-repeat;
   }
 }
@@ -622,8 +652,10 @@
   flex-direction: column;
   justify-content: flex-end;
   padding: var(--space-5);
+  padding-bottom: calc(var(--button-size) + var(--space-4));
   backdrop-filter: blur(1px);
   -webkit-backdrop-filter: blur(1px);
+  z-index: 2;
 
   .photo-card:hover & {
     opacity: 1;
@@ -661,7 +693,7 @@
   gap: var(--space-2);
   opacity: 0;
   transition: var(--transition-medium);
-  z-index: 15;
+  z-index: 5;
 
   .photo-card:hover & {
     opacity: 1;
@@ -1132,7 +1164,7 @@
 }
 
 .action-btn.download-btn {
-  font-size: 22px;
+  font-size: var(--font-2xl);
 }
 
 .lazy-image {
@@ -1305,7 +1337,7 @@
 .close-button {
   background: none;
   border: none;
-  font-size: 28px;
+  font-size: var(--font-4xl);
   line-height: 1;
   color: var(--text-muted);
   cursor: pointer;
@@ -1355,17 +1387,17 @@
 .modal .form-group input:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px oklch(55% 0.08 250deg / 10%);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary-color) 12%, transparent);
 }
 
 .error-message {
-  padding: 12px;
-  background: rgb(239 68 68 / 10%);
-  border: 1px solid rgb(239 68 68 / 30%);
+  padding: var(--space-3);
+  background: color-mix(in oklch, var(--color-danger) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
   border-radius: var(--radius-sm);
-  color: #ef4444;
-  font-size: 14px;
-  margin-bottom: 16px;
+  color: var(--color-danger-ink);
+  font-size: var(--font-base);
+  margin-bottom: var(--space-4);
 }
 
 .modal-actions {
@@ -1539,11 +1571,6 @@
     & .photo-meta-full {
       overflow: visible;
     }
-  }
-
-  .photo-card-actions .favorite-btn,
-  .photo-card-actions .download-btn {
-    display: none;
   }
 }
 

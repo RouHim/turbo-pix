@@ -67,6 +67,11 @@
   let pinch = null;
   let hoveredColumn = $state(null);
   let focusedColumnStart = $state(null);
+  // Set by a pointer press on a column: the hover readout already covers that
+  // press, and pinning `focusedColumnStart` would leave a stale announcement
+  // standing after the pointer leaves the lane (the keyboard path keeps
+  // announcing while the column stays focused).
+  let focusFromPointer = false;
   let suppressClick = false;
   let measureContext = null;
   // Set while a *user gesture* owns the view change it makes — a keyboard focus
@@ -151,7 +156,9 @@
   const photoCountLabel = (count) =>
     count === 0
       ? $t('ui.timeline_no_photos_month', { default: 'No photos' })
-      : $t('ui.photos_count', { values: { count }, default: '{count} photos' });
+      : count === 1
+        ? $t('ui.photos_count_one', { default: '1 photo' })
+        : $t('ui.photos_count', { values: { count }, default: '{count} photos' });
 
   const rowCount = (column) => photoCountLabel(column.count);
 
@@ -167,7 +174,12 @@
     const column = hoveredColumn ?? columns.find((c) => c.gridStart === focusedColumnStart);
     if (column) return `${column.label}, ${rowCount(column)}`;
     const label = formatSelectionLabel(effectiveSelection, format);
-    if (effectiveSelection !== null) return label;
+    if (effectiveSelection !== null) {
+      // The count of the filtered range is persistent state, not a hover
+      // readout: it must survive the pointer leaving the lane.
+      const count = countInRange(model, effectiveSelection.startIndex, effectiveSelection.endIndex);
+      return `${label} · ${photoCountLabel(count)}`;
+    }
     return $t('ui.timeline_span_summary', {
       values: { range: label, count: model.total },
       default: '{range} · {count} photos',
@@ -838,19 +850,22 @@
         tabindex={column.gridStart === tabbableStart ? 0 : -1}
         onclick={() => activateColumn(column)}
         onkeydown={(event) => handleColumnKeydown(event, column)}
+        onpointerdown={() => (focusFromPointer = true)}
         onmouseenter={() => (hoveredColumn = column)}
         onmouseleave={() => (hoveredColumn = null)}
         onfocus={() => {
           hoveredColumn = column;
-          focusedColumnStart = column.gridStart;
+          focusedColumnStart = focusFromPointer ? null : column.gridStart;
+          focusFromPointer = false;
         }}
         onblur={() => (hoveredColumn = null)}
       >
         <span
           class="timeline-column-bar"
-          style="height: {column.count === 0
-            ? 0
-            : Math.max(3, Math.round((column.count / columnMax) * (LANE_HEIGHT - 12)))}px"
+          style="height: {Math.max(
+            column.count === 0 ? 2 : 3,
+            Math.round((column.count / columnMax) * (LANE_HEIGHT - 12))
+          )}px"
         ></span>
       </button>
     {/each}
@@ -988,21 +1003,21 @@
   .timeline-column-bar {
     width: 100%;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-    background: color-mix(in oklch, var(--primary-color) 22%, transparent);
+    background: color-mix(in oklch, var(--primary-color) 45%, transparent);
   }
 
   .timeline-column.empty .timeline-column-bar {
-    background: var(--background-secondary);
+    background: var(--divider-color);
   }
 
   /* Hover/focus reveals the period (prev-spec FR-006) with a lighter tint than the
      active state, which stays the strongest signal on the lane. */
   .timeline-column.hovered .timeline-column-bar {
-    background: color-mix(in oklch, var(--primary-color) 30%, transparent);
+    background: color-mix(in oklch, var(--primary-color) 60%, transparent);
   }
 
   .timeline-column.active .timeline-column-bar {
-    background: color-mix(in oklch, var(--primary-color) 45%, transparent);
+    background: color-mix(in oklch, var(--primary-color) 75%, transparent);
   }
 
   .timeline-column:focus-visible {
@@ -1102,7 +1117,7 @@
   .timeline-level[aria-pressed='true'] {
     border-color: var(--primary-color);
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
-    color: var(--primary-dark);
+    color: var(--primary-ink);
   }
 
   .timeline-level:focus-visible {

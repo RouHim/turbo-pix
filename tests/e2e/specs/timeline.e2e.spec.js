@@ -247,27 +247,27 @@ test.describe('Timeline', () => {
     // GIVEN: the full span, where the columns are decades
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '120');
     const decade = columnAt(23520); // 1960 * 12
-    await expect(decade).toHaveAttribute('aria-label', /^1960s, \d+ photos$/);
+    await expect(decade).toHaveAttribute('aria-label', /^1960s, \d+ photos?$/);
 
     // AND: hovering announces the same name in the status row
     await decade.hover();
-    await expect(status).toHaveText(/^1960s, \d+ photos$/);
+    await expect(status).toHaveText(/^1960s, \d+ photos?$/);
 
     // WHEN: drilling into the 1960s — the columns become years
     await decade.click();
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
     const year = columnAt(23544); // 1962 * 12
-    await expect(year).toHaveAttribute('aria-label', /^1962, \d+ photos$/);
+    await expect(year).toHaveAttribute('aria-label', /^1962, \d+ photos?$/);
     await year.hover();
-    await expect(status).toHaveText(/^1962, \d+ photos$/);
+    await expect(status).toHaveText(/^1962, \d+ photos?$/);
 
     // WHEN: filtering to 1962 — the columns become months
     await year.click();
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '1');
     const month = columnAt(23546); // 1962 * 12 + 2 === March 1962
-    await expect(month).toHaveAttribute('aria-label', /^March 1962, \d+ photos$/);
+    await expect(month).toHaveAttribute('aria-label', /^March 1962, \d+ photos?$/);
     await month.hover();
-    await expect(status).toHaveText(/^March 1962, \d+ photos$/);
+    await expect(status).toHaveText(/^March 1962, \d+ photos?$/);
   });
 
   test('should keep a bound outside the model span inside the announced slider range', async ({
@@ -804,7 +804,7 @@ test.describe('Timeline', () => {
     await column.focus();
     const name = await column.getAttribute('aria-label');
     expect(name).toMatch(/\d{4}/);
-    expect(name).toMatch(/photos|No photos/);
+    expect(name).toMatch(/photos?|No photos/);
 
     // Arrow keys move focus to the next period the library has photos in: a
     // zero-photo month announces itself but cannot be activated or selected,

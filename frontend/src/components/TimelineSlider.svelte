@@ -24,6 +24,9 @@
   let initError = $state(false);
 
   const model = $derived(buildTimelineModel(data?.density ?? []));
+  // The timeline earns its 210px only once the density can say something:
+  // fewer than three distinct years is a grid, not a graph.
+  const showTimeline = $derived(model.years.length > 2);
   const filter = $derived(
     normalizeDateFilter({
       year: route.year,
@@ -165,8 +168,8 @@
         <div class="timeline-label">{labelText}</div>
       </div>
     </div>
-  {:else if model.length === 0}
-    <!-- Empty library: nothing to filter, render nothing -->
+  {:else if !showTimeline}
+    <!-- Too few distinct years to describe density: the grid leads. -->
   {:else}
     <div class="timeline-container">
       <!-- Desktop: zoomable overview -->
@@ -258,7 +261,7 @@
 
   .timeline-label.filtered {
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
-    color: var(--primary-dark);
+    color: var(--primary-ink);
   }
 
   .timeline-reset {
@@ -383,6 +386,16 @@
     .timeline-container {
       padding: var(--space-3) var(--space-4);
     }
+
+    .timeline-reset {
+      width: var(--button-size);
+      height: var(--button-size);
+    }
+
+    .timeline-year-select,
+    .timeline-month-select {
+      min-height: var(--button-size);
+    }
   }
 
   @media (width <= 480px) {
@@ -397,8 +410,8 @@
     }
 
     .timeline-reset {
-      width: 36px;
-      height: 36px;
+      width: var(--button-size);
+      height: var(--button-size);
     }
   }
 

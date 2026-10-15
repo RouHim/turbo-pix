@@ -1,0 +1,303 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15T06:21:47Z",
+  "title": "Design System: TurboPix",
+  "extensions": {
+    "colorMeta": {
+      "slate": {
+        "role": "primary",
+        "displayName": "Deep Slate",
+        "canonical": "oklch(55% 0.08 250deg)",
+        "tonalRamp": [
+          "oklch(15% 0.08 250deg)",
+          "oklch(25% 0.08 250deg)",
+          "oklch(35% 0.08 250deg)",
+          "oklch(45% 0.08 250deg)",
+          "oklch(55% 0.08 250deg)",
+          "oklch(65% 0.08 250deg)",
+          "oklch(75% 0.08 250deg)",
+          "oklch(90% 0.08 250deg)"
+        ]
+      },
+      "brass": {
+        "role": "secondary",
+        "displayName": "Warm Brass",
+        "canonical": "oklch(75% 0.12 80deg)",
+        "tonalRamp": [
+          "oklch(15% 0.12 80deg)",
+          "oklch(25% 0.12 80deg)",
+          "oklch(35% 0.12 80deg)",
+          "oklch(45% 0.12 80deg)",
+          "oklch(55% 0.12 80deg)",
+          "oklch(65% 0.12 80deg)",
+          "oklch(75% 0.12 80deg)",
+          "oklch(90% 0.12 80deg)"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Signal Red",
+        "canonical": "oklch(55% 0.2 25deg)",
+        "tonalRamp": [
+          "oklch(15% 0.2 25deg)",
+          "oklch(25% 0.2 25deg)",
+          "oklch(35% 0.2 25deg)",
+          "oklch(45% 0.2 25deg)",
+          "oklch(55% 0.2 25deg)",
+          "oklch(65% 0.2 25deg)",
+          "oklch(75% 0.2 25deg)",
+          "oklch(90% 0.2 25deg)"
+        ]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Signal Green",
+        "canonical": "oklch(65% 0.18 155deg)",
+        "tonalRamp": [
+          "oklch(15% 0.18 155deg)",
+          "oklch(25% 0.18 155deg)",
+          "oklch(35% 0.18 155deg)",
+          "oklch(45% 0.18 155deg)",
+          "oklch(55% 0.18 155deg)",
+          "oklch(65% 0.18 155deg)",
+          "oklch(75% 0.18 155deg)",
+          "oklch(90% 0.18 155deg)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "oklch(97.5% 0.005 80deg)",
+        "tonalRamp": [
+          "oklch(15% 0.005 80deg)",
+          "oklch(25% 0.005 80deg)",
+          "oklch(35% 0.005 80deg)",
+          "oklch(45% 0.005 80deg)",
+          "oklch(55% 0.005 80deg)",
+          "oklch(65% 0.005 80deg)",
+          "oklch(75% 0.005 80deg)",
+          "oklch(90% 0.005 80deg)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(20% 0.01 260deg)",
+        "tonalRamp": [
+          "oklch(15% 0.01 260deg)",
+          "oklch(25% 0.01 260deg)",
+          "oklch(35% 0.01 260deg)",
+          "oklch(45% 0.01 260deg)",
+          "oklch(55% 0.01 260deg)",
+          "oklch(65% 0.01 260deg)",
+          "oklch(75% 0.01 260deg)",
+          "oklch(90% 0.01 260deg)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Logo and section headings only — the serif's single register."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Dialog titles and error-state headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default UI voice across all functional strings."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase section captions and compact meta labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-light",
+        "value": "0 1px 2px oklch(0% 0 0deg / 4%), 0 1px 1px oklch(0% 0 0deg / 3%)",
+        "purpose": "Resting cards, header, dropdowns."
+      },
+      {
+        "name": "shadow-medium",
+        "value": "0 2px 8px oklch(0% 0 0deg / 6%), 0 1px 3px oklch(0% 0 0deg / 4%)",
+        "purpose": "Floating controls and bars; button hover lift."
+      },
+      {
+        "name": "shadow-heavy",
+        "value": "0 4px 16px oklch(0% 0 0deg / 8%), 0 2px 6px oklch(0% 0 0deg / 5%)",
+        "purpose": "Hover lift on cards and circular action buttons."
+      },
+      {
+        "name": "shadow-glow",
+        "value": "0 0 12px oklch(55% 0.08 250deg / 10%)",
+        "purpose": "Defined but unused; reserved."
+      }
+    ],
+    "motion": [
+      {
+        "name": "transition-fast",
+        "value": "0.15s cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Color, border, and small state changes."
+      },
+      {
+        "name": "transition-medium",
+        "value": "0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Card hover, overlays, drawers."
+      },
+      {
+        "name": "transition-slow",
+        "value": "0.5s cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Image scale and filter, viewer fade-in."
+      },
+      {
+        "name": "ease-spring",
+        "value": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "purpose": "View transitions and orbit chrome only."
+      }
+    ],
+    "breakpoints": [
+      { "name": "xs-down", "value": "480px" },
+      { "name": "sm-down", "value": "768px" },
+      { "name": "md-down", "value": "1024px" },
+      { "name": "lg-down", "value": "1200px" },
+      { "name": "xl-up", "value": "1400px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Filled Deep Slate action; lifts one step on hover.",
+      "html": "<button class='ds-btn-primary'>Save changes</button>",
+      "css": ".ds-btn-primary { padding: 10px 20px; border: none; border-radius: var(--radius-sm); background: var(--primary-color); color: #fff; font: 500 14px/1.5 var(--font-body); cursor: pointer; transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); } .ds-btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-medium); } .ds-btn-primary:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Outline toolbar button; hover and focus recolor the hairline border only.",
+      "html": "<button class='ds-btn-ghost'>Select all</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; gap: var(--space-1); padding: 8px 12px; border: 1px solid var(--divider-color); border-radius: var(--radius-md); background: var(--surface-color); color: var(--text-primary); font: 400 14px/1.5 var(--font-body); cursor: pointer; } .ds-btn-ghost:hover { border-color: var(--primary-color); } .ds-btn-ghost:focus-visible { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 2px var(--surface-color), 0 0 0 4px var(--primary-color); } .ds-btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Glass Icon Button",
+      "kind": "button",
+      "refersTo": "button-glass-icon",
+      "description": "Round veil control that sits on photos; hover deepens the veil and scales 1.1.",
+      "html": "<button class='ds-btn-glass' aria-label='Zoom in'><svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='11' cy='11' r='8'></circle><line x1='21' y1='21' x2='16.65' y2='16.65'></line><line x1='11' y1='8' x2='11' y2='14'></line><line x1='8' y1='11' x2='14' y2='11'></line></svg></button>",
+      "css": ".ds-btn-glass { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: none; border-radius: var(--radius-full); background: var(--viewer-btn-bg); backdrop-filter: blur(8px) saturate(1.5); -webkit-backdrop-filter: blur(8px) saturate(1.5); color: var(--viewer-btn-color); cursor: pointer; transition: background var(--transition-fast), transform var(--transition-fast); } .ds-btn-glass:hover { background: var(--viewer-btn-hover-bg); transform: scale(1.1); }"
+    },
+    {
+      "name": "Photo Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Contact-sheet frame: flat paper at rest, caption gradient fades in on hover.",
+      "html": "<figure class='ds-card'><div class='ds-card-media'></div><figcaption class='ds-card-caption'><strong>Amsterdam West</strong><span>2024-05-12 · 35 mm</span></figcaption></figure>",
+      "css": ".ds-card { position: relative; margin: 0; border: 1px solid var(--divider-color); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-color); box-shadow: var(--shadow-light); transition: box-shadow var(--transition-medium), border-color var(--transition-medium); cursor: pointer; } .ds-card:hover { box-shadow: var(--shadow-heavy); border-color: var(--primary-light); } .ds-card-media { aspect-ratio: 1; background: var(--background-secondary); } .ds-card-caption { position: absolute; inset: auto 0 0 0; display: flex; flex-direction: column; gap: 2px; padding: 20px; color: #fff; background: linear-gradient(to top, oklch(0% 0 0deg / 70%) 0%, transparent 100%); opacity: 0; transition: opacity var(--transition-medium); } .ds-card:hover .ds-card-caption { opacity: 1; } .ds-card-caption strong { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; } .ds-card-caption span { font-size: 13px; color: oklch(100% 0 0deg / 90%); }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "Resting on paper with a hairline; focus turns the border slate and brightens to surface.",
+      "html": "<input class='ds-input-search' type='search' placeholder='AI-powered photo search' aria-label='Search' />",
+      "css": ".ds-input-search { width: 100%; max-width: 600px; padding: 12px 16px; border: 1px solid var(--divider-color); border-radius: var(--radius-md); background: var(--background-color); color: var(--text-primary); font: 400 16px/1.5 var(--font-body); transition: border-color var(--transition-fast), background var(--transition-fast); } .ds-input-search:focus { outline: none; border-color: var(--primary-color); background: var(--surface-color); }"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Text-first nav items on glass; the active item fills Deep Slate.",
+      "html": "<nav class='ds-nav'><button class='ds-nav-item'>All Photos</button><button class='ds-nav-item active' aria-current='page'>Favorites</button><button class='ds-nav-item'>Albums</button></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 4px; width: 240px; padding: 16px; background: var(--glass-bg); backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5); border-right: 1px solid var(--glass-border); } .ds-nav-item { display: flex; align-items: center; width: 100%; padding: 12px 16px; border: none; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); font: 400 15px/1.5 var(--font-body); text-align: left; cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast); } .ds-nav-item:hover { background: var(--background-secondary); color: var(--text-primary); } .ds-nav-item.active { background: var(--primary-color); color: #fff; font-weight: 500; } .ds-nav-item:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }"
+    },
+    {
+      "name": "Glass Dialog",
+      "kind": "custom",
+      "description": "Glass panel over a 60% scrim, entrance scale-and-settle in 0.3s.",
+      "html": "<div class='ds-dialog' role='dialog' aria-modal='true'><div class='ds-dialog-panel'><h2 class='ds-dialog-title'>Edit metadata</h2><p class='ds-dialog-body'>Dates and coordinates are written straight into the photo's EXIF.</p></div></div>",
+      "css": ".ds-dialog { display: flex; align-items: center; justify-content: center; padding: 20px; background: oklch(0% 0 0deg / 60%); } .ds-dialog-panel { width: 100%; max-width: 500px; max-height: 90vh; overflow-y: auto; padding: 24px; border: 1px solid var(--divider-color); border-radius: var(--radius-lg); background: var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); color: var(--text-primary); animation: ds-modal-in 0.3s ease-out; } .ds-dialog-title { margin: 0 0 8px; font: 600 20px/1.5 var(--font-body); } .ds-dialog-body { margin: 0; color: var(--text-secondary); font: 400 14px/1.5 var(--font-body); } @keyframes ds-modal-in { from { opacity: 0; transform: scale(0.95) translateY(-20px); } to { opacity: 1; transform: scale(1) translateY(0); } }"
+    },
+    {
+      "name": "Toast",
+      "kind": "custom",
+      "description": "Bottom-center glass pill; the leading icon carries the type.",
+      "html": "<div class='ds-toast' role='status'><div class='ds-toast-body'><strong>Album created</strong><span>12 photos added</span></div></div>",
+      "css": ".ds-toast { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: var(--radius-md); background: var(--glass-bg); backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5); color: var(--text-primary); font: 400 14px/1.5 var(--font-body); box-shadow: var(--shadow-heavy); animation: ds-toast-in 0.3s ease-out; } .ds-toast > svg { color: var(--primary-color); } .ds-toast-body { display: flex; flex-direction: column; gap: 2px; } .ds-toast-body strong { font-weight: 600; } .ds-toast-body span { font-size: 13px; color: var(--text-secondary); } @keyframes ds-toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }"
+    },
+    {
+      "name": "Toggle Chips",
+      "kind": "chip",
+      "refersTo": "chip-toggle",
+      "description": "32px full-radius pills; pressed state is a 12% slate mix with a slate border.",
+      "html": "<div class='ds-chips'><button class='ds-chip'>Decade</button><button class='ds-chip' aria-pressed='true'>Year</button><button class='ds-chip'>Month</button></div>",
+      "css": ".ds-chips { display: flex; gap: 4px; } .ds-chip { height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid var(--divider-color); border-radius: var(--radius-full); background: transparent; color: var(--text-secondary); font: 400 12px/1 var(--font-body); cursor: pointer; transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast); } .ds-chip:hover { border-color: var(--primary-color); color: var(--primary-color); } .ds-chip[aria-pressed='true'] { border-color: var(--primary-color); background: color-mix(in oklch, var(--primary-color) 12%, transparent); color: var(--primary-dark); } .ds-chip:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface-color), 0 0 0 4px var(--primary-color); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Contact Sheet",
+    "overview": "The interface is a contact sheet on a light table: every photo gets the same quiet frame, the grid is the reading surface, and nothing in the chrome competes with the pictures. Browsing is scanning a proof sheet — calm, spacious, understated — and the only marks on the paper are the user's own: favorites in warm brass, selections and focus in deep slate.\n\nTwo materials carry the system. **Matte paper** — warm off-white surfaces, 1px hairlines at half opacity, ambient shadows — holds the content. **Layered glass** — translucent, blurred chrome that floats above (header, sidebar, control bars, dialogs, toasts) — carries the interface. Light mode is daylight paper (canvas at oklch 97.5%, hue 80); dark mode is the same room with the lights off (canvas at 14%) where the photos glow.\n\nType keeps the print register: Playfair Display for identity and section headings, DM Sans for everything functional, on a 4px rhythm. Motion is a courtesy, not a performance: three durations on one easing family (0.15 / 0.3 / 0.5s, cubic-bezier(0.4, 0, 0.2, 1)), one spring for view transitions, and both reduced-motion and reduced-transparency fallbacks built in.",
+    "keyCharacteristics": [
+      "Warm paper surfaces, deep slate interaction, exactly one brass mark.",
+      "Two materials only: matte paper and layered glass.",
+      "Contact-sheet grid: equal frames, generous gutters, chrome recedes.",
+      "Editorial serif for identity; a quiet sans for every UI string.",
+      "Motion 0.15/0.3/0.5s, one easing family, fully degradable."
+    ],
+    "rules": [
+      {
+        "name": "The Grease-Pencil Rule",
+        "body": "Warm Brass marks only human actions and rare attention — favorites, a single retry. Keep it to small areas; its scarcity is the point.",
+        "section": "colors"
+      },
+      {
+        "name": "The Warm Paper Rule",
+        "body": "Neutral surfaces stay warm (hue 80, chroma ≤ 0.005) and text stays cool (hue 260). Never substitute pure gray for paper or a warm hue for ink.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Voice Rule",
+        "body": "Playfair Display speaks for identity and section headings only; every functional string is DM Sans.",
+        "section": "typography"
+      },
+      {
+        "name": "The One-Step Lift Rule",
+        "body": "Hover moves a surface exactly one shadow step — light→heavy on cards, veil→veil-deep on glass icon buttons — with a scale of at most 1.15 on round controls.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Solid Fallback Rule",
+        "body": "Every glass surface must degrade to a solid paper surface under `prefers-reduced-transparency` or missing `backdrop-filter` (the scrim deepens to 92% black).",
+        "section": "elevation"
+      },
+      {
+        "name": "The Four-Step Radius Rule",
+        "body": "Radii come from 4 / 6 / 8 / full and nothing else; the 2px progress track is legacy drift, not a scale.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do let photos lead: the contact-sheet grid is the primary surface; chrome recedes behind paper tones and 1px hairlines.",
+      "Do keep interaction singular: Deep Slate for active, selected, and focus states, mixed translucently (12–45%) for large areas.",
+      "Do reserve Warm Brass for marks a person makes (favorites) and rare attention moments — small areas only.",
+      "Do pair every glass surface with its solid fallback for reduced transparency and missing `backdrop-filter` support.",
+      "Do build on the 4px spacing scale and keep ≥44px touch targets in viewer and mobile chrome.",
+      "Do keep Playfair Display for identity headings only; all UI strings use DM Sans.",
+      "Do use feather icons only (16–24px inline, no emoji).",
+      "Do honor `prefers-reduced-motion` and `prefers-reduced-transparency` in every new effect."
+    ],
+    "donts": [
+      "Don't fill large surfaces with Warm Brass or introduce new saturated hues.",
+      "Don't add shadows beyond light/medium/heavy, and never reference tokens that don't exist (an undefined `--shadow-lg` reference once silently removed the dialogs' shadow).",
+      "Don't use radius values outside 4/6/8/full — the 2px progress track is legacy drift.",
+      "Don't hardcode hex or rgb colors in new components — error boxes and toast accents come from the danger/success/accent tokens.",
+      "Don't use pure gray surfaces or warm text; paper stays warm (hue 80), ink stays cool (hue 260).",
+      "Don't rely on `--font-mono`: the JetBrains Mono token ships no web font.",
+      "Don't ship interactive controls without a visible `:focus-visible` treatment.",
+      "Don't use emoji or non-feather icon sets."
+    ]
+  }
+}

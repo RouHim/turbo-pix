@@ -62,12 +62,10 @@ use std::sync::Arc;
 use crate::db::{DbPool, Photo};
 use crate::media_facts::MediaFactsIndex;
 use crate::mimetype_detector;
-use crate::video_capability::{plan, ClientCodecs, Delivery};
-use crate::video_probe::ResolvedCapabilities;
+use crate::video_capability::{plan, ClientCodecs, Delivery, ResolvedCapabilities};
 use crate::video_processor::{
-    claim_transcode, convert_video_with_progress, get_copied_path_versioned, get_transcode_status,
-    get_transcoded_path_versioned, purge_old_transcode_versions, remux_sidecar_path,
-    remux_to_faststart_mp4, set_transcode_status, FileConversion, SourceCodecs, TranscodeClaim,
+    claim_transcode, convert_video_with_progress, get_transcode_status, remux_to_faststart_mp4,
+    set_transcode_status, FileConversion, SourceCodecs, TranscodeCache, TranscodeClaim,
     TranscodeState, TranscodeStatus,
 };
 use crate::video_stream::{
@@ -98,7 +96,7 @@ pub async fn get_video_file(
     db_pool: DbPool,
     facts: Arc<MediaFactsIndex>,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let mut photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
+    let photo = match Photo::find_by_hash(&db_pool, &photo_hash).await {
         Ok(Some(photo)) => photo,
         Ok(None) => return Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -117,8 +115,9 @@ pub async fn get_video_file(
 
     if return_metadata_only {
         // The date lives in the file; the payload must carry what the file
-        // carries (the DB row has none).
-        facts.enrich(&mut photo);
+        // carries (the DB row has none). The reply seam adds the facts before
+        // this projection reads them.
+        let photo = crate::photo_reply::PhotoReply::from_row(photo, &facts).into_inner();
         let video_metadata = json!({
             "hash_sha256": photo.hash_sha256,
             "filename": photo.filename,
@@ -230,19 +229,9 @@ pub async fn get_video_file(
         Delivery::StreamTranscode => Some(StreamMode::Transcode),
     };
 
-    // Cache fast path (FR-010): an artifact already produced for this exact
-    // source version is played as bytes, exactly like the original, instead of
-    // converting the same file a second time. Absence never gates playback —
-    // an uncached video simply gets the `stream` decision below.
-    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-    let hash = &photo.hash_sha256;
-    let file_size = photo.file_size;
-    let modified_millis = photo.date_modified.timestamp_millis();
-    let transcoded_artifact =
-        get_transcoded_path_versioned(Path::new(&cache_dir), hash, file_size, modified_millis);
-    let copied_artifact =
-        get_copied_path_versioned(Path::new(&cache_dir), hash, file_size, modified_millis);
+    let cache = TranscodeCache::from_env();
+    let transcoded_artifact = cache.transcoded(&photo);
+    let copied_artifact = cache.copied(&photo);
     // Existence is the whole test: an artifact only ever appears through an
     // atomic temp + rename, so a file at one of these paths is complete. The
     // per-hash conversion status tracks claim/cooldown state and must not gate
@@ -251,7 +240,7 @@ pub async fn get_video_file(
     // another (and the reverse).
     // The faststart sidecar is the remux cache: a lossless `-c copy` of the
     // source, so a remux delivery prefers it over any whole-file artifact.
-    let remux_sidecar = remux_sidecar_path(&cache_dir, hash, file_size, modified_millis);
+    let remux_sidecar = cache.remux(&photo);
     let cached_remux = matches!(delivery, Delivery::StreamRemux) && remux_sidecar.exists();
     // Which whole-file artifact this delivery may be served. The copy keeps the
     // SOURCE video codec, so only the delivery that implies the client declared
@@ -295,7 +284,7 @@ pub async fn get_video_file(
     let cached_encoder = matches!(delivery, Delivery::StreamTranscode | Delivery::StreamRemux)
         .then(|| get_transcode_status(&photo.hash_sha256).and_then(|status| status.encoder))
         .flatten()
-        .filter(|_| !caps.codec.is_empty());
+        .filter(|_| caps.may_claim_encoder());
 
     // `?decision` (bare or `=true`): don't stream — return the recommended
     // playback action as JSON so the client can pick without probing the
@@ -397,6 +386,7 @@ pub async fn get_video_file(
                     &headers,
                     FileConversion::Reencode,
                     &caps,
+                    &cache,
                 )
                 .await;
             } else {
@@ -414,6 +404,7 @@ pub async fn get_video_file(
                     &headers,
                     whole_file_kind(delivery),
                     &caps,
+                    &cache,
                 )
                 .await;
             }
@@ -626,31 +617,9 @@ fn urlencoding(value: &str) -> String {
 /// that had to probe the file.
 fn source_codecs(caps: &ResolvedCapabilities) -> SourceCodecs<'_> {
     SourceCodecs {
-        video: (!caps.codec.is_empty()).then_some(caps.codec.as_str()),
+        video: caps.may_claim_encoder().then_some(caps.codec.as_str()),
         audio: caps.audio_codec.as_deref(),
     }
-}
-
-/// True when the RESOLVED capabilities of THIS request attest the source
-/// carries no stream a conversion can map: neither a non-attached video track
-/// nor an audio track (a cover-art-only MP4 without audio, a subtitle-only
-/// MKV). Both the whole-file escape hatch and the stream path consult it.
-///
-/// `caps` is the facts `video_probe::resolve` produced for this request, never
-/// the stored snapshot read at handler entry: `caps.probed` is set only by a
-/// successful probe, so the completeness fact is `caps.probed ||
-/// record_is_complete(photo)` — the record is complete when a previous request
-/// wrote it, and a successful probe is exactly what makes it so on the request
-/// that establishes the fact. Reading the stored snapshot instead would let
-/// the guard never fire on that request, and an incomplete record must never be
-/// read as "there is none": its empty codecs mean "unknown" as well as
-/// "absent", and refusing a real video would be worse than a doomed spawn. A
-/// FAILED probe leaves `caps.probed` false and the record incomplete, so such
-/// a file still claims its slot and answers 202.
-fn has_no_mappable_stream(photo: &Photo, caps: &ResolvedCapabilities) -> bool {
-    (caps.probed || crate::video_probe::record_is_complete(photo))
-        && caps.codec.is_empty()
-        && caps.audio_codec.is_none()
 }
 
 /// Whole-file conversion escape hatch: the legacy `?transcode=true` flow
@@ -660,14 +629,15 @@ fn has_no_mappable_stream(photo: &Photo, caps: &ResolvedCapabilities) -> bool {
 /// cannot consume the streamed codec and for explicit user retries.
 ///
 /// `caps` are the capabilities THIS request resolved (see
-/// [`source_codecs`] and [`has_no_mappable_stream`]) — the stored snapshot
-/// cannot be substituted, because a request that had to probe is the one whose
-/// facts are not in the record yet.
+/// [`source_codecs`] and [`ResolvedCapabilities::has_no_mappable_stream`]) —
+/// the stored snapshot cannot be substituted, because a request that had to
+/// probe is the one whose facts are not in the record yet.
 async fn serve_whole_file_transcode(
     photo: &Photo,
     headers: &HeaderMap,
     conversion: FileConversion,
     caps: &ResolvedCapabilities,
+    cache: &TranscodeCache,
 ) -> Result<Box<dyn Reply>, Rejection> {
     let codecs = source_codecs(caps);
     let video_path = Path::new(&photo.file_path);
@@ -682,39 +652,12 @@ async fn serve_whole_file_transcode(
         photo.filename
     );
 
-    // Get cache directory from environment or use the app data path (not /tmp/turbo-pix: a
-    // predictable world-writable path is squat-able by local users via symlinks). main.rs defaults
-    // the env var from config when unset.
-    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-    let cache_path = Path::new(&cache_dir);
-    // Versioned by the source's size+mtime (the DB hash is path-derived, so an in-place edit keeps
-    // the hash while the bytes change — the version makes this miss after the rescan notices the
-    // edit instead of serving the stale H.264 transcode forever).
     // This delivery's own artifact, plus the universal re-encode every client
     // can play: an existing re-encode answers a delivery whose own artifact is
     // missing, never the other way round (a copy keeps the source video codec,
     // which only an audio-only delivery's client declared).
-    let own_artifact = match conversion {
-        FileConversion::VideoCopy => get_copied_path_versioned(
-            cache_path,
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        ),
-        FileConversion::Reencode => get_transcoded_path_versioned(
-            cache_path,
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        ),
-    };
-    let universal_artifact = get_transcoded_path_versioned(
-        cache_path,
-        &photo.hash_sha256,
-        photo.file_size,
-        photo.date_modified.timestamp_millis(),
-    );
+    let own_artifact = cache.artifact(conversion, photo);
+    let universal_artifact = cache.transcoded(photo);
     let transcoded_path = if own_artifact.exists() {
         own_artifact
     } else if universal_artifact.exists() {
@@ -732,7 +675,7 @@ async fn serve_whole_file_transcode(
         // claiming a conversion slot for a run that can only fail (and whose
         // failure the poll endpoint would then report). Placed after the
         // artifact check so a finished artifact is always served.
-        if has_no_mappable_stream(photo, caps) {
+        if caps.has_no_mappable_stream(photo) {
             log::warn!(
                 "Serving original video; the resolved capabilities list no mappable stream: {}",
                 photo.filename
@@ -759,7 +702,7 @@ async fn serve_whole_file_transcode(
                 // leaves no file at the artifact path. Remove any leftover temp sibling
                 // and serve the original; the warning header tells the client why. A
                 // finished artifact is never deleted on the strength of this status.
-                let temp_output_path = transcoded_path.with_extension("mp4.tmp");
+                let temp_output_path = TranscodeCache::temp_sibling(&transcoded_path);
                 if temp_output_path.exists() {
                     log::warn!(
                         "Removing leftover temp file from failed/timeout transcode: {}",
@@ -817,7 +760,7 @@ async fn serve_whole_file_transcode(
                 spawn_whole_file_transcode(
                     photo,
                     transcoded_path.clone(),
-                    cache_path.to_path_buf(),
+                    cache.clone(),
                     conversion,
                     codecs,
                 );
@@ -857,7 +800,7 @@ async fn serve_whole_file_transcode(
 fn spawn_whole_file_transcode(
     photo: &Photo,
     output_path: PathBuf,
-    cache_root: PathBuf,
+    cache: TranscodeCache,
     conversion: FileConversion,
     codecs: SourceCodecs<'_>,
 ) {
@@ -914,7 +857,7 @@ fn spawn_whole_file_transcode(
                 // versioned name folds in size+mtime, so an in-place edit produces a new
                 // file rather than overwriting; the old code only purged the artifact's
                 // own directory).
-                purge_old_transcode_versions(&cache_root, &hash, &output_path);
+                cache.purge_old_versions(&hash, &output_path);
                 // The poll status is the third carrier of the encoder claim
                 // (alongside the live `x-turbopix-encoder` header and the
                 // cached `?decision` field): `convert_with_fallback` names an
@@ -986,17 +929,14 @@ fn spawn_whole_file_transcode(
 /// `codecs` are the codecs the run that just finished copied, as the resolver
 /// reported them: they pick the copy's codec tags and whether the audio is
 /// copied or converted (see `build_conversion_args`).
-fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
-    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-
+fn spawn_cache_fill(
+    photo: &Photo,
+    mode: StreamMode,
+    codecs: SourceCodecs<'_>,
+    cache: &TranscodeCache,
+) {
     if mode == StreamMode::Remux {
-        let sidecar = remux_sidecar_path(
-            &cache_dir,
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        );
+        let sidecar = cache.remux(photo);
         if sidecar.exists() {
             return;
         }
@@ -1008,8 +948,8 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         // concurrent fills cannot interleave.
         let source = PathBuf::from(&photo.file_path);
         let hash = photo.hash_sha256.clone();
-        let cache_root = PathBuf::from(&cache_dir);
         let sidecar_keep = sidecar.clone();
+        let cache = cache.clone();
         // The source's first video track, from the resolver (`codecs` is the
         // record for the stream that just finished). The sidecar is served as
         // `action: direct` bytes and played natively, so it must carry the same
@@ -1021,7 +961,7 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
                 Ok(()) => {
                     log::info!("Remux cache ready for {hash}");
                     // An in-place edit versions the sidecar name; drop the stale ones.
-                    purge_old_transcode_versions(&cache_root, &hash, &sidecar_keep);
+                    cache.purge_old_versions(&hash, &sidecar_keep);
                 }
                 Err(e) => log::warn!("Remux cache fill failed for {hash}: {e}"),
             }
@@ -1042,20 +982,7 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
         StreamMode::Audio => FileConversion::VideoCopy,
         StreamMode::Transcode | StreamMode::Remux => FileConversion::Reencode,
     };
-    let output = match conversion {
-        FileConversion::VideoCopy => get_copied_path_versioned(
-            Path::new(&cache_dir),
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        ),
-        FileConversion::Reencode => get_transcoded_path_versioned(
-            Path::new(&cache_dir),
-            &photo.hash_sha256,
-            photo.file_size,
-            photo.date_modified.timestamp_millis(),
-        ),
-    };
+    let output = cache.artifact(conversion, photo);
     if output.exists() {
         // Cached already (or cached while this playthrough ran).
         return;
@@ -1063,7 +990,7 @@ fn spawn_cache_fill(photo: &Photo, mode: StreamMode, codecs: SourceCodecs<'_>) {
     if claim_transcode(&photo.hash_sha256) != TranscodeClaim::Started {
         return;
     }
-    spawn_whole_file_transcode(photo, output, PathBuf::from(&cache_dir), conversion, codecs);
+    spawn_whole_file_transcode(photo, output, cache.clone(), conversion, codecs);
 }
 
 /// Parse a single-range `Range` header value (e.g. "bytes=0-1023", "bytes=-500").
@@ -1244,7 +1171,7 @@ pub async fn stream_video(
     // produced" without misleading the client, and inventing one is out of
     // scope. The body stays generic (no server paths, no ffmpeg diagnostics),
     // like every other start failure.
-    if has_no_mappable_stream(&photo, &caps) {
+    if caps.has_no_mappable_stream(&photo) {
         log::warn!(
             "Refusing to stream a source with no mappable stream: {}",
             photo.filename
@@ -1318,6 +1245,7 @@ pub async fn stream_video(
     // client is already playing, so it can never gate first playback (FR-010).
     let fill_source = (start <= FULL_RUN_MAX_START_SECS)
         .then(|| (photo.clone(), caps.codec.clone(), caps.audio_codec.clone()));
+    let cache = TranscodeCache::from_env();
     tokio::spawn(async move {
         let outcome = supervise(child, stderr, progress).await;
         match &outcome {
@@ -1340,6 +1268,7 @@ pub async fn stream_video(
                         video: (!video_codec.is_empty()).then_some(video_codec.as_str()),
                         audio: audio_codec.as_deref(),
                     },
+                    &cache,
                 );
             }
         }
@@ -1367,7 +1296,7 @@ pub async fn stream_video(
     // the run's own claim does not apply either: reporting the encoder would
     // render "Converted on the CPU (<video encoder>)" for a pure audio
     // conversion. The empty codec is the same signal the MIME uses.
-    let encoder = encoder.filter(|_| !caps.codec.is_empty());
+    let encoder = encoder.filter(|_| caps.may_claim_encoder());
     let response: Box<dyn Reply> = match encoder {
         Some(encoder) => Box::new(warp::reply::with_header(
             response,
@@ -1396,6 +1325,8 @@ mod tests {
     use chrono::Utc;
     use tempfile::TempDir;
     use warp::http::HeaderValue;
+
+    use crate::video_processor::{get_copied_path_versioned, get_transcoded_path_versioned};
 
     struct EnvVarGuard {
         key: &'static str,
@@ -2072,6 +2003,7 @@ mod tests {
                 video: None,
                 audio: Some("opus"),
             },
+            &TranscodeCache::from_env(),
         );
         let audio_artifact = get_transcoded_path_versioned(
             temp_dir.path(),
@@ -2123,6 +2055,7 @@ mod tests {
                 video: Some("hevc"),
                 audio: Some("mp3"),
             },
+            &TranscodeCache::from_env(),
         );
         // The fill resolves its cache root from `TRANSCODE_CACHE_DIR`, which
         // this test pinned to the FIRST temp dir, so the artifact lands there
@@ -2303,8 +2236,7 @@ mod tests {
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = remux_sidecar_path(
-            temp_dir.path().to_str().unwrap(),
+        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3054,6 +2986,7 @@ mod tests {
                     video: None,
                     audio: Some("mp3"),
                 },
+                &TranscodeCache::from_env(),
             );
             attempts += 1;
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -3106,6 +3039,7 @@ mod tests {
                 video: None,
                 audio: Some("mp3"),
             },
+            &TranscodeCache::from_env(),
         );
 
         // Already converting (another request owns the claim): the pool bound
@@ -3120,6 +3054,7 @@ mod tests {
                 video: None,
                 audio: Some("mp3"),
             },
+            &TranscodeCache::from_env(),
         );
 
         // Neither call may have started an encoder.
@@ -3322,8 +3257,7 @@ mod tests {
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = remux_sidecar_path(
-            temp_dir.path().to_str().unwrap(),
+        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -4085,8 +4019,7 @@ mod tests {
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = remux_sidecar_path(
-            temp_dir.path().to_str().unwrap(),
+        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
             &hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),

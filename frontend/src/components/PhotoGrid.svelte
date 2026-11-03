@@ -17,6 +17,7 @@
   import Icon from './Icon.svelte';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { isPrefixQuery } from '../lib/query.js';
+  import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import PhotoCard from './PhotoCard.svelte';
 
   const DEFAULT_BATCH_SIZE = APP_CONSTANTS.DEFAULT_BATCH_SIZE;
@@ -57,19 +58,7 @@
    * Builds API filter params from the current route.
    */
   function buildFilters() {
-    const filters = {};
-    if (route.view === 'favorites') filters.query = 'is_favorite:true';
-    if (route.view === 'videos') filters.query = 'type:video';
-    if (route.sort) {
-      const [field, order] = route.sort.split('_');
-      filters.sort = field;
-      filters.order = order || 'desc';
-    }
-    if (route.year) filters.year = route.year;
-    if (route.month) filters.month = route.month;
-    if (route.to_year) filters.toYear = route.to_year;
-    if (route.to_month) filters.toMonth = route.to_month;
-    return filters;
+    return routeToPhotoQuery(route, { view: 'grid' });
   }
 
   /**

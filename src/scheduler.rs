@@ -334,129 +334,15 @@ impl PhotoScheduler {
 
     pub fn start(&self) -> JoinHandle<()> {
         let mut scheduler = Scheduler::new();
-
-        let photo_paths = self.photo_paths.clone();
-        let db_pool = self.db_pool.clone();
-        let cache_manager = self.cache_manager.clone();
-        let semantic_search = self.semantic_search.clone();
-        let data_path = self.data_path.clone();
-        let rescan_lock = self.rescan_lock.clone();
-        let status = self.status.clone();
-        let locale = self.locale.clone();
-        let nominatim_url = self.nominatim_url.clone();
-        let media_facts = self.media_facts.clone();
+        let cycle = self.clone();
 
         // Full rescan and cleanup at midnight
         scheduler.every(1.day()).at("00:00").run(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                // Try to acquire lock - if another rescan is running, skip this one
-                let lock = match rescan_lock.try_lock() {
-                    Ok(lock) => lock,
-                    Err(_) => {
-                        warn!("Skipping scheduled rescan - another rescan is already in progress");
-                        return;
-                    }
-                };
-
-                info!("Starting scheduled photo rescan and cleanup (two-phase indexing)");
-
-                // Mark indexing as started
-                status.start_indexing().await;
-                status.mark_incomplete();
-
-                let processor = PhotoProcessor::new(photo_paths.clone(), semantic_search.clone());
-
-                // Phase 1: Fast metadata-only scan (skip semantic vectors)
-                info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
-                match processor
-                    .full_rescan_and_cleanup(&db_pool, &cache_manager, &status, &media_facts)
-                    .await
-                {
-                    Ok(processed_photos) => {
-                        // Convert ProcessedPhoto to Photo
-                        let photos: Vec<crate::db::Photo> =
-                            processed_photos.into_iter().map(|p| p.into()).collect();
-
-                        // Batch write photos to database
-                        let (indexed_count, error_count) =
-                            Self::batch_write_photos(&db_pool, photos, &status).await;
-
-                        info!(
-                            "Phase 1 completed: {} photos indexed, {} errors",
-                            indexed_count, error_count
-                        );
-
-                        // Phase 2: Batch compute semantic vectors
-                        info!("Phase 2: Computing semantic vectors in batches");
-                        status.set_phase("semantic_vectors").await;
-                        match processor
-                            .batch_compute_semantic_vectors(&db_pool, &status)
-                            .await
-                        {
-                            Ok((success, errors)) => {
-                                info!(
-                                    "Phase 2 completed: {} semantic vectors computed, {} errors",
-                                    success, errors
-                                )
-                            }
-                            Err(e) => error!("Phase 2 failed: {}", e),
-                        }
-
-                        // Phase 3: Geo resolution
-                        info!("Phase 3: Resolving photo geo locations");
-                        status.set_phase("geo_resolution").await;
-                        Self::run_geo_resolution_phase(
-                            &db_pool,
-                            &nominatim_url,
-                            &status,
-                            &media_facts,
-                        )
-                        .await;
-
-                        // Phase 4: Generate collages
-                        info!("Phase 4: Generating collages");
-                        status.set_phase("collages").await;
-                        match collage_generator::generate_collages(
-                            &db_pool,
-                            &media_facts,
-                            &data_path,
-                            locale.as_str(),
-                        )
-                        .await
-                        {
-                            Ok(count) => info!("Phase 4 completed: {} collages generated", count),
-                            Err(e) => error!("Phase 4 (collage generation) failed: {}", e),
-                        }
-
-                        // Phase 5: Housekeeping Identification
-                        info!("Phase 5: Identifying housekeeping candidates");
-                        status.set_phase("housekeeping").await;
-                        match housekeeping_manager::run_housekeeping_scan(
-                            &db_pool,
-                            &semantic_search,
-                        )
-                        .await
-                        {
-                            Ok(count) => info!(
-                                "Phase 5 completed: {} housekeeping candidates identified",
-                                count
-                            ),
-                            Err(e) => error!("Phase 5 (housekeeping identification) failed: {}", e),
-                        }
-
-                        // Mark as complete only if Phase 1 succeeded
-                        status.mark_complete();
-                    }
-                    Err(e) => {
-                        error!("Phase 1 (metadata scan) failed: {}", e);
-                        status.mark_incomplete();
-                    }
+                if let Err(e) = cycle.run_cycle().await {
+                    error!("Scheduled rescan failed: {}", e);
                 }
-
-                // Always mark indexing as stopped, even on error
-                status.stop_indexing().await;
-                drop(lock);
             });
         });
 
@@ -527,26 +413,47 @@ impl PhotoScheduler {
     }
 
     pub async fn run_startup_rescan(&self) -> Result<(), anyhow::Error> {
-        // Try to acquire lock - if another rescan is running, skip this one
+        self.run_cycle().await
+    }
+
+    /// The one five-phase indexing cycle. Both entry points — the startup
+    /// rescan and the nightly schedule — call it; they differ only in how the
+    /// result is reported.
+    ///
+    /// The lock and the status transitions live here too, so a phase-1 failure
+    /// has exactly one meaning: mark the index incomplete, stop indexing and
+    /// return the error. Phases 2–5 run only after phase 1 succeeded.
+    async fn run_cycle(&self) -> Result<(), anyhow::Error> {
         let lock = match self.rescan_lock.try_lock() {
             Ok(lock) => lock,
             Err(_) => {
-                warn!("Skipping startup rescan - another rescan is already in progress");
+                warn!("Skipping rescan - another rescan is already in progress");
                 return Ok(());
             }
         };
 
-        info!("Starting startup photo rescan and cleanup (two-phase indexing)");
-
-        // Mark indexing as started
+        info!("Starting photo rescan and cleanup (two-phase indexing)");
         self.status.start_indexing().await;
         self.status.mark_incomplete();
 
+        let result = self.run_phases().await;
+
+        match &result {
+            Ok(()) => self.status.mark_complete(),
+            Err(_) => self.status.mark_incomplete(),
+        }
+        // Always mark indexing as stopped, even on error.
+        self.status.stop_indexing().await;
+        drop(lock);
+        result
+    }
+
+    async fn run_phases(&self) -> Result<(), anyhow::Error> {
         let processor = PhotoProcessor::new(self.photo_paths.clone(), self.semantic_search.clone());
 
         // Phase 1: Fast metadata-only scan (skip semantic vectors)
         info!("Phase 1: Fast metadata scan (skipping semantic vectors)");
-        let result = processor
+        let processed_photos = processor
             .full_rescan_and_cleanup(
                 &self.db_pool,
                 &self.cache_manager,
@@ -554,32 +461,20 @@ impl PhotoScheduler {
                 &self.media_facts,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Phase 1 failed: {}", e));
+            .map_err(|e| anyhow::anyhow!("Phase 1 (metadata scan) failed: {}", e))?;
 
-        let (indexed_count, error_count) = match result {
-            Ok(processed_photos) => {
-                // Convert ProcessedPhoto to Photo
-                let photos: Vec<crate::db::Photo> =
-                    processed_photos.into_iter().map(|p| p.into()).collect();
+        // Convert ProcessedPhoto to Photo
+        let photos: Vec<crate::db::Photo> =
+            processed_photos.into_iter().map(|p| p.into()).collect();
 
-                // Batch write photos to database (same as scheduled rescan)
-                let (count, errors) =
-                    Self::batch_write_photos(&self.db_pool, photos, &self.status).await;
+        // Batch write photos to database
+        let (indexed_count, error_count) =
+            Self::batch_write_photos(&self.db_pool, photos, &self.status).await;
 
-                info!(
-                    "Phase 1 completed: {} photos indexed, {} errors",
-                    count, errors
-                );
-                (count, errors)
-            }
-            Err(e) => {
-                error!("{}", e);
-                self.status.mark_incomplete();
-                self.status.stop_indexing().await;
-                drop(lock);
-                return Err(e);
-            }
-        };
+        info!(
+            "Phase 1 completed: {} photos indexed, {} errors",
+            indexed_count, error_count
+        );
 
         // Phase 2: Batch compute semantic vectors
         info!("Phase 2: Computing semantic vectors in batches");
@@ -637,16 +532,9 @@ impl PhotoScheduler {
         }
 
         info!(
-            "Startup rescan completed (five-phase): {} photos indexed, {} errors",
+            "Rescan completed (five-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
-
-        // Mark as complete - all phases ran (some may have had errors but the process completed)
-        self.status.mark_complete();
-
-        // Mark indexing as stopped
-        self.status.stop_indexing().await;
-        drop(lock);
         Ok(())
     }
 }

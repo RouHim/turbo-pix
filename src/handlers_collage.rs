@@ -390,7 +390,8 @@ mod tests {
     ///      that month matches it.
     #[tokio::test]
     async fn test_accept_collage_publishes_the_extracted_date_to_facts() {
-        use crate::db::{Photo, SearchQuery};
+        use crate::db::SearchQuery;
+        use crate::photo_listing::{ListingPage, ListingRequest};
         use chrono::{TimeZone, Utc};
 
         let db_pool = create_in_memory_pool()
@@ -457,45 +458,57 @@ mod tests {
         );
 
         // ...and a month filter for that date matches the new photo.
-        let (photos, total) = Photo::search_photos(
+        let listing = crate::photo_listing::list(
             &db_pool,
             &facts,
-            &SearchQuery {
-                q: None,
-                year: Some(2015),
-                month: Some(6),
-                to_year: None,
-                to_month: None,
+            ListingRequest {
+                query: &SearchQuery {
+                    q: None,
+                    year: Some(2015),
+                    month: Some(6),
+                    to_year: None,
+                    to_month: None,
+                },
+                album: None,
+                sort: None,
+                order: None,
+                page: Some(ListingPage {
+                    limit: 50,
+                    offset: 0,
+                }),
             },
-            50,
-            0,
-            None,
-            None,
         )
         .await
         .expect("search must succeed");
+        let (photos, total) = (listing.photos, listing.total as i64);
         assert_eq!(total, 1, "the accepted collage must match its own month");
         assert_eq!(photos[0].file_path, dest);
         assert_eq!(photos[0].taken_at, Some(captured));
 
         // The undated-path control: a different month must not match it.
-        let (other, other_total) = Photo::search_photos(
+        let listing = crate::photo_listing::list(
             &db_pool,
             &facts,
-            &SearchQuery {
-                q: None,
-                year: Some(2020),
-                month: Some(1),
-                to_year: None,
-                to_month: None,
+            ListingRequest {
+                query: &SearchQuery {
+                    q: None,
+                    year: Some(2020),
+                    month: Some(1),
+                    to_year: None,
+                    to_month: None,
+                },
+                album: None,
+                sort: None,
+                order: None,
+                page: Some(ListingPage {
+                    limit: 50,
+                    offset: 0,
+                }),
             },
-            50,
-            0,
-            None,
-            None,
         )
         .await
         .expect("search must succeed");
+        let (other, other_total) = (listing.photos, listing.total as i64);
         assert_eq!(other_total, 0);
         assert!(other.is_empty());
     }

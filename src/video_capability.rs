@@ -3,7 +3,171 @@
 //! decision that maps resolved capabilities + a client declaration onto a
 //! delivery mode.
 
-use crate::video_probe::ResolvedCapabilities;
+use serde_json::Value;
+
+use crate::db::Photo;
+
+/// Bumped whenever the set of persisted capability facts changes; its presence
+/// is the "record complete, never probe again" marker.
+pub const CAPABILITY_VERSION: u64 = 1;
+
+#[derive(Debug, Default, PartialEq)]
+pub struct CapabilityPatch {
+    /// False for audio-only / cover-art-only containers: the probe succeeded but
+    /// found no non-attached video stream.
+    pub has_video_stream: bool,
+    /// False when the probe found no non-attached audio stream. Without this
+    /// fact a `None` [`Self::audio_codec`] cannot be told apart from "the first
+    /// audio stream reported no `codec_name`", and `merged` would then keep a
+    /// stored codec for a file the probe just proved carries no audio at all.
+    pub has_audio_stream: bool,
+    pub codec: Option<String>,
+    pub container: Option<String>,
+    pub bit_depth: Option<u32>,
+    pub audio_codec: Option<String>,
+    pub duration_secs: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedCapabilities {
+    pub codec: String,
+    pub container: Option<String>,
+    pub family: ContainerFamily,
+    pub bit_depth: Option<u32>,
+    pub audio_codec: Option<String>,
+    /// `Some(true)` / `Some(false)` when a pass established the layout (the
+    /// probe's own verdict, or the fact the record already stored), `None` when
+    /// none ever did: the record carries no `moov_at_start` key and the moov
+    /// pass yielded no verdict. Never invented — `plan` reads `None` as "not
+    /// known to be progressive" and takes the remux rung for an MP4-family
+    /// source instead of the whole-file download `Direct` costs.
+    pub moov_at_start: Option<bool>,
+    pub duration_secs: Option<f64>,
+    /// True when this call had to probe the file (incomplete record).
+    pub probed: bool,
+}
+
+impl ResolvedCapabilities {
+    /// Whether a delivery may name an encoder. A source with no video stream
+    /// (or an unknown codec) was not video-encoded, so silence is the only
+    /// honest hint.
+    pub fn may_claim_encoder(&self) -> bool {
+        !self.codec.is_empty()
+    }
+
+    /// Whether the container carries no mappable video stream, using the
+    /// stored snapshot and this call's probe together: `probed` is set only by
+    /// a successful probe, so completeness is `probed ||
+    /// record_is_complete(photo)`.
+    pub fn has_no_mappable_stream(&self, photo: &Photo) -> bool {
+        (self.probed || record_is_complete(photo))
+            && self.codec.is_empty()
+            && self.audio_codec.is_none()
+    }
+
+    /// The facts the stored record already holds. `probed: false`: no file was
+    /// consulted for this answer.
+    pub fn from_record(photo: &Photo) -> Self {
+        Self {
+            codec: photo.video_codec().unwrap_or_default().to_string(),
+            container: photo.container().map(str::to_string),
+            family: ContainerFamily::from_record(photo.container(), &photo.filename),
+            bit_depth: photo.bit_depth(),
+            audio_codec: photo.audio_codec().map(str::to_string),
+            moov_at_start: stored_moov_at_start(photo),
+            duration_secs: photo.duration.filter(|d| *d > 0.0),
+            probed: false,
+        }
+    }
+
+    /// The facts a probe established, merged over the stored record.
+    pub(crate) fn merged(
+        photo: &Photo,
+        patch: &CapabilityPatch,
+        moov_at_start: Option<bool>,
+    ) -> Self {
+        let container = patch
+            .container
+            .clone()
+            .or_else(|| photo.container().map(str::to_string));
+        Self {
+            // A probe that established there is no non-attached video stream
+            // resolves to NO video codec: the stored record may still hold the
+            // cover picture's codec (dropped above, but the in-memory `photo`
+            // snapshot cannot see that write), and answering with it would
+            // contradict the probe's own finding. A probe that DID find a video
+            // stream but reported no `codec_name` keeps the fallback — the
+            // record then carries no codec key at all, so it stays incomplete
+            // and is probed again rather than being trusted.
+            codec: if patch.has_video_stream {
+                patch
+                    .codec
+                    .clone()
+                    .unwrap_or_else(|| photo.video_codec().unwrap_or_default().to_string())
+            } else {
+                String::new()
+            },
+            family: ContainerFamily::from_record(container.as_deref(), &photo.filename),
+            container,
+            bit_depth: patch.bit_depth.or_else(|| photo.bit_depth()),
+            // Same rule as `codec` above, for the same reason: a probe that
+            // established there is no non-attached audio stream resolves to NO
+            // audio codec, because the stored record may still hold one from an
+            // earlier scan of this path (an in-place replacement, before the
+            // rescan updates the row) and answering with it would contradict the
+            // probe. The stored value is only a fallback for a probe that DID
+            // find an audio stream but reported no `codec_name` — there the
+            // record carries no codec key, so it stays incomplete and is probed
+            // again rather than trusted. A stale `Some(…)` here is not cosmetic:
+            // `has_no_mappable_stream` keys on an empty codec AND
+            // `audio_codec.is_none()`, so it would claim a conversion slot for a
+            // run whose maps select nothing, and `output_mime` would advertise
+            // audio the copied init segment does not carry.
+            audio_codec: if patch.has_audio_stream {
+                patch
+                    .audio_codec
+                    .clone()
+                    .or_else(|| photo.audio_codec().map(str::to_string))
+            } else {
+                None
+            },
+            moov_at_start,
+            duration_secs: patch
+                .duration_secs
+                .or_else(|| photo.duration.filter(|d| *d > 0.0)),
+            probed: true,
+        }
+    }
+}
+
+/// Complete = a previous probe/scan wrote the version marker plus either a codec
+/// or the explicit "probed, no video stream" marker.
+/// An absent `moov_at_start` key is "never probed", NOT "true".
+pub fn record_is_complete(photo: &Photo) -> bool {
+    let Some(video) = photo.metadata.get("video") else {
+        return false;
+    };
+    if video.get("capability_version").and_then(Value::as_u64) != Some(CAPABILITY_VERSION) {
+        return false;
+    }
+    video
+        .get("codec")
+        .and_then(Value::as_str)
+        .is_some_and(|c| !c.is_empty())
+        || video.get("no_video_stream").and_then(Value::as_bool) == Some(true)
+}
+
+/// The layout the record itself stores: `Some(true)` / `Some(false)` when the
+/// key is there, `None` when it is absent — the state [`record_is_complete`]
+/// documents as "never probed", NOT "true". The scanner's own fallback for a
+/// failed layout pass is not a record: absence stays absence.
+pub(crate) fn stored_moov_at_start(photo: &Photo) -> Option<bool> {
+    photo
+        .metadata
+        .get("video")
+        .and_then(|video| video.get("moov_at_start"))
+        .and_then(Value::as_bool)
+}
 
 /// Maps a ffprobe pixel format string to its bit depth.
 ///
@@ -283,7 +447,6 @@ impl ClientCodecs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::video_probe::ResolvedCapabilities;
 
     fn caps(
         codec: &str,

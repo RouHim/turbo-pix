@@ -1,6 +1,4 @@
-use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -16,7 +14,9 @@ use crate::image_editor::{self, RotationAngle};
 use crate::media_facts::MediaFactsIndex;
 use crate::metadata_writer;
 use crate::mimetype_detector;
-use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit, VideoMetadataWrite};
+use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit, VideoSaveError};
+use crate::photo_listing::{self, ListingPage, ListingRequest};
+use crate::photo_reply::PhotoReply;
 use crate::warp_helpers::{
     handle_rejection, with_cache, with_db, with_facts, DatabaseError, NotFoundError,
     PermissionError, ValidationError, VideoMetadataError,
@@ -50,7 +50,7 @@ pub struct PhotoQuery {
 
 #[derive(Debug, serde::Serialize)]
 pub struct PhotosResponse {
-    pub photos: Vec<Photo>,
+    pub photos: Vec<PhotoReply>,
     pub total: usize,
     pub page: u32,
     pub limit: u32,
@@ -68,12 +68,14 @@ pub struct MapPhotoQuery {
     pub q: Option<String>,
     pub year: Option<i32>,
     pub month: Option<i32>,
+    pub to_year: Option<i32>,
+    pub to_month: Option<i32>,
     pub album: Option<i64>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct MapPhotosResponse {
-    pub photos: Vec<Photo>,
+    pub photos: Vec<PhotoReply>,
 }
 
 async fn fetch_photos(
@@ -82,43 +84,28 @@ async fn fetch_photos(
     query: &PhotoQuery,
     limit: i64,
     offset: i64,
-) -> Result<(Vec<Photo>, i64), String> {
-    if query.q.is_some()
-        || query.year.is_some()
-        || query.month.is_some()
-        || query.to_year.is_some()
-        || query.to_month.is_some()
-    {
-        let search_query = SearchQuery {
-            q: query.q.clone(),
-            year: query.year,
-            month: query.month,
-            to_year: query.to_year,
-            to_month: query.to_month,
-        };
-        Photo::search_photos(
-            db_pool,
-            facts,
-            &search_query,
-            limit,
-            offset,
-            query.sort.as_deref(),
-            query.order.as_deref(),
-        )
-        .await
-        .map_err(|e| format!("{}", e))
-    } else {
-        Photo::list_with_pagination(
-            db_pool,
-            facts,
-            limit,
-            offset,
-            query.sort.as_deref(),
-            query.order.as_deref(),
-        )
-        .await
-        .map_err(|e| format!("{}", e))
-    }
+) -> Result<(Vec<Photo>, usize), String> {
+    let search_query = SearchQuery {
+        q: query.q.clone(),
+        year: query.year,
+        month: query.month,
+        to_year: query.to_year,
+        to_month: query.to_month,
+    };
+    photo_listing::list(
+        db_pool,
+        facts,
+        ListingRequest {
+            query: &search_query,
+            album: None,
+            sort: query.sort.as_deref(),
+            order: query.order.as_deref(),
+            page: Some(ListingPage { limit, offset }),
+        },
+    )
+    .await
+    .map(|listing| (listing.photos, listing.total))
+    .map_err(|e| format!("{}", e))
 }
 
 pub async fn list_photos(
@@ -144,8 +131,11 @@ pub async fn list_photos(
             let has_prev = page > 1;
 
             Ok(warp::reply::json(&PhotosResponse {
-                photos,
-                total: total as usize,
+                photos: photos
+                    .into_iter()
+                    .map(|photo| PhotoReply::from_row(photo, &facts))
+                    .collect(),
+                total,
                 page,
                 limit,
                 has_next,
@@ -183,21 +173,31 @@ pub async fn list_map_photos(
         q: query.q.clone(),
         year: query.year,
         month: query.month,
-        to_year: None,
-        to_month: None,
+        to_year: query.to_year,
+        to_month: query.to_month,
     };
 
-    match Photo::list_all_filtered(
+    match photo_listing::list(
         &db_pool,
         &facts,
-        &search_query,
-        query.sort.as_deref(),
-        query.order.as_deref(),
-        query.album,
+        ListingRequest {
+            query: &search_query,
+            album: query.album,
+            sort: query.sort.as_deref(),
+            order: query.order.as_deref(),
+            page: None,
+        },
     )
     .await
     {
-        Ok(photos) => Ok(warp::reply::json(&MapPhotosResponse { photos }).into_response()),
+        Ok(listing) => Ok(warp::reply::json(&MapPhotosResponse {
+            photos: listing
+                .photos
+                .into_iter()
+                .map(|photo| PhotoReply::from_row(photo, &facts))
+                .collect(),
+        })
+        .into_response()),
         Err(e) => {
             log::error!("Database error: {}", e);
             Err(reject::custom(DatabaseError {
@@ -213,11 +213,10 @@ pub async fn get_photo(
     facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     match Photo::find_by_hash(&db_pool, &photo_hash).await {
-        Ok(Some(mut photo)) => {
-            // The date and coordinates live in the file; every response is
-            // enriched from the index before it goes out.
-            facts.enrich(&mut photo);
-            Ok(warp::reply::json(&photo))
+        Ok(Some(photo)) => {
+            // The date and coordinates live in the file; the reply seam is the
+            // one place that adds them.
+            Ok(warp::reply::json(&PhotoReply::from_row(photo, &facts)))
         }
         Ok(None) => Err(reject::custom(NotFoundError)),
         Err(e) => {
@@ -524,8 +523,7 @@ pub async fn toggle_favorite(
         Ok(_) => {
             // Enrich after the write; the flag is ours, the facts are the
             // file's.
-            facts.enrich(&mut photo);
-            Ok(warp::reply::json(&photo))
+            Ok(warp::reply::json(&PhotoReply::from_row(photo, &facts)))
         }
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -640,8 +638,10 @@ pub async fn update_photo_metadata(
         Ok(_) => {
             // Enrich after the DB write: the response must carry what the file
             // now carries, never the requested precision.
-            facts.enrich(&mut updated_photo);
-            Ok(warp::reply::json(&updated_photo))
+            Ok(warp::reply::json(&PhotoReply::from_row(
+                updated_photo,
+                &facts,
+            )))
         }
         Err(e) => {
             log::error!("Database error: {}", e);
@@ -707,66 +707,18 @@ fn video_metadata_rejection(err: Mp4MetadataError) -> Rejection {
     })
 }
 
-/// The values the container actually holds after a successful write, in the
-/// representation a later extraction reads back.
-///
-/// The carriers keep their own shape: a position is re-rendered in the ISO 6709
-/// shape the carrier already had (a fixed decimal count, so a request with more
-/// precision is rounded — about 11 m at four decimals), and an instant is whole
-/// seconds in the `mvhd`/`tkhd`/`mdhd` fields with text carriers re-rendered at
-/// their own fraction width. A field that was not asked for stays `None`, so a
-/// save never restates a value the user did not touch.
-///
-/// A readback that fails keeps the requested value: the write already
-/// succeeded, so this is the mirror's reporting step, not a second validation.
-/// A readback that succeeds and finds no carrier holding a requested instant is
-/// the one answer that is not a report: `Err` says the container cannot
-/// represent the value, and the caller rolls the file back and refuses rather
-/// than mirroring an instant the file does not carry (a text carrier that
-/// cannot be parsed is still a carrier and stays on the reporting path).
-fn applied_edit(
-    path: &Path,
-    requested: VideoMetadataEdit,
-) -> Result<VideoMetadataEdit, Mp4MetadataError> {
-    let stored = match mp4_metadata::read_metadata(path) {
-        Ok(stored) => stored,
-        Err(err) => {
-            log::warn!(
-                "Could not read {} back after a metadata write ({err}); keeping the requested values",
-                path.display()
-            );
-            return Ok(requested);
+/// Maps a container-save failure. A clean refusal keeps its 4xx code; a failed
+/// rollback is always a 500, because the file may still differ from the row.
+fn video_save_rejection(err: VideoSaveError) -> Rejection {
+    match err {
+        VideoSaveError::Metadata(err) => video_metadata_rejection(err),
+        VideoSaveError::Rollback { cause, rollback } => {
+            log::error!("Video metadata rollback failed after {cause}: {rollback}");
+            reject::custom(DatabaseError {
+                message: format!("Video metadata rollback failed: {rollback}"),
+            })
         }
-    };
-    // Every carrier the writer renders has been written before this read, so a
-    // readback that holds neither the binary time boxes nor a text item with
-    // the instant proves the container has no date carrier at all: the write
-    // patched nothing date-shaped, and answering the request would claim a date
-    // the patched file does not have.
-    if requested.taken_at.is_some()
-        && stored.creation_time.is_none()
-        && stored.creation_date_text.is_none()
-    {
-        return Err(Mp4MetadataError::Unrepresentable("date"));
     }
-    let position = stored
-        .location_iso6709
-        .as_deref()
-        .and_then(mp4_metadata::parse_iso6709);
-
-    Ok(VideoMetadataEdit {
-        // The instant the binary time boxes carry — what a later ffprobe
-        // reports as `format.tags.creation_time`.
-        taken_at: requested
-            .taken_at
-            .map(|requested| stored.creation_time.unwrap_or(requested)),
-        latitude: requested
-            .latitude
-            .map(|requested| position.map_or(requested, |(latitude, _)| latitude)),
-        longitude: requested
-            .longitude
-            .map(|requested| position.map_or(requested, |(_, longitude)| longitude)),
-    })
 }
 
 /// True when a save's APPLIED position differs from the one the file held
@@ -799,127 +751,6 @@ fn applied_position_moves_the_file(
     previous != Some((latitude, longitude))
 }
 
-/// Puts `time` on the file at `path`.
-fn set_modified(path: &Path, time: SystemTime) -> Result<(), Mp4MetadataError> {
-    File::options()
-        .write(true)
-        .open(path)
-        .and_then(|file| file.set_modified(time))
-        .map_err(Mp4MetadataError::Io)
-}
-
-/// Puts a patched container back through the write's undo token.
-///
-/// [`mp4_metadata::restore`] refuses unless the file's modification time is the
-/// one the token recorded, and that equality rests on `write_moov_region`'s own
-/// `set_modified` call, which only WARNS when the kernel refuses it. A save
-/// whose clock was not wound back would therefore leave the container patched
-/// while the token refuses to undo it — the file and the row permanently
-/// disagreeing, the split FR-006 forbids and no later scan repairs, because the
-/// row's fingerprint still matches the patched file. So the instant the file
-/// carried before the write is put back and the undo retried: the retry
-/// succeeding IS the proof that the token recorded that instant, since
-/// `restore` accepts nothing else.
-///
-/// A retry that still refuses means the token names some other instant — the
-/// file moved between our read and the write — so the time goes back to the
-/// value it was found with (our own repair attempt is not left on the file)
-/// and the failure is reported. Nothing here claims a file was repaired that
-/// was not.
-fn roll_back_container(
-    path: &Path,
-    write: &VideoMetadataWrite,
-    pre_write_modified: Option<SystemTime>,
-) -> Result<(), Mp4MetadataError> {
-    let found_modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
-    let rearmed = match (pre_write_modified, found_modified) {
-        (Some(pre), Some(found)) if pre != found => {
-            set_modified(path, pre)?;
-            true
-        }
-        _ => false,
-    };
-    match mp4_metadata::restore(&write.undo) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            if rearmed {
-                if let Some(found) = found_modified {
-                    if let Err(put_back) = set_modified(path, found) {
-                        log::error!(
-                            "Could not hand the modification time of {} back after a refused rollback: {}",
-                            path.display(),
-                            put_back
-                        );
-                    }
-                }
-            }
-            Err(err)
-        }
-    }
-}
-
-/// The container half of a save: the instant the file carried before the write,
-/// the write, and the readback of what the file actually holds afterwards.
-///
-/// Every blocking file operation of this half of a save lives here, in the order
-/// the row write's rollback needs them, so the caller can hand the whole thing
-/// to the blocking pool: the file is opened and its `moov` region read twice —
-/// up to 64 MiB — and a runtime worker must never sit in that. The save's other
-/// blocking file work, the facts reload behind the row write, is handed to the
-/// same pool by the caller for the same reason. The edit lock is
-/// held by the calling task across the await, so the critical section is
-/// exactly as long as it was when these calls were inline.
-///
-/// A readback that finds no date carrier rolls the file back HERE, before the
-/// refusal leaves this function, so no caller can forget the rollback that
-/// keeps a refused save from leaving a patched file behind.
-fn patch_container(
-    path: &Path,
-    requested: VideoMetadataEdit,
-) -> Result<(Option<SystemTime>, VideoMetadataWrite, VideoMetadataEdit), Rejection> {
-    // The undo token's guard is the file's modification time, so the rollbacks
-    // need the instant the file carried before the write.
-    let pre_write_modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
-
-    let write = match mp4_metadata::write_metadata(path, &requested) {
-        Ok(write) => write,
-        Err(err) => return Err(video_metadata_rejection(err)),
-    };
-
-    // The container keeps the carrier's own representation, not the request's:
-    // mirroring the request would leave the row (and this response) claiming
-    // precision the file does not hold, and `metadata_extractor` re-derives
-    // both fields from those carriers — so the next scan of a changed file
-    // would silently move the stored values by the rounding error. Read back
-    // what the write actually left.
-    let applied = match applied_edit(path, requested) {
-        Ok(applied) => applied,
-        Err(err) => {
-            // The readback proved the container holds no carrier for the
-            // requested instant. Put the file back (the write may still have
-            // patched a location carrier) so the refusal leaves the file and
-            // the row in agreement.
-            if let Err(rollback) = roll_back_container(path, &write, pre_write_modified) {
-                log::error!(
-                    "Could not roll back {} after refusing a date with no carrier: {}",
-                    path.display(),
-                    rollback
-                );
-                return Err(reject::custom(DatabaseError {
-                    message: format!(
-                        "Video metadata rollback failed for {}: {}",
-                        path.display(),
-                        rollback
-                    ),
-                }));
-            }
-            return Err(video_metadata_rejection(err));
-        }
-    };
-
-    Ok((pre_write_modified, write, applied))
-}
-
 /// Apply a metadata edit to a video's container and record the row-side facts
 /// of the save.
 ///
@@ -944,7 +775,7 @@ fn patch_container(
 /// over a container that still holds the values is the one answer a client
 /// cannot recover from.
 async fn apply_video_metadata_edit(
-    mut photo: Photo,
+    photo: Photo,
     edit: VideoMetadataEdit,
     db_pool: &DbPool,
     facts: Arc<MediaFactsIndex>,
@@ -960,8 +791,7 @@ async fn apply_video_metadata_edit(
             "Empty metadata request for video {}; file and row left untouched",
             photo.hash_sha256
         );
-        facts.enrich(&mut photo);
-        return Ok(warp::reply::json(&photo));
+        return Ok(warp::reply::json(&PhotoReply::from_row(photo, &facts)));
     }
 
     let _guard = VIDEO_EDIT_LOCK.lock().await;
@@ -991,12 +821,13 @@ async fn apply_video_metadata_edit(
                 _ => None,
             });
 
-    // The container is patched on the blocking pool for the reason
-    // `patch_container` documents. This task keeps holding the edit lock across
-    // the await, so the critical section is unchanged.
-    let (pre_write_modified, write, applied) = tokio::task::spawn_blocking({
+    // The container is patched on the blocking pool: the file is opened and its
+    // `moov` region read twice — up to 64 MiB — and a runtime worker must never
+    // sit in that. This task keeps holding the edit lock across the await, so
+    // the critical section is unchanged.
+    let save = tokio::task::spawn_blocking({
         let path = PathBuf::from(&photo.file_path);
-        move || patch_container(&path, edit)
+        move || mp4_metadata::save_metadata(&path, edit)
     })
     .await
     .map_err(|error| {
@@ -1004,7 +835,10 @@ async fn apply_video_metadata_edit(
         reject::custom(DatabaseError {
             message: "Failed to update video metadata".to_string(),
         })
-    })??;
+    })?
+    .map_err(video_save_rejection)?;
+    let applied = save.applied();
+    let fingerprint = save.fingerprint();
 
     // The save owns the position the container now holds and nothing else: the
     // stored document also holds members no file carries — a resolved place
@@ -1041,11 +875,11 @@ async fn apply_video_metadata_edit(
     // not to protect the row: DO NOT collapse it into an unconditional stamp,
     // which would erase the mismatch the change detection keys on and let
     // every later scan skip a file whose row still describes the previous one.
-    let row_describes_patched_file = photo.file_size == write.fingerprint.file_size as i64
-        && photo.date_modified == write.fingerprint.file_modified;
+    let row_describes_patched_file = photo.file_size == fingerprint.file_size as i64
+        && photo.date_modified == fingerprint.file_modified;
     if row_describes_patched_file {
-        photo.file_size = write.fingerprint.file_size as i64;
-        photo.date_modified = write.fingerprint.file_modified;
+        photo.file_size = fingerprint.file_size as i64;
+        photo.date_modified = fingerprint.file_modified;
     } else {
         log::debug!(
             "Row for {} still describes the file it was scanned from; keeping its fingerprint so the next scan re-extracts {}",
@@ -1062,10 +896,8 @@ async fn apply_video_metadata_edit(
 
     // Only what the save wrote: the row may have taken a commit since it was
     // re-read, and a replacement of the whole document would revert it.
-    let identity = row_describes_patched_file.then_some((
-        write.fingerprint.file_size as i64,
-        write.fingerprint.file_modified,
-    ));
+    let identity = row_describes_patched_file
+        .then_some((fingerprint.file_size as i64, fingerprint.file_modified));
 
     // The row write's error is a boxed, non-`Send` value, and a `match`
     // scrutinee lives until the end of the match — so render it into a message
@@ -1097,10 +929,7 @@ async fn apply_video_metadata_edit(
             })
             .await;
             match reload {
-                Ok(_) => {
-                    facts.enrich(&mut photo);
-                    Ok(warp::reply::json(&photo))
-                }
+                Ok(_) => Ok(warp::reply::json(&PhotoReply::from_row(photo, &facts))),
                 Err(error) => {
                     log::error!(
                         "Video metadata facts reload task panicked for {}: {}",
@@ -1117,12 +946,8 @@ async fn apply_video_metadata_edit(
             log::error!("Database error after a video metadata write: {}", db_error);
             // The container is already rewritten; putting it back keeps the
             // file and the row in agreement. That rollback is container I/O
-            // like the patch above, so it runs on the same pool.
-            let file_path = PathBuf::from(&photo.file_path);
-            let rollback = tokio::task::spawn_blocking(move || {
-                roll_back_container(&file_path, &write, pre_write_modified)
-            })
-            .await;
+            // like the save above, so it runs on the same pool.
+            let rollback = tokio::task::spawn_blocking(move || save.rollback()).await;
             let message = match rollback {
                 Ok(Ok(())) => format!("Database error: {}", db_error),
                 Ok(Err(rollback)) => {
@@ -1284,7 +1109,7 @@ pub async fn rotate_photo(
 
     let old_hash = photo.hash_sha256.clone();
     match image_editor::rotate_image(&photo, angle, &db_pool).await {
-        Ok(mut updated_photo) => {
+        Ok(updated_photo) => {
             // The content hash changed, so all thumbnails under the old hash
             // are stale; remove them so the thumbnail cache cannot grow
             // without bound (they are keyed by hash, see clear_for_hash).
@@ -1296,8 +1121,10 @@ pub async fn rotate_photo(
             crate::video_processor::clear_transcode_cache_for_hash(&old_hash);
             // The row write is done; the reply carries the file's facts (the
             // index is keyed by path, which survives the hash re-key).
-            facts.enrich(&mut updated_photo);
-            Ok(warp::reply::json(&updated_photo))
+            Ok(warp::reply::json(&PhotoReply::from_row(
+                updated_photo,
+                &facts,
+            )))
         }
         Err(e) => {
             log::error!("Failed to rotate image: {}", e);
@@ -2191,6 +2018,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_map_photos_honors_the_range_end() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let facts = Arc::new(crate::media_facts::test_facts(&[
+            ("./test/one.jpg", "2020-05-25T10:00:00Z"),
+            ("./test/two.jpg", "2022-05-25T10:00:00Z"),
+            ("./test/three.jpg", "2024-05-25T10:00:00Z"),
+        ]));
+        let routes = build_test_routes_with_facts(
+            db_pool.clone(),
+            PathBuf::from("/tmp/turbo-pix-test-cache"),
+            facts.clone(),
+        );
+
+        for (filename, hash) in [("one.jpg", 'a'), ("two.jpg", 'b'), ("three.jpg", 'c')] {
+            crate::db::tests::create_test_photo(filename.to_string(), hash.to_string().repeat(64))
+                .create(&db_pool)
+                .await
+                .unwrap();
+        }
+
+        let response = warp::test::request()
+            .path("/api/photos/map?year=2020&to_year=2022&sort=date&order=asc")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        let photos = body["photos"].as_array().unwrap();
+        assert_eq!(photos.len(), 2, "the range end must bound the map listing");
+        assert_eq!(photos[0]["filename"], "one.jpg");
+        assert_eq!(photos[1]["filename"], "two.jpg");
+    }
+
+    #[tokio::test]
     async fn test_map_photos_returns_no_coordinates_for_a_video() {
         let db_pool = create_in_memory_pool().await.expect("db");
         // Coordinates live in the index; a video's file yields a date but no
@@ -2938,60 +2799,6 @@ mod tests {
         assert_eq!(after_row.file_size, before_row.file_size);
         assert_eq!(after_row.date_modified, before_row.date_modified);
         assert_eq!(after_row.updated_at, before_row.updated_at);
-    }
-
-    /// `mp4_metadata::restore` refuses unless the file still carries the exact
-    /// modification time the write recorded, and that equality rests on the
-    /// writer's own `set_modified`, which only WARNS when the kernel refuses it.
-    /// A save whose clock was not wound back would leave the container patched
-    /// while the undo refuses to run — the file and the row permanently
-    /// disagreeing, and no later scan repairs it, because the row's fingerprint
-    /// still matches the patched file. So the rollback puts the pre-write
-    /// instant back and retries: the retry succeeding IS the proof that the
-    /// token recorded that instant, since `restore` accepts nothing else.
-    #[tokio::test]
-    async fn a_rollback_re_arms_the_modification_time_the_write_recorded() {
-        let temp_dir = TempDir::new().unwrap();
-        let video = temp_dir.path().join("rearm_clock.mp4");
-        fs::copy("test-data/test_video_with_date.mp4", &video).expect("fixture");
-        let before_bytes = fs::read(&video).unwrap();
-        let before_modified = fs::metadata(&video).unwrap().modified().unwrap();
-
-        // GIVEN: a real write, so the token holds this file's real pre-write
-        // clock, and a file whose clock the kernel did not wind back
-        let edit = crate::mp4_metadata::VideoMetadataEdit {
-            taken_at: Some("2024-07-04T12:00:00Z".parse::<DateTime<Utc>>().unwrap()),
-            latitude: None,
-            longitude: None,
-        };
-        let write = crate::mp4_metadata::write_metadata(&video, &edit).expect("write");
-        assert_ne!(
-            fs::read(&video).unwrap(),
-            before_bytes,
-            "the fixture must carry a date this write replaces, or nothing was patched"
-        );
-        set_modified(&video, before_modified + std::time::Duration::from_secs(7))
-            .expect("the kernel refused the clock the writer needs");
-
-        // THEN: the plain restore refuses — the token's guard is real
-        assert!(
-            crate::mp4_metadata::restore(&write.undo).is_err(),
-            "restore must refuse a file whose clock moved, or it would graft an \
-             old `moov` onto whatever is there now"
-        );
-
-        // AND: the rollback re-arms the recorded clock and undoes the write
-        roll_back_container(&video, &write, Some(before_modified)).expect("rollback");
-        assert_eq!(
-            fs::read(&video).unwrap(),
-            before_bytes,
-            "the container must be byte-identical to where it started"
-        );
-        assert_eq!(
-            fs::metadata(&video).unwrap().modified().unwrap(),
-            before_modified,
-            "the file's own identity must be what the row still describes"
-        );
     }
 
     /// The container keeps the carrier's own representation, and the row (and

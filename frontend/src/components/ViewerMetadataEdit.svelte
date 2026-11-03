@@ -1,10 +1,12 @@
 <script>
   import { api } from '../lib/api.js';
+  import { logger } from '../lib/logger.js';
   import { get } from 'svelte/store';
   import { t } from '../lib/i18n.js';
   import { addToast } from '../lib/state.svelte.js';
   import { isMetadataEditable, isVideoFile } from '../lib/utils.js';
   import { METADATA_ERROR_KEYS } from '../lib/metadataErrors.js';
+  import { buildMetadataEdit } from '../lib/metadataEditPolicy.js';
   import Icon from './Icon.svelte';
 
   const { photo = null, onClose = () => {}, onSaved = () => {} } = $props();
@@ -133,116 +135,48 @@
       takenAt = '';
     }
     // Remember what this open installed; an untouched date is left out of the
-    // payload entirely (checked in buildUpdatesFromForm).
+    // payload entirely (see buildMetadataEdit).
     populatedTakenAt = takenAt;
 
     const loc = photo.metadata?.location || {};
     latitude = loc.latitude != null ? String(loc.latitude) : '';
     longitude = loc.longitude != null ? String(loc.longitude) : '';
     // Remember what this open installed; an untouched position is left out of
-    // the payload entirely (checked in buildUpdatesFromForm).
+    // the payload entirely (see buildMetadataEdit).
     populatedLatitude = latitude;
     populatedLongitude = longitude;
   }
 
   /**
-   * The number a coordinate input stands for, or `null` when it holds nothing
-   * parseable. The populated baseline goes through this too, so the
-   * comparison in `buildUpdatesFromForm` is numeric on both sides: a
-   * `<input type="number">` may hand back a normalized spelling of what was
-   * installed ("52.5" as "52.50"), which is the same value, not an edit.
+   * Translate a policy refusal code into the form's message. The policy module
+   * is language-free; the keys live here so `tests/i18n-integrity.test.js`
+   * still sees every literal.
    */
-  function coordinateValue(input) {
-    const parsed = parseFloat(String(input ?? '').trim());
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-
-  /**
-   * Builds the metadata update payload from the form, validating GPS pairing
-   * and ranges. Returns { updates } on success or { error } on validation
-   * failure (translated message for the form).
-   */
-  function buildUpdatesFromForm() {
-    const updates = {};
-
-    // Only an edited date goes into the payload: restating the value the form
-    // was opened with would make the backend rewrite the file's capture date
-    // (truncated to whole minutes) on an unrelated save. The comparison is on
-    // the instant, so the input's own spelling (with or without seconds) never
-    // counts as an edit.
-    const takenAtMs = takenAt ? new Date(takenAt).getTime() : null;
-    const populatedMs = populatedTakenAt ? new Date(populatedTakenAt).getTime() : null;
-    if (takenAtMs !== null && takenAtMs !== populatedMs) {
-      updates.taken_at = new Date(takenAtMs).toISOString();
-    }
-
-    const lat = String(latitude ?? '').trim();
-    const lng = String(longitude ?? '').trim();
-    const hasLat = lat !== '';
-    const hasLng = lng !== '';
-
-    if ((hasLat && !hasLng) || (!hasLat && hasLng)) {
-      return {
-        error: get(t)('ui.metadata.edit_validation_gps_pair', {
+  const refusalMessage = (refusal) => {
+    switch (refusal) {
+      case 'clear_unsupported':
+        return get(t)('messages.metadata_clear_unsupported', {
+          default: 'Clearing metadata fields is not supported',
+        });
+      case 'gps_pair':
+        return get(t)('ui.metadata.edit_validation_gps_pair', {
           default: 'Both latitude and longitude must be provided together',
-        }),
-      };
-    }
-
-    const latVal = hasLat ? parseFloat(lat) : null;
-    const lngVal = hasLng ? parseFloat(lng) : null;
-
-    if (hasLat && (latVal < -90 || latVal > 90)) {
-      return {
-        error: get(t)('ui.metadata.edit_validation_gps', {
+        });
+      case 'invalid_date':
+        return get(t)('ui.metadata.edit_error_invalid_date', {
+          default: 'Invalid date',
+        });
+      case 'gps_range':
+        return get(t)('ui.metadata.edit_validation_gps', {
           default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
-        }),
-      };
+        });
+      default:
+        // A code the policy does not know is a programming error; never paint
+        // it as a GPS-range refusal the user cannot act on.
+        logger.warn('unknown metadata refusal code', refusal);
+        return get(t)('ui.metadata.edit_error', { default: 'Failed to update metadata' });
     }
-
-    if (hasLng && (lngVal < -180 || lngVal > 180)) {
-      return {
-        error: get(t)('ui.metadata.edit_validation_gps', {
-          default: 'GPS coordinates must be between -90/90 (lat) and -180/180 (lng)',
-        }),
-      };
-    }
-
-    // The position is all-or-nothing, like every other save: the backend
-    // refuses a half pair, and a request that carries one of the two would be
-    // answered with a refusal the user cannot act on. So the pair goes in as a
-    // unit — and only when it differs from the value the form opened with.
-    // Restating an untouched position is the location half of the same bug the
-    // date half above avoids: the container's location writer runs for any
-    // pair it is handed, so a date-only save on a geotagged video would either
-    // be refused for a missing location carrier or rewrite location bytes the
-    // user never looked at.
-    const positionChanged =
-      (hasLat && latVal !== coordinateValue(populatedLatitude)) ||
-      (hasLng && lngVal !== coordinateValue(populatedLongitude));
-    if (positionChanged) {
-      updates.latitude = latVal;
-      updates.longitude = lngVal;
-    }
-
-    return { updates };
-  }
-
-  /**
-   * True when the user cleared a field the photo previously had a value for
-   * (date taken / GPS). The backend cannot clear these fields, so such a save
-   * must fail honestly instead of silently no-oping with a success toast.
-   */
-  function formHasClearedFields() {
-    if (!photo) return false;
-    const hadTakenAt = Boolean(photo.taken_at);
-    const hadLat = photo.metadata?.location?.latitude != null;
-    const hadLng = photo.metadata?.location?.longitude != null;
-    const hasTakenAt = String(takenAt ?? '').trim() !== '';
-    const hasLat = String(latitude ?? '').trim() !== '';
-    const hasLng = String(longitude ?? '').trim() !== '';
-    return (hadTakenAt && !hasTakenAt) || (hadLat && !hasLat) || (hadLng && !hasLng);
-  }
+  };
 
   /**
    * True while `token`/`targetHash` still describe the session the form on
@@ -270,18 +204,24 @@
     const targetHash = editTargetHash;
 
     try {
-      // Clearing a previously-set field cannot be saved by the backend; keep
-      // the modal open with an honest error instead of a fake success toast.
-      if (formHasClearedFields()) {
-        errorMessage = get(t)('messages.metadata_clear_unsupported', {
-          default: 'Clearing metadata fields is not supported',
-        });
-        return;
-      }
-
-      const { updates, error } = buildUpdatesFromForm();
-      if (error) {
-        errorMessage = error;
+      // Clearing a previously-set field cannot be saved by the backend; the
+      // policy refuses it (before pairing/range) and the modal stays open with
+      // an honest error instead of a fake success toast.
+      const { updates, refusal } = buildMetadataEdit({
+        takenAt,
+        latitude,
+        longitude,
+        baseline: {
+          takenAt: populatedTakenAt,
+          latitude: populatedLatitude,
+          longitude: populatedLongitude,
+          hadTakenAt: Boolean(photo.taken_at),
+          hadLatitude: photo.metadata?.location?.latitude != null,
+          hadLongitude: photo.metadata?.location?.longitude != null,
+        },
+      });
+      if (refusal) {
+        errorMessage = refusalMessage(refusal);
         return;
       }
 

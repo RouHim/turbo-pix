@@ -12,7 +12,6 @@
   import { route } from '../lib/router.svelte.js';
   import { logger } from '../lib/logger.js';
   import {
-    buildMapFilters,
     fetchSemanticPhotoSet,
     formatCoordinates,
     getLocationLabel,
@@ -20,6 +19,7 @@
     isSemanticQuery,
     wrapLongitudeForView,
   } from '../lib/map.js';
+  import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import MapPopup from './MapPopup.svelte';
 
   const MAX_ZOOM = 19;
@@ -75,7 +75,7 @@
   async function fetchPhotoSet(currentRoute, signal) {
     if (currentRoute.album != null) {
       // Album detail mirrors the grid: album scope + sort/order, no q/year/month.
-      const { sort, order } = buildMapFilters(currentRoute);
+      const { sort, order } = routeToPhotoQuery(currentRoute, { view: 'map' });
       const response = await api.getMapPhotos(
         { album: currentRoute.album, sort, order },
         { signal }
@@ -87,7 +87,9 @@
       return fetchSemanticPhotoSet(api, currentRoute.query, { signal });
     }
 
-    const response = await api.getMapPhotos(buildMapFilters(currentRoute), { signal });
+    const response = await api.getMapPhotos(routeToPhotoQuery(currentRoute, { view: 'map' }), {
+      signal,
+    });
     return response.photos ?? [];
   }
 
@@ -497,6 +499,8 @@
     route.sort;
     route.year;
     route.month;
+    route.to_year;
+    route.to_month;
     route.album;
     untrack(() => loadPhotos());
   });

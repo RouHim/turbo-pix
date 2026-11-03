@@ -188,18 +188,30 @@ pub async fn list_album_photos(
         .clamp(MIN_PAGE_SIZE, MAX_PAGE_SIZE);
     let offset = (page as u64 - 1) * limit as u64;
 
-    let (photos, total) = match albums::photos_for_album(
+    let search_query = crate::db::SearchQuery {
+        q: None,
+        year: None,
+        month: None,
+        to_year: None,
+        to_month: None,
+    };
+    let listing = match crate::photo_listing::list(
         &db_pool,
         &facts,
-        id,
-        limit as i64,
-        offset as i64,
-        query.sort.as_deref(),
-        query.order.as_deref(),
+        crate::photo_listing::ListingRequest {
+            query: &search_query,
+            album: Some(id),
+            sort: query.sort.as_deref(),
+            order: query.order.as_deref(),
+            page: Some(crate::photo_listing::ListingPage {
+                limit: limit as i64,
+                offset: offset as i64,
+            }),
+        },
     )
     .await
     {
-        Ok(ok) => ok,
+        Ok(listing) => listing,
         Err(e) => {
             log::error!("Failed to list album {id} photos: {e}");
             return Err(reject::custom(DatabaseError {
@@ -207,13 +219,15 @@ pub async fn list_album_photos(
             }));
         }
     };
+    let photos = listing.photos;
+    let total = listing.total;
     // The album may have been deleted between the existence check above and
     // this query (members cascade away, so the join reads empty). Re-check
     // when the page reads empty so a concurrent delete still reports 404
     // instead of 200 with empty results. `photos.is_empty()` (not just
     // `total == 0`) also covers an album deleted between the COUNT and the
-    // SELECT inside `photos_for_album`, where the total is stale (>0) but
-    // the join already reads empty.
+    // SELECT inside the listing, where the total is stale (>0) but the
+    // membership read already empty.
     if photos.is_empty() {
         match albums::find_by_id(&db_pool, id).await {
             Ok(None) => return Ok(not_found_reply()),
@@ -229,8 +243,11 @@ pub async fn list_album_photos(
     let has_next = offset.saturating_add(limit as u64) < total as u64;
     let has_prev = page > 1;
     Ok(warp::reply::json(&PhotosResponse {
-        photos,
-        total: total as usize,
+        photos: photos
+            .into_iter()
+            .map(|photo| crate::photo_reply::PhotoReply::from_row(photo, &facts))
+            .collect(),
+        total,
         page,
         limit,
         has_next,

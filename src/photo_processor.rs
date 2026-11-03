@@ -273,7 +273,13 @@ impl PhotoProcessor {
                                 video_profile: existing_photo.video_profile().map(String::from),
                                 bit_depth: existing_photo.bit_depth(),
                                 container: existing_photo.container().map(String::from),
-                                moov_at_start: existing_photo.moov_at_start(),
+                                // The unchanged path only uses this to decide
+                                // whether to persist a `false`; an absent key
+                                // stays absent (the scan writes no verdict).
+                                moov_at_start: crate::video_capability::stored_moov_at_start(
+                                    &existing_photo,
+                                )
+                                .unwrap_or(true),
                                 semantic_vector_indexed: existing_photo.semantic_vector_indexed,
                             });
                         }

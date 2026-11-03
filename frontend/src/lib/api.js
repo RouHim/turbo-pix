@@ -128,7 +128,7 @@ class TurboPixAPI {
 
   /**
    * Retrieves the complete filtered photo set for the Map view (no pagination).
-   * @param {Object} params - query, sort, order, year, month, album
+   * @param {Object} params - query, sort, order, year, month, toYear, toMonth, album
    * @param {Object} options - Fetch options (signal for AbortController, etc.)
    * @returns {Promise<{photos: Array}>}
    */
@@ -141,6 +141,10 @@ class TurboPixAPI {
     if (params.year !== undefined && params.year !== null) searchParams.set('year', params.year);
     if (params.month !== undefined && params.month !== null)
       searchParams.set('month', params.month);
+    if (params.toYear !== undefined && params.toYear !== null)
+      searchParams.set('to_year', params.toYear);
+    if (params.toMonth !== undefined && params.toMonth !== null)
+      searchParams.set('to_month', params.toMonth);
     if (params.album !== undefined && params.album !== null)
       searchParams.set('album', params.album);
 

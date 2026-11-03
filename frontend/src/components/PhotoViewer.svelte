@@ -24,6 +24,7 @@
   } from '../lib/video/originalAttempt.js';
   import { codecTokenFor } from '../lib/video/playbackVerification.js';
   import { isHardwareEncoder } from '../lib/video/encoderHint.js';
+  import { createStreamSession, nextStreamMode } from '../lib/video/streamSession.js';
   import { gestures } from '../lib/gestures/action.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import Icon from './Icon.svelte';
@@ -82,39 +83,6 @@
   // object holds MediaSource/DOM references and closures that must never be
   // proxied, and nothing renders from it.
   let streamPlayer = null;
-  // Single-flight timer for retrying a stream run the server refused because
-  // every conversion slot was taken. Plain field, torn down with the player and
-  // by any newer run or user seek (see `disarmStreamRetry`).
-  let streamRetryTimer = null;
-  // The newest position the user asked for, in seconds: the offset of every run
-  // the player begins (`onRunStart`) and every position picked on the element
-  // itself (`onUserSeek`), whichever came last. A refusal re-arms the retry
-  // here rather than at the refused run's own offset, because a run can be held
-  // by the server for its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s) while
-  // the user scrubs somewhere else, and that seek reaches the viewer only
-  // through these callbacks (see `rememberStreamIntent`).
-  let streamIntentOffset = 0;
-  // The offset the run the player most recently began plays from, as that run
-  // reported it through `onRunStart`. A failure that has to resume reads it
-  // together with the element's own position (see `resumeStreamOffset`): a run
-  // that never attached leaves the element at 0 — `playStream` clears its
-  // source at the start of every run, and only a run past its first append
-  // re-parks it — so this is the only witness of where such a run was asked to
-  // play. Kept apart from `streamIntentOffset`, which every user seek moves
-  // too, and therefore says nothing about the run currently in flight.
-  let streamRunStartOffset = 0;
-  // How many consecutive stream runs have ended as a LOST run — a delivery
-  // that stopped short of the declared duration (the server's stall watchdog
-  // killing a parked run, a crash, a broken pipe) — and the rung they were
-  // counted for. Such a loss is no evidence that the mode cannot be decoded
-  // (see `claimLostRunRetry`), so the same rung is replayed at the viewer's
-  // own position while this budget lasts; the ladder takes over once it is
-  // spent. `forgetLostRuns` clears the count at every photo, on a user seek
-  // and whenever a run reaches playback — the moves that make the losses
-  // counted so far somebody else's.
-  const LOST_RUN_RETRY_LIMIT = 2;
-  let lostRunRetries = 0;
-  let lostRunMode = null;
 
   // Collage
   let isPendingCollage = $state(false);
@@ -139,6 +107,12 @@
   let viewerEl = $state(null);
   let imageEl = $state(null);
   let videoEl = $state(null);
+  // The stream bookkeeping — ladder, saturation retry, newest intent offset,
+  // run start offset and lost-run budget — lives in one node-tested module; the
+  // viewer supplies the element position and owns the DOM.
+  const streamSession = createStreamSession({
+    getPosition: () => videoEl?.currentTime ?? 0,
+  });
   let mainEl = $state(null);
   // Element focused before the viewer opened; restored on close.
   let previouslyFocusedElement = null;
@@ -638,8 +612,8 @@
     hideTranscodeToast();
     // The previous photo's losses die with its playback too: a budget is spent
     // against one photo's runs at one rung, and this photo's playback starts
-    // with a full one (see `claimLostRunRetry`).
-    forgetLostRuns();
+    // with a full one (see `streamSession.claimLostRunRetry`).
+    streamSession.forgetLostRuns();
     // The previous photo's encoder claim dies with its playback: an image (or
     // any later branch) must never inherit it, and every video path below
     // states its own answer.
@@ -1059,18 +1033,6 @@
    * bytes will differ; the ladder is therefore bounded by its own end, with
    * "play original anyway" as the way out.
    */
-  const STREAM_LADDER = ['remux', 'audio', 'transcode'];
-
-  /**
-   * The rung after `currentMode`, or `null` when the ladder is exhausted. The
-   * last rung has no successor, which is what terminates the ladder: at most
-   * three attempts per photo, then the error state.
-   */
-  function nextStreamMode(currentMode) {
-    const index = STREAM_LADDER.indexOf(currentMode);
-    return index >= 0 && index < STREAM_LADDER.length - 1 ? STREAM_LADDER[index + 1] : null;
-  }
-
   /**
    * Play a server-streamed conversion through MSE: the server pipes fragmented
    * MP4 and the player appends it to a SourceBuffer, so playback starts long
@@ -1136,7 +1098,7 @@
           // is what keeps a run the stall watchdog kills for a paused viewer
           // from ever spending the budget — the viewer watched this run before
           // they paused, which is exactly what `playing` reports.
-          forgetLostRuns();
+          streamSession.forgetLostRuns();
         }
         if (state === 'buffering') {
           // Bytes are flowing: the run is preparing playback. A run the server
@@ -1160,8 +1122,8 @@
       // the newest start intent as long as nothing newer lands; see
       // rememberStreamIntent. That offset is also kept as the run's own start
       // offset, for a failure that has to resume without the element as a
-      // witness; see rememberRunStart.
-      onRunStart: rememberRunStart,
+      // witness; see streamSession.beginRun.
+      onRunStart: (seconds) => streamSession.beginRun(seconds),
       // A position the user picked on the element itself is the other move that
       // leaves a refused offset behind: either this seek starts a run for the
       // new target (which supersedes the refused one and, if that run is
@@ -1182,8 +1144,8 @@
       // counted so far belong to a position the user has just left, and a
       // replay of one of them would drag them back to it.
       onUserSeek: (seconds) => {
-        forgetLostRuns();
-        rememberStreamIntent(seconds);
+        streamSession.forgetLostRuns();
+        streamSession.rememberIntent(seconds);
       },
       onEncoder: (encoder) => {
         if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
@@ -1227,7 +1189,7 @@
    * full, so keep the waiting notice (with "play original anyway" still
    * reachable, in case the wait is a long one) and retry the same run until the
    * user moves on — a newer run replaces it, and a user seek that starts no run
-   * drops it outright (see `disarmStreamRetry`). Retries cannot stack (one
+   * drops it outright (see `streamSession.disarmRetry`). Retries cannot stack (one
    * timer, and the newest refusal replaces it). Every other error is a real
    * one — a LOST run included: it is no refusal, so it takes the error path,
    * where the same rung is replayed at the viewer's position before the ladder
@@ -1255,8 +1217,8 @@
       get(t)('video.stream.waiting', { default: 'Waiting for a free conversion slot…' })
     );
     const photoHash = photo.hash_sha256;
-    const startAt = Number.isFinite(streamIntentOffset) ? streamIntentOffset : 0;
-    scheduleStreamRetry(() => {
+    const startAt = Number.isFinite(streamSession.intentOffset) ? streamSession.intentOffset : 0;
+    streamSession.scheduleRetry(() => {
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
       // Resume the newest position the user asked for, not the offset this run
       // was refused at: a seek can land while the run is still in flight (the
@@ -1287,94 +1249,8 @@
     return Math.min(Math.max(hinted, STREAM_RETRY_DELAY_MS), STREAM_RETRY_DELAY_MAX_MS);
   }
 
-  /**
-   * Drop the pending saturation retry. A retry is armed for a run the server
-   * refused, and it runs `playStream(..., { startAt })`: firing it once a newer
-   * run exists would abort that run and drag playback back to the offset the
-   * user has already left, so it must never outlive the position it was armed
-   * for.
-   * Every newer run disarms it the moment it begins — including a run msePlayer
-   * restarts for a seek inside its own player, which is why the player reports
-   * every run through `onRunStart` instead of only the states it reaches: a
-   * refused run can be held by the server for the whole
-   * `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s by default) before it answers, and
-   * until that signal nothing in the viewer can tell that a newer run exists.
-   *
-   * A user seek is the second signal, and it is not derivable from the first:
-   * a target the element can serve from its buffer restarts no run, so the
-   * viewer would never learn that the offset it armed for is one the user has
-   * left — which is why every user seek reaches the viewer through `onUserSeek`
-   * and disarms the retry here too. Between the two, no retry can outlive the
-   * position it was armed for, which is what lets its firing path resume at
-   * that position instead of reading the element (see `handleStreamFailure`).
-   */
-  function disarmStreamRetry() {
-    if (streamRetryTimer === null) return;
-    clearTimeout(streamRetryTimer);
-    streamRetryTimer = null;
-  }
-
-  /**
-   * Record the newest position the user asked for and drop any retry armed for
-   * an older one. Both signals the player reports state it: `onRunStart`, with
-   * the offset every run plays from, and `onUserSeek`, with every position
-   * picked on the element itself. The recorded offset is what
-   * `handleStreamFailure` re-arms the retry for, because a run's own offset is
-   * not necessarily the user's newest move: the server can hold that run for
-   * its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (20 s) before refusing it,
-   * while a seek that lands in that window is reported here and nowhere else
-   * the viewer can see.
-   *
-   * The newest signal wins, in both directions: a deliberate restart at 0
-   * reports its own `onRunStart(0)` after the older seek, and a seek that lands
-   * after a refusal disarms that refusal's retry outright instead of leaving it
-   * to fire at the position the user has left.
-   */
-  function rememberStreamIntent(seconds) {
-    if (Number.isFinite(seconds)) streamIntentOffset = seconds;
-    disarmStreamRetry();
-  }
-
-  /**
-   * Record the offset the run the player just began plays from, and keep the
-   * newest-position bookkeeping `onRunStart` has always done.
-   *
-   * The offset goes to a field of its own, not to `streamIntentOffset`: that
-   * one is also moved by every user seek, so it cannot say what the run
-   * currently in flight was asked to play — and it is the failed run's own
-   * start offset that has to survive its failure, because a run that never
-   * attached leaves the element reading 0 (see `resumeStreamOffset`).
-   */
-  function rememberRunStart(seconds) {
-    if (Number.isFinite(seconds)) streamRunStartOffset = seconds;
-    rememberStreamIntent(seconds);
-  }
-
-  /**
-   * Arm the one pending saturation retry. `destroyStreamPlayer` disarms it, so
-   * a closed viewer or a new photo never leaves a retry running, and both a
-   * newer run (`onRunStart`) and a user seek (`onUserSeek`) do.
-   *
-   * The newest request wins: a retry is armed for the run that was just
-   * refused, and an older one still pending belongs to an offset the user has
-   * already left (the newest refused seek is the position they picked last).
-   * The offset it is armed for is the position it resumes, not a command that
-   * overrides a later move: disarming on that move is what keeps the two
-   * consistent. Replacing it cannot let retries stack — there is one timer, and
-   * arming never leaves two — and it cannot starve playback either: a refusal
-   * that keeps arriving is a request that keeps being made, each of which fires
-   * its own retry within [STREAM_RETRY_DELAY_MS, STREAM_RETRY_DELAY_MAX_MS].
-   */
-  function scheduleStreamRetry(callback, delayMs) {
-    disarmStreamRetry();
-    streamRetryTimer = setTimeout(() => {
-      streamRetryTimer = null;
-      callback();
-    }, delayMs);
-  }
-
   function destroyStreamPlayer() {
-    disarmStreamRetry();
+    streamSession.disarmRetry();
     if (!streamPlayer) return;
     streamPlayer.destroy();
     streamPlayer = null;
@@ -1393,96 +1269,6 @@
   }
 
   /**
-   * Clear the lost-run budget: the losses counted so far belong to a position
-   * or a session the viewer has left, so the next loss starts a fresh count.
-   * The rung the count was spent against stays — a budget is per mode, and only
-   * a mode change (`claimLostRunRetry`) moves it; every other move clears the
-   * count and leaves the rung where it is.
-   */
-  function forgetLostRuns() {
-    lostRunRetries = 0;
-  }
-
-  /**
-   * Whether a lost run may be replayed on its own rung, claiming the retry
-   * when it may.
-   *
-   * A body that ends short of the declared duration is never evidence that the
-   * mode cannot be decoded: the server's stall watchdog kills a run whose
-   * client stopped reading (the parked pump), a crash closes the response, a
-   * broken pipe ends it — and `msePlayer` tags exactly that truncation
-   * `lostRun`. Undecodable bytes report themselves through the element's own
-   * `error` events instead, untagged, and still escalate at once. Burning a
-   * ladder rung for a loss converts a healthy run harder (remux → audio →
-   * transcode) and restarts the video at 0:00, so the same rung is replayed
-   * at the viewer's own position while this budget lasts.
-   *
-   * The budget is bounded and belongs to one rung: a loss on a mode other than
-   * the one being counted starts its own count, and `forgetLostRuns` clears it
-   * at every photo, on a user seek and whenever a run reaches playback. Once
-   * `LOST_RUN_RETRY_LIMIT` consecutive losses are spent, the loss falls
-   * through to the ladder — so a stream that keeps dying still ends on the
-   * ladder's own bounded end, "play original anyway".
-   */
-  function claimLostRunRetry(attemptedMode) {
-    if (attemptedMode !== lostRunMode) {
-      lostRunMode = attemptedMode;
-      lostRunRetries = 0;
-    }
-    if (lostRunRetries >= LOST_RUN_RETRY_LIMIT) return false;
-    lostRunRetries += 1;
-    return true;
-  }
-
-  /**
-   * The offset a run started after a failure plays from: the larger of the
-   * element's own position and the offset the failed run was started at.
-   *
-   * The element's position is the witness of a run that ATTACHED: it was parked
-   * on that run's offset and then played from it, so its position is the
-   * position the viewer reached. `streamIntentOffset` cannot stand in for it —
-   * it holds the offset of every run the player began and of every user seek,
-   * so for a video watched linearly from the start it is still 0, the reset
-   * this exists to avoid — and a run the server held for its whole queue wait
-   * cannot stand in for it either.
-   *
-   * A run that never attached left no such trace: `playStream` clears the
-   * element's source at the start of every run (`removeAttribute('src')` plus
-   * `load()`) and only a run that reaches its first append re-parks it, so the
-   * element still reads 0 while such a run reports its failure — a refused
-   * response, a body that delivered no bytes ("ffmpeg dying before the init
-   * segment looks identical"). The offset that run was asked to play from
-   * (`streamRunStartOffset`, reported by its own `onRunStart`) is then the only
-   * witness, and it is the position the viewer is standing on: it came from the
-   * run that just died there or from the user's own seek. Taking the larger of
-   * the two therefore keeps all three cases — a parked or playing run that died
-   * keeps the position the viewer reached (the element's position wins), a run
-   * that never attached keeps the position its own start offset stands for, and
-   * a run that started at 0 and never attached still restarts at 0.
-   *
-   * The offset is only usable while the timeline still has media after it: a
-   * run that starts at (or past) the declared duration delivers nothing — the
-   * server still answers with a stream head, its fragment lands past the end,
-   * the player's own `clampDuration` strips it and the pump then reads the
-   * empty buffer as a clean end (msePlayer, the `timestampOffset` guard) — so
-   * a failure that lands there restarts from the beginning of the timeline
-   * instead of parking the viewer on an offset that can only end immediately.
-   * The guard belongs to the offset the next run would start at, which is why
-   * it is applied to the winner and not to the element alone.
-   */
-  function resumeStreamOffset(decision) {
-    const position = videoEl?.currentTime ?? 0;
-    const resumed = Math.max(
-      Number.isFinite(position) ? position : 0,
-      Number.isFinite(streamRunStartOffset) ? streamRunStartOffset : 0
-    );
-    if (resumed <= 0) return 0;
-    const duration = decision.duration;
-    if (Number.isFinite(duration) && duration > 0 && resumed >= duration) return 0;
-    return resumed;
-  }
-
-  /**
    * A streamed conversion failed for real (spawn error, refused response,
    * undecodable bytes). Self-heal first: climb one rung of the ladder and try
    * the same video again, converted harder. Only when the ladder is exhausted
@@ -1496,8 +1282,8 @@
    *
    * A LOST run is not a failure of the mode at all, so it is replayed on the
    * rung the viewer was watching before the ladder is touched (see
-   * `claimLostRunRetry`). Both restarts play from the viewer's own position
-   * rather than 0:00 (see `resumeStreamOffset`), read here — before the
+   * `streamSession.claimLostRunRetry`). Both restarts play from the viewer's own position
+   * rather than 0:00 (see `streamSession.resumeOffset`), read here — before the
    * teardown below and before the next run clears the element (`playStream`
    * drops its `src`). The element's own position belongs to the run that just
    * died on it; the offset that run was started at is the witness that
@@ -1510,9 +1296,9 @@
       attemptedMode,
     });
     if (!isOpen || currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-    const startAt = resumeStreamOffset(decision);
+    const startAt = streamSession.resumeOffset(decision);
     destroyStreamPlayer();
-    if (error?.lostRun && claimLostRunRetry(attemptedMode)) {
+    if (error?.lostRun && streamSession.claimLostRunRetry(attemptedMode)) {
       playStream(photo, decision, attemptedMode, { startAt });
       return;
     }

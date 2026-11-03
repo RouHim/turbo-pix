@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildMapFilters,
   fetchSemanticPhotoSet,
   formatCoordinates,
   getLocationLabel,
@@ -98,20 +97,6 @@ test('wrapLongitudeForView never pushes an on-screen longitude out of view', () 
   // longitude inside it must not become L - 360.
   assert.equal(wrapLongitudeForView(120, -198.75, 138.75), 120);
   assert.equal(wrapLongitudeForView(13.4, -198.75, 138.75), 13.4);
-});
-
-test('buildMapFilters mirrors the grid filter construction', () => {
-  assert.deepEqual(
-    buildMapFilters({ query: 'location:Berlin', sort: 'date_asc', year: 2024, month: 5 }),
-    { query: 'location:Berlin', sort: 'date', order: 'asc', year: 2024, month: 5 }
-  );
-  assert.deepEqual(buildMapFilters({ query: null, sort: 'size_desc', year: null, month: null }), {
-    query: null,
-    sort: 'size',
-    order: 'desc',
-    year: undefined,
-    month: undefined,
-  });
 });
 
 test('isSemanticQuery treats prefix queries as regular searches', () => {

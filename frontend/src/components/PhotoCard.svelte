@@ -141,6 +141,7 @@
   data-photo-id={photo?.hash_sha256}
   class:selected
   use:longpress={{ onLongPress: () => onLongPress?.(photo) }}
+  onclick={handleCardClick}
 >
   {#if selectionMode}
     <div class="photo-card-selection-badge" aria-hidden="true">
@@ -153,7 +154,6 @@
     tabindex="0"
     aria-label={title}
     aria-pressed={selectionMode ? selected : undefined}
-    onclick={handleCardClick}
     onkeydown={(e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();

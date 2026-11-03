@@ -11,15 +11,6 @@ use crate::media_facts::MediaFactsIndex;
 pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
 
-/// `skip(offset).take(limit)` over an in-memory result set. Both positions are
-/// client-supplied: a negative value is treated as "no rows skipped" rather
-/// than panicking on the cast.
-fn paginate(photos: Vec<Photo>, offset: i64, limit: i64) -> Vec<Photo> {
-    let offset = usize::try_from(offset).unwrap_or(0);
-    let limit = usize::try_from(limit).unwrap_or(0);
-    photos.into_iter().skip(offset).take(limit).collect()
-}
-
 /// Photo entity with metadata stored as JSON
 /// Breaking change: All EXIF/camera/location/video metadata moved to `metadata` JSON field
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,7 +289,7 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
 /// bound yields an inverted interval that no row satisfies, keeping the old
 /// equality filter's "month = 13 matches nothing" result. `to_year` without
 /// `year` filters nothing, because a bound is only formed from `year`.
-fn month_range_bounds(
+pub(crate) fn month_range_bounds(
     year: Option<i32>,
     month: Option<i32>,
     to_year: Option<i32>,
@@ -337,10 +328,10 @@ pub(crate) fn photo_in_month_range(photo: &Photo, bounds: &(String, String)) -> 
 /// Builds the reusable WHERE clause for photo searches: the `q` token grammar
 /// (`type:` / `is_favorite:` / `location:` / general LIKE). Returns the clause
 /// (starting with `" WHERE 1=1"`) plus its string parameters in placeholder
-/// order. Shared by `Photo::search_photos` and `Photo::list_all_filtered` so
-/// both honor identical filter semantics. The month range is NOT here: it
-/// filters a file-derived date, see [`photo_in_month_range`].
-fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
+/// order. Used by the photo listing module so all listings honor identical
+/// filter semantics. The month range is NOT here: it filters a file-derived
+/// date, see [`photo_in_month_range`].
+pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
     let mut where_clause = String::from(" WHERE 1=1");
     let mut params: Vec<String> = Vec::new();
 
@@ -532,16 +523,6 @@ impl Photo {
         self.metadata.get("video")?.get("container")?.as_str()
     }
 
-    /// Whether the MOOV atom is at the start of the container. Defaults to
-    /// `true` when absent (absence means the record never wrote a false value).
-    pub fn moov_at_start(&self) -> bool {
-        self.metadata
-            .get("video")
-            .and_then(|v| v.get("moov_at_start"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true)
-    }
-
     // ===== DATABASE OPERATIONS =====
 
     /// Update photo (convenience wrapper)
@@ -650,51 +631,6 @@ impl Photo {
         Ok(())
     }
 
-    pub async fn list_with_pagination(
-        pool: &DbPool,
-        facts: &MediaFactsIndex,
-        limit: i64,
-        offset: i64,
-        sort: Option<&str>,
-        order: Option<&str>,
-    ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-        // SQL fast path: an explicit column sort with no date filter can be
-        // ordered and paged by SQLite itself.
-        if is_sql_sort(sort) {
-            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-                .fetch_one(pool)
-                .await?;
-
-            let query_str = format!(
-                "SELECT * FROM photos ORDER BY {} LIMIT ? OFFSET ?",
-                build_order_clause(sort, order)
-            );
-
-            let mut photos = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(query_str))
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(pool)
-                .await?;
-            for photo in &mut photos {
-                facts.enrich(photo);
-            }
-            return Ok((photos, total));
-        }
-
-        // Date-ordered (or default) listing: the DB stores no date, so the
-        // whole set is ordered from the index in memory.
-        let mut photos: Vec<Photo> = sqlx::query_as::<_, Photo>("SELECT * FROM photos")
-            .fetch_all(pool)
-            .await?;
-        for photo in &mut photos {
-            facts.enrich(photo);
-        }
-        sort_photos(&mut photos, sort, order);
-        let total = photos.len() as i64;
-
-        Ok((paginate(photos, offset, limit), total))
-    }
-
     pub async fn find_by_hash(
         pool: &DbPool,
         hash: &str,
@@ -713,7 +649,7 @@ impl Photo {
     /// statements, a failed duration write (SQLITE_BUSY under concurrent API
     /// writes, disk error, crash between them) left the `capability_version`
     /// marker behind — and that marker alone completes the record for
-    /// [`crate::video_probe::record_is_complete`], so the probe would
+    /// [`crate::video_capability::record_is_complete`], so the probe would
     /// short-circuit forever after and the NULL duration would be permanent
     /// until the file changed on disk.
     ///
@@ -1190,141 +1126,6 @@ impl Photo {
         Ok(())
     }
 
-    pub async fn search_photos(
-        pool: &DbPool,
-        facts: &MediaFactsIndex,
-        query: &SearchQuery,
-        limit: i64,
-        offset: i64,
-        sort: Option<&str>,
-        order: Option<&str>,
-    ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
-        let (where_clause, params) = build_search_where(query);
-        let bounds = month_range_bounds(query.year, query.month, query.to_year, query.to_month);
-
-        // SQL fast path: no date filter and an explicit column sort.
-        if bounds.is_none() && is_sql_sort(sort) {
-            // Get total count
-            let count_sql = format!("SELECT COUNT(*) FROM photos{}", where_clause);
-            let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
-            for param in &params {
-                count_query = count_query.bind(param);
-            }
-            let total = count_query.fetch_one(pool).await?;
-
-            let data_sql = format!(
-                "SELECT * FROM photos{} ORDER BY {} LIMIT ? OFFSET ?",
-                where_clause,
-                build_order_clause(sort, order)
-            );
-
-            let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql));
-            for param in &params {
-                data_query = data_query.bind(param);
-            }
-            data_query = data_query.bind(limit).bind(offset);
-
-            let mut photos = data_query.fetch_all(pool).await?;
-            for photo in &mut photos {
-                facts.enrich(photo);
-            }
-            return Ok((photos, total));
-        }
-
-        // The month filter is on a file-derived date and a date-ordered sort
-        // has nothing to order by in SQL: fetch every row the filters select,
-        // then filter, order and page with the index.
-        let data_sql = format!("SELECT * FROM photos{}", where_clause);
-        let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(data_sql));
-        for param in &params {
-            data_query = data_query.bind(param);
-        }
-        let mut photos = data_query.fetch_all(pool).await?;
-
-        for photo in &mut photos {
-            facts.enrich(photo);
-        }
-        if let Some(bounds) = &bounds {
-            photos.retain(|photo| photo_in_month_range(photo, bounds));
-        }
-        sort_photos(&mut photos, sort, order);
-        let total = photos.len() as i64;
-
-        Ok((paginate(photos, offset, limit), total))
-    }
-
-    /// Returns every photo matching `query` (optionally scoped to one album)
-    /// with no pagination. The Map view needs the complete filtered set: it
-    /// plots the geo-located subset and hands the same sorted array to the
-    /// viewer so next/previous span exactly the grid's result set
-    /// (FR-005, FR-011). Album scoping mirrors the grid's album detail view,
-    /// which ignores q/year/month.
-    pub async fn list_all_filtered(
-        pool: &DbPool,
-        facts: &MediaFactsIndex,
-        query: &SearchQuery,
-        sort: Option<&str>,
-        order: Option<&str>,
-        album: Option<i64>,
-    ) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
-        let (mut where_clause, params) = build_search_where(query);
-
-        if album.is_some() {
-            where_clause.push_str(
-                " AND hash_sha256 IN (SELECT photo_hash FROM album_members WHERE album_id = ?)",
-            );
-        }
-        let bounds = month_range_bounds(query.year, query.month, query.to_year, query.to_month);
-
-        // SQL fast path: no date filter and an explicit column sort. The rows
-        // still get enriched — the map hands this array straight to the
-        // response, coordinates included.
-        if bounds.is_none() && is_sql_sort(sort) {
-            let sql = format!(
-                "SELECT * FROM photos{} ORDER BY {}",
-                where_clause,
-                build_order_clause(sort, order)
-            );
-
-            let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(sql));
-            for param in &params {
-                data_query = data_query.bind(param);
-            }
-            if let Some(album_id) = album {
-                data_query = data_query.bind(album_id);
-            }
-
-            let mut photos = data_query.fetch_all(pool).await?;
-            for photo in &mut photos {
-                facts.enrich(photo);
-            }
-            return Ok(photos);
-        }
-
-        // No pagination here (the Map needs the complete filtered set), but a
-        // month filter or a date sort still has to run on the file-derived
-        // dates.
-        let sql = format!("SELECT * FROM photos{}", where_clause);
-        let mut data_query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(sql));
-        for param in &params {
-            data_query = data_query.bind(param);
-        }
-        if let Some(album_id) = album {
-            data_query = data_query.bind(album_id);
-        }
-
-        let mut photos = data_query.fetch_all(pool).await?;
-        for photo in &mut photos {
-            facts.enrich(photo);
-        }
-        if let Some(bounds) = &bounds {
-            photos.retain(|photo| photo_in_month_range(photo, bounds));
-        }
-        sort_photos(&mut photos, sort, order);
-
-        Ok(photos)
-    }
-
     pub async fn get_timeline_data(
         pool: &DbPool,
         facts: &MediaFactsIndex,
@@ -1579,6 +1380,54 @@ pub(crate) mod tests {
     use sqlx::Row;
 
     use crate::media_facts::{test_facts, test_facts_with_coords, MediaFacts, MediaFactsIndex};
+    use crate::photo_listing::{ListingPage, ListingRequest};
+
+    async fn search(
+        pool: &DbPool,
+        facts: &MediaFactsIndex,
+        query: &SearchQuery,
+        limit: i64,
+        offset: i64,
+        sort: Option<&str>,
+        order: Option<&str>,
+    ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
+        let listing = crate::photo_listing::list(
+            pool,
+            facts,
+            ListingRequest {
+                query,
+                album: None,
+                sort,
+                order,
+                page: Some(ListingPage { limit, offset }),
+            },
+        )
+        .await?;
+        Ok((listing.photos, listing.total as i64))
+    }
+
+    async fn list_all_filtered(
+        pool: &DbPool,
+        facts: &MediaFactsIndex,
+        query: &SearchQuery,
+        sort: Option<&str>,
+        order: Option<&str>,
+        album: Option<i64>,
+    ) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
+        let listing = crate::photo_listing::list(
+            pool,
+            facts,
+            ListingRequest {
+                query,
+                album,
+                sort,
+                order,
+                page: None,
+            },
+        )
+        .await?;
+        Ok(listing.photos)
+    }
 
     pub(crate) fn create_test_photo(filename: String, hash: String) -> Photo {
         // Ensure hash is 64 characters for SHA256
@@ -2484,7 +2333,7 @@ pub(crate) mod tests {
         assert_eq!(stored.metadata["video"]["container"], "mp4");
         // AND: the record no longer looks probed, so the next request re-probes
         assert!(
-            !crate::video_probe::record_is_complete(&stored),
+            !crate::video_capability::record_is_complete(&stored),
             "a record whose video facts are gone must be re-probed: {}",
             stored.metadata
         );
@@ -2605,7 +2454,7 @@ pub(crate) mod tests {
             stored.metadata
         );
         assert!(
-            !crate::video_probe::record_is_complete(&stored),
+            !crate::video_capability::record_is_complete(&stored),
             "{}",
             stored.metadata
         );
@@ -2736,7 +2585,7 @@ pub(crate) mod tests {
             stored.metadata
         );
         assert!(
-            crate::video_probe::record_is_complete(&stored),
+            crate::video_capability::record_is_complete(&stored),
             "a rescan of an unchanged file must not force a re-probe: {}",
             stored.metadata
         );
@@ -2849,7 +2698,7 @@ pub(crate) mod tests {
             stored.metadata
         );
         assert!(
-            !crate::video_probe::record_is_complete(&stored),
+            !crate::video_capability::record_is_complete(&stored),
             "the changed row has to be re-probed: {}",
             stored.metadata
         );
@@ -3387,7 +3236,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:Berlin");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3428,7 +3277,7 @@ pub(crate) mod tests {
 
         // Single month (start bound only).
         let query = date_filter_query(Some(2012), Some(3), None, None);
-        let (photos, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -3436,14 +3285,14 @@ pub(crate) mod tests {
 
         // Whole year (no month) stays a single-year filter.
         let query = date_filter_query(Some(2012), None, None, None);
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 3);
 
         // Month-granular range spanning years, both bounds inclusive.
         let query = date_filter_query(Some(2012), Some(3), Some(2015), Some(8));
-        let (photos, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 4);
@@ -3453,7 +3302,7 @@ pub(crate) mod tests {
 
         // Year-precision end bound stops at December of that year.
         let query = date_filter_query(Some(2012), Some(3), Some(2012), None);
-        let (photos, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 2);
@@ -3461,21 +3310,21 @@ pub(crate) mod tests {
 
         // Reversed bounds match nothing (the router normalises before it gets here).
         let query = date_filter_query(Some(2015), Some(8), Some(2012), Some(3));
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0);
 
         // A month bound without a year filters nothing.
         let query = date_filter_query(None, Some(3), None, None);
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 6);
 
         // An end year without a start year filters nothing either.
         let query = date_filter_query(None, None, Some(2015), None);
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 6);
@@ -3484,20 +3333,20 @@ pub(crate) mod tests {
         // bound: `2012-13` must not become a valid ordering point that lets a
         // later end year widen the range to 2013-01…2015-12.
         let query = date_filter_query(Some(2012), Some(13), None, None);
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0);
 
         let query = date_filter_query(Some(2012), Some(13), Some(2015), None);
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0);
 
         // Likewise for an out-of-range end month.
         let query = date_filter_query(Some(2012), None, Some(2015), Some(13));
-        let (_, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0);
@@ -3522,7 +3371,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let query = date_filter_query(Some(2012), Some(1), Some(2012), Some(12));
-        let (photos, total) = Photo::search_photos(&pool, &facts, &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -3542,7 +3391,7 @@ pub(crate) mod tests {
         x_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("IMG_2024");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3554,13 +3403,13 @@ pub(crate) mod tests {
             create_test_photo_with_metadata("weird%name.jpg", "percent-hash", json!({}));
         percent_photo.create(&pool).await.unwrap();
         let query = create_search_query("100%");
-        let (_, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0, "'100%' must not match every row");
 
         let query = create_search_query("weird%name");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -3583,7 +3432,7 @@ pub(crate) mod tests {
 
         // `_` in a location token must not widen to a single-char wildcard
         let query = create_search_query("location:Col_gne");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 0);
@@ -3606,7 +3455,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("Berlin");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3631,7 +3480,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:Paris");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3651,7 +3500,7 @@ pub(crate) mod tests {
         plain_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset is_favorite:true");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3672,7 +3521,7 @@ pub(crate) mod tests {
         image_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset type:video");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3696,7 +3545,7 @@ pub(crate) mod tests {
         ny_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3723,7 +3572,7 @@ pub(crate) mod tests {
         // with a leading space — the LIKE pattern must be trimmed or it
         // matches nothing.
         let query = create_search_query("location: New York");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3761,7 +3610,7 @@ pub(crate) mod tests {
         // A bare "location:" token must not filter (previously it emitted
         // LIKE '%%' which matched every row with a city).
         let query = create_search_query("with-city location:");
-        let (_, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (_, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3783,7 +3632,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset location:Berlin");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3800,7 +3649,7 @@ pub(crate) mod tests {
         fav_photo.create(&pool).await.unwrap();
 
         for query in ["is_favorite:true' OR '1'='1", "sunset' OR '1'='1 --"] {
-            let (photos, total) = Photo::search_photos(
+            let (photos, total) = search(
                 &pool,
                 &no_facts(),
                 &create_search_query(query),
@@ -3825,7 +3674,7 @@ pub(crate) mod tests {
         plain_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("type:raw");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
 
@@ -3859,7 +3708,7 @@ pub(crate) mod tests {
         berlin_fav_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York is_favorite:true");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -3881,7 +3730,7 @@ pub(crate) mod tests {
         ny_image_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York type:video");
-        let (photos, total) = Photo::search_photos(&pool, &no_facts(), &query, 50, 0, None, None)
+        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -3903,7 +3752,7 @@ pub(crate) mod tests {
             photo.create(&pool).await.unwrap();
         }
 
-        let photos = Photo::list_all_filtered(
+        let photos = list_all_filtered(
             &pool,
             &facts,
             &SearchQuery {
@@ -3962,7 +3811,7 @@ pub(crate) mod tests {
         rome.metadata = json!({ "location": { "city": "Rome" } });
         rome.update(&pool).await.unwrap();
 
-        let photos = Photo::list_all_filtered(
+        let photos = list_all_filtered(
             &pool,
             &facts,
             &SearchQuery {
@@ -3999,7 +3848,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-        let photos = Photo::list_all_filtered(
+        let photos = list_all_filtered(
             &pool,
             &no_facts(),
             &SearchQuery {

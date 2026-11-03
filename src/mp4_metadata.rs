@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -2923,6 +2923,222 @@ fn span_delta(span: &BoxSpan, edits: &[MoovEdit]) -> isize {
     edited - Padding::of(span).total as isize
 }
 
+/// The container keeps the carrier's own representation, not the request's:
+/// mirroring the request would leave the row (and the response) claiming
+/// precision the file does not hold, and `metadata_extractor` re-derives both
+/// fields from those carriers — so the next scan of a changed file would
+/// silently move the stored values by the rounding error. Read back what the
+/// write actually left.
+///
+/// A readback that fails keeps the requested value: the write already
+/// succeeded, so this is the mirror's reporting step, not a second validation.
+/// A readback that succeeds and finds no carrier holding a requested instant is
+/// the one answer that is not a report: `Err` says the container cannot
+/// represent the value, and the caller rolls the file back and refuses rather
+/// than mirroring an instant the file does not carry (a text carrier that
+/// cannot be parsed is still a carrier and stays on the reporting path).
+fn applied_edit(
+    path: &Path,
+    requested: VideoMetadataEdit,
+) -> Result<VideoMetadataEdit, Mp4MetadataError> {
+    let stored = match read_metadata(path) {
+        Ok(stored) => stored,
+        Err(err) => {
+            log::warn!(
+                "Could not read {} back after a metadata write ({err}); keeping the requested values",
+                path.display()
+            );
+            return Ok(requested);
+        }
+    };
+    // Every carrier the writer renders has been written before this read, so a
+    // readback that holds neither the binary time boxes nor a text item with
+    // the instant proves the container has no date carrier at all: the write
+    // patched nothing date-shaped, and answering the request would claim a date
+    // the patched file does not have.
+    if requested.taken_at.is_some()
+        && stored.creation_time.is_none()
+        && stored.creation_date_text.is_none()
+    {
+        return Err(Mp4MetadataError::Unrepresentable("date"));
+    }
+    let position = stored.location_iso6709.as_deref().and_then(parse_iso6709);
+
+    Ok(VideoMetadataEdit {
+        // The instant the binary time boxes carry — what a later ffprobe
+        // reports as `format.tags.creation_time`.
+        taken_at: requested
+            .taken_at
+            .map(|requested| stored.creation_time.unwrap_or(requested)),
+        latitude: requested
+            .latitude
+            .map(|requested| position.map_or(requested, |(latitude, _)| latitude)),
+        longitude: requested
+            .longitude
+            .map(|requested| position.map_or(requested, |(_, longitude)| longitude)),
+    })
+}
+
+/// Puts `time` on the file at `path`.
+fn set_modified(path: &Path, time: SystemTime) -> Result<(), Mp4MetadataError> {
+    File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(time))
+        .map_err(Mp4MetadataError::Io)
+}
+
+/// Puts a patched container back through the write's undo token.
+///
+/// [`restore`] refuses unless the file's modification time is the one the token
+/// recorded, and that equality rests on `write_moov_region`'s own
+/// `set_modified` call, which only WARNS when the kernel refuses it. A save
+/// whose clock was not wound back would therefore leave the container patched
+/// while the token refuses to undo it — the file and the row permanently
+/// disagreeing, the split FR-006 forbids and no later scan repairs, because the
+/// row's fingerprint still matches the patched file. So the instant the file
+/// carried before the write is put back and the undo retried: the retry
+/// succeeding IS the proof that the token recorded that instant, since
+/// [`restore`] accepts nothing else.
+///
+/// A retry that still refuses means the token names some other instant — the
+/// file moved between our read and the write — so the time goes back to the
+/// value it was found with (our own repair attempt is not left on the file)
+/// and the failure is reported. Nothing here claims a file was repaired that
+/// was not.
+fn roll_back(
+    write: &VideoMetadataWrite,
+    pre_write_modified: Option<SystemTime>,
+) -> Result<(), Mp4MetadataError> {
+    let found_modified = fs::metadata(&write.undo.path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    let rearmed = match (pre_write_modified, found_modified) {
+        (Some(pre), Some(found)) if pre != found => {
+            set_modified(&write.undo.path, pre)?;
+            true
+        }
+        _ => false,
+    };
+    match restore(&write.undo) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if rearmed {
+                if let Some(found) = found_modified {
+                    if let Err(put_back) = set_modified(&write.undo.path, found) {
+                        log::error!(
+                            "Could not hand the modification time of {} back after a refused rollback: {}",
+                            write.undo.path.display(),
+                            put_back
+                        );
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+/// The container half of a save failed, or the file could not be put back.
+#[derive(Debug)]
+pub enum VideoSaveError {
+    /// The write or its readback refused; the file was rolled back.
+    Metadata(Mp4MetadataError),
+    /// The readback refused AND the rollback could not run. The file may still
+    /// carry the write; the caller must report damage, never a clean refusal.
+    Rollback {
+        cause: Mp4MetadataError,
+        rollback: Mp4MetadataError,
+    },
+}
+
+impl fmt::Display for VideoSaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Metadata(err) => err.fmt(f),
+            Self::Rollback { cause, rollback } => {
+                write!(
+                    f,
+                    "metadata refused ({cause}); rollback failed ({rollback})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for VideoSaveError {}
+
+/// A completed container save: the file's new identity, the values the
+/// container actually holds, and the ability to put the file back.
+///
+/// The save's container rules — readback proof, modification-time re-arm,
+/// rollback ordering — live here, with the writer, instead of in the HTTP
+/// handler that mirrors the row. The handler keeps only the row write and the
+/// resolver's re-arm.
+#[derive(Debug)]
+pub struct AppliedVideoSave {
+    write: VideoMetadataWrite,
+    applied: VideoMetadataEdit,
+    pre_write_modified: Option<SystemTime>,
+}
+
+impl AppliedVideoSave {
+    /// The values the container holds after the write (carrier precision, not
+    /// the request's spelling).
+    pub fn applied(&self) -> VideoMetadataEdit {
+        self.applied
+    }
+
+    /// The file's identity as the scanner records it after the write.
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.write.fingerprint
+    }
+
+    /// Puts the file back exactly as the save found it. A failure means the
+    /// file may still differ from the row.
+    pub fn rollback(&self) -> Result<(), Mp4MetadataError> {
+        roll_back(&self.write, self.pre_write_modified)
+    }
+}
+
+/// Writes `edit` into the container and proves what the file holds.
+///
+/// Every blocking file operation lives here, in the order the caller's rollback
+/// needs them. A readback that finds no carrier for a requested instant rolls
+/// the file back before the refusal leaves this function, so no caller can
+/// forget the rollback that keeps a refused save from leaving a patched file
+/// behind.
+pub fn save_metadata(
+    path: &Path,
+    requested: VideoMetadataEdit,
+) -> Result<AppliedVideoSave, VideoSaveError> {
+    // The undo token's guard is the file's modification time, so the rollback
+    // needs the instant the file carried before the write.
+    let pre_write_modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+
+    let write = write_metadata(path, &requested).map_err(VideoSaveError::Metadata)?;
+
+    let applied = match applied_edit(path, requested) {
+        Ok(applied) => applied,
+        Err(cause) => {
+            // The readback proved the container holds no carrier for the
+            // requested instant. Put the file back (the write may still have
+            // patched a location carrier) so the refusal leaves the file and
+            // the row in agreement.
+            return match roll_back(&write, pre_write_modified) {
+                Ok(()) => Err(VideoSaveError::Metadata(cause)),
+                Err(rollback) => Err(VideoSaveError::Rollback { cause, rollback }),
+            };
+        }
+    };
+
+    Ok(AppliedVideoSave {
+        write,
+        applied,
+        pre_write_modified,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -2932,6 +3148,60 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    /// `restore` refuses unless the file still carries the exact modification
+    /// time the write recorded, and that equality rests on the writer's own
+    /// `set_modified`, which only WARNS when the kernel refuses it. A save
+    /// whose clock was not wound back would leave the container patched while
+    /// the undo refuses to run — the file and the row permanently disagreeing,
+    /// and no later scan repairs it, because the row's fingerprint still
+    /// matches the patched file. So the rollback puts the pre-write instant
+    /// back and retries: the retry succeeding IS the proof that the token
+    /// recorded that instant, since `restore` accepts nothing else.
+    #[tokio::test]
+    async fn a_rollback_re_arms_the_modification_time_the_write_recorded() {
+        let temp_dir = TempDir::new().unwrap();
+        let video = temp_dir.path().join("rearm_clock.mp4");
+        fs::copy("test-data/test_video_with_date.mp4", &video).expect("fixture");
+        let before_bytes = fs::read(&video).unwrap();
+        let before_modified = fs::metadata(&video).unwrap().modified().unwrap();
+
+        // GIVEN: a real save, so the token holds this file's real pre-write
+        // clock, and a file whose clock the kernel did not wind back
+        let edit = VideoMetadataEdit {
+            taken_at: Some("2024-07-04T12:00:00Z".parse::<DateTime<Utc>>().unwrap()),
+            latitude: None,
+            longitude: None,
+        };
+        let save = save_metadata(&video, edit).expect("save");
+        assert_ne!(
+            fs::read(&video).unwrap(),
+            before_bytes,
+            "the fixture must carry a date this write replaces, or nothing was patched"
+        );
+        set_modified(&video, before_modified + std::time::Duration::from_secs(7))
+            .expect("the kernel refused the clock the writer needs");
+
+        // THEN: the plain restore refuses — the token's guard is real
+        assert!(
+            restore(&save.write.undo).is_err(),
+            "restore must refuse a file whose clock moved, or it would graft an \
+             old `moov` onto whatever is there now"
+        );
+
+        // AND: the save's rollback re-arms the recorded clock and undoes it
+        save.rollback().expect("rollback");
+        assert_eq!(
+            fs::read(&video).unwrap(),
+            before_bytes,
+            "the container must be byte-identical to where it started"
+        );
+        assert_eq!(
+            fs::metadata(&video).unwrap().modified().unwrap(),
+            before_modified,
+            "the file's own identity must be what the row still describes"
+        );
+    }
 
     #[test]
     fn reads_apple_key_carriers_from_the_fixture() {

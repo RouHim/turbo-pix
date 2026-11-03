@@ -9,7 +9,7 @@ use crate::warp_helpers::{with_db, with_facts, DatabaseError, NotFoundError};
 
 #[derive(Debug, Serialize)]
 pub struct HousekeepingCandidate {
-    pub photo: Photo,
+    pub photo: crate::photo_reply::PhotoReply,
     pub reason: String,
     pub score: f32,
 }
@@ -41,7 +41,7 @@ pub async fn list_housekeeping_candidates(
     // Fetch photos for each candidate
     let mut candidates = Vec::new();
     for (photo_hash, reason, score) in candidates_data {
-        if let Ok(Some(mut photo)) =
+        if let Ok(Some(photo)) =
             sqlx::query_as::<_, Photo>("SELECT * FROM photos WHERE hash_sha256 = ?")
                 .bind(&photo_hash)
                 .fetch_optional(&db_pool)
@@ -49,9 +49,8 @@ pub async fn list_housekeeping_candidates(
         {
             // The candidate carries the file's capture facts, like every other
             // photo response.
-            facts.enrich(&mut photo);
             candidates.push(HousekeepingCandidate {
-                photo,
+                photo: crate::photo_reply::PhotoReply::from_row(photo, &facts),
                 reason,
                 score,
             });

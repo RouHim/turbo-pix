@@ -92,25 +92,6 @@ export function wrapLongitudeForView(lng, west, east) {
 }
 
 /**
- * Route state → /api/photos/map params, mirroring PhotoGrid.buildFilters:
- * favorites/videos view tokens never apply (the map is its own view), the
- * route query travels verbatim, sort/order split like the grid.
- */
-export function buildMapFilters(route) {
-  const filters = {
-    query: route.query || null,
-    year: route.year ?? undefined,
-    month: route.month ?? undefined,
-  };
-  if (route.sort) {
-    const [field, order] = route.sort.split('_');
-    filters.sort = field;
-    filters.order = order || 'desc';
-  }
-  return filters;
-}
-
-/**
  * Non-prefix queries run through CLIP semantic search, exactly like the grid
  * (prefix queries type:/location:/is_favorite: stay regular).
  */

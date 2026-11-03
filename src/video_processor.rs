@@ -1,3 +1,4 @@
+use crate::db::Photo;
 use crate::thumbnail_types::{CacheError, CacheResult, VideoMetadata};
 use crate::video_encoder::{self, HwPlan, SOFTWARE_ENCODER};
 use chrono::{DateTime, Utc};
@@ -1634,6 +1635,129 @@ async fn convert_with_fallback(
     }
 }
 
+/// The transcode cache root and the naming rules for everything beneath it.
+///
+/// A [`Photo`]'s cache identity is `{hash}_{size}_{mtime_millis}`, the layout
+/// has three namespaces (`transcoded/`, `copied/`, `remux/`), and the cache
+/// root may itself be the `transcoded` namespace. Callers ask this value for
+/// the artifact they want instead of re-deriving those rules from scalars.
+#[derive(Debug, Clone)]
+pub struct TranscodeCache {
+    root: PathBuf,
+}
+
+impl TranscodeCache {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The one place the environment is read. `main` defaults the variable
+    /// from config, so this fallback only serves tests and embedded callers.
+    pub fn from_env() -> Self {
+        Self::new(
+            std::env::var("TRANSCODE_CACHE_DIR")
+                .unwrap_or_else(|_| "./data/cache/transcoded".to_string()),
+        )
+    }
+
+    fn namespace_dir(&self, namespace: &str) -> PathBuf {
+        namespace_dir(&self.root, namespace)
+    }
+
+    /// The H.264 + AAC re-encode every client can play.
+    pub fn transcoded(&self, photo: &Photo) -> PathBuf {
+        get_transcoded_path_versioned(
+            &self.root,
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        )
+    }
+
+    /// The video copy (source video codec, converted audio).
+    pub fn copied(&self, photo: &Photo) -> PathBuf {
+        get_copied_path_versioned(
+            &self.root,
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        )
+    }
+
+    /// The faststart remux sidecar for one cache identity.
+    pub fn remux_path(&self, original_hash: &str, file_size: i64, modified_millis: i64) -> PathBuf {
+        self.namespace_dir("remux").join(format!(
+            "{}_{}_{}.mp4",
+            original_hash, file_size, modified_millis
+        ))
+    }
+
+    /// The faststart remux sidecar.
+    pub fn remux(&self, photo: &Photo) -> PathBuf {
+        self.remux_path(
+            &photo.hash_sha256,
+            photo.file_size,
+            photo.date_modified.timestamp_millis(),
+        )
+    }
+
+    /// The artifact a whole-file conversion writes.
+    pub fn artifact(&self, conversion: FileConversion, photo: &Photo) -> PathBuf {
+        match conversion {
+            FileConversion::VideoCopy => self.copied(photo),
+            FileConversion::Reencode => self.transcoded(photo),
+        }
+    }
+
+    /// The temp sibling a conversion renames into place on success.
+    pub fn temp_sibling(path: &Path) -> PathBuf {
+        path.with_extension("mp4.tmp")
+    }
+
+    /// Drops every older artifact of `hash` after `keep` was written.
+    pub fn purge_old_versions(&self, hash: &str, keep: &Path) {
+        purge_old_transcode_versions(&self.root, hash, keep);
+    }
+
+    /// Removes every cached artifact and temp for one hash.
+    pub fn clear_for_hash(&self, hash: &str) {
+        let prefix = format!("{hash}_");
+        self.clear_matching(|name| name.starts_with(&prefix));
+    }
+
+    /// One pass per namespace for many hashes.
+    pub fn clear_for_hashes(&self, hashes: &HashSet<String>) {
+        if hashes.is_empty() {
+            return;
+        }
+        self.clear_matching(|name| {
+            name.split_once('_')
+                .is_some_and(|(hash, _)| hashes.contains(hash))
+        });
+    }
+
+    fn clear_matching(&self, matches: impl Fn(&str) -> bool) {
+        for ns in TRANSCODE_NAMESPACES {
+            let dir = self.namespace_dir(ns);
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                if entry.file_name().to_str().is_some_and(&matches) {
+                    let path = entry.path();
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        log::warn!(
+                            "Failed to remove transcode cache file {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The namespaces a transcode artifact can be written into, as they appear
 /// beneath the transcode cache root (see [`namespace_dir`]).
 const TRANSCODE_NAMESPACES: [&str; 3] = ["transcoded", "copied", "remux"];
@@ -1699,22 +1823,6 @@ pub fn get_copied_path_versioned(
     ))
 }
 
-/// Faststart remux sidecar path under `{cache_dir}/remux/`, versioned by the
-/// source's content fingerprint (size + mtime millis) exactly like the
-/// transcode cache. (Moved from handlers_video so all three transcode
-/// namespaces have one home module.)
-pub(crate) fn remux_sidecar_path(
-    cache_dir: &str,
-    original_hash: &str,
-    file_size: i64,
-    modified_millis: i64,
-) -> std::path::PathBuf {
-    namespace_dir(Path::new(cache_dir), "remux").join(format!(
-        "{}_{}_{}.mp4",
-        original_hash, file_size, modified_millis
-    ))
-}
-
 /// Removes every transcode-cache file for `hash`: finished versioned
 /// artifacts (`{hash}_*.mp4`) and temp leftovers (`{hash}_*.tmp`) in the
 /// `transcoded/`, `copied/` and `remux/` namespaces.
@@ -1723,8 +1831,7 @@ pub(crate) fn remux_sidecar_path(
 /// a deleted photo's conversions stay on disk forever. The `{hash}_` prefix
 /// uses the full 64-hex path hash, so no other photo's files can match.
 pub fn clear_transcode_cache_for_hash(hash: &str) {
-    let prefix = format!("{hash}_");
-    clear_transcode_cache_matching(|name| name.starts_with(&prefix));
+    TranscodeCache::from_env().clear_for_hash(hash);
 }
 
 /// [`clear_transcode_cache_for_hash`] for many hashes at once: every namespace
@@ -1739,41 +1846,7 @@ pub fn clear_transcode_cache_for_hash(hash: &str) {
 /// namespace is O(N + K). The per-hash form stays for the single-photo
 /// delete/rotate paths, where one listing is the whole job.
 pub fn clear_transcode_cache_for_hashes(hashes: &HashSet<String>) {
-    if hashes.is_empty() {
-        return;
-    }
-    clear_transcode_cache_matching(|name| {
-        name.split_once('_')
-            .is_some_and(|(hash, _)| hashes.contains(hash))
-    });
-}
-
-/// Removes every cache file in all three namespaces whose file name satisfies
-/// `matches`; the two entry points above differ only in that predicate. Keeps
-/// the shared error-logging contract: a failed unlink is a warning, never a
-/// propagated error, so one unreadable entry cannot abort a sweep.
-fn clear_transcode_cache_matching(matches: impl Fn(&str) -> bool) {
-    let cache_dir = std::env::var("TRANSCODE_CACHE_DIR")
-        .unwrap_or_else(|_| "./data/cache/transcoded".to_string());
-    let root = Path::new(&cache_dir);
-    for ns in TRANSCODE_NAMESPACES {
-        let dir = namespace_dir(root, ns);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.filter_map(|e| e.ok()) {
-            if entry.file_name().to_str().is_some_and(&matches) {
-                let path = entry.path();
-                if let Err(e) = std::fs::remove_file(&path) {
-                    log::warn!(
-                        "Failed to remove transcode cache file {}: {}",
-                        path.display(),
-                        e
-                    );
-                }
-            }
-        }
-    }
+    TranscodeCache::from_env().clear_for_hashes(hashes);
 }
 
 /// Removes stale `{hash}_*.mp4` siblings in every transcode namespace except

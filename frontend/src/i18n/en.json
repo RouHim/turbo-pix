@@ -19,6 +19,8 @@
     "removed": "Removed",
     "download": "Download",
     "menu": "Menu",
+    "collapse_sidebar": "Collapse sidebar",
+    "expand_sidebar": "Expand sidebar",
     "newest_first": "Newest First",
     "oldest_first": "Oldest First",
     "name_a_z": "Name A-Z",

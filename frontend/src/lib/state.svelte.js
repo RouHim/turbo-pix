@@ -1,12 +1,28 @@
 import { api } from './api.js';
+import {
+  browserStorage,
+  readSidebarCollapsed,
+  writeSidebarCollapsed,
+} from './sidebarPreference.js';
 
 export const appState = $state({
   sidebarOpen: false,
+  // Desktop-only: the mobile drawer keeps its own `sidebarOpen` lifecycle.
+  sidebarCollapsed: readSidebarCollapsed(browserStorage()),
   mobileSearchOpen: false,
   // Raster tile endpoint served by GET /api/config (TURBO_PIX_TILE_URL).
   // null = not configured → the map renders without a tile layer.
   tileUrl: null,
 });
+
+/**
+ * Applies the desktop sidebar choice and remembers it. A denied write must
+ * not discard the state the user just chose.
+ */
+export function setSidebarCollapsed(collapsed) {
+  appState.sidebarCollapsed = collapsed;
+  writeSidebarCollapsed(browserStorage(), collapsed);
+}
 
 export const indexingState = $state({
   isIndexing: false,

@@ -301,12 +301,16 @@ jobs:
       - name: Test container startup and health
         if: matrix.arch == 'amd64'
         run: |
-          podman run -d --name turbo-pix-test -p 18473:18473 --user=0 -v $(pwd)/data:/data:z turbo-pix-${{ matrix.arch }}:latest
+          # Host networking: rootless podman's port forward on ubuntu-latest
+          # resets connections to the published port even though the server is
+          # listening inside the container (verified in run 41978793453). The
+          # runner is isolated, so sharing its network namespace is safe.
+          podman run -d --name turbo-pix-test --network host --user=0 -v $(pwd)/data:/data:z turbo-pix-${{ matrix.arch }}:latest
           sleep 5
           echo "=== Container logs after 5s ==="
           podman logs turbo-pix-test
           echo "=== Testing health endpoint ==="
-          if ! curl --retry 5 --retry-delay 2 --retry-all-errors http://localhost:18473/health; then
+          if ! curl --retry 5 --retry-delay 2 --retry-all-errors http://127.0.0.1:18473/health; then
             echo "=== Health check failed, dumping full logs ==="
             podman logs turbo-pix-test
             podman stop turbo-pix-test

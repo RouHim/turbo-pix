@@ -1,5 +1,6 @@
 <script>
   import { onMount, untrack } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { get } from 'svelte/store';
   import { isLoading } from 'svelte-i18n';
   import { t, initI18n } from './lib/i18n.js';
@@ -14,7 +15,7 @@
   } from './lib/state.svelte.js';
   import { route, init as initRouter } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
-  import { throttle, performance } from './lib/utils.js';
+  import { performance } from './lib/utils.js';
   import { APP_CONSTANTS } from './lib/constants.js';
   import { logger } from './lib/logger.js';
   import Icon from './components/Icon.svelte';
@@ -65,6 +66,15 @@
           })
   );
 
+  // Same breakpoint the scoped CSS uses (max-width: 768px), so the drawer
+  // state and the layout agree exactly at 768px.
+  const isMobileViewport = new MediaQuery(`(max-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT}px)`);
+
+  // The drawer is a mobile surface: crossing back to desktop retires it.
+  $effect(() => {
+    if (!isMobileViewport.current) appState.sidebarOpen = false;
+  });
+
   // FR-013: selection never leaks across surfaces. A different view OR a
   // different query is a different surface (semantic search results are one);
   // sort/date-range changes keep the same result set, so they do not clear.
@@ -78,16 +88,6 @@
   });
 
   onMount(() => {
-    const updateMobile = throttle(() => {
-      // Matches the CSS breakpoint (max-width: 768px), so the sidebar state
-      // and the layout agree exactly at 768px.
-      const isMobile = window.innerWidth <= APP_CONSTANTS.MOBILE_BREAKPOINT;
-      if (!isMobile) appState.sidebarOpen = false;
-    }, 150);
-
-    updateMobile();
-    window.addEventListener('resize', updateMobile);
-
     let connectionWasUp = true;
     const healthTimer = setInterval(async () => {
       try {
@@ -138,7 +138,6 @@
     })();
 
     return () => {
-      window.removeEventListener('resize', updateMobile);
       clearInterval(healthTimer);
       clearInterval(perfTimer);
     };
@@ -148,7 +147,12 @@
 {#if ready && !$isLoading}
   <Header />
   <Sidebar />
-  <main class="main-content" class:map-mode={route.view === 'map'}>
+  <main
+    class="main-content"
+    data-testid="main-content"
+    class:map-mode={route.view === 'map'}
+    class:sidebar-collapsed={appState.sidebarCollapsed}
+  >
     <div class="content-header">
       <h2 id="current-view-title">
         {#if route.query}
@@ -252,6 +256,15 @@
     padding: var(--space-6);
     background: var(--background-color);
     container-type: inline-size;
+  }
+
+  /* The mobile drawer overlays the content, so only desktop reclaims width.
+     The margin snaps (no transition): a layout-property animation here
+     re-measures the timeline while it runs and breaks resize geometry. */
+  @media (min-width: 769px) {
+    .main-content.sidebar-collapsed {
+      margin-left: 0;
+    }
   }
 
   .content-header {

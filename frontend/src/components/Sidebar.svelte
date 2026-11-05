@@ -158,12 +158,19 @@
 
 <div
   class="sidebar-overlay"
+  data-testid="sidebar-overlay"
   class:show={appState.sidebarOpen}
   role="presentation"
   onclick={closeSidebar}
 ></div>
 
-<nav id="sidebar-nav" class="sidebar" class:open={appState.sidebarOpen}>
+<nav
+  id="sidebar-nav"
+  class="sidebar"
+  data-testid="sidebar-nav"
+  class:open={appState.sidebarOpen}
+  class:collapsed={appState.sidebarCollapsed}
+>
   <div class="sidebar-content">
     {#each views as view (view.id)}
       {@const isAlbumsNav =
@@ -256,6 +263,9 @@
     border-right: 1px solid var(--glass-border, var(--divider-color));
     z-index: 90;
     overflow-y: auto;
+    transition:
+      transform var(--transition-medium),
+      visibility var(--transition-medium);
   }
 
   .sidebar-content {
@@ -311,9 +321,6 @@
     .sidebar {
       transform: translateX(-100%);
       visibility: hidden;
-      transition:
-        transform var(--transition-medium),
-        visibility var(--transition-medium);
       z-index: 95;
       width: 280px;
       /* The drawer floats over the photo mosaic: text on 70% glass over a
@@ -340,6 +347,14 @@
     .sidebar-overlay.show {
       opacity: 1;
       visibility: visible;
+    }
+  }
+
+  /* Desktop collapse; the mobile drawer keeps its own transform lifecycle. */
+  @media (min-width: 769px) {
+    .sidebar.collapsed {
+      transform: translateX(-100%);
+      visibility: hidden;
     }
   }
 
@@ -434,5 +449,11 @@
     color: var(--text-primary);
     font-family: var(--font-body);
     font-size: var(--font-md);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar {
+      transition: none;
+    }
   }
 </style>

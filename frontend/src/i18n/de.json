@@ -19,6 +19,8 @@
     "removed": "Entfernt",
     "download": "Herunterladen",
     "menu": "Menü",
+    "collapse_sidebar": "Seitenleiste einklappen",
+    "expand_sidebar": "Seitenleiste ausklappen",
     "newest_first": "Neueste zuerst",
     "oldest_first": "Älteste zuerst",
     "name_a_z": "Name A-Z",

@@ -4,7 +4,13 @@
   import Icon from './Icon.svelte';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast, appState, loadSavedSearches, savedSearches } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    appState,
+    loadSavedSearches,
+    savedSearches,
+    setSidebarCollapsed,
+  } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { handleError } from '../lib/utils.js';
 
@@ -17,6 +23,13 @@
     { id: 'collages', key: 'ui.collages', fallback: 'Collages' },
     { id: 'housekeeping', key: 'ui.housekeeping', fallback: 'Housekeeping' },
   ];
+
+  // Desktop edge tab: the sidebar's own collapse control.
+  const collapseLabel = $derived(
+    appState.sidebarCollapsed
+      ? $t('ui.expand_sidebar', { default: 'Expand sidebar' })
+      : $t('ui.collapse_sidebar', { default: 'Collapse sidebar' })
+  );
 
   function navigate(view) {
     appState.mobileSearchOpen = false;
@@ -250,6 +263,27 @@
   </div>
 </nav>
 
+<button
+  type="button"
+  id="sidebar-collapse-toggle"
+  class="sidebar-toggle"
+  class:collapsed={appState.sidebarCollapsed}
+  data-testid="sidebar-collapse-toggle"
+  title={collapseLabel}
+  aria-label={collapseLabel}
+  aria-expanded={!appState.sidebarCollapsed}
+  aria-controls="sidebar-nav"
+  onclick={() => setSidebarCollapsed(!appState.sidebarCollapsed)}
+>
+  <span class="sidebar-toggle-tab">
+    <Icon
+      name={appState.sidebarCollapsed ? 'chevron-right' : 'chevron-left'}
+      width={16}
+      height={16}
+    />
+  </span>
+</button>
+
 <style>
   .sidebar {
     position: fixed;
@@ -273,6 +307,63 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+  }
+
+  /* The sidebar's own collapse control. The button keeps a 44×48 hit area
+     while the visible 24×48 tab straddles the sidebar border; collapsed it
+     parks flush against the viewport edge (left: -10px keeps the tab clear of
+     the content's 24px padding) and stays the way back in. */
+  .sidebar-toggle {
+    position: fixed;
+    top: calc(var(--header-height) + var(--space-6));
+    left: calc(var(--sidebar-width) - 22px);
+    z-index: 95;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 48px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: left var(--transition-medium);
+  }
+
+  .sidebar-toggle.collapsed {
+    left: -10px;
+  }
+
+  /* Collapsed, the tab is the only way back in: no opacity budget. */
+  .sidebar-toggle.collapsed .sidebar-toggle-tab {
+    opacity: 1;
+  }
+
+  .sidebar-toggle-tab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 48px;
+    border: 1px solid var(--divider-color);
+    border-left: none;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    background: var(--surface-color);
+    box-shadow: var(--shadow-light);
+    opacity: 0.55;
+    transition: opacity var(--transition-fast);
+  }
+
+  .sidebar-toggle:hover .sidebar-toggle-tab,
+  .sidebar-toggle:focus-visible .sidebar-toggle-tab {
+    opacity: 1;
+  }
+
+  .sidebar-toggle:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    border-radius: var(--radius-md);
   }
 
   .nav-item {
@@ -348,10 +439,15 @@
       opacity: 1;
       visibility: visible;
     }
+
+    /* The edge tab is desktop chrome; the hamburger owns the mobile drawer. */
+    .sidebar-toggle {
+      display: none;
+    }
   }
 
   /* Desktop collapse; the mobile drawer keeps its own transform lifecycle. */
-  @media (min-width: 769px) {
+  @media (width > 768px) {
     .sidebar.collapsed {
       transform: translateX(-100%);
       visibility: hidden;
@@ -452,7 +548,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sidebar {
+    .sidebar,
+    .sidebar-toggle {
       transition: none;
     }
   }

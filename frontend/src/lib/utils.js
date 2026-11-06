@@ -161,25 +161,6 @@ export function formatCollageDate(dateString) {
   return `${weekdayName}, ${monthName} ${day}, ${year}`;
 }
 
-// ── Timing helpers ──────────────────────────────────────────────────────────
-
-/**
- * Throttle a function call.
- * @param {Function} func
- * @param {number} limit - milliseconds
- * @returns {Function}
- */
-export function throttle(func, limit) {
-  let inThrottle;
-  return function (...args) {
-    if (!inThrottle) {
-      func.apply(this, args);
-      inThrottle = true;
-      setTimeout(() => (inThrottle = false), limit);
-    }
-  };
-}
-
 // ── Toast notifications ─────────────────────────────────────────────────────
 
 /**

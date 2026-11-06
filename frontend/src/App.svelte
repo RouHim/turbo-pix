@@ -69,10 +69,35 @@
   // Same breakpoint the scoped CSS uses (max-width: 768px), so the drawer
   // state and the layout agree exactly at 768px.
   const isMobileViewport = new MediaQuery(`(max-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT}px)`);
+  const SIDEBAR_NAV_ID = 'sidebar-nav';
+  const SIDEBAR_COLLAPSE_TOGGLE_ID = 'sidebar-collapse-toggle';
 
-  // The drawer is a mobile surface: crossing back to desktop retires it.
+  // The drawer is a mobile surface: crossing back to desktop retires it. If the
+  // desktop sidebar lands hidden (`collapsed`), the browser blurs the focused
+  // nav item and drops focus on <body>; hand it to the edge tab instead of
+  // leaving keyboard users at the top of the document.
   $effect(() => {
-    if (!isMobileViewport.current) appState.sidebarOpen = false;
+    if (isMobileViewport.current) return;
+    if (!untrack(() => appState.sidebarOpen)) return;
+    // The nav is still focusable at this instant: its `visibility: hidden`
+    // transition only ends later, so capturing focus synchronously (the
+    // toggle pattern) is the only reliable moment to notice it.
+    const focusInDrawer = Boolean(
+      document.getElementById(SIDEBAR_NAV_ID)?.contains(document.activeElement)
+    );
+    appState.sidebarOpen = false;
+    if (!appState.sidebarCollapsed) return;
+    if (!focusInDrawer) return;
+    // The tab is `display: none` until the media query's style recalc lands, so
+    // a synchronous focus() can no-op (observed as a flake in the full suite).
+    // Focus on the next frame and verify once more if the first attempt lost.
+    const focusTab = () => document.getElementById(SIDEBAR_COLLAPSE_TOGGLE_ID)?.focus();
+    requestAnimationFrame(() => {
+      focusTab();
+      if (document.activeElement?.id !== SIDEBAR_COLLAPSE_TOGGLE_ID) {
+        requestAnimationFrame(focusTab);
+      }
+    });
   });
 
   // FR-013: selection never leaks across surfaces. A different view OR a
@@ -261,7 +286,7 @@
   /* The mobile drawer overlays the content, so only desktop reclaims width.
      The margin snaps (no transition): a layout-property animation here
      re-measures the timeline while it runs and breaks resize geometry. */
-  @media (min-width: 769px) {
+  @media (width > 768px) {
     .main-content.sidebar-collapsed {
       margin-left: 0;
     }

@@ -1,44 +1,13 @@
 <script>
   import { t } from '../lib/i18n.js';
-  import { appState, setSidebarCollapsed } from '../lib/state.svelte.js';
+  import { appState } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
-  import { MediaQuery } from 'svelte/reactivity';
   import SearchBar from './SearchBar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import Icon from './Icon.svelte';
 
-  // One control, two behaviours: the drawer on mobile, the desktop collapse.
-  const isMobile = new MediaQuery(`(max-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT}px)`);
-  const SIDEBAR_NAV_ID = 'sidebar-nav';
-
-  const menuLabel = $derived(
-    isMobile.current
-      ? $t('ui.menu', { default: 'Menu' })
-      : appState.sidebarCollapsed
-        ? $t('ui.expand_sidebar', { default: 'Expand sidebar' })
-        : $t('ui.collapse_sidebar', { default: 'Collapse sidebar' })
-  );
-
-  const menuExpanded = $derived(
-    isMobile.current ? appState.sidebarOpen : !appState.sidebarCollapsed
-  );
-
-  let menuBtnEl = $state(null);
-
   function toggleSidebar() {
-    if (isMobile.current) {
-      appState.sidebarOpen = !appState.sidebarOpen;
-      return;
-    }
-    const collapsing = !appState.sidebarCollapsed;
-    // A mouse click already focuses the toggle; only a programmatic or
-    // keyboard-driven collapse can strand focus inside the hidden nav.
-    const focusInsideSidebar =
-      collapsing &&
-      Boolean(document.getElementById(SIDEBAR_NAV_ID)?.contains(document.activeElement));
-    setSidebarCollapsed(collapsing);
-    if (focusInsideSidebar) menuBtnEl?.focus();
+    appState.sidebarOpen = !appState.sidebarOpen;
   }
 
   function toggleMobileSearch() {
@@ -56,27 +25,18 @@
 </script>
 
 <header class="header">
-  <div class="header-content">
+  <div class="header-content" data-testid="header-content">
     <button
       type="button"
       class="menu-btn"
       data-testid="sidebar-toggle"
-      bind:this={menuBtnEl}
-      title={menuLabel}
+      title={$t('ui.menu', { default: 'Menu' })}
       onclick={toggleSidebar}
-      aria-label={menuLabel}
-      aria-expanded={menuExpanded}
-      aria-controls={SIDEBAR_NAV_ID}
+      aria-label={$t('ui.menu', { default: 'Menu' })}
+      aria-expanded={appState.sidebarOpen}
+      aria-controls="sidebar-nav"
     >
-      {#if isMobile.current}
-        <Icon name="menu" width={20} height={20} />
-      {:else}
-        <Icon
-          name={appState.sidebarCollapsed ? 'chevron-right' : 'chevron-left'}
-          width={20}
-          height={20}
-        />
-      {/if}
+      <Icon name="menu" width={20} height={20} />
     </button>
     <button
       type="button"
@@ -89,7 +49,7 @@
     >
       <Icon name="search" width={20} height={20} />
     </button>
-    <h1 class="logo">
+    <h1 class="logo" data-testid="brand">
       <a href="/" onclick={onLogoClick}>
         <img src="/favicon.svg" alt={$t('ui.logo_alt', { default: 'TurboPix logo' })} />TurboPix
       </a>
@@ -181,13 +141,6 @@
   .menu-btn:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: -2px;
-  }
-
-  /* The same control collapses the sidebar on desktop. */
-  @media (min-width: 769px) {
-    .menu-btn {
-      display: flex;
-    }
   }
 
   .mobile-search-btn {

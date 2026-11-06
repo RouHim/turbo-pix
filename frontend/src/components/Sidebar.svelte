@@ -310,12 +310,13 @@
   }
 
   /* The sidebar's own collapse control. The button keeps a 44×48 hit area
-     while the visible 24×48 tab straddles the sidebar border; collapsed it
-     parks flush against the viewport edge (left: -10px keeps the tab clear of
-     the content's 24px padding) and stays the way back in. */
+     while the visible 24×48 tab straddles the sidebar border. Bottom-anchored
+     so the collapsed tab never covers the view title; collapsed it parks flush
+     against the viewport edge (left: -10px keeps the tab clear of the
+     content's 24px padding) and stays the way back in. */
   .sidebar-toggle {
     position: fixed;
-    top: calc(var(--header-height) + var(--space-6));
+    bottom: var(--space-6);
     left: calc(var(--sidebar-width) - 22px);
     z-index: 95;
     display: flex;

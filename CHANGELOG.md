@@ -1,3 +1,17 @@
+# [2.49.0](https://github.com/RouHim/turbo-pix/compare/2.48.16...2.49.0) (2026-11-06)
+
+
+### Bug Fixes
+
+* **sidebar:** anchor the edge tab to the sidebar bottom ([2a3b811](https://github.com/RouHim/turbo-pix/commit/2a3b81184d6d3ccff291fdf081806c07bc4a7ec2))
+* **sidebar:** use the primary accent for the collapsed tab ([1abe6d2](https://github.com/RouHim/turbo-pix/commit/1abe6d25592908e0248024265530840eab7d8a1b))
+
+
+### Features
+
+* **sidebar:** collapse the desktop sidebar from the header toggle ([8bd6f57](https://github.com/RouHim/turbo-pix/commit/8bd6f57244fe017e0e393b04e62a23ed9798bfe4))
+* **sidebar:** move the collapse control to a sidebar edge tab ([77f91f7](https://github.com/RouHim/turbo-pix/commit/77f91f79405201dbcb045d668fbe91560cefe7ba))
+
 ## [2.48.16](https://github.com/RouHim/turbo-pix/compare/2.48.15...2.48.16) (2026-11-03)
 
 ## [2.48.15](https://github.com/RouHim/turbo-pix/compare/2.48.14...2.48.15) (2026-10-31)

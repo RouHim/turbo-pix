@@ -313,7 +313,8 @@
      while the visible 24×48 tab straddles the sidebar border. Bottom-anchored
      so the collapsed tab never covers the view title; collapsed it parks flush
      against the viewport edge (left: -10px keeps the tab clear of the
-     content's 24px padding) and stays the way back in. */
+     content's 24px padding) and stays the way back in. The tab carries the
+     primary accent so it reads as a control against the paper-white shell. */
   .sidebar-toggle {
     position: fixed;
     bottom: var(--space-6);
@@ -336,11 +337,6 @@
     left: -10px;
   }
 
-  /* Collapsed, the tab is the only way back in: no opacity budget. */
-  .sidebar-toggle.collapsed .sidebar-toggle-tab {
-    opacity: 1;
-  }
-
   .sidebar-toggle-tab {
     display: flex;
     align-items: center;
@@ -353,7 +349,10 @@
     background: var(--surface-color);
     box-shadow: var(--shadow-light);
     opacity: 0.55;
-    transition: opacity var(--transition-fast);
+    transition:
+      opacity var(--transition-fast),
+      background var(--transition-fast),
+      border-color var(--transition-fast);
   }
 
   .sidebar-toggle:hover .sidebar-toggle-tab,
@@ -361,9 +360,22 @@
     opacity: 1;
   }
 
+  /* Collapsed, the tab is the only way back in, so it carries the primary
+     accent at full contrast; expanded it stays quiet shell chrome. */
+  .sidebar-toggle.collapsed .sidebar-toggle-tab {
+    border-color: transparent;
+    background: var(--primary-color);
+    color: white;
+    opacity: 1;
+  }
+
+  .sidebar-toggle.collapsed:hover .sidebar-toggle-tab {
+    background: var(--primary-dark);
+  }
+
   .sidebar-toggle:focus-visible {
     outline: 2px solid var(--primary-color);
-    outline-offset: -2px;
+    outline-offset: 2px;
     border-radius: var(--radius-md);
   }
 

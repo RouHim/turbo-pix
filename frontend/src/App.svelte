@@ -273,12 +273,15 @@
 {/if}
 
 <style>
+  /* The canvas starts at the viewport top and scrolls UNDER the fixed glass
+     header; the header's blur only reads as frosted glass when the grid
+     passes beneath it. The top inset is padding (not a margin), so it scrolls
+     away and the photos reach the header's bottom edge. */
   .main-content {
     margin-left: var(--sidebar-width);
-    margin-top: var(--header-height);
-    height: calc(100vh - var(--header-height));
+    height: 100vh;
     overflow-y: auto;
-    padding: var(--space-6);
+    padding: calc(var(--header-height) + var(--space-6)) var(--space-6) var(--space-6);
     background: var(--background-color);
     container-type: inline-size;
   }
@@ -410,7 +413,7 @@
   @media (max-width: 768px) {
     .main-content {
       margin-left: 0;
-      padding: var(--space-4);
+      padding: calc(var(--header-height) + var(--space-4)) var(--space-4) var(--space-4);
     }
 
     .select-mode-btn {

@@ -1,3 +1,10 @@
+## [2.49.1](https://github.com/RouHim/turbo-pix/compare/2.49.0...2.49.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **layout:** scroll the canvas under the fixed glass header ([2b3ba2c](https://github.com/RouHim/turbo-pix/commit/2b3ba2c1c4d9430c4208f95e805c064e27b2d073))
+
 # [2.49.0](https://github.com/RouHim/turbo-pix/compare/2.48.16...2.49.0) (2026-11-06)
 
 

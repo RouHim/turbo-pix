@@ -47,12 +47,22 @@ test.describe('Sidebar collapse', () => {
       const sidebarWidth = document
         .querySelector('[data-testid="sidebar-nav"]')
         .getBoundingClientRect().width;
-      return { hitW: hit.width, hitH: hit.height, tabX: inner.x, tabW: inner.width, sidebarWidth };
+      return {
+        hitW: hit.width,
+        hitH: hit.height,
+        tabX: inner.x,
+        tabW: inner.width,
+        tabBottom: inner.bottom,
+        viewportH: window.innerHeight,
+        sidebarWidth,
+      };
     });
     expect(tab.hitW).toBe(44);
     expect(tab.hitH).toBe(48);
     expect(tab.tabW).toBe(24);
     expect(tab.tabX).toBeCloseTo(tab.sidebarWidth - 12, 0);
+    // Bottom-anchored: the collapsed tab must never sit over the view title.
+    expect(tab.viewportH - tab.tabBottom).toBeCloseTo(24, 0);
 
     // AND: The brand is the first header element again
     const layout = await page.evaluate(() => {

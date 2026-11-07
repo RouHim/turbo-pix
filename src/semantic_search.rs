@@ -1018,6 +1018,8 @@ mod tests {
             file_size: 123,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(100),
             height: Some(100),
             orientation: None,

@@ -2782,6 +2782,8 @@ pub(crate) mod tests {
             file_size: 11156,
             mime_type: Some("video/mp4".to_string()),
             taken_at: Some(now),
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(1920),
             height: Some(1080),
             orientation: Some(1),

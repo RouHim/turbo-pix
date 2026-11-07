@@ -7,9 +7,7 @@ use crate::db::DbPool;
 use crate::handlers_photo::{
     PhotosResponse, DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE,
 };
-use crate::media_facts::MediaFactsIndex;
-use crate::warp_helpers::{with_db, with_facts, DatabaseError, ValidationError};
-use std::sync::Arc;
+use crate::warp_helpers::{with_db, DatabaseError, ValidationError};
 
 const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
 
@@ -168,7 +166,6 @@ pub async fn list_album_photos(
     id: i64,
     query: AlbumPhotosQuery,
     db_pool: DbPool,
-    facts: Arc<MediaFactsIndex>,
 ) -> Result<impl Reply, Rejection> {
     match albums::find_by_id(&db_pool, id).await {
         Ok(Some(_)) => {}
@@ -197,7 +194,6 @@ pub async fn list_album_photos(
     };
     let listing = match crate::photo_listing::list(
         &db_pool,
-        &facts,
         crate::photo_listing::ListingRequest {
             query: &search_query,
             album: Some(id),
@@ -245,7 +241,7 @@ pub async fn list_album_photos(
     Ok(warp::reply::json(&PhotosResponse {
         photos: photos
             .into_iter()
-            .map(|photo| crate::photo_reply::PhotoReply::from_row(photo, &facts))
+            .map(crate::photo_reply::PhotoReply::from_row)
             .collect(),
         total,
         page,
@@ -380,7 +376,6 @@ pub async fn remove_album_members(
 
 pub fn build_albums_routes(
     db_pool: DbPool,
-    media_facts: Arc<MediaFactsIndex>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let list = warp::path!("api" / "albums")
         .and(warp::get())
@@ -410,7 +405,6 @@ pub fn build_albums_routes(
         .and(warp::get())
         .and(warp::query::<AlbumPhotosQuery>())
         .and(with_db(db_pool.clone()))
-        .and(with_facts(media_facts.clone()))
         .and_then(list_album_photos);
 
     let add = warp::path!("api" / "albums" / i64 / "members")
@@ -447,7 +441,7 @@ mod tests {
     fn build_test_routes(
         db_pool: DbPool,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
-        build_albums_routes(db_pool, Arc::new(MediaFactsIndex::new())).recover(handle_rejection)
+        build_albums_routes(db_pool).recover(handle_rejection)
     }
 
     fn seed_photo(photo_hash: &str) -> Photo {
@@ -458,6 +452,8 @@ mod tests {
             file_size: 0,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: None,
             height: None,
             orientation: None,

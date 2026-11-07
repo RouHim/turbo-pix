@@ -1,11 +1,12 @@
 # Feature Specification: Bulk Date-Shift Removal and File-Only Photo Dates/Coordinates
 
 **Created**: 2026-09-28
+**Revised**: 2026-11-07 — FR-001/FR-002 now permit a scan-owned, non-editable derived copy of the date and coordinates (`photos.taken_at`, `taken_latitude`, `taken_longitude`). The file stays the authority and every derived write follows a file read; the original "no column, no index" rule made date ordering a per-request full-library scan, which FR-012 forbids.
 **Status**: Approved
 **Input**: Remove the bulk date-shift feature and stop storing date values in the library database — a photo's date (and, per clarification, its coordinates) may only ever be adjusted in the file, never in the database.
 
 ## Goal
-TurboPix currently keeps a photo's capture date and coordinates in its own database as if that copy were authoritative: the bulk date-shift action rewrote only the database and never the file, so the library and the file disagreed, and any later rescan or in-place edit could silently take the shift back. This spec removes that capability entirely and makes the photo file the single place where a capture date or a coordinate lives. The database stops persisting either value and every date- or location-dependent view is served from the files themselves. Scope boundary: date and coordinate values only — the library's own audit timestamps, resolved location labels, and generated artifacts are out of scope.
+TurboPix currently keeps a photo's capture date and coordinates in its own database as if that copy were authoritative: the bulk date-shift action rewrote only the database and never the file, so the library and the file disagreed, and any later rescan or in-place edit could silently take the shift back. This spec removes that capability entirely and makes the photo file the single place where a capture date or a coordinate can be *edited*. The database may keep a scan-owned derived copy for ordering, filtering and map placement (FR-001), but it is never authoritative: every write to it follows a read of the file, no request can set it, and a reindex reconciles it. Scope boundary: date and coordinate values only — the library's own audit timestamps, resolved location labels, and generated artifacts are out of scope.
 
 ## User Scenarios
 
@@ -13,7 +14,7 @@ TurboPix currently keeps a photo's capture date and coordinates in its own datab
 A user corrects a single photo's taken date from the viewer.
 
 **Acceptance**
-1. Given a photo whose file type can carry metadata, when the user saves a new taken date, then the date is written into the photo file and is what the app shows for that photo afterwards (card, viewer, timeline position), while the database holds no date value for it.
+1. Given a photo whose file type can carry metadata, when the user saves a new taken date, then the date is written into the photo file first and is what the app shows for that photo afterwards (card, viewer, timeline position), and the database's derived copy is updated from the file's readback — never from the request.
 2. Given that saved photo, when the library is reindexed and the file is opened in another application, then the app and the other application report the same date, and the value shown by the app is unchanged by the reindex.
 3. Given the saved photo, when the user reopens it in the same running session, then the shown date is the file's date — no server restart and no manual rescan is required.
 
@@ -21,7 +22,7 @@ A user corrects a single photo's taken date from the viewer.
 A user corrects a photo's location.
 
 **Acceptance**
-1. Given a photo whose file type can carry metadata, when the user saves coordinates, then they are written into the file, the photo's place on the map (and any location grouping) follows immediately, and the database holds no coordinate value for it.
+1. Given a photo whose file type can carry metadata, when the user saves coordinates, then they are written into the file first, the photo's place on the map (and any location grouping) follows immediately, and the database's derived copy records the file's readback.
 2. Given that saved photo, when the file is read by another application, then the same coordinates appear, at the precision the file can represent.
 3. Given photos whose coordinates exist only in their files, when the map view renders, then each photo is placed from its file's coordinates.
 
@@ -44,7 +45,7 @@ A user tries to re-date a video, a RAW file, or an unwritable photo.
 A user browses a library whose dates and coordinates exist only in its files.
 
 **Acceptance**
-1. Given a library with no stored dates, when the grid is sorted by date (ascending or descending), filtered to a year/month range, or the timeline renders its span and per-month density, then the results match the files' dates exactly.
+1. Given a library whose derived copies the scan has reconciled, when the grid is sorted by date (ascending or descending), filtered to a year/month range, or the timeline renders its span and per-month density, then the results match the files' dates exactly.
 2. Given a file whose date was changed outside the app, when the library is reindexed, then the app shows the file's date and the affected ordering, filter buckets and timeline density follow it.
 3. Given a photo whose file yields no readable date, when its date is displayed or used for ordering, then the app applies the existing fallback order (embedded date, then a date encoded in the filename, then the file's own timestamp) and never invents a different date.
 4. Given photos that carry a database-only date from the removed feature, when the change ships, then that value is gone and the file's own date is what the app shows.
@@ -58,13 +59,13 @@ A user works with files that carry partial or absent metadata.
 3. Given a photo with neither a file date nor a filename date, when it appears in a date-ordered listing, then it keeps the same position and the same "unknown" presentation as today.
 
 ## Functional Requirements
-- **FR-001**: At rest, the library database stores no capture date and no coordinates for a photo — no table column, no index over such a value, and no key inside a photo's stored metadata.
-- **FR-002**: A photo's date and coordinates are the ones its file carries; when a derived copy exists anywhere, the file wins on conflict, and no derived copy may be edited as if it were the authority.
+- **FR-001**: At rest, the library database may hold a *derived* copy of a photo's capture date and coordinates (`photos.taken_at`, `taken_latitude`, `taken_longitude`) to order, filter and place photos; that copy is read-only to every request. Only the scan's row write and the two metadata saves write it, each after reading the file, and the scan reconciles it on every pass. A photo's stored metadata document holds no coordinate keys.
+- **FR-002**: A photo's date and coordinates are the ones its file carries. The file is written first and the derived copy records its readback; when the two disagree (a failed row write, an external edit), the file wins and the next scan reconciles the copy. No request may write the derived columns from client input.
 - **FR-003**: Date-dependent browsing remains available and correct while dates come from files: date sort (both directions), year/month range filtering, the timeline's oldest/newest span and its per-month density, and any date-based grouping such as same-day clusters.
 - **FR-004**: Location-dependent behaviour derives from the files' coordinates: map markers, their clustering, location grouping, and location-based filtering.
-- **FR-005**: Saving an edited taken date writes it into the file and nowhere else; the value shown afterwards equals the value the file carries, without a restart or a manual rescan.
-- **FR-006**: Saving edited coordinates writes them into the file and nowhere else, with the same immediacy rule, and the app never reports a precision the file cannot represent.
-- **FR-007**: Any failure to write the file (unsupported file type, unwritable or read-only file, file no longer present, write refused) fails the save with an explicit error, stores nothing anywhere, and leaves the previously shown value in place.
+- **FR-005**: Saving an edited taken date writes it into the file first; the derived row copy then records the file's readback and nothing else is written from the request. The value shown afterwards equals the value the file carries, without a restart or a manual rescan.
+- **FR-006**: Saving edited coordinates writes them into the file first, with the same readback rule and immediacy, and the app never reports a precision the file cannot represent.
+- **FR-007**: Any failure to write the file (unsupported file type, unwritable or read-only file, file no longer present, write refused) fails the save with an explicit error, stores nothing anywhere — file, derived columns and metadata document unchanged — and leaves the previously shown value in place.
 - **FR-008**: In-app date/coordinate editing is offered only for file types whose files can carry the value; for every other file type the app states that it cannot be edited in-app, and no value is stored.
 - **FR-009**: The bulk date-shift capability is removed end to end: no action in any selection UI, no client request helper, no server route, no request/response shape for it, no user-facing text about it, and no test asserting it — while the remaining bulk actions and their shared machinery keep working unchanged.
 - **FR-010**: Bookkeeping timestamps of the library itself (index, creation, update and file-modification bookkeeping) and dates belonging to generated artifacts are not photo capture dates and remain unaffected; resolved location labels may stay cached as long as they remain recomputable from the file's coordinates.
@@ -75,7 +76,7 @@ A user works with files that carry partial or absent metadata.
 
 ## Key Entities
 - **Photo file**: the authoritative record for a photo's capture date and coordinates; the only thing a date or location save may modify.
-- **Library database**: the catalogue of photos (identity, paths, favorites, album membership, thumbnails, resolved labels, bookkeeping timestamps); holds no capture date and no coordinates.
+- **Library database**: the catalogue of photos (identity, paths, favorites, album membership, thumbnails, resolved labels, bookkeeping timestamps) plus the scan-owned derived copy of each file's date and coordinates, which no request may write.
 - **Derived date/location view**: whatever serves sorting, filtering, timeline density and map placement; reproducible from the files and never authoritative over them.
 - **Bulk action set**: the actions a multi-selection offers; after this change it contains no date-writing action.
 
@@ -110,11 +111,11 @@ A user works with files that carry partial or absent metadata.
 - "Date values" in the brief means capture/presentation dates; the library's own audit timestamps and generated-artifact dates are explicitly not part of the removal.
 
 ## Success Criteria
-- **SC-001**: After a date edit, the database contains no stored date for that photo, a file-level metadata reader and the app report the same date, and a reindex leaves the app's value unchanged.
+- **SC-001**: After a date edit, the database's derived copy holds exactly the readback of the file's new date (never the request's spelling), a file-level metadata reader and the app report the same date, and a reindex leaves the app's value unchanged.
 - **SC-002**: The bulk date-shift capability is unreachable from both UI and API in every supported language, and the remaining bulk actions pass their existing test suites unchanged.
 - **SC-003**: On a library of at least 5,000 photos, date sorting, a month-range filter and the timeline load each respond within 1 second on the reference desktop, with results matching the files' dates.
 - **SC-004**: Across the whole reference library, every photo's displayed date and coordinates equal what a file-level metadata reader reports for that file — zero photos disagree.
 - **SC-005**: For a video/RAW/WebP photo, no edit path writes a date or coordinate anywhere, and the interface states the limitation.
 - **SC-006**: After a reindex, a date changed outside the app is displayed and reorders the affected listings; no stored value overrides the file.
-- **SC-007**: Date and location browsing (sort, filters, timeline, map placement) is fully operable with no stored dates or coordinates in the database.
+- **SC-007**: Date and location browsing (sort, filters, timeline, map placement) keeps working after the derived copy is dropped and rebuilt by the next scan — it is an accelerator, never the authority.
 - **SC-008**: English and German language bundles remain complete and structurally identical after the removal of the date-shift text.

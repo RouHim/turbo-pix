@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{FromRow, Row};
 
-use crate::media_facts::MediaFactsIndex;
+use crate::media_facts::MediaFacts;
 
 pub use crate::db_pool::{create_db_pool, delete_orphaned_photos, vacuum_database, DbPool};
 pub use crate::db_types::{SearchQuery, TimelineData, TimelineDensity};
@@ -22,12 +22,24 @@ pub struct Photo {
     pub file_size: i64,
     pub mime_type: Option<String>,
 
-    // === COMPUTATIONAL (used in application logic) ===
-    /// Capture date. TRANSIENT: the DB stores no date any more, so `from_row`
-    /// always yields `None`; only `MediaFactsIndex::enrich` fills it in (from
-    /// the file) on the way out to a response.
+    // === FILE-DERIVED FACTS ===
+    /// The capture date as the file carries it.
+    ///
+    /// Read-only in the database sense: only the scan's upsert and the two
+    /// metadata saves write it, and both derive it from a fresh read of the
+    /// file *before* the row write. No API path may write it from client input,
+    /// and the scan reconciles it on every pass, so a divergence heals at the
+    /// next scan instead of ageing in place.
     #[serde(deserialize_with = "deserialize_optional_datetime")]
     pub taken_at: Option<DateTime<Utc>>,
+    /// The file's coordinates, with the same ownership as `taken_at`. Never
+    /// serialized at the top level: [`crate::photo_reply::PhotoReply`] nests
+    /// them under `metadata.location`, which is the API's shape.
+    #[serde(skip)]
+    pub taken_latitude: Option<f64>,
+    /// See [`Photo::taken_latitude`].
+    #[serde(skip)]
+    pub taken_longitude: Option<f64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: Option<i32>,
@@ -42,10 +54,10 @@ pub struct Photo {
 
     // === METADATA (JSON blob) ===
     /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
-    /// location{city,...}, video{codec,audio_codec,bitrate,frame_rate}. The
-    /// coordinates in `location` are response-only: [`MediaFactsIndex::enrich`]
-    /// merges them in from the file, and [`stored_metadata`] strips them again
-    /// before any write.
+    /// location{city,...}, video{codec,audio_codec,bitrate,frame_rate}. Stored
+    /// documents hold no coordinates: [`stored_metadata`] strips the pair from
+    /// every write, and [`crate::photo_reply::PhotoReply`] nests the row's
+    /// derived pair into the response.
     #[serde(deserialize_with = "deserialize_json_value")]
     pub metadata: serde_json::Value,
 
@@ -92,7 +104,7 @@ where
 
 /// The single serializer for `photos.metadata`: the value to store in a row.
 ///
-/// Capture coordinates are file facts (the DB stores none), so the two
+/// Capture coordinates live in the photo's derived columns, so the two
 /// coordinate keys are stripped from `location` on every write. `location`
 /// itself is kept — city and any other key survive, and an emptied
 /// `location` object is deliberately not collapsed (removing a key is not a
@@ -153,63 +165,21 @@ fn add_general_search_params(params: &mut Vec<String>, query: &str) {
 /// for photo listings. `sort`/`order` are client-supplied but whitelisted by
 /// the match; the `hash_sha256` tiebreak keeps pagination deterministic.
 ///
-/// Date ordering is NOT in here: `taken_at` lives in the files, so the DB
-/// cannot order by it. [`sort_photos`] owns every date-ordered (and the
-/// default) listing; this clause is only used on the SQL fast path, which
-/// [`is_sql_sort`] gates to the explicit column sorts below.
+/// The default (and `date`) sort is the derived capture date itself: an
+/// unknown date is `NULL`, which SQLite orders first ascending / last
+/// descending — exactly the "unknown" contract.
 pub(crate) fn build_order_clause(sort: Option<&str>, order: Option<&str>) -> String {
     let sort_field = match sort {
         Some("filename") | Some("name") => "filename",
         Some("file_size") | Some("size") => "file_size",
-        _ => "created_at", // default (the only remaining column sort)
+        Some("created_at") => "created_at",
+        _ => "taken_at",
     };
     let sort_order = match order {
         Some("asc") => "ASC",
         _ => "DESC", // default
     };
     format!("{sort_field} {sort_order}, hash_sha256 {sort_order}")
-}
-
-/// Whether `sort` names an explicit non-date column sort — the only case a
-/// listing may let SQLite order and page the result itself. Everything else
-/// (the default listing and `sort=date`) orders on the file-derived date,
-/// which only exists in the in-memory index.
-pub(crate) fn is_sql_sort(sort: Option<&str>) -> bool {
-    matches!(
-        sort,
-        Some("filename") | Some("name") | Some("file_size") | Some("size") | Some("created_at")
-    )
-}
-
-/// Orders `photos` in memory by the listing sort contract, on the
-/// file-derived `taken_at` an enriching index put on each row (the DB column
-/// is gone). The comparator mirrors SQLite exactly so pagination stays
-/// deterministic:
-///
-/// - an unknown date is `None`, which orders *before* every `Some` — SQLite's
-///   `NULL` first for `ASC`; reversing for `DESC` puts it last;
-/// - equal primary values tie-break on `hash_sha256` in the same direction as
-///   the sort, exactly like `..., hash_sha256 ASC|DESC`.
-pub(crate) fn sort_photos(photos: &mut [Photo], sort: Option<&str>, order: Option<&str>) {
-    let ascending = match order {
-        Some("asc") => true,
-        _ => false, // default
-    };
-    photos.sort_by(|a, b| {
-        let primary = match sort {
-            Some("filename") | Some("name") => a.filename.cmp(&b.filename),
-            Some("file_size") | Some("size") => a.file_size.cmp(&b.file_size),
-            Some("created_at") => a.created_at.cmp(&b.created_at),
-            // `date` and the default both order by the capture date.
-            _ => a.taken_at.cmp(&b.taken_at),
-        };
-        let ordering = primary.then_with(|| a.hash_sha256.cmp(&b.hash_sha256));
-        if ascending {
-            ordering
-        } else {
-            ordering.reverse()
-        }
-    });
 }
 
 impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
@@ -222,10 +192,11 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
             filename: row.try_get("filename")?,
             file_size: row.try_get("file_size")?,
             mime_type: row.try_get("mime_type")?,
-            // The DB keeps no capture date (the column is dropped in the
-            // schema that follows this change); the file-derived value is
-            // attached by `MediaFactsIndex::enrich` before any response.
-            taken_at: None,
+            taken_at: row
+                .try_get::<Option<String>, _>("taken_at")?
+                .and_then(|value| parse_datetime(&value)),
+            taken_latitude: row.try_get("taken_latitude")?,
+            taken_longitude: row.try_get("taken_longitude")?,
             width: row.try_get("width")?,
             height: row.try_get("height")?,
             orientation: row.try_get("orientation")?,
@@ -276,20 +247,23 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
     }
 }
 
-/// Inclusive month-granular filter bounds as zero-padded `YYYY-MM` strings.
+/// The SQL bounds of an inclusive month-granular range, as the `YYYY-MM`
+/// prefixes `taken_at` starts with: `from` is the range's first month,
+/// `to_exclusive` the month after its last, so callers compare
+/// `taken_at >= from AND taken_at < to_exclusive`. RFC3339 UTC text compares
+/// chronologically (`'2012-03-15T…' >= '2012-03'` and `< '2012-04'`), and a
+/// `NULL` date never matches either comparison.
 ///
 /// `year`/`month` is the start bound, `to_year`/`to_month` the end bound; an
 /// absent end bound makes the filter a single period. A missing month means
 /// January for a start bound and December for an end bound, so `year=2012`
 /// still means "all of 2012" and `from=2012-03,to=2015` stops at December
-/// 2015. A month outside `1..=12` is not formattable, and formatting it as a
-/// literal `YYYY-MM` would silently turn it into a valid *ordering point*
-/// (`2012-13` sorts after every 2012 row but before `2013-01`, so
-/// `month=13&to_year=2015` would widen the range to 2013-01…2015-12); such a
-/// bound yields an inverted interval that no row satisfies, keeping the old
-/// equality filter's "month = 13 matches nothing" result. `to_year` without
-/// `year` filters nothing, because a bound is only formed from `year`.
-pub(crate) fn month_range_bounds(
+/// 2015. A month outside `1..=12` is not formattable and would otherwise
+/// become a valid ordering point (`2012-13` sorts after every 2012 row), so
+/// such a bound yields an inverted interval that no row satisfies — the old
+/// equality filter's "month = 13 matches nothing". `to_year` without `year`
+/// filters nothing, because a bound is only formed from `year`.
+pub(crate) fn month_range_sql_bounds(
     year: Option<i32>,
     month: Option<i32>,
     to_year: Option<i32>,
@@ -297,6 +271,7 @@ pub(crate) fn month_range_bounds(
 ) -> Option<(String, String)> {
     let year = year?;
     let from_month = month.unwrap_or(1);
+    let end_year = to_year.unwrap_or(year);
     let end_month = match to_year {
         Some(_) => to_month.unwrap_or(12),
         None => month.unwrap_or(12),
@@ -304,36 +279,35 @@ pub(crate) fn month_range_bounds(
     if !(1..=12).contains(&from_month) || !(1..=12).contains(&end_month) {
         return Some(("9999-99".to_string(), "0000-00".to_string()));
     }
-    let from = format!("{:04}-{:02}", year, from_month);
-    let to = format!("{:04}-{:02}", to_year.unwrap_or(year), end_month);
-    Some((from, to))
-}
-
-/// Whether `photo`'s file-derived capture date lies inside the inclusive
-/// month-granular `bounds` from [`month_range_bounds`].
-///
-/// Compares the zero-padded `YYYY-MM` key lexicographically, which sorts
-/// chronologically — the exact comparison the removed
-/// `strftime('%Y-%m', taken_at)` SQL made. A photo whose date is unknown (no
-/// facts entry, so `taken_at` stayed `None`) never matches, just as a NULL
-/// `taken_at` failed the old SQL comparison.
-pub(crate) fn photo_in_month_range(photo: &Photo, bounds: &(String, String)) -> bool {
-    let Some(taken_at) = photo.taken_at else {
-        return false;
+    // Saturating, not `+ 1`: a client-supplied `year`/`to_year` at `i32::MAX`
+    // must not panic under overflow checks (debug builds and tests).
+    let (next_year, next_month) = if end_month == 12 {
+        (end_year.saturating_add(1), 1)
+    } else {
+        (end_year, end_month + 1)
     };
-    let key = taken_at.format("%Y-%m").to_string();
-    key.as_str() >= bounds.0.as_str() && key.as_str() <= bounds.1.as_str()
+    Some((
+        format!("{:04}-{:02}", year, from_month),
+        format!("{:04}-{:02}", next_year, next_month),
+    ))
 }
 
 /// Builds the reusable WHERE clause for photo searches: the `q` token grammar
-/// (`type:` / `is_favorite:` / `location:` / general LIKE). Returns the clause
-/// (starting with `" WHERE 1=1"`) plus its string parameters in placeholder
-/// order. Used by the photo listing module so all listings honor identical
-/// filter semantics. The month range is NOT here: it filters a file-derived
-/// date, see [`photo_in_month_range`].
+/// (`type:` / `is_favorite:` / `location:` / general LIKE) and the inclusive
+/// month range on the derived `taken_at`. Returns the clause (starting with
+/// `" WHERE 1=1"`) plus its string parameters in placeholder order. Used by the
+/// photo listing module so all listings honor identical filter semantics.
 pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
     let mut where_clause = String::from(" WHERE 1=1");
     let mut params: Vec<String> = Vec::new();
+
+    if let Some((from, to_exclusive)) =
+        month_range_sql_bounds(query.year, query.month, query.to_year, query.to_month)
+    {
+        where_clause.push_str(" AND taken_at >= ? AND taken_at < ?");
+        params.push(from);
+        params.push(to_exclusive);
+    }
 
     if let Some(q) = &query.q {
         // Split on whitespace and AND per-token conditions so combined
@@ -404,9 +378,6 @@ pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
         }
     }
 
-    // The month-granular range is NOT part of the SQL: it filters a
-    // file-derived date the database does not store. `month_range_bounds` is
-    // applied in Rust by the callers, via `photo_in_month_range`.
     (where_clause, params)
 }
 
@@ -525,6 +496,16 @@ impl Photo {
 
     // ===== DATABASE OPERATIONS =====
 
+    /// Records the facts a fresh read of the file yielded. The only writers are
+    /// the file-reading paths (scan upsert, EXIF save, container save): a
+    /// client value must never reach these columns, which is why the signature
+    /// takes [`MediaFacts`] and not three loose options.
+    pub fn set_capture_facts(&mut self, facts: MediaFacts) {
+        self.taken_at = facts.taken_at;
+        self.taken_latitude = facts.latitude;
+        self.taken_longitude = facts.longitude;
+    }
+
     /// Update photo (convenience wrapper)
     pub async fn update(&self, pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
         let mut tx = pool.begin().await?;
@@ -573,6 +554,7 @@ impl Photo {
         hash_sha256: &str,
         rearm_geo_resolution: bool,
         fingerprint: Option<(i64, DateTime<Utc>)>,
+        facts: MediaFacts,
         updated_at: DateTime<Utc>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (file_size, file_modified) = fingerprint
@@ -582,10 +564,10 @@ impl Photo {
         sqlx::query(
             r#"
             UPDATE photos SET
-                -- The save writes no date and no coordinates: both are file
-                -- facts (`MediaFactsIndex`), and `stored_metadata` strips the
+                -- The save's date and coordinates land in their columns (bound
+                -- from the container readback), and `stored_metadata` strips the
                 -- coordinate pair from this document on every write anyway. The
-                -- only stored member the save invalidates is the place name
+                -- only DOCUMENT member the save invalidates is the place name
                 -- geocoded from the position it replaced.
                 metadata = CASE WHEN ? THEN json_patch(
                                     CASE WHEN json_type(metadata) = 'object' THEN metadata ELSE '{}' END,
@@ -594,6 +576,12 @@ impl Photo {
                 geo_location_resolved = CASE WHEN ? THEN 0 ELSE geo_location_resolved END,
                 file_size = COALESCE(?, file_size),
                 file_modified = COALESCE(?, file_modified),
+                -- The container was rewritten before this row write; these are
+                -- the values the readback proved it now holds (the save's own
+                -- members, restated per carrier precision).
+                taken_at = ?,
+                taken_latitude = ?,
+                taken_longitude = ?,
                 updated_at = ?
             WHERE hash_sha256 = ?
             "#,
@@ -602,6 +590,9 @@ impl Photo {
         .bind(rearm_geo_resolution)
         .bind(file_size)
         .bind(&file_modified)
+        .bind(facts.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(facts.latitude)
+        .bind(facts.longitude)
         .bind(updated_at.to_rfc3339())
         .bind(hash_sha256)
         .execute(&mut *tx)
@@ -728,9 +719,11 @@ impl Photo {
                 width, height, orientation, duration,
                 thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
                 metadata,
-                file_modified, date_indexed, created_at, updated_at
+                file_modified, date_indexed, created_at, updated_at,
+                taken_at, taken_latitude, taken_longitude
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22
             )
             "#,
         )
@@ -753,6 +746,9 @@ impl Photo {
         .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
         .bind(Utc::now().to_rfc3339())
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.taken_latitude)
+        .bind(self.taken_longitude)
         .execute(&mut **tx)
         .await?;
 
@@ -780,6 +776,7 @@ impl Photo {
                 width = ?, height = ?, orientation = ?, duration = ?,
                 thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?,
                 metadata = ?,
+                taken_at = ?, taken_latitude = ?, taken_longitude = ?,
                 file_modified = ?, updated_at = ?
             WHERE hash_sha256 = ?
             "#,
@@ -798,6 +795,9 @@ impl Photo {
         .bind(self.is_favorite.unwrap_or(false))
         .bind(self.semantic_vector_indexed.unwrap_or(false))
         .bind(stored_metadata(&self.metadata))
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.taken_latitude)
+        .bind(self.taken_longitude)
         .bind(self.date_modified.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(&self.hash_sha256)
@@ -831,6 +831,7 @@ impl Photo {
                 width = ?, height = ?, orientation = ?, duration = ?,
                 thumbnail_path = ?, has_thumbnail = ?, blurhash = ?, is_favorite = ?, semantic_vector_indexed = ?,
                 metadata = ?,
+                taken_at = ?, taken_latitude = ?, taken_longitude = ?,
                 file_modified = ?, updated_at = ?
             WHERE hash_sha256 = ?
             "#,
@@ -850,6 +851,9 @@ impl Photo {
         .bind(self.is_favorite.unwrap_or(false))
         .bind(self.semantic_vector_indexed.unwrap_or(false))
         .bind(stored_metadata(&self.metadata))
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.taken_latitude)
+        .bind(self.taken_longitude)
         .bind(self.date_modified.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(old_hash)
@@ -991,15 +995,23 @@ impl Photo {
                 width, height, orientation, duration,
                 thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
                 metadata,
-                file_modified, date_indexed, created_at, updated_at
+                file_modified, date_indexed, created_at, updated_at,
+                taken_at, taken_latitude, taken_longitude
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22
             )
             ON CONFLICT(hash_sha256) DO UPDATE SET
                 file_path = excluded.file_path,
                 filename = excluded.filename,
                 file_size = excluded.file_size,
                 mime_type = excluded.mime_type,
+                -- The scan's statement of what the file carries is the whole
+                -- reconciliation: every pass re-states it, so an edit made
+                -- outside the app heals here and no stale copy survives a scan.
+                taken_at = excluded.taken_at,
+                taken_latitude = excluded.taken_latitude,
+                taken_longitude = excluded.taken_longitude,
 
                 width = excluded.width,
                 height = excluded.height,
@@ -1052,10 +1064,11 @@ impl Photo {
                                      '$.camera', '$.settings', '$.video', '$.location.city'),
                                  excluded.metadata)
                     END,
-                    -- Coordinates are file facts (`MediaFactsIndex`) and never
-                    -- stored, so `stored_metadata` strips the pair out of what
-                    -- the scan writes and this clears one a legacy row kept: the
-                    -- file is authoritative for its own position.
+                    -- Stored coordinate keys are legacy residue: the pair lives
+                    -- in `taken_latitude`/`taken_longitude`, `stored_metadata`
+                    -- strips it out of what the scan writes, and this clears one
+                    -- a pre-migration row kept — the file is authoritative for
+                    -- its own position.
                     '$.location.latitude',
                     '$.location.longitude'),
                 -- The place name that branch drops was geocoded from the
@@ -1104,6 +1117,9 @@ impl Photo {
         .bind(self.date_indexed.map(|dt| dt.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
         .bind(Utc::now().to_rfc3339())
+        .bind(self.taken_at.map(|dt| dt.to_rfc3339()))
+        .bind(self.taken_latitude)
+        .bind(self.taken_longitude)
         .execute(&mut **tx)
         .await?;
 
@@ -1128,12 +1144,10 @@ impl Photo {
 
     pub async fn get_timeline_data(
         pool: &DbPool,
-        facts: &MediaFactsIndex,
     ) -> Result<TimelineData, Box<dyn std::error::Error>> {
-        // The dates live in the files; the DB only supplies the paths to look
-        // up in the index.
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT hash_sha256, file_path FROM photos")
+        // One pass over the derived dates; an undated row contributes no bucket.
+        let rows: Vec<String> =
+            sqlx::query_scalar("SELECT taken_at FROM photos WHERE taken_at IS NOT NULL")
                 .fetch_all(pool)
                 .await?;
 
@@ -1141,8 +1155,8 @@ impl Photo {
         let mut max_date: Option<DateTime<Utc>> = None;
         let mut buckets: BTreeMap<(i32, i32), i64> = BTreeMap::new();
 
-        for (_, file_path) in rows {
-            let Some(taken_at) = facts.get(&file_path).and_then(|facts| facts.taken_at) else {
+        for raw in rows {
+            let Some(taken_at) = parse_datetime(&raw) else {
                 continue;
             };
             min_date = Some(min_date.map_or(taken_at, |current| current.min(taken_at)));
@@ -1265,9 +1279,11 @@ impl From<crate::indexer::ProcessedPhoto> for Photo {
             filename: processed.filename,
             file_size: processed.file_size,
             mime_type: processed.mime_type,
-            // Transient: the DB stores no date, the scan publishes the file's
-            // facts to the index instead.
-            taken_at: None,
+            // The file facts the scan just read: this row is the derived copy
+            // the listing orders by, and the upsert restates it on every pass.
+            taken_at: processed.taken_at,
+            taken_latitude: processed.latitude,
+            taken_longitude: processed.longitude,
             width: processed.width,
             height: processed.height,
             orientation: processed.orientation,
@@ -1318,30 +1334,19 @@ pub async fn get_paths_needing_semantic_indexing(
 }
 
 /// Photos still needing a location label, with the coordinates the file
-/// carries. Coordinates live in the index (the DB stores none), so the query
-/// narrows to unresolved rows and the index decides which of them have a
-/// usable coordinate pair.
+/// carries: the row's derived pair, narrowed in SQL to unresolved rows that
+/// have one.
 pub async fn get_photos_needing_geo_resolution(
     pool: &DbPool,
-    facts: &MediaFactsIndex,
 ) -> Result<Vec<(String, f64, f64)>, Box<dyn std::error::Error>> {
-    let paths: Vec<String> = sqlx::query_scalar(
-        "SELECT file_path FROM photos
-         WHERE geo_location_resolved IS NULL OR geo_location_resolved = 0
+    let photos: Vec<(String, f64, f64)> = sqlx::query_as(
+        "SELECT file_path, taken_latitude, taken_longitude FROM photos
+         WHERE (geo_location_resolved IS NULL OR geo_location_resolved = 0)
+           AND taken_latitude IS NOT NULL AND taken_longitude IS NOT NULL
          ORDER BY file_path",
     )
     .fetch_all(pool)
     .await?;
-
-    let mut photos = Vec::new();
-    for file_path in paths {
-        let Some(entry) = facts.get(&file_path) else {
-            continue;
-        };
-        if let (Some(latitude), Some(longitude)) = (entry.latitude, entry.longitude) {
-            photos.push((file_path, latitude, longitude));
-        }
-    }
 
     Ok(photos)
 }
@@ -1379,12 +1384,10 @@ pub(crate) mod tests {
     use chrono::Datelike;
     use sqlx::Row;
 
-    use crate::media_facts::{test_facts, test_facts_with_coords, MediaFacts, MediaFactsIndex};
     use crate::photo_listing::{ListingPage, ListingRequest};
 
     async fn search(
         pool: &DbPool,
-        facts: &MediaFactsIndex,
         query: &SearchQuery,
         limit: i64,
         offset: i64,
@@ -1393,7 +1396,6 @@ pub(crate) mod tests {
     ) -> Result<(Vec<Photo>, i64), Box<dyn std::error::Error>> {
         let listing = crate::photo_listing::list(
             pool,
-            facts,
             ListingRequest {
                 query,
                 album: None,
@@ -1408,7 +1410,6 @@ pub(crate) mod tests {
 
     async fn list_all_filtered(
         pool: &DbPool,
-        facts: &MediaFactsIndex,
         query: &SearchQuery,
         sort: Option<&str>,
         order: Option<&str>,
@@ -1416,7 +1417,6 @@ pub(crate) mod tests {
     ) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
         let listing = crate::photo_listing::list(
             pool,
-            facts,
             ListingRequest {
                 query,
                 album,
@@ -1436,8 +1436,8 @@ pub(crate) mod tests {
         } else {
             hash
         };
-        // No `taken_at`: the DB stores no date any more; tests that need one
-        // seed the facts index (see `create_photo_with_facts`).
+        // No date and no coordinates unless a test states them: they are the
+        // file's facts, held in the derived columns (see `create_photo_with_date`).
         Photo {
             hash_sha256: hash_64,
             file_path: format!("./test/{}", filename),
@@ -1445,6 +1445,8 @@ pub(crate) mod tests {
             file_size: 1024,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(1920),
             height: Some(1080),
             orientation: None,
@@ -1462,25 +1464,18 @@ pub(crate) mod tests {
         }
     }
 
-    /// Builds the row and seeds its file-derived date, keeping the DB date-free.
-    async fn create_photo_with_facts(
+    /// Builds the row with the derived capture date the scan would write.
+    async fn create_photo_with_date(
         pool: &DbPool,
-        facts: &MediaFactsIndex,
         hash: &str,
         filename: &str,
         taken_at: &str,
     ) -> Photo {
-        let photo = create_test_photo(filename.to_string(), hash.to_string());
-        facts.set(
-            &photo.file_path,
-            MediaFacts {
-                taken_at: Some(
-                    DateTime::parse_from_rfc3339(taken_at)
-                        .expect("invalid RFC3339 date")
-                        .with_timezone(&Utc),
-                ),
-                ..MediaFacts::default()
-            },
+        let mut photo = create_test_photo(filename.to_string(), hash.to_string());
+        photo.taken_at = Some(
+            DateTime::parse_from_rfc3339(taken_at)
+                .expect("invalid RFC3339 date")
+                .with_timezone(&Utc),
         );
         photo.create(pool).await.unwrap();
         photo
@@ -1569,187 +1564,62 @@ pub(crate) mod tests {
         }
     }
 
-    fn photo_names(photos: &[Photo]) -> Vec<&str> {
-        photos.iter().map(|p| p.filename.as_str()).collect()
-    }
-
-    /// An index with no entries, for listings whose assertions are about the
-    /// filters and not about any date.
-    fn no_facts() -> MediaFactsIndex {
-        test_facts(&[])
-    }
-
     #[test]
-    fn test_sort_photos_orders_unknown_dates_like_sql() {
-        // GIVEN: three photos, two of them with a file-derived date and one
-        // with no facts entry at all
-        let index = test_facts(&[
-            ("./test/old.jpg", "2012-03-15T10:00:00Z"),
-            ("./test/new.jpg", "2015-08-31T10:00:00Z"),
-        ]);
-        let mut unknown = create_test_photo("unknown.jpg".to_string(), "c".repeat(64));
-        let mut old = create_test_photo("old.jpg".to_string(), "a".repeat(64));
-        let mut new = create_test_photo("new.jpg".to_string(), "b".repeat(64));
-        for photo in [&mut unknown, &mut old, &mut new] {
-            index.enrich(photo);
-        }
+    fn month_range_sql_bounds_are_inclusive_prefixes() {
+        // GIVEN: `year=2012&month=3&to_year=2015` (an absent end month is December)
+        let (from, to_exclusive) = month_range_sql_bounds(Some(2012), Some(3), Some(2015), None)
+            .expect("year forms bounds");
+        // THEN: the range starts at March 2012 and stops before January 2016, so
+        // December 2015 is still inside it
+        assert_eq!(from, "2012-03");
+        assert_eq!(to_exclusive, "2016-01");
 
-        // WHEN: sorting ascending (no explicit sort is the date default)
-        let mut photos = vec![unknown.clone(), new.clone(), old.clone()];
-        sort_photos(&mut photos, None, Some("asc"));
-
-        // THEN: the unknown date sorts first, exactly like SQLite's NULL-first
-        // `ORDER BY taken_at ASC`
-        assert_eq!(photo_names(&photos), ["unknown.jpg", "old.jpg", "new.jpg"]);
-
-        // AND: an explicit `sort=date` is that same ordering
-        let mut photos = vec![unknown.clone(), new.clone(), old.clone()];
-        sort_photos(&mut photos, Some("date"), Some("asc"));
-        assert_eq!(photo_names(&photos), ["unknown.jpg", "old.jpg", "new.jpg"]);
-
-        // WHEN: sorting descending
-        let mut photos = vec![unknown.clone(), old.clone(), new.clone()];
-        sort_photos(&mut photos, Some("date"), None);
-
-        // THEN: the unknown date sorts last, exactly like SQLite's NULL-last
-        // `ORDER BY taken_at DESC`
-        assert_eq!(photo_names(&photos), ["new.jpg", "old.jpg", "unknown.jpg"]);
-    }
-
-    #[test]
-    fn test_sort_photos_tiebreaks_by_hash_like_sql() {
-        // GIVEN: two photos sharing one date, hashes "aa…" < "bb…"
-        let index = test_facts(&[
-            ("./test/aa.jpg", "2012-03-15T10:00:00Z"),
-            ("./test/bb.jpg", "2012-03-15T10:00:00Z"),
-        ]);
-        let mut aa = create_test_photo("aa.jpg".to_string(), "aa".to_string());
-        let mut bb = create_test_photo("bb.jpg".to_string(), "bb".to_string());
-        for photo in [&mut aa, &mut bb] {
-            index.enrich(photo);
-        }
-
-        // WHEN: sorting ascending
-        let mut photos = vec![bb.clone(), aa.clone()];
-        sort_photos(&mut photos, Some("date"), Some("asc"));
-
-        // THEN: the hash tiebreak runs in the same direction as the sort
-        assert_eq!(photo_names(&photos), ["aa.jpg", "bb.jpg"]);
-
-        // AND: descending reverses both the date and the tiebreak
-        let mut photos = vec![aa.clone(), bb.clone()];
-        sort_photos(&mut photos, Some("date"), Some("desc"));
-        assert_eq!(photo_names(&photos), ["bb.jpg", "aa.jpg"]);
-    }
-
-    #[test]
-    fn test_sort_photos_supports_filename_and_size() {
-        let mut a = create_test_photo("a.jpg".to_string(), "1".repeat(64));
-        a.file_size = 300;
-        let mut b = create_test_photo("b.jpg".to_string(), "2".repeat(64));
-        b.file_size = 100;
-        let mut c = create_test_photo("c.jpg".to_string(), "3".repeat(64));
-        c.file_size = 200;
-
-        // WHEN: sorting by filename
-        let mut photos = vec![c.clone(), a.clone(), b.clone()];
-        sort_photos(&mut photos, Some("filename"), Some("asc"));
-        assert_eq!(photo_names(&photos), ["a.jpg", "b.jpg", "c.jpg"]);
-
-        sort_photos(&mut photos, Some("name"), None);
-        assert_eq!(photo_names(&photos), ["c.jpg", "b.jpg", "a.jpg"]);
-
-        // AND: sorting by file size (`size` is the same field)
-        let mut photos = vec![a.clone(), b.clone(), c.clone()];
-        sort_photos(&mut photos, Some("file_size"), Some("asc"));
+        // AND: a single year spans January through December
+        let (from, to_exclusive) =
+            month_range_sql_bounds(Some(2020), None, None, None).expect("year forms bounds");
         assert_eq!(
-            photos.iter().map(|p| p.file_size).collect::<Vec<_>>(),
-            [100, 200, 300]
+            (from.as_str(), to_exclusive.as_str()),
+            ("2020-01", "2021-01")
         );
 
-        let mut photos = vec![a.clone(), b.clone(), c.clone()];
-        sort_photos(&mut photos, Some("size"), None);
+        // AND: a single month is that month only
+        let (from, to_exclusive) =
+            month_range_sql_bounds(Some(2020), Some(12), None, None).expect("year forms bounds");
         assert_eq!(
-            photos.iter().map(|p| p.file_size).collect::<Vec<_>>(),
-            [300, 200, 100]
+            (from.as_str(), to_exclusive.as_str()),
+            ("2020-12", "2021-01")
         );
-    }
 
-    #[test]
-    fn test_photo_in_month_range_uses_lexicographic_year_month() {
-        // GIVEN: the inclusive bounds of `year=2012&month=3&to_year=2015`
-        let bounds = month_range_bounds(Some(2012), Some(3), Some(2015), None)
-            .expect("year=2012 forms bounds");
-        assert_eq!(bounds, ("2012-03".to_string(), "2015-12".to_string()));
+        // AND: an impossible month yields an inverted interval no row satisfies
+        let (from, to_exclusive) = month_range_sql_bounds(Some(2012), Some(13), Some(2015), None)
+            .expect("year forms bounds");
+        assert!(from > to_exclusive);
 
-        let index = test_facts(&[
-            ("./test/mar2012.jpg", "2012-03-15T10:00:00Z"),
-            ("./test/feb2012.jpg", "2012-02-29T10:00:00Z"),
-            ("./test/dec2015.jpg", "2015-12-31T23:59:59Z"),
-        ]);
-        let mut mar = create_test_photo("mar2012.jpg".to_string(), "a".repeat(64));
-        let mut feb = create_test_photo("feb2012.jpg".to_string(), "b".repeat(64));
-        let mut dec = create_test_photo("dec2015.jpg".to_string(), "c".repeat(64));
-        let mut unknown = create_test_photo("unknown.jpg".to_string(), "d".repeat(64));
-        for photo in [&mut mar, &mut feb, &mut dec, &mut unknown] {
-            index.enrich(photo);
-        }
+        // AND: an end bound without a start filters nothing
+        assert!(month_range_sql_bounds(None, None, Some(2015), None).is_none());
 
-        // THEN: both bounds are inclusive
-        assert!(photo_in_month_range(&mar, &bounds));
-        assert!(photo_in_month_range(&dec, &bounds));
-        // AND: the month before the start bound does not match
-        assert!(!photo_in_month_range(&feb, &bounds));
-        // AND: a photo with no facts entry never matches
-        assert!(!photo_in_month_range(&unknown, &bounds));
+        // AND: a year at the type's ceiling must not overflow (debug panics)
+        let (from, to_exclusive) = month_range_sql_bounds(Some(i32::MAX), Some(12), None, None)
+            .expect("year forms bounds");
+        assert_eq!(from, "2147483647-12");
+        assert_eq!(
+            to_exclusive,
+            "2147483647-01".replace("2147483647", &i32::MAX.to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_get_timeline_data() {
         let pool = create_test_db_pool().await.unwrap();
         // The dates live in the files; the index is their in-memory stand-in.
-        let facts = test_facts(&[
-            ("./test/photo1.jpg", "2010-05-25T10:00:00Z"),
-            ("./test/photo2.jpg", "2010-05-26T10:00:00Z"),
-            ("./test/photo3.jpg", "2011-12-01T10:00:00Z"),
-            ("./test/photo4.jpg", "2024-01-15T10:00:00Z"),
-        ]);
 
-        create_photo_with_facts(
-            &pool,
-            &facts,
-            &"a".repeat(64),
-            "photo1.jpg",
-            "2010-05-25T10:00:00Z",
-        )
-        .await;
-        create_photo_with_facts(
-            &pool,
-            &facts,
-            &"b".repeat(64),
-            "photo2.jpg",
-            "2010-05-26T10:00:00Z",
-        )
-        .await;
-        create_photo_with_facts(
-            &pool,
-            &facts,
-            &"c".repeat(64),
-            "photo3.jpg",
-            "2011-12-01T10:00:00Z",
-        )
-        .await;
-        create_photo_with_facts(
-            &pool,
-            &facts,
-            &"d".repeat(64),
-            "photo4.jpg",
-            "2024-01-15T10:00:00Z",
-        )
-        .await;
+        create_photo_with_date(&pool, &"a".repeat(64), "photo1.jpg", "2010-05-25T10:00:00Z").await;
+        create_photo_with_date(&pool, &"b".repeat(64), "photo2.jpg", "2010-05-26T10:00:00Z").await;
+        create_photo_with_date(&pool, &"c".repeat(64), "photo3.jpg", "2011-12-01T10:00:00Z").await;
+        create_photo_with_date(&pool, &"d".repeat(64), "photo4.jpg", "2024-01-15T10:00:00Z").await;
 
         // Get timeline data
-        let timeline = Photo::get_timeline_data(&pool, &facts).await.unwrap();
+        let timeline = Photo::get_timeline_data(&pool).await.unwrap();
 
         // Verify min/max dates
         assert_eq!(
@@ -2028,7 +1898,7 @@ pub(crate) mod tests {
         tx.commit().await.unwrap();
 
         // Raw check: every bound column must be non-null. A dropped bind
-        // shifts the trailing values so ?20=updated_at binds NULL.
+        // shifts the trailing values so ?22=updated_at binds NULL.
         let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
             "SELECT date_indexed, created_at, updated_at FROM photos WHERE hash_sha256 = ?",
         )
@@ -2066,11 +1936,11 @@ pub(crate) mod tests {
         assert!(updated_at.is_some(), "rescan upsert must keep updated_at");
     }
 
-    /// The schema contract: no stored capture date and no index for one.
-    /// `taken_at` survives on `Photo` only as a response-side field that
-    /// `MediaFactsIndex::enrich` fills from the file.
+    /// The schema contract: the derived copy of the file's date and
+    /// coordinates exists as real columns, and the date is indexed so listings
+    /// page in SQL. Stored metadata documents stay free of coordinates.
     #[tokio::test]
-    async fn test_photos_schema_has_no_taken_at_column() {
+    async fn test_photos_schema_carries_the_derived_file_facts() {
         let pool = create_test_db_pool().await.unwrap();
 
         let columns: Vec<String> = sqlx::query("PRAGMA table_info(photos)")
@@ -2078,10 +1948,12 @@ pub(crate) mod tests {
             .fetch_all(&pool)
             .await
             .unwrap();
-        assert!(
-            !columns.iter().any(|name| name == "taken_at"),
-            "photos must not store a capture date, found columns {columns:?}"
-        );
+        for expected in ["taken_at", "taken_latitude", "taken_longitude"] {
+            assert!(
+                columns.iter().any(|name| name == expected),
+                "photos must carry the derived {expected}, found columns {columns:?}"
+            );
+        }
 
         let taken_at_index: Option<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_photos_taken_at'",
@@ -2090,8 +1962,8 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert!(
-            taken_at_index.is_none(),
-            "idx_photos_taken_at must be dropped"
+            taken_at_index.is_some(),
+            "idx_photos_taken_at must exist for the date-ordered listing"
         );
     }
 
@@ -2117,15 +1989,15 @@ pub(crate) mod tests {
         );
         assert_eq!(stored["location"]["city"], "Munich");
 
-        // An enriched copy (the response-side shape, coordinates merged in
-        // from the file) must not smuggle them back in on update.
-        let facts =
-            test_facts_with_coords(&[(&photo.file_path, "2024-05-25T10:00:00Z", 48.1, 11.5)]);
+        // The response shape (coordinates nested from the row's derived pair)
+        // must not smuggle them back into the document on update.
         let mut enriched = photo.clone();
-        facts.enrich(&mut enriched);
+        enriched.taken_latitude = Some(48.1);
+        enriched.taken_longitude = Some(11.5);
+        let enriched = crate::photo_reply::PhotoReply::from_row(enriched).into_inner();
         assert!(
             enriched.metadata["location"].get("latitude").is_some(),
-            "enrich must have merged the file's coordinates into the copy"
+            "the reply must nest the row's coordinates into location"
         );
         enriched.update(&pool).await.unwrap();
 
@@ -2740,6 +2612,7 @@ pub(crate) mod tests {
             &hash,
             false,
             Some((snapshot.file_size, snapshot.date_modified)),
+            MediaFacts::default(),
             Utc::now(),
         )
         .await
@@ -2754,9 +2627,9 @@ pub(crate) mod tests {
             "the name committed after the row was read is not the save's to overwrite: {}",
             stored.metadata
         );
-        // The save stores neither the date nor the coordinates: both are file
-        // facts the response carries from the index.
-        assert!(stored.taken_at.is_none());
+        // The save stores the facts it read back from the container, and the
+        // stored document stays coordinate-free.
+        assert!(stored.taken_at.is_none(), "this save wrote no date");
         assert!(stored.metadata["location"].get("latitude").is_none());
         assert!(stored.metadata["location"].get("longitude").is_none());
     }
@@ -2765,7 +2638,7 @@ pub(crate) mod tests {
     /// the scan would correct a name geocoded from a position the save
     /// replaced: the resolver skips the row (its `geo_location_resolved` is
     /// already 1). The save therefore has to drop the name and re-queue the row
-    /// itself, and the queue reads the NEW position from the facts index.
+    /// itself, and the queue reads the NEW position from the row's columns.
     #[tokio::test]
     async fn video_metadata_mirror_rearms_the_resolver_when_the_save_moves_the_photo() {
         // GIVEN: a resolved row, named for the coordinates it held
@@ -2779,13 +2652,22 @@ pub(crate) mod tests {
         let fingerprint = (photo.file_size, photo.date_modified);
         // The file now carries the position the save wrote; coordinates live in
         // the index, which is what the resolver reads.
-        let facts =
-            test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 48.2082, 16.3737)]);
 
         // WHEN: a save reports it moved the position
-        Photo::record_video_edit(&pool, &hash, true, Some(fingerprint), Utc::now())
-            .await
-            .expect("record");
+        Photo::record_video_edit(
+            &pool,
+            &hash,
+            true,
+            Some(fingerprint),
+            MediaFacts {
+                latitude: Some(48.2082),
+                longitude: Some(16.3737),
+                ..MediaFacts::default()
+            },
+            Utc::now(),
+        )
+        .await
+        .expect("record");
 
         // THEN: the name it belonged to is gone and the row reaches the
         // resolver again, carrying the NEW position
@@ -2799,7 +2681,7 @@ pub(crate) mod tests {
             stored.metadata
         );
         assert_eq!(
-            get_photos_needing_geo_resolution(&pool, &facts)
+            get_photos_needing_geo_resolution(&pool)
                 .await
                 .expect("candidates"),
             vec![(photo.file_path.clone(), 48.2082, 16.3737)],
@@ -2822,13 +2704,18 @@ pub(crate) mod tests {
             .await
             .expect("resolve");
         let fingerprint = (photo.file_size, photo.date_modified);
-        let facts =
-            test_facts_with_coords(&[(&photo.file_path, "2024-07-04T12:00:00Z", 52.52, 13.405)]);
 
         // WHEN: a save reports no move
-        Photo::record_video_edit(&pool, &hash, false, Some(fingerprint), Utc::now())
-            .await
-            .expect("record");
+        Photo::record_video_edit(
+            &pool,
+            &hash,
+            false,
+            Some(fingerprint),
+            MediaFacts::default(),
+            Utc::now(),
+        )
+        .await
+        .expect("record");
 
         // THEN: the name survives and the row is not re-queued
         let stored = Photo::find_by_hash(&pool, &hash)
@@ -2837,7 +2724,7 @@ pub(crate) mod tests {
             .expect("row");
         assert_eq!(stored.metadata["location"]["city"], "Berlin");
         assert!(
-            get_photos_needing_geo_resolution(&pool, &facts)
+            get_photos_needing_geo_resolution(&pool)
                 .await
                 .expect("candidates")
                 .is_empty(),
@@ -2851,7 +2738,7 @@ pub(crate) mod tests {
         let pool = create_test_db_pool().await.unwrap();
 
         // Get timeline data from empty database
-        let timeline = Photo::get_timeline_data(&pool, &no_facts()).await.unwrap();
+        let timeline = Photo::get_timeline_data(&pool).await.unwrap();
 
         // Should return None for dates and empty density
         assert_eq!(timeline.min_date, None);
@@ -3090,27 +2977,16 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_get_photos_needing_geo_resolution() {
         let pool = create_test_db_pool().await.unwrap();
-        // Coordinates live in the index (the DB stores none).
-        let facts = test_facts_with_coords(&[
-            (
-                "./test/needs-geo.jpg",
-                "2024-01-01T00:00:00Z",
-                52.52,
-                13.405,
-            ),
-            (
-                "./test/resolved-geo.jpg",
-                "2024-01-01T00:00:00Z",
-                48.137,
-                11.575,
-            ),
-        ]);
-        let unresolved_photo =
+        let mut unresolved_photo =
             create_test_photo("needs-geo.jpg".to_string(), "needs-geo-hash".to_string());
-        let resolved_photo = create_test_photo(
+        unresolved_photo.taken_latitude = Some(52.52);
+        unresolved_photo.taken_longitude = Some(13.405);
+        let mut resolved_photo = create_test_photo(
             "resolved-geo.jpg".to_string(),
             "resolved-geo-hash".to_string(),
         );
+        resolved_photo.taken_latitude = Some(48.137);
+        resolved_photo.taken_longitude = Some(11.575);
         let no_gps_photo = create_test_photo("no-gps.jpg".to_string(), "no-gps-hash".to_string());
 
         unresolved_photo.create(&pool).await.unwrap();
@@ -3123,9 +2999,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let photos = get_photos_needing_geo_resolution(&pool, &facts)
-            .await
-            .unwrap();
+        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
 
         assert_eq!(
             photos,
@@ -3136,25 +3010,19 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_mark_photo_geo_resolved() {
         let pool = create_test_db_pool().await.unwrap();
-        let facts = test_facts_with_coords(&[(
-            "./test/mark-resolved.jpg",
-            "2024-01-01T00:00:00Z",
-            52.52,
-            13.405,
-        )]);
-        let photo = create_test_photo(
+        let mut photo = create_test_photo(
             "mark-resolved.jpg".to_string(),
             "mark-resolved-hash".to_string(),
         );
+        photo.taken_latitude = Some(52.52);
+        photo.taken_longitude = Some(13.405);
 
         photo.create(&pool).await.unwrap();
         mark_photo_geo_resolved(&pool, &photo.file_path)
             .await
             .unwrap();
 
-        let photos = get_photos_needing_geo_resolution(&pool, &facts)
-            .await
-            .unwrap();
+        let photos = get_photos_needing_geo_resolution(&pool).await.unwrap();
 
         assert!(photos.is_empty());
     }
@@ -3162,16 +3030,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_update_photo_city() {
         let pool = create_test_db_pool().await.unwrap();
-        let facts = test_facts_with_coords(&[(
-            "./test/city-update.jpg",
-            "2024-01-01T00:00:00Z",
-            52.52,
-            13.405,
-        )]);
-        let photo = create_test_photo(
+        let mut photo = create_test_photo(
             "city-update.jpg".to_string(),
             "city-update-hash".to_string(),
         );
+        photo.taken_latitude = Some(52.52);
+        photo.taken_longitude = Some(13.405);
 
         photo.create(&pool).await.unwrap();
         update_photo_city(&pool, &photo.file_path, Some("Berlin"))
@@ -3189,7 +3053,7 @@ pub(crate) mod tests {
         assert_eq!(metadata["location"]["city"], json!("Berlin"));
         assert_eq!(resolved_value, 1);
         // A labelled photo is no longer a geo-resolution candidate.
-        assert!(get_photos_needing_geo_resolution(&pool, &facts)
+        assert!(get_photos_needing_geo_resolution(&pool)
             .await
             .unwrap()
             .is_empty());
@@ -3236,9 +3100,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:Berlin");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3263,7 +3125,6 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_search_photos_filters_inclusive_month_range() {
         let pool = create_test_db_pool().await.unwrap();
-        let facts = MediaFactsIndex::new();
         for (hash, filename, taken_at) in [
             ("a", "feb2012.jpg", "2012-02-10T10:00:00Z"),
             ("b", "mar2012.jpg", "2012-03-15T10:00:00Z"),
@@ -3272,29 +3133,23 @@ pub(crate) mod tests {
             ("e", "aug2015.jpg", "2015-08-31T23:30:00Z"),
             ("f", "sep2015.jpg", "2015-09-01T00:00:00Z"),
         ] {
-            create_photo_with_facts(&pool, &facts, &hash.repeat(64), filename, taken_at).await;
+            create_photo_with_date(&pool, &hash.repeat(64), filename, taken_at).await;
         }
 
         // Single month (start bound only).
         let query = date_filter_query(Some(2012), Some(3), None, None);
-        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(photos[0].filename, "mar2012.jpg");
 
         // Whole year (no month) stays a single-year filter.
         let query = date_filter_query(Some(2012), None, None, None);
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 3);
 
         // Month-granular range spanning years, both bounds inclusive.
         let query = date_filter_query(Some(2012), Some(3), Some(2015), Some(8));
-        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 4);
         let names: Vec<&str> = photos.iter().map(|p| p.filename.as_str()).collect();
         assert!(!names.contains(&"feb2012.jpg"));
@@ -3302,53 +3157,39 @@ pub(crate) mod tests {
 
         // Year-precision end bound stops at December of that year.
         let query = date_filter_query(Some(2012), Some(3), Some(2012), None);
-        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(photos[0].taken_at.unwrap().year(), 2012);
 
         // Reversed bounds match nothing (the router normalises before it gets here).
         let query = date_filter_query(Some(2015), Some(8), Some(2012), Some(3));
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0);
 
         // A month bound without a year filters nothing.
         let query = date_filter_query(None, Some(3), None, None);
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 6);
 
         // An end year without a start year filters nothing either.
         let query = date_filter_query(None, None, Some(2015), None);
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 6);
 
         // An out-of-range start month matches nothing, with or without an end
         // bound: `2012-13` must not become a valid ordering point that lets a
         // later end year widen the range to 2013-01…2015-12.
         let query = date_filter_query(Some(2012), Some(13), None, None);
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0);
 
         let query = date_filter_query(Some(2012), Some(13), Some(2015), None);
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0);
 
         // Likewise for an out-of-range end month.
         let query = date_filter_query(Some(2012), None, Some(2015), Some(13));
-        let (_, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0);
     }
 
@@ -3356,10 +3197,8 @@ pub(crate) mod tests {
     async fn test_search_photos_range_ignores_unknown_dates() {
         let pool = create_test_db_pool().await.unwrap();
         // The undated photo gets NO index entry: its file yields no date.
-        let facts = MediaFactsIndex::new();
-        create_photo_with_facts(
+        create_photo_with_date(
             &pool,
-            &facts,
             &"c".repeat(64),
             "mar2012.jpg",
             "2012-03-15T10:00:00Z",
@@ -3371,9 +3210,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let query = date_filter_query(Some(2012), Some(1), Some(2012), Some(12));
-        let (photos, total) = search(&pool, &facts, &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(photos[0].filename, "mar2012.jpg");
     }
@@ -3391,9 +3228,7 @@ pub(crate) mod tests {
         x_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("IMG_2024");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1, "underscore must match literally");
         assert_eq!(photos[0].file_path, underscore_photo.file_path);
@@ -3403,15 +3238,11 @@ pub(crate) mod tests {
             create_test_photo_with_metadata("weird%name.jpg", "percent-hash", json!({}));
         percent_photo.create(&pool).await.unwrap();
         let query = create_search_query("100%");
-        let (_, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0, "'100%' must not match every row");
 
         let query = create_search_query("weird%name");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(photos[0].file_path, percent_photo.file_path);
     }
@@ -3432,9 +3263,7 @@ pub(crate) mod tests {
 
         // `_` in a location token must not widen to a single-char wildcard
         let query = create_search_query("location:Col_gne");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 0);
         assert!(photos.is_empty());
     }
@@ -3455,9 +3284,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("Berlin");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3480,9 +3307,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:Paris");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 0);
         assert!(photos.is_empty());
@@ -3500,9 +3325,7 @@ pub(crate) mod tests {
         plain_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset is_favorite:true");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3521,9 +3344,7 @@ pub(crate) mod tests {
         image_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset type:video");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3545,9 +3366,7 @@ pub(crate) mod tests {
         ny_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3572,9 +3391,7 @@ pub(crate) mod tests {
         // with a leading space — the LIKE pattern must be trimmed or it
         // matches nothing.
         let query = create_search_query("location: New York");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos[0].file_path, ny_photo.file_path);
@@ -3610,9 +3427,7 @@ pub(crate) mod tests {
         // A bare "location:" token must not filter (previously it emitted
         // LIKE '%%' which matched every row with a city).
         let query = create_search_query("with-city location:");
-        let (_, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
     }
@@ -3632,9 +3447,7 @@ pub(crate) mod tests {
         berlin_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("sunset location:Berlin");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3649,17 +3462,9 @@ pub(crate) mod tests {
         fav_photo.create(&pool).await.unwrap();
 
         for query in ["is_favorite:true' OR '1'='1", "sunset' OR '1'='1 --"] {
-            let (photos, total) = search(
-                &pool,
-                &no_facts(),
-                &create_search_query(query),
-                50,
-                0,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
+            let (photos, total) = search(&pool, &create_search_query(query), 50, 0, None, None)
+                .await
+                .unwrap();
             assert_eq!(total, 0, "query {query:?} must not match");
             assert!(photos.is_empty(), "query {query:?} must not match");
         }
@@ -3674,9 +3479,7 @@ pub(crate) mod tests {
         plain_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("type:raw");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
@@ -3708,9 +3511,7 @@ pub(crate) mod tests {
         berlin_fav_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York is_favorite:true");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, ny_fav_photo.file_path);
@@ -3730,9 +3531,7 @@ pub(crate) mod tests {
         ny_image_photo.create(&pool).await.unwrap();
 
         let query = create_search_query("location:New York type:video");
-        let (photos, total) = search(&pool, &no_facts(), &query, 50, 0, None, None)
-            .await
-            .unwrap();
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, ny_video_photo.file_path);
@@ -3741,7 +3540,6 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_all_filtered_returns_every_match_without_pagination() {
         let pool = create_test_db_pool().await.unwrap();
-        let facts = MediaFactsIndex::new();
 
         for index in 0..120 {
             // `create_test_photo` zero-pads short hashes to 64 chars, so
@@ -3754,7 +3552,6 @@ pub(crate) mod tests {
 
         let photos = list_all_filtered(
             &pool,
-            &facts,
             &SearchQuery {
                 q: None,
                 year: None,
@@ -3776,11 +3573,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_all_filtered_applies_search_tokens_and_year() {
         let pool = create_test_db_pool().await.unwrap();
-        let facts = MediaFactsIndex::new();
 
-        let mut berlin_2020 = create_photo_with_facts(
+        let mut berlin_2020 = create_photo_with_date(
             &pool,
-            &facts,
             &"1".repeat(64),
             "berlin_2020.jpg",
             "2020-05-25T10:00:00Z",
@@ -3789,9 +3584,8 @@ pub(crate) mod tests {
         berlin_2020.metadata = json!({ "location": { "city": "Berlin" } });
         berlin_2020.update(&pool).await.unwrap();
 
-        let mut berlin_2024 = create_photo_with_facts(
+        let mut berlin_2024 = create_photo_with_date(
             &pool,
-            &facts,
             &"2".repeat(64),
             "berlin_2024.jpg",
             "2024-05-25T10:00:00Z",
@@ -3800,20 +3594,14 @@ pub(crate) mod tests {
         berlin_2024.metadata = json!({ "location": { "city": "Berlin" } });
         berlin_2024.update(&pool).await.unwrap();
 
-        let mut rome = create_photo_with_facts(
-            &pool,
-            &facts,
-            &"3".repeat(64),
-            "rome.jpg",
-            "2020-05-25T10:00:00Z",
-        )
-        .await;
+        let mut rome =
+            create_photo_with_date(&pool, &"3".repeat(64), "rome.jpg", "2020-05-25T10:00:00Z")
+                .await;
         rome.metadata = json!({ "location": { "city": "Rome" } });
         rome.update(&pool).await.unwrap();
 
         let photos = list_all_filtered(
             &pool,
-            &facts,
             &SearchQuery {
                 q: Some("location:Berlin".to_string()),
                 year: Some(2020),
@@ -3850,7 +3638,6 @@ pub(crate) mod tests {
 
         let photos = list_all_filtered(
             &pool,
-            &no_facts(),
             &SearchQuery {
                 q: None,
                 year: None,

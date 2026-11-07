@@ -309,20 +309,33 @@ pub(crate) fn month_range_bounds(
     Some((from, to))
 }
 
-/// Whether `photo`'s file-derived capture date lies inside the inclusive
+/// Whether a file-derived capture date lies inside the inclusive
 /// month-granular `bounds` from [`month_range_bounds`].
 ///
 /// Compares the zero-padded `YYYY-MM` key lexicographically, which sorts
 /// chronologically — the exact comparison the removed
-/// `strftime('%Y-%m', taken_at)` SQL made. A photo whose date is unknown (no
-/// facts entry, so `taken_at` stayed `None`) never matches, just as a NULL
-/// `taken_at` failed the old SQL comparison.
-pub(crate) fn photo_in_month_range(photo: &Photo, bounds: &(String, String)) -> bool {
-    let Some(taken_at) = photo.taken_at else {
+/// `strftime('%Y-%m', taken_at)` SQL made. An unknown date (no facts entry, so
+/// `None`) never matches, just as a NULL `taken_at` failed the old SQL
+/// comparison.
+pub(crate) fn date_in_month_range(
+    taken_at: Option<DateTime<Utc>>,
+    bounds: &(String, String),
+) -> bool {
+    let Some(taken_at) = taken_at else {
         return false;
     };
     let key = taken_at.format("%Y-%m").to_string();
     key.as_str() >= bounds.0.as_str() && key.as_str() <= bounds.1.as_str()
+}
+
+/// The library's row-set revision: one integer bumped by a trigger on every
+/// photo-row insert, delete and re-key (see the `library_revision` migration).
+/// An in-memory listing order is valid only while this value and the file-facts
+/// generation are unchanged.
+pub(crate) async fn library_revision(pool: &DbPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT revision FROM library_revision WHERE id = 1")
+        .fetch_one(pool)
+        .await
 }
 
 /// Builds the reusable WHERE clause for photo searches: the `q` token grammar
@@ -330,7 +343,7 @@ pub(crate) fn photo_in_month_range(photo: &Photo, bounds: &(String, String)) -> 
 /// (starting with `" WHERE 1=1"`) plus its string parameters in placeholder
 /// order. Used by the photo listing module so all listings honor identical
 /// filter semantics. The month range is NOT here: it filters a file-derived
-/// date, see [`photo_in_month_range`].
+/// date, see [`date_in_month_range`].
 pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
     let mut where_clause = String::from(" WHERE 1=1");
     let mut params: Vec<String> = Vec::new();
@@ -406,7 +419,7 @@ pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
 
     // The month-granular range is NOT part of the SQL: it filters a
     // file-derived date the database does not store. `month_range_bounds` is
-    // applied in Rust by the callers, via `photo_in_month_range`.
+    // applied in Rust by the callers, via `date_in_month_range`.
     (where_clause, params)
 }
 
@@ -1676,7 +1689,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_photo_in_month_range_uses_lexicographic_year_month() {
+    fn test_date_in_month_range_uses_lexicographic_year_month() {
         // GIVEN: the inclusive bounds of `year=2012&month=3&to_year=2015`
         let bounds = month_range_bounds(Some(2012), Some(3), Some(2015), None)
             .expect("year=2012 forms bounds");
@@ -1696,12 +1709,53 @@ pub(crate) mod tests {
         }
 
         // THEN: both bounds are inclusive
-        assert!(photo_in_month_range(&mar, &bounds));
-        assert!(photo_in_month_range(&dec, &bounds));
+        assert!(date_in_month_range(mar.taken_at, &bounds));
+        assert!(date_in_month_range(dec.taken_at, &bounds));
         // AND: the month before the start bound does not match
-        assert!(!photo_in_month_range(&feb, &bounds));
+        assert!(!date_in_month_range(feb.taken_at, &bounds));
         // AND: a photo with no facts entry never matches
-        assert!(!photo_in_month_range(&unknown, &bounds));
+        assert!(!date_in_month_range(unknown.taken_at, &bounds));
+    }
+
+    #[tokio::test]
+    async fn library_revision_tracks_insert_delete_and_rekey_only() {
+        // GIVEN: a fresh library
+        let pool = create_test_db_pool().await.unwrap();
+        assert_eq!(library_revision(&pool).await.unwrap(), 0);
+
+        // WHEN: a photo is indexed
+        let photo = create_test_photo("revision.jpg".to_string(), "revision".to_string());
+        photo.create(&pool).await.unwrap();
+        // THEN: the row-set revision moves
+        assert_eq!(library_revision(&pool).await.unwrap(), 1);
+
+        // WHEN: a column that cannot change the listing's keys is written
+        sqlx::query("UPDATE photos SET is_favorite = 1, metadata = '{}' WHERE hash_sha256 = ?")
+            .bind(&photo.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // THEN: the revision stays, so a cached order is not needlessly rebuilt
+        assert_eq!(library_revision(&pool).await.unwrap(), 1);
+
+        // WHEN: the row is re-keyed in place (an in-app rotation)
+        sqlx::query("UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ?")
+            .bind("r".repeat(64))
+            .bind(&photo.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // THEN: the revision moves
+        assert_eq!(library_revision(&pool).await.unwrap(), 2);
+
+        // WHEN: the row is removed
+        sqlx::query("DELETE FROM photos WHERE hash_sha256 = ?")
+            .bind("r".repeat(64))
+            .execute(&pool)
+            .await
+            .unwrap();
+        // THEN: the revision moves again
+        assert_eq!(library_revision(&pool).await.unwrap(), 3);
     }
 
     #[tokio::test]

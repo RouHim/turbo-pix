@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
@@ -26,6 +27,11 @@ pub struct MediaFacts {
 /// rotation and is what every DB row already carries).
 pub struct MediaFactsIndex {
     entries: RwLock<HashMap<String, MediaFacts>>,
+    /// Process-unique handle for caches derived from this index, so one index
+    /// (one library) can never be served another's cached view.
+    instance_id: u64,
+    /// Bumped by every mutation; a derived view is valid only while unchanged.
+    generation: AtomicU64,
 }
 
 impl Default for MediaFactsIndex {
@@ -36,9 +42,25 @@ impl Default for MediaFactsIndex {
 
 impl MediaFactsIndex {
     pub fn new() -> Self {
+        static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             entries: RwLock::new(HashMap::new()),
+            instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// Identifies this index for process-wide caches derived from its facts.
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// The current facts generation. Read it BEFORE deriving anything from this
+    /// index: a cache tagged with it stays valid only while the value is
+    /// unchanged, and a concurrent mutation forces the next reader to rebuild
+    /// instead of serving a stale derivation.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     pub fn get(&self, file_path: &str) -> Option<MediaFacts> {
@@ -54,6 +76,9 @@ impl MediaFactsIndex {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(file_path.to_string(), facts);
+        // Release pairs with `generation`'s Acquire: a reader that observes the
+        // new generation is guaranteed to observe the fact it announced.
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     pub fn remove(&self, file_path: &str) {
@@ -61,6 +86,7 @@ impl MediaFactsIndex {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(file_path);
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     pub fn remove_many(&self, file_paths: &[String]) {
@@ -71,6 +97,8 @@ impl MediaFactsIndex {
         for file_path in file_paths {
             entries.remove(file_path);
         }
+        drop(entries);
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Reads the file and stores what it yields; returns that value.

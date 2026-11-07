@@ -3,13 +3,20 @@
 //!
 //! The database stores no capture date, so only an explicit column sort can be
 //! ordered and paged by SQLite. Every date-ordered listing (the default, the
-//! grid, the map, an album) fetches the filtered rows, enriches them from the
-//! file-facts index, filters the month range in Rust and sorts with
-//! [`sort_photos`]. Callers hand this module a request instead of re-sequencing
-//! that ladder.
+//! grid, an album) orders on the file-derived date the file-facts index holds:
+//! the request reads only `(hash, path)` per row, orders those keys with
+//! [`sort_photos`]'s contract and fetches just the rows it returns. The
+//! unfiltered library's keys — what infinite scroll asks for — are cached until
+//! the row set or the facts change, so a page costs the page, not the library.
+//! Callers hand this module a request instead of re-sequencing that ladder.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use chrono::{DateTime, Utc};
 
 use crate::db::{
-    build_order_clause, build_search_where, is_sql_sort, month_range_bounds, photo_in_month_range,
+    build_order_clause, build_search_where, date_in_month_range, is_sql_sort, month_range_bounds,
     sort_photos, DbPool, Photo,
 };
 use crate::db_types::SearchQuery;
@@ -93,30 +100,249 @@ pub async fn list(
         return Ok(Listing { photos, total });
     }
 
-    // Date-ordered or month-filtered listing: the date lives in the files, so
-    // the filtered set is fetched and the index does the rest.
-    let mut photos = fetch_rows(
-        pool,
-        facts,
-        &where_clause,
-        &params,
-        request.album,
-        None,
-        None,
-    )
-    .await?;
-    if let Some(bounds) = &bounds {
-        photos.retain(|photo| photo_in_month_range(photo, bounds));
-    }
-    sort_photos(&mut photos, request.sort, request.order);
-
-    let total = photos.len();
-    let photos = match request.page {
-        Some(page) => paginate(photos, page.offset, page.limit),
-        None => photos,
+    // Everything below needs the file-derived dates: the month filter always,
+    // the default order does. Both therefore work on cheap `(date, hash)` keys
+    // and only the rows that are actually returned get loaded — fetching every
+    // row (and its metadata JSON) for a 50-row page made the grid's next-page
+    // request scale with the whole library. The unfiltered library's keys are
+    // served from the shared order cache; a filtered set is read per request.
+    let unfiltered = request.query.q.is_none() && request.album.is_none();
+    let keys: Arc<Vec<OrderKey>> = if unfiltered {
+        unfiltered_order_keys(pool, facts).await?
+    } else {
+        let mut keys = fetch_order_keys(pool, facts, &where_clause, &params, request.album).await?;
+        sort_order_keys(&mut keys, Some("asc"));
+        Arc::new(keys)
     };
 
+    // The keys are stored ascending; the default direction walks them
+    // backwards, which reverses the `hash_sha256` tiebreak with it — the exact
+    // reversal `sort_photos` applies.
+    let ascending = matches!(request.order, Some("asc"));
+    let total = ordered_keys(&keys, ascending)
+        .filter(|key| in_range(key, bounds.as_ref()))
+        .count();
+
+    // A column sort behind a month filter cannot be paged by key: it needs the
+    // whole filtered set, sorts it as rows, and pages afterwards.
+    let key_page = if is_sql_sort(request.sort) {
+        None
+    } else {
+        request.page
+    };
+    let hashes = ordered_hashes(ordered_keys(&keys, ascending), bounds.as_ref(), key_page);
+    let mut photos = fetch_rows_by_hashes(pool, facts, &hashes).await?;
+    if is_sql_sort(request.sort) {
+        sort_photos(&mut photos, request.sort, request.order);
+        if let Some(page) = request.page {
+            photos = paginate(photos, page);
+        }
+    }
+
     Ok(Listing { photos, total })
+}
+
+/// One listing order entry: the file-derived capture date and the row's hash.
+type OrderKey = (Option<DateTime<Utc>>, String);
+
+/// The unfiltered library's date order, cached across requests: the whole
+/// library's `(date, hash)` keys, ascending.
+///
+/// The capture date exists only in the files, so neither SQLite nor a cheap
+/// query can order or page the default listing; without this cache every page
+/// re-read the library's every row. The cached list is invalidated by two
+/// exact, cheap signals — the row-set revision the `library_revision` triggers
+/// bump (insert/delete/re-key) and the file-facts generation (any date change)
+/// — and never by a time-to-live, which would silently serve a stale order.
+struct CachedOrder {
+    facts_instance: u64,
+    revision: i64,
+    generation: u64,
+    keys: Arc<Vec<OrderKey>>,
+}
+
+static LISTING_ORDER: OnceLock<Mutex<Option<CachedOrder>>> = OnceLock::new();
+
+fn order_cache() -> &'static Mutex<Option<CachedOrder>> {
+    LISTING_ORDER.get_or_init(|| Mutex::new(None))
+}
+
+fn cached_order(
+    facts: &MediaFactsIndex,
+    revision: i64,
+    generation: u64,
+) -> Option<Arc<Vec<OrderKey>>> {
+    let cached = order_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cached = cached.as_ref()?;
+    let valid = cached.facts_instance == facts.instance_id()
+        && cached.revision == revision
+        && cached.generation == generation;
+    valid.then(|| Arc::clone(&cached.keys))
+}
+
+fn store_order(facts: &MediaFactsIndex, revision: i64, generation: u64, keys: Arc<Vec<OrderKey>>) {
+    *order_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(CachedOrder {
+        facts_instance: facts.instance_id(),
+        revision,
+        generation,
+        keys,
+    });
+}
+
+/// The unfiltered library's cached date order, rebuilt only when the row set
+/// or the file facts changed.
+async fn unfiltered_order_keys(
+    pool: &DbPool,
+    facts: &MediaFactsIndex,
+) -> Result<Arc<Vec<OrderKey>>, Box<dyn std::error::Error>> {
+    // Both signals are read BEFORE the rows: a change landing afterwards only
+    // makes the stored entry look older than the rows it describes, which
+    // forces a rebuild on the next request — never a stale hit. Reading them
+    // after the rows could label older rows with a newer revision instead.
+    let generation = facts.generation();
+    let revision = crate::db::library_revision(pool).await?;
+    if let Some(keys) = cached_order(facts, revision, generation) {
+        return Ok(keys);
+    }
+
+    // No WHERE clause: the cached order spans the whole library.
+    let mut keys = fetch_order_keys(pool, facts, "", &[], None).await?;
+    sort_order_keys(&mut keys, Some("asc"));
+    let keys = Arc::new(keys);
+    store_order(facts, revision, generation, Arc::clone(&keys));
+    Ok(keys)
+}
+
+/// The listing order's keys for one filtered set: `(capture date, hash)` per
+/// row, dates from the file-facts index. Only the two identifying columns are
+/// read — never the rows' metadata.
+async fn fetch_order_keys(
+    pool: &DbPool,
+    facts: &MediaFactsIndex,
+    where_clause: &str,
+    params: &[String],
+    album: Option<i64>,
+) -> Result<Vec<OrderKey>, Box<dyn std::error::Error>> {
+    let sql = format!("SELECT hash_sha256, file_path FROM photos{where_clause}");
+    let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+    for param in params {
+        query = query.bind(param);
+    }
+    if let Some(album_id) = album {
+        query = query.bind(album_id);
+    }
+
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(hash, file_path)| (facts.get(&file_path).and_then(|entry| entry.taken_at), hash))
+        .collect())
+}
+
+/// Orders the listing keys exactly like [`sort_photos`]: primary ascending
+/// (unknown date before every known one) with the `hash_sha256` tiebreak in the
+/// same direction, the whole comparison reversed for the default `DESC`.
+fn sort_order_keys(keys: &mut [OrderKey], order: Option<&str>) {
+    let ascending = matches!(order, Some("asc"));
+    keys.sort_by(|a, b| {
+        let ordering = a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1));
+        if ascending {
+            ordering
+        } else {
+            ordering.reverse()
+        }
+    });
+}
+
+/// Walks the ascending keys in the requested direction.
+fn ordered_keys(keys: &[OrderKey], ascending: bool) -> Box<dyn Iterator<Item = &OrderKey> + '_> {
+    if ascending {
+        Box::new(keys.iter())
+    } else {
+        Box::new(keys.iter().rev())
+    }
+}
+
+/// Whether a key lies inside the month range (always true without one).
+fn in_range(key: &OrderKey, bounds: Option<&(String, String)>) -> bool {
+    bounds.is_none_or(|bounds| date_in_month_range(key.0, bounds))
+}
+
+/// The hashes of an ordered key list, month range applied before the offset so
+/// pagination never counts an excluded key. `page: None` yields the complete
+/// filtered set (the Map contract).
+fn ordered_hashes<'a>(
+    ordered: impl Iterator<Item = &'a OrderKey>,
+    bounds: Option<&(String, String)>,
+    page: Option<ListingPage>,
+) -> Vec<String> {
+    let (offset, limit) = match page {
+        Some(page) => (
+            usize::try_from(page.offset).unwrap_or(0),
+            usize::try_from(page.limit).unwrap_or(0),
+        ),
+        None => (0, usize::MAX),
+    };
+    ordered
+        .filter(|key| in_range(key, bounds))
+        .skip(offset)
+        .take(limit)
+        .map(|(_, hash)| hash.clone())
+        .collect()
+}
+
+/// `photos`' slice of a listing page, skipping `offset` rows.
+fn paginate(photos: Vec<Photo>, page: ListingPage) -> Vec<Photo> {
+    let offset = usize::try_from(page.offset).unwrap_or(0);
+    let limit = usize::try_from(page.limit).unwrap_or(0);
+    photos.into_iter().skip(offset).take(limit).collect()
+}
+
+/// Fetches the page's rows by primary key and restores the order the keys
+/// dictate (SQL's `IN` returns database order), enriching only those rows.
+async fn fetch_rows_by_hashes(
+    pool: &DbPool,
+    facts: &MediaFactsIndex,
+    hashes: &[String],
+) -> Result<Vec<Photo>, Box<dyn std::error::Error>> {
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // One placeholder per hash exceeds SQLite's variable limit for a large
+    // filtered set (the Map contract passes all of it), so the lookup chunks.
+    const HASH_CHUNK: usize = 500;
+    let mut by_hash: HashMap<String, Photo> = HashMap::with_capacity(hashes.len());
+    for chunk in hashes.chunks(HASH_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!("SELECT * FROM photos WHERE hash_sha256 IN ({placeholders})");
+        let mut query = sqlx::query_as::<_, Photo>(sqlx::AssertSqlSafe(sql));
+        for hash in chunk {
+            query = query.bind(hash);
+        }
+        by_hash.extend(
+            query
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(|photo| (photo.hash_sha256.clone(), photo)),
+        );
+    }
+
+    let mut photos = Vec::with_capacity(by_hash.len());
+    for hash in hashes {
+        if let Some(photo) = by_hash.remove(hash) {
+            photos.push(photo);
+        }
+    }
+    for photo in &mut photos {
+        facts.enrich(photo);
+    }
+    Ok(photos)
 }
 
 /// Fetches the filtered rows, optionally ordered and paged by SQL, and
@@ -155,12 +381,6 @@ async fn fetch_rows(
         facts.enrich(photo);
     }
     Ok(photos)
-}
-
-fn paginate(photos: Vec<Photo>, offset: i64, limit: i64) -> Vec<Photo> {
-    let offset = usize::try_from(offset).unwrap_or(0);
-    let limit = usize::try_from(limit).unwrap_or(0);
-    photos.into_iter().skip(offset).take(limit).collect()
 }
 
 #[cfg(test)]
@@ -308,6 +528,327 @@ mod tests {
                     .unwrap()
                     .with_timezone(&Utc)
             )
+        );
+    }
+
+    fn unfiltered_query() -> SearchQuery {
+        SearchQuery {
+            q: None,
+            year: None,
+            month: None,
+            to_year: None,
+            to_month: None,
+        }
+    }
+
+    /// A paginated date-ordered listing must be exactly the unpaginated order
+    /// sliced per page, with the same filtered total — for both directions.
+    #[tokio::test]
+    async fn date_sort_pages_match_the_unpaginated_order() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let facts = test_facts(&[]);
+        seed(
+            &pool,
+            &facts,
+            &[
+                ("a.jpg", "a", "2020-01-01T10:00:00Z"),
+                ("b.jpg", "b", "2020-03-01T10:00:00Z"),
+                ("c.jpg", "c", "2020-02-01T10:00:00Z"),
+                ("d.jpg", "d", "2021-05-01T10:00:00Z"),
+                ("e.jpg", "e", "2019-12-31T10:00:00Z"),
+            ],
+        )
+        .await;
+        let query = unfiltered_query();
+
+        for order in [None, Some("asc")] {
+            let complete = list(
+                &pool,
+                &facts,
+                ListingRequest {
+                    query: &query,
+                    album: None,
+                    sort: None,
+                    order,
+                    page: None,
+                },
+            )
+            .await
+            .unwrap();
+            let expected: Vec<String> = complete
+                .photos
+                .iter()
+                .map(|photo| photo.filename.clone())
+                .collect();
+
+            let mut paged = Vec::new();
+            for page in 0..3 {
+                let listing = list(
+                    &pool,
+                    &facts,
+                    ListingRequest {
+                        query: &query,
+                        album: None,
+                        sort: None,
+                        order,
+                        page: Some(ListingPage {
+                            limit: 2,
+                            offset: page * 2,
+                        }),
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(listing.total, complete.total, "order={order:?}");
+                paged.extend(listing.photos.into_iter().map(|photo| photo.filename));
+            }
+
+            assert_eq!(paged, expected, "order={order:?}");
+        }
+    }
+
+    /// One page of the unfiltered, date-ordered listing.
+    async fn page_of(
+        pool: &DbPool,
+        facts: &MediaFactsIndex,
+        order: Option<&str>,
+        offset: i64,
+    ) -> Listing {
+        let query = unfiltered_query();
+        list(
+            pool,
+            facts,
+            ListingRequest {
+                query: &query,
+                album: None,
+                sort: None,
+                order,
+                page: Some(ListingPage { limit: 10, offset }),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn names(listing: &Listing) -> Vec<&str> {
+        listing
+            .photos
+            .iter()
+            .map(|photo| photo.filename.as_str())
+            .collect()
+    }
+
+    /// The unfiltered order is cached across requests, so every way the row set
+    /// can change must invalidate it: an insert, a delete and an in-place
+    /// re-key (rotation rewrites `hash_sha256`, the path stays).
+    #[tokio::test]
+    async fn the_cached_order_follows_row_set_changes() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let facts = test_facts(&[]);
+        let seeded = seed(
+            &pool,
+            &facts,
+            &[
+                ("a.jpg", "a", "2020-01-01T10:00:00Z"),
+                ("b.jpg", "b", "2020-02-01T10:00:00Z"),
+            ],
+        )
+        .await;
+
+        let first = page_of(&pool, &facts, None, 0).await;
+        assert_eq!(names(&first), vec!["b.jpg", "a.jpg"]);
+        assert_eq!(first.total, 2);
+
+        // A scan inserts a newer photo.
+        seed(&pool, &facts, &[("c.jpg", "c", "2020-03-01T10:00:00Z")]).await;
+        let second = page_of(&pool, &facts, None, 0).await;
+        assert_eq!(names(&second), vec!["c.jpg", "b.jpg", "a.jpg"]);
+        assert_eq!(second.total, 3);
+
+        // An in-app rotation re-keys a row without changing its path.
+        let rotated_hash = format!("{:0<64}", "a-rotated");
+        sqlx::query("UPDATE photos SET hash_sha256 = ? WHERE hash_sha256 = ?")
+            .bind(&rotated_hash)
+            .bind(&seeded[0].hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let third = page_of(&pool, &facts, None, 0).await;
+        assert_eq!(names(&third), vec!["c.jpg", "b.jpg", "a.jpg"]);
+        assert_eq!(third.photos[2].hash_sha256, rotated_hash);
+
+        // A removal.
+        sqlx::query("DELETE FROM photos WHERE hash_sha256 = ?")
+            .bind(&seeded[1].hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let fourth = page_of(&pool, &facts, None, 0).await;
+        assert_eq!(names(&fourth), vec!["c.jpg", "a.jpg"]);
+        assert_eq!(fourth.total, 2);
+    }
+
+    /// A date edit changes the order although no row and no column the DB
+    /// stores changed: the facts generation must invalidate the cached order.
+    #[tokio::test]
+    async fn the_cached_order_follows_a_file_date_change() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let facts = test_facts(&[]);
+        let seeded = seed(
+            &pool,
+            &facts,
+            &[
+                ("a.jpg", "a", "2020-01-01T10:00:00Z"),
+                ("b.jpg", "b", "2020-02-01T10:00:00Z"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            names(&page_of(&pool, &facts, None, 0).await),
+            vec!["b.jpg", "a.jpg"]
+        );
+
+        facts.set(
+            &seeded[0].file_path,
+            MediaFacts {
+                taken_at: Some(
+                    DateTime::parse_from_rfc3339("2021-01-01T10:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                ),
+                ..MediaFacts::default()
+            },
+        );
+
+        assert_eq!(
+            names(&page_of(&pool, &facts, None, 0).await),
+            vec!["a.jpg", "b.jpg"]
+        );
+    }
+
+    /// A row the file-facts index does not know is undated, not missing: it
+    /// stays in the listing (and in the total) and orders first ascending /
+    /// last descending, exactly like a `NULL` date did in SQL.
+    #[tokio::test]
+    async fn a_row_without_file_facts_stays_in_the_listing() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let facts = test_facts(&[]);
+        let seeded = seed(
+            &pool,
+            &facts,
+            &[
+                ("old.jpg", "old", "2020-01-01T10:00:00Z"),
+                ("unknown.jpg", "unknown", "2020-02-01T10:00:00Z"),
+                ("new.jpg", "new", "2020-03-01T10:00:00Z"),
+            ],
+        )
+        .await;
+        facts.remove(&seeded[1].file_path);
+        let query = unfiltered_query();
+
+        let ascending = list(
+            &pool,
+            &facts,
+            ListingRequest {
+                query: &query,
+                album: None,
+                sort: Some("date"),
+                order: Some("asc"),
+                page: Some(ListingPage {
+                    limit: 10,
+                    offset: 0,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ascending.total, 3);
+        assert_eq!(
+            ascending
+                .photos
+                .iter()
+                .map(|photo| photo.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["unknown.jpg", "old.jpg", "new.jpg"]
+        );
+
+        let descending = list(
+            &pool,
+            &facts,
+            ListingRequest {
+                query: &query,
+                album: None,
+                sort: Some("date"),
+                order: None,
+                page: Some(ListingPage {
+                    limit: 2,
+                    offset: 0,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(descending.total, 3);
+        assert_eq!(
+            descending
+                .photos
+                .iter()
+                .map(|photo| photo.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new.jpg", "old.jpg"]
+        );
+    }
+
+    /// A column sort behind a month filter must still order by that column —
+    /// the month filter only decides which rows are listed, never their order.
+    #[tokio::test]
+    async fn a_column_sort_behind_a_month_filter_pages_by_that_column() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let facts = test_facts(&[]);
+        seed(
+            &pool,
+            &facts,
+            &[
+                ("a.jpg", "a", "2020-01-01T10:00:00Z"),
+                ("c.jpg", "c", "2020-02-01T10:00:00Z"),
+                ("b.jpg", "b", "2020-03-01T10:00:00Z"),
+                ("old.jpg", "old", "2019-12-01T10:00:00Z"),
+            ],
+        )
+        .await;
+
+        let listing = list(
+            &pool,
+            &facts,
+            ListingRequest {
+                query: &SearchQuery {
+                    q: None,
+                    year: Some(2020),
+                    month: None,
+                    to_year: None,
+                    to_month: None,
+                },
+                album: None,
+                sort: Some("filename"),
+                order: Some("asc"),
+                page: Some(ListingPage {
+                    limit: 2,
+                    offset: 1,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(listing.total, 3);
+        assert_eq!(
+            listing
+                .photos
+                .iter()
+                .map(|photo| photo.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.jpg", "c.jpg"]
         );
     }
 

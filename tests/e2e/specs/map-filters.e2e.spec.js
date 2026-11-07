@@ -70,7 +70,7 @@ async function focusLocation(page, key) {
 
 /**
  * The year of the newest dated photo. Read as UTC, like the server's
- * `strftime('%Y', taken_at)`: a local-year conversion could name the
+ * RFC3339 UTC `taken_at`: a local-year conversion could name the
  * neighbouring year right after New Year.
  */
 async function latestYear(page) {

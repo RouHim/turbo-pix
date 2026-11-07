@@ -15,7 +15,6 @@ use sha2::{Digest, Sha256};
 
 use crate::cache_manager::CacheManager;
 use crate::db::{DbPool, Photo};
-use crate::media_facts::MediaFactsIndex;
 use crate::raw_processor;
 
 /// Check if a file is a video based on its extension
@@ -396,13 +395,11 @@ fn compute_file_hash(file_path: &Path) -> Result<String, ImageEditError> {
 /// 2. Removes database record
 /// 3. Deletes all thumbnails
 /// 4. Removes semantic vector
-/// 5. Removes the file's entry from the capture-facts index
 ///
 /// # Arguments
 /// * `photo` - Photo entity to delete
 /// * `db_pool` - Database connection pool
 /// * `cache_manager` - Cache manager for thumbnail deletion
-/// * `facts` - Capture-facts index the deleted file's entry is removed from
 ///
 /// # Returns
 /// Ok(()) on success, error otherwise
@@ -410,7 +407,6 @@ pub async fn delete_photo(
     photo: &Photo,
     db_pool: &DbPool,
     cache_manager: &CacheManager,
-    facts: &MediaFactsIndex,
 ) -> Result<(), ImageEditError> {
     let file_path = std::path::Path::new(&photo.file_path);
 
@@ -465,9 +461,6 @@ pub async fn delete_photo(
         })?;
 
     log::info!("Deleted photo from database: {}", photo.hash_sha256);
-
-    // The row (and its file) are gone, so its file-derived facts must go too.
-    facts.remove(&photo.file_path);
 
     Ok(())
 }
@@ -531,6 +524,8 @@ mod tests {
             file_size: file_bytes.len() as i64,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(width as i32),
             height: Some(height as i32),
             orientation: Some(1),
@@ -694,6 +689,8 @@ mod tests {
             file_size: 1024,
             mime_type: Some("image/x-canon-cr2".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(800),
             height: Some(600),
             orientation: Some(1),
@@ -733,6 +730,8 @@ mod tests {
             file_size: 1024,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(800),
             height: Some(600),
             orientation: Some(1),
@@ -782,6 +781,8 @@ mod tests {
             file_size: 12345,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(800),
             height: Some(600),
             orientation: Some(1),
@@ -799,7 +800,7 @@ mod tests {
         };
 
         // WHEN: Attempt to delete
-        let result = delete_photo(&photo, &db_pool, &cache_manager, &MediaFactsIndex::new()).await;
+        let result = delete_photo(&photo, &db_pool, &cache_manager).await;
 
         // THEN: Should fail with PermissionDenied and sanitized message
         assert!(matches!(result, Err(ImageEditError::PermissionDenied(_))));
@@ -824,7 +825,7 @@ mod tests {
         photo.hash_sha256 = "delete-writable-hash".to_string();
 
         // WHEN: Delete photo
-        let result = delete_photo(&photo, &db_pool, &cache_manager, &MediaFactsIndex::new()).await;
+        let result = delete_photo(&photo, &db_pool, &cache_manager).await;
 
         // THEN: Should succeed and remove file
         assert!(result.is_ok(), "Delete failed: {:?}", result);

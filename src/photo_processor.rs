@@ -8,7 +8,6 @@ use tokio::sync::Semaphore;
 use crate::cache_manager::CacheManager;
 use crate::db::DbPool;
 use crate::file_scanner::{FileScanner, PhotoFile};
-use crate::media_facts::{MediaFacts, MediaFactsIndex};
 use crate::metadata_extractor::MetadataExtractor;
 use crate::mimetype_detector;
 use crate::raw_processor;
@@ -84,18 +83,6 @@ pub struct PhotoProcessor {
     semantic_search: Arc<dyn SemanticSearch>,
 }
 
-/// The file-derived facts a processed photo carries: what a scan publishes to
-/// the index and what every response is enriched from.
-impl From<&ProcessedPhoto> for MediaFacts {
-    fn from(photo: &ProcessedPhoto) -> Self {
-        MediaFacts {
-            taken_at: photo.taken_at,
-            latitude: photo.latitude,
-            longitude: photo.longitude,
-        }
-    }
-}
-
 /// Attempt to fix MOOV atom placement for video files during scanning.
 /// Only applies to video files (by MIME type). Errors are logged as warnings
 /// and never propagate — scanning continues regardless of MOOV fix outcome.
@@ -131,7 +118,6 @@ impl PhotoProcessor {
         db_pool: &DbPool,
         cache_manager: &CacheManager,
         status: &IndexingStatus,
-        facts: &MediaFactsIndex,
     ) -> Result<Vec<ProcessedPhoto>, Box<dyn std::error::Error>> {
         // Step 1: Get all photo files on disk. A partial scan (missing or
         // unreadable directory) must NOT trigger orphan cleanup — files that
@@ -174,11 +160,6 @@ impl PhotoProcessor {
                 error!("Failed to clear cache for {}: {}", hash, e);
             }
         }
-        // A deleted row's file is gone (or gone from the roots), so its facts
-        // must not linger in the index.
-        let deleted_file_paths: Vec<String> =
-            deleted_paths.iter().map(|(path, _)| path.clone()).collect();
-        facts.remove_many(&deleted_file_paths);
         // Conversions are keyed by the same hash; orphan rows must not leave them
         // behind. Cleared in one pass per namespace for the whole batch, not once
         // per orphan: the per-hash form re-lists all three namespace directories,
@@ -232,8 +213,8 @@ impl PhotoProcessor {
                             status_clone.phases.metadata.add_processed(1);
 
                             // Convert existing Photo to ProcessedPhoto. The
-                            // date/coordinates come from the FILE, not the row
-                            // (the DB stores neither any more).
+                            // date/coordinates are re-read from the FILE, so
+                            // the row write reconciles them.
                             let file_facts = crate::media_facts::read_media_facts_with_metadata(
                                 &photo_file.path,
                                 Some(&photo_file.metadata),
@@ -304,10 +285,8 @@ impl PhotoProcessor {
             // Wait for at least one task to complete
             if let Some(outcome) = tasks.join_next().await {
                 if let Some(photo) = record_metadata_task_outcome(outcome, status) {
-                    // Every scan republishes what the file says: the index is
-                    // the only place the date and coordinates live for as long
-                    // as the process runs.
-                    facts.set(&photo.file_path, MediaFacts::from(&photo));
+                    // The row write below carries the file's date and
+                    // coordinates, which is the scan's whole reconciliation.
                     photos.push(photo);
                 }
             }
@@ -704,7 +683,6 @@ mod tests {
     use super::PhotoProcessor;
     use crate::cache_manager::CacheManager;
     use crate::db::{create_in_memory_pool, DbPool, Photo};
-    use crate::media_facts::MediaFactsIndex;
     use crate::scheduler::IndexingStatus;
     use crate::semantic_search::NoopSemanticSearch;
 
@@ -733,6 +711,8 @@ mod tests {
             file_size: metadata.len() as i64,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: None,
+            taken_latitude: None,
+            taken_longitude: None,
             width: None,
             height: None,
             orientation: None,
@@ -755,10 +735,9 @@ mod tests {
         photo.create(pool).await.expect("row must be created");
     }
 
-    /// GIVEN a photo row whose file is unchanged (size + mtime match) and an
-    /// EMPTY facts index
+    /// GIVEN a photo row whose file is unchanged (size + mtime match)
     /// WHEN a phase-1 rescan runs
-    /// THEN the index carries the date the file itself holds
+    /// THEN the returned photo carries the date the file itself holds
     #[tokio::test]
     async fn test_rescan_publishes_facts_for_unchanged_files() {
         let temp_dir = TempDir::new().unwrap();
@@ -772,19 +751,21 @@ mod tests {
 
         let row = unchanged_row(&path, &"a".repeat(64));
         seed_row(&pool, &row).await;
-        let facts = MediaFactsIndex::new();
 
         let status = IndexingStatus::new();
         let photos = test_processor(&temp_dir)
-            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+            .full_rescan_and_cleanup(&pool, &cache, &status)
             .await
             .expect("rescan must succeed");
 
-        let published = facts.get(&row.file_path).expect("facts must be published");
+        let processed_row = photos
+            .iter()
+            .find(|photo| photo.file_path == row.file_path)
+            .expect("the unchanged photo must be returned");
         assert_eq!(
-            published.taken_at,
+            processed_row.taken_at,
             Some(pinned),
-            "an unchanged file still publishes its own date"
+            "an unchanged file still republishes its own date"
         );
         // The fast path copies the row's blurhash verbatim; the modified branch
         // would have recomputed a real one. This proves which branch ran.
@@ -799,10 +780,10 @@ mod tests {
         );
     }
 
-    /// GIVEN facts for a file's old date (the row's size/mtime also match the
-    /// OLD file)
+    /// GIVEN a row whose file carries an old date (the row's size/mtime also
+    /// match the OLD file)
     /// WHEN the file's EXIF date is rewritten outside the app and a rescan runs
-    /// THEN the index carries the NEW date (FR-013/SC-006)
+    /// THEN the rescan carries the NEW date into the row write (FR-013/SC-006)
     #[tokio::test]
     async fn test_rescan_picks_up_an_external_date_change() {
         let temp_dir = TempDir::new().unwrap();
@@ -815,38 +796,35 @@ mod tests {
         crate::metadata_writer::update_metadata(&path, Some(old_date), None, None)
             .expect("failed to write the old date");
 
-        let row = unchanged_row(&path, &"b".repeat(64));
+        let mut row = unchanged_row(&path, &"b".repeat(64));
+        row.taken_at = Some(old_date);
         seed_row(&pool, &row).await;
-        let facts = MediaFactsIndex::new();
-        facts.set(
-            &row.file_path,
-            crate::media_facts::MediaFacts {
-                taken_at: Some(old_date),
-                ..Default::default()
-            },
-        );
 
         // WHEN: the file's date changes outside the app
         crate::metadata_writer::update_metadata(&path, Some(new_date), None, None)
             .expect("failed to rewrite the date");
 
         let status = IndexingStatus::new();
-        test_processor(&temp_dir)
-            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+        let photos = test_processor(&temp_dir)
+            .full_rescan_and_cleanup(&pool, &cache, &status)
             .await
             .expect("rescan must succeed");
 
-        // THEN: the index carries the file's new date, not the old one
+        // THEN: the rescan carries the file's new date, not the old one
+        let processed_row = photos
+            .iter()
+            .find(|photo| photo.file_path == row.file_path)
+            .expect("the rescan must return the file");
         assert_eq!(
-            facts.get(&row.file_path).unwrap().taken_at,
+            processed_row.taken_at,
             Some(new_date),
             "a rescan must republish the date the file now carries"
         );
     }
 
-    /// GIVEN a facts entry for a photo whose file is gone
+    /// GIVEN rows for a surviving file and for a file that is gone
     /// WHEN a rescan runs
-    /// THEN the orphan's facts are removed from the index
+    /// THEN the orphan is dropped and the survivor is returned
     #[tokio::test]
     async fn test_rescan_removes_facts_of_orphaned_photos() {
         let temp_dir = TempDir::new().unwrap();
@@ -867,29 +845,18 @@ mod tests {
         };
         seed_row(&pool, &gone).await;
 
-        let facts = MediaFactsIndex::new();
-        for path in [&keep.file_path, &gone.file_path] {
-            facts.set(
-                path,
-                crate::media_facts::MediaFacts {
-                    taken_at: Some(Utc.with_ymd_and_hms(2012, 3, 15, 14, 30, 0).unwrap()),
-                    ..Default::default()
-                },
-            );
-        }
-
         let status = IndexingStatus::new();
         let photos = test_processor(&temp_dir)
-            .full_rescan_and_cleanup(&pool, &cache, &status, &facts)
+            .full_rescan_and_cleanup(&pool, &cache, &status)
             .await
             .expect("rescan must succeed");
 
-        // THEN: the orphan's entry is gone and the surviving file's is not
+        // THEN: the orphan is gone and the surviving file is returned
         assert!(
-            facts.get(&gone.file_path).is_none(),
-            "an orphaned photo's facts must be removed"
+            !photos.iter().any(|photo| photo.file_path == gone.file_path),
+            "an orphaned photo's row must be removed"
         );
-        assert!(facts.get(&keep.file_path).is_some());
+        assert!(photos.iter().any(|photo| photo.file_path == keep.file_path));
         // The surviving file is unchanged, so it must have taken the fast path
         // (which preserves the seeded blurhash marker) rather than being
         // reprocessed.

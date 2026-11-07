@@ -509,6 +509,8 @@ mod tests {
             file_size: 1024,
             mime_type: Some("image/jpeg".to_string()),
             taken_at: Some(now),
+            taken_latitude: None,
+            taken_longitude: None,
             width: Some(100),
             height: Some(100),
             orientation: Some(1),

@@ -50,9 +50,17 @@ function photoColumns() {
     .map((line) => line.split('|')[1]);
 }
 
+/**
+ * One statement's value. The CLI prints the preceding `PRAGMA busy_timeout`'s
+ * value first, so the answer is the output's last line.
+ */
+function sqlValue(sql) {
+  return runSql(sql).trim().split('\n').pop().trim();
+}
+
 /** The raw `photos.metadata` JSON as the server stored it. */
 function storedMetadata(hashSha256) {
-  return runSql(`SELECT metadata FROM photos WHERE hash_sha256='${hashSha256}';`).trim();
+  return sqlValue(`SELECT metadata FROM photos WHERE hash_sha256='${hashSha256}';`);
 }
 
 /** A fixture photo from the listing (the hash these specs address it by). */
@@ -251,10 +259,14 @@ test.describe('Metadata edit', () => {
       expect(monthCount(densityAfter, originalDate)).toBe(originalBucketBefore - 1);
       expect(monthCount(densityAfter, savedDate)).toBe(savedBucketBefore + 1);
 
-      // AND the database stores no part of the date: no column for it, and no
-      // key for it in the row's metadata (the schema after the file-only-date
-      // migration).
-      expect(photoColumns()).not.toContain('taken_at');
+      // AND the database's derived copy records exactly what the file now
+      // holds — the save writes the file first and stores its readback — while
+      // the metadata document keeps no date key.
+      expect(photoColumns()).toContain('taken_at');
+      const storedTakenAt = sqlValue(
+        `SELECT taken_at FROM photos WHERE hash_sha256='${photo.hash_sha256}';`
+      );
+      expect(Date.parse(storedTakenAt)).toBe(Date.parse(saved.taken_at));
       const metadataJson = storedMetadata(photo.hash_sha256);
       expect(metadataJson).not.toMatch(/"taken_at"\s*:/);
 

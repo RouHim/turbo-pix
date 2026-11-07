@@ -69,13 +69,6 @@ pub fn with_db(db_pool: DbPool) -> impl Filter<Extract = (DbPool,), Error = Infa
     warp::any().map(move || db_pool.clone())
 }
 
-pub fn with_facts(
-    facts: Arc<crate::media_facts::MediaFactsIndex>,
-) -> impl Filter<Extract = (Arc<crate::media_facts::MediaFactsIndex>,), Error = Infallible> + Clone
-{
-    warp::any().map(move || facts.clone())
-}
-
 pub fn with_thumbnail_generator(
     thumbnail_generator: ThumbnailGenerator,
 ) -> impl Filter<Extract = (ThumbnailGenerator,), Error = Infallible> + Clone {

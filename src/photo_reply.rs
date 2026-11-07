@@ -1,24 +1,42 @@
 //! The reply shape for a photo.
 //!
-//! A [`Photo`] row is a database row: it carries no capture date and no
-//! coordinates, because those are facts of the file and the database stores
-//! neither. Only [`MediaFactsIndex::enrich`] fills them in. This module makes
-//! that step the only way to turn a row into a photo response, so a new route
-//! cannot serialize an undated row by forgetting a call.
+//! A [`Photo`] row carries its derived coordinates as flat columns
+//! (`taken_latitude` / `taken_longitude`, skipped in serialization), while the
+//! API nests them under `metadata.location`. This module is that one
+//! formatting step, so no route can serialize a photo whose coordinates are
+//! missing from the shape the client reads.
 
 use serde::{Serialize, Serializer};
 
 use crate::db::Photo;
-use crate::media_facts::MediaFactsIndex;
 
-/// A photo carrying the file facts a response must show.
+/// A photo carrying the file facts in the API's shape.
 #[derive(Debug)]
 pub struct PhotoReply(Photo);
 
 impl PhotoReply {
-    /// Enriches the row from the file-facts index and marks it as a reply.
-    pub fn from_row(mut photo: Photo, facts: &MediaFactsIndex) -> Self {
-        facts.enrich(&mut photo);
+    /// Nests the row's derived coordinate pair into `metadata.location`.
+    pub fn from_row(mut photo: Photo) -> Self {
+        let (Some(latitude), Some(longitude)) = (photo.taken_latitude, photo.taken_longitude)
+        else {
+            return Self(photo);
+        };
+
+        let mut location = photo
+            .metadata
+            .get("location")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        location.insert("latitude".to_string(), serde_json::json!(latitude));
+        location.insert("longitude".to_string(), serde_json::json!(longitude));
+
+        if !photo.metadata.is_object() {
+            photo.metadata = serde_json::Value::Object(serde_json::Map::new());
+        }
+        if let Some(metadata) = photo.metadata.as_object_mut() {
+            metadata.insert("location".to_string(), serde_json::Value::Object(location));
+        }
         Self(photo)
     }
 
@@ -39,35 +57,35 @@ impl Serialize for PhotoReply {
 mod tests {
     use super::*;
     use crate::db::tests::create_test_photo;
-    use crate::media_facts::test_facts_with_coords;
 
     #[test]
-    fn reply_carries_file_facts_while_the_row_stays_raw() {
-        let photo = create_test_photo("a.jpg".to_string(), "a".to_string());
-        let facts =
-            test_facts_with_coords(&[(&photo.file_path, "2012-03-15T10:00:00Z", 52.52, 13.405)]);
+    fn reply_nests_the_row_coordinates_under_location() {
+        let mut photo = create_test_photo("a.jpg".to_string(), "a".to_string());
+        photo.taken_latitude = Some(52.52);
+        photo.taken_longitude = Some(13.405);
+        photo.metadata = serde_json::json!({"location": {"city": "Berlin"}});
 
-        let reply = PhotoReply::from_row(photo, &facts);
+        let reply = PhotoReply::from_row(photo);
         let value = serde_json::to_value(&reply).unwrap();
 
-        assert_eq!(
-            value["taken_at"],
-            serde_json::json!("2012-03-15T10:00:00Z"),
-            "the reply must carry the file's capture date"
-        );
+        assert_eq!(value["metadata"]["location"]["city"], "Berlin");
         assert_eq!(value["metadata"]["location"]["latitude"], 52.52);
         assert_eq!(value["metadata"]["location"]["longitude"], 13.405);
+        // The flat columns are an implementation detail, never in the payload.
+        assert!(value.get("taken_latitude").is_none());
+        assert!(value.get("taken_longitude").is_none());
     }
 
     #[test]
-    fn a_row_without_facts_stays_undated() {
-        let photo = create_test_photo("b.jpg".to_string(), "b".to_string());
-        let facts = test_facts_with_coords(&[]);
+    fn a_row_without_coordinates_keeps_its_metadata_untouched() {
+        let mut photo = create_test_photo("b.jpg".to_string(), "b".to_string());
+        photo.metadata = serde_json::json!({"location": {"city": "Berlin"}});
+        let metadata = photo.metadata.clone();
 
-        let reply = PhotoReply::from_row(photo, &facts);
+        let reply = PhotoReply::from_row(photo);
         let value = serde_json::to_value(&reply).unwrap();
 
+        assert_eq!(value["metadata"], metadata);
         assert!(value["taken_at"].is_null());
-        assert!(value["metadata"]["location"].get("latitude").is_none());
     }
 }

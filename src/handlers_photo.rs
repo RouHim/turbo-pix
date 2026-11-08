@@ -499,10 +499,17 @@ pub async fn toggle_favorite(
         }
     };
 
-    photo.is_favorite = Some(favorite_req.is_favorite);
-
-    match photo.update(&db_pool).await {
-        Ok(_) => {
+    // A favorite toggle owns `is_favorite` only: the row's file facts belong
+    // to the scan and the metadata saves, and this handler never reads the
+    // file, so a whole-row rewrite would revert a reconciliation that landed
+    // since the read above.
+    let updated_at = Utc::now();
+    let favorite_write =
+        Photo::set_favorite(&db_pool, &photo_hash, favorite_req.is_favorite, updated_at).await;
+    match favorite_write {
+        Ok(()) => {
+            photo.is_favorite = Some(favorite_req.is_favorite);
+            photo.updated_at = updated_at;
             // The row already carries the file facts; the reply nests them.
             Ok(warp::reply::json(&PhotoReply::from_row(photo)))
         }
@@ -862,14 +869,40 @@ async fn apply_video_metadata_edit(
     // the save, so it runs on the blocking pool.
     let facts = {
         let path = PathBuf::from(&photo.file_path);
-        tokio::task::spawn_blocking(move || crate::media_facts::read_media_facts(&path))
-            .await
-            .map_err(|error| {
+        match tokio::task::spawn_blocking(move || crate::media_facts::read_media_facts(&path)).await
+        {
+            Ok(facts) => facts,
+            Err(error) => {
                 log::error!("Video metadata readback task panicked: {}", error);
-                reject::custom(DatabaseError {
-                    message: "Failed to read back the video's metadata".to_string(),
-                })
-            })?
+                // The container is already rewritten; putting it back keeps the
+                // file and the row in agreement (the row still carries the
+                // pre-save facts). That rollback is container I/O like the save,
+                // so it runs on the same pool.
+                let rollback = tokio::task::spawn_blocking(move || save.rollback()).await;
+                let message = match rollback {
+                    Ok(Ok(())) => "Failed to read back the video's metadata".to_string(),
+                    Ok(Err(rollback)) => {
+                        log::error!(
+                            "Could not roll back {} after a failed readback: {}",
+                            photo.file_path,
+                            rollback
+                        );
+                        format!(
+                            "Failed to read back the video's metadata; the container could not be put back ({})",
+                            rollback
+                        )
+                    }
+                    Err(error) => {
+                        log::error!("Video metadata rollback task panicked: {}", error);
+                        format!(
+                            "Failed to read back the video's metadata; the container could not be put back ({})",
+                            error
+                        )
+                    }
+                };
+                return Err(reject::custom(DatabaseError { message }));
+            }
+        }
     };
     photo.set_capture_facts(facts);
 
@@ -1186,8 +1219,8 @@ pub async fn batch_favorite(
     };
 
     for hash in &req.hashes {
-        let mut photo = match Photo::find_by_hash(&db_pool, hash).await {
-            Ok(Some(photo)) => photo,
+        match Photo::find_by_hash(&db_pool, hash).await {
+            Ok(Some(_)) => {}
             Ok(None) => {
                 result.failed.push(BatchFailure {
                     id: hash.clone(),
@@ -1203,10 +1236,12 @@ pub async fn batch_favorite(
                 });
                 continue;
             }
-        };
-        photo.is_favorite = Some(req.is_favorite);
-        match photo.update(&db_pool).await {
-            Ok(_) => result.applied.push(hash.clone()),
+        }
+        // Only `is_favorite` changes: the file facts are the scan's, and this
+        // handler does not read them from the file.
+        let updated_at = Utc::now();
+        match Photo::set_favorite(&db_pool, hash, req.is_favorite, updated_at).await {
+            Ok(()) => result.applied.push(hash.clone()),
             Err(e) => {
                 log::error!("Database error: {}", e);
                 result.failed.push(BatchFailure {
@@ -1909,11 +1944,13 @@ mod tests {
 
         let mut older =
             crate::db::tests::create_test_photo("older.jpg".to_string(), "a".repeat(64));
+        older.taken_at = Some(Utc.with_ymd_and_hms(2020, 5, 25, 10, 0, 0).unwrap());
         older.metadata = json!({ "location": { "city": "Berlin" } });
         older.create(&db_pool).await.unwrap();
 
         let mut newer =
             crate::db::tests::create_test_photo("newer.jpg".to_string(), "b".repeat(64));
+        newer.taken_at = Some(Utc.with_ymd_and_hms(2024, 5, 25, 10, 0, 0).unwrap());
         newer.metadata = json!({ "location": { "city": "Berlin" } });
         newer.create(&db_pool).await.unwrap();
 
@@ -1928,6 +1965,9 @@ mod tests {
         assert_eq!(photos.len(), 2);
         assert_eq!(photos[0]["filename"], "older.jpg");
         assert_eq!(photos[1]["filename"], "newer.jpg");
+        // The order must come from the dates, not from a hash tiebreak.
+        assert_eq!(photos[0]["taken_at"], "2020-05-25T10:00:00Z");
+        assert_eq!(photos[1]["taken_at"], "2024-05-25T10:00:00Z");
     }
 
     #[tokio::test]
@@ -2873,7 +2913,8 @@ mod tests {
         assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
         assert_eq!(row.metadata["location"]["city"], "Vienna");
-        // The row stores no coordinates: they are file facts.
+        // The stored document keeps no coordinates: the pair lives in the
+        // derived columns.
         assert!(row.metadata["location"].get("latitude").is_none());
         assert!(
             crate::db::get_photos_needing_geo_resolution(&db_pool)
@@ -2947,8 +2988,8 @@ mod tests {
         );
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
         assert_eq!(row.metadata["location"]["city"], "Vienna");
-        // The row stores no coordinates: they are file facts, and the response
-        // above already carries the applied pin.
+        // The stored document keeps no coordinates (the pair lives in the
+        // derived columns), and the response above already carries the pin.
         assert!(row.metadata["location"].get("latitude").is_none());
         assert!(
             crate::db::get_photos_needing_geo_resolution(&db_pool)
@@ -3006,8 +3047,8 @@ mod tests {
             .reply(&routes)
             .await;
 
-        // THEN: the response serves the file's facts and the row stores none
-        // of them
+        // THEN: the response serves the file's facts (the row's derived copy)
+        // and the stored document carries no coordinate keys
         assert_eq!(moved.status(), 200);
         let body: serde_json::Value = serde_json::from_slice(moved.body()).unwrap();
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();

@@ -783,7 +783,8 @@ mod tests {
     /// GIVEN a row whose file carries an old date (the row's size/mtime also
     /// match the OLD file)
     /// WHEN the file's EXIF date is rewritten outside the app and a rescan runs
-    /// THEN the rescan carries the NEW date into the row write (FR-013/SC-006)
+    /// THEN phase 1 returns the file's NEW date (the row write itself is proved
+    /// by `test_create_or_update_upsert_carries_file_facts`, FR-013/SC-006)
     #[tokio::test]
     async fn test_rescan_picks_up_an_external_date_change() {
         let temp_dir = TempDir::new().unwrap();
@@ -818,7 +819,7 @@ mod tests {
         assert_eq!(
             processed_row.taken_at,
             Some(new_date),
-            "a rescan must republish the date the file now carries"
+            "phase 1 must return the date the file now carries"
         );
     }
 

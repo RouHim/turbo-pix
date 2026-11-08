@@ -25,11 +25,15 @@ pub struct Photo {
     // === FILE-DERIVED FACTS ===
     /// The capture date as the file carries it.
     ///
-    /// Read-only in the database sense: only the scan's upsert and the two
-    /// metadata saves write it, and both derive it from a fresh read of the
-    /// file *before* the row write. No API path may write it from client input,
-    /// and the scan reconciles it on every pass, so a divergence heals at the
-    /// next scan instead of ageing in place.
+    /// Read-only in the database sense: only the scan's upsert, the two
+    /// metadata saves (`Photo::update` from a fresh file read, and
+    /// `Photo::record_video_edit` from a container readback), and the rotation
+    /// rewrite (`Photo::update_with_old_hash`, which restates the facts it
+    /// preserves) write it, and each derives it from the file *before* the row
+    /// write. No API path may write it from client input, and the scan
+    /// reconciles it on every pass, so a divergence heals at the next scan
+    /// instead of ageing in place. The favorite paths therefore own only
+    /// `is_favorite`, through [`Photo::set_favorite`].
     #[serde(deserialize_with = "deserialize_optional_datetime")]
     pub taken_at: Option<DateTime<Utc>>,
     /// The file's coordinates, with the same ownership as `taken_at`. Never
@@ -261,7 +265,12 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for Photo {
 /// 2015. A month outside `1..=12` is not formattable and would otherwise
 /// become a valid ordering point (`2012-13` sorts after every 2012 row), so
 /// such a bound yields an inverted interval that no row satisfies — the old
-/// equality filter's "month = 13 matches nothing". `to_year` without `year`
+/// equality filter's "month = 13 matches nothing". A year outside `1..=9999`
+/// gets the same treatment: the prefix is four digits, so `10000-01` sorts
+/// before every real date and would silently match everything instead. An end
+/// bound whose month after it would exceed 9999 (December 9999) saturates to
+/// `"9999-99"`, which orders after every four-digit date, so a range that ends
+/// there still reaches the end of the timeline. `to_year` without `year`
 /// filters nothing, because a bound is only formed from `year`.
 pub(crate) fn month_range_sql_bounds(
     year: Option<i32>,
@@ -276,20 +285,25 @@ pub(crate) fn month_range_sql_bounds(
         Some(_) => to_month.unwrap_or(12),
         None => month.unwrap_or(12),
     };
+    // An unrepresentable year is as unformattable as an impossible month: the
+    // five-digit `10000-01` prefix sorts before `2012-…`, so it would turn a
+    // bound meant to match nothing into one that matches everything.
+    if !(1..=9999).contains(&year) || !(1..=9999).contains(&end_year) {
+        return Some(("9999-99".to_string(), "0000-00".to_string()));
+    }
     if !(1..=12).contains(&from_month) || !(1..=12).contains(&end_month) {
         return Some(("9999-99".to_string(), "0000-00".to_string()));
     }
-    // Saturating, not `+ 1`: a client-supplied `year`/`to_year` at `i32::MAX`
-    // must not panic under overflow checks (debug builds and tests).
-    let (next_year, next_month) = if end_month == 12 {
-        (end_year.saturating_add(1), 1)
+    // December 9999 has no four-digit month after it; `"10000-01"` would sort
+    // before every real date, so the exclusive end saturates instead.
+    let to_exclusive = if end_month == 12 && end_year == 9999 {
+        "9999-99".to_string()
+    } else if end_month == 12 {
+        format!("{:04}-{:02}", end_year + 1, 1)
     } else {
-        (end_year, end_month + 1)
+        format!("{:04}-{:02}", end_year, end_month + 1)
     };
-    Some((
-        format!("{:04}-{:02}", year, from_month),
-        format!("{:04}-{:02}", next_year, next_month),
-    ))
+    Some((format!("{:04}-{:02}", year, from_month), to_exclusive))
 }
 
 /// Builds the reusable WHERE clause for photo searches: the `q` token grammar
@@ -612,6 +626,46 @@ impl Photo {
         Ok(())
     }
 
+    /// Record a favorite change and nothing else.
+    ///
+    /// The favorite paths own `is_favorite`, not the file-derived facts: they
+    /// never read the file, so rewriting the whole row from their snapshot
+    /// would revert a scan reconciliation (or a metadata save) that landed in
+    /// between. This statement therefore touches only the column the UI owns
+    /// plus `updated_at`, which the caller stamps so its reply carries the
+    /// instant the row committed.
+    ///
+    /// Fails when no row matched, like [`Photo::record_video_edit`]: an
+    /// `UPDATE` reports success even when it touched nothing, and the caller
+    /// must not answer 200 for a photo that vanished mid-request.
+    pub async fn set_favorite(
+        pool: &DbPool,
+        hash_sha256: &str,
+        is_favorite: bool,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tx = pool.begin().await?;
+        sqlx::query("UPDATE photos SET is_favorite = ?, updated_at = ? WHERE hash_sha256 = ?")
+            .bind(is_favorite)
+            .bind(updated_at.to_rfc3339())
+            .bind(hash_sha256)
+            .execute(&mut *tx)
+            .await?;
+        let affected = sqlx::query("SELECT changes()")
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get::<i64, _>(0)?;
+        if affected == 0 {
+            return Err(format!(
+                "Photo with hash {} no longer exists (deleted mid-request?) — favorite update matched 0 rows",
+                hash_sha256
+            )
+            .into());
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Create or update photo (convenience wrapper)
     /// Use `batch_write_photos` in production for better performance
     #[cfg(test)]
@@ -765,6 +819,15 @@ impl Photo {
     }
 
     /// Update photo using an existing transaction (for batch operations)
+    ///
+    /// This is the row writer for the paths that own the FILE's facts: the
+    /// image metadata save (from its fresh EXIF readback). It restates
+    /// `taken_at`/`taken_latitude`/`taken_longitude` from the snapshot, so a
+    /// caller that does not derive them from the file must use a targeted
+    /// statement instead — [`Photo::set_favorite`] for the favorite paths — or
+    /// it reverts a concurrent scan reconciliation. (The rotation rewrite uses
+    /// [`Photo::update_with_old_hash`], which restates the same facts while
+    /// rekeying the row.)
     pub async fn update_with_transaction(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1381,7 +1444,7 @@ pub async fn update_photo_city(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use chrono::Datelike;
+    use chrono::{Datelike, TimeZone};
     use sqlx::Row;
 
     use crate::photo_listing::{ListingPage, ListingRequest};
@@ -1598,13 +1661,30 @@ pub(crate) mod tests {
         // AND: an end bound without a start filters nothing
         assert!(month_range_sql_bounds(None, None, Some(2015), None).is_none());
 
-        // AND: a year at the type's ceiling must not overflow (debug panics)
+        // AND: an end bound at the schema's ceiling still reaches every later
+        // row, because the exclusive end saturates past every four-digit date
+        let (from, to_exclusive) =
+            month_range_sql_bounds(Some(2012), None, Some(9999), None).expect("year forms bounds");
+        assert_eq!(
+            (from.as_str(), to_exclusive.as_str()),
+            ("2012-01", "9999-99")
+        );
+
+        // AND: December 9999 is its own last month, so the end saturates too
+        let (from, to_exclusive) =
+            month_range_sql_bounds(Some(9999), Some(12), None, None).expect("year forms bounds");
+        assert_eq!(
+            (from.as_str(), to_exclusive.as_str()),
+            ("9999-12", "9999-99")
+        );
+
+        // AND: a year beyond four digits is unrepresentable and must filter
+        // nothing, never match everything
         let (from, to_exclusive) = month_range_sql_bounds(Some(i32::MAX), Some(12), None, None)
             .expect("year forms bounds");
-        assert_eq!(from, "2147483647-12");
         assert_eq!(
-            to_exclusive,
-            "2147483647-01".replace("2147483647", &i32::MAX.to_string())
+            (from.as_str(), to_exclusive.as_str()),
+            ("9999-99", "0000-00")
         );
     }
 
@@ -1934,6 +2014,56 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         assert!(updated_at.is_some(), "rescan upsert must keep updated_at");
+    }
+
+    /// The scan's reconciliation at the row write: the upsert stores the file's
+    /// date and both coordinates, and a same-hash rescan that found new facts
+    /// replaces the derived copy with them.
+    #[tokio::test]
+    async fn test_create_or_update_upsert_carries_file_facts() {
+        let pool = create_test_db_pool().await.unwrap();
+        let mut photo = create_test_photo("scan-facts.jpg".to_string(), "d".repeat(64));
+        photo.taken_at = Some(Utc.with_ymd_and_hms(2020, 5, 25, 10, 0, 0).unwrap());
+        photo.taken_latitude = Some(48.137);
+        photo.taken_longitude = Some(11.575);
+        photo.create_or_update(&pool).await.unwrap();
+
+        let found = Photo::find_by_hash(&pool, &photo.hash_sha256)
+            .await
+            .unwrap()
+            .expect("upserted photo must be readable");
+        assert_eq!(found.taken_at, photo.taken_at, "the date must survive");
+        assert_eq!(
+            found.taken_latitude, photo.taken_latitude,
+            "the latitude must survive"
+        );
+        assert_eq!(
+            found.taken_longitude, photo.taken_longitude,
+            "the longitude must survive"
+        );
+
+        // A later scan finds a different date and position for the same file.
+        photo.taken_at = Some(Utc.with_ymd_and_hms(2024, 8, 1, 9, 15, 0).unwrap());
+        photo.taken_latitude = Some(52.52);
+        photo.taken_longitude = Some(13.405);
+        photo.create_or_update(&pool).await.unwrap();
+
+        let found = Photo::find_by_hash(&pool, &photo.hash_sha256)
+            .await
+            .unwrap()
+            .expect("rescan must keep the row readable");
+        assert_eq!(
+            found.taken_at, photo.taken_at,
+            "a rescan must overwrite the date the row carried"
+        );
+        assert_eq!(
+            found.taken_latitude, photo.taken_latitude,
+            "a rescan must overwrite the latitude the row carried"
+        );
+        assert_eq!(
+            found.taken_longitude, photo.taken_longitude,
+            "a rescan must overwrite the longitude the row carried"
+        );
     }
 
     /// The schema contract: the derived copy of the file's date and

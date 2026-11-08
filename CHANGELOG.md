@@ -1,3 +1,15 @@
+# [2.50.0](https://github.com/RouHim/turbo-pix/compare/2.49.6...2.50.0) (2026-11-08)
+
+
+### Bug Fixes
+
+* **listing:** close review round 1 findings ([f4acbbb](https://github.com/RouHim/turbo-pix/commit/f4acbbb016eda09a544bd57c0927b72d7af9ac68))
+
+
+### Features
+
+* **listing:** keep a scan-owned derived copy of the file's date and coordinates ([fb8ff8a](https://github.com/RouHim/turbo-pix/commit/fb8ff8ab0c7a87d18586cb35a0a62cf31d93a5b4))
+
 ## [2.49.6](https://github.com/RouHim/turbo-pix/compare/2.49.5...2.49.6) (2026-11-08)
 
 ## [2.49.5](https://github.com/RouHim/turbo-pix/compare/2.49.4...2.49.5) (2026-11-07)

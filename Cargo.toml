@@ -62,6 +62,12 @@ log = "0.4"
 env_logger = "0.11"
 
 
+# `mi_collect` for the musl build that installs mimalloc globally. Target-scoped
+# so a glibc build keeps using `malloc_trim` and does not link mimalloc's C
+# library into every binary.
+[target.'cfg(target_env = "musl")'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
+
 [dev-dependencies]
 tempfile = "3.0"
 

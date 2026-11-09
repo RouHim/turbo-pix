@@ -162,12 +162,13 @@ impl Drop for HeapTrim {
     }
 }
 
-// The symbol is linked by the `mimalloc` dependency that also provides the
-// global allocator on musl builds; the crate itself exposes no binding for it.
+// `mi_collect` has to come from the crate that builds mimalloc's C library: its
+// build script emits the link line, so every binary that links this crate also
+// gets the archive. A hand-written `extern "C"` only resolved for binaries that
+// already referenced the `mimalloc` crate — the container build's
+// `benchmark_video` did not, and the release build failed to link.
 #[cfg(target_env = "musl")]
-unsafe extern "C" {
-    fn mi_collect(force: bool);
-}
+use libmimalloc_sys::mi_collect;
 
 /// Hands freed heap back to the OS.
 ///

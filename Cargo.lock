@@ -4782,6 +4782,7 @@ dependencies = [
  "image",
  "img-parts",
  "kamadak-exif",
+ "libc",
  "libsqlite3-sys",
  "log",
  "mimalloc",

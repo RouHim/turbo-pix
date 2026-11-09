@@ -51,6 +51,10 @@ const IDLE_MONITOR_TICK: Duration = Duration::from_secs(60);
 /// unreachable hub cannot be retried once per request.
 const LOAD_RETRY_BACKOFF: Duration = Duration::from_secs(60);
 
+fn retry_deadline() -> Instant {
+    Instant::now() + LOAD_RETRY_BACKOFF
+}
+
 // Text encoding parameters
 const CONTEXT_LENGTH: usize = 77;
 const EOT_TOKEN: u32 = 49407;
@@ -141,6 +145,45 @@ pub(crate) struct ModelPaths {
 pub(crate) struct LoadedModel {
     pub(crate) model: Arc<clip::ClipModel>,
     pub(crate) tokenizer: Arc<Tokenizer>,
+    // Drop guard, never read: MUST stay the last field, because struct fields
+    // drop in declaration order, so the tensors above are freed before it walks
+    // the arenas. That is what makes the trim follow the last clone instead of
+    // the logical unload.
+    _trim: HeapTrim,
+}
+
+/// Returns the freed heap to the OS when the model it belongs to is gone.
+#[derive(Clone)]
+struct HeapTrim;
+
+impl Drop for HeapTrim {
+    fn drop(&mut self) {
+        release_freed_memory();
+    }
+}
+
+/// Hands freed heap back to the OS.
+///
+/// Neither allocator does this on its own: glibc raises its `mmap` threshold
+/// after the first large free, so a second load/unload cycle leaves the whole
+/// model in the arena (measured: 538 MiB retained), and mimalloc keeps its
+/// heap (measured: 569 MiB retained). Without this the idle unload only looks
+/// like it works on the first cycle.
+///
+/// mimalloc collects the calling thread's heap plus any abandoned one, so on
+/// musl the reclaim relies on the thread that allocated the weights being
+/// gone: tokio's blocking pool retires idle workers after ~10 s, two orders of
+/// magnitude below the idle window, so its heap is abandoned long before the
+/// unload runs.
+fn release_freed_memory() {
+    #[cfg(target_env = "musl")]
+    unsafe {
+        mi_collect(true);
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 /// Materialization state behind the single-flight lock: the resolved paths and
@@ -197,7 +240,7 @@ impl SemanticSearchEngine {
                 log::warn!(
                     "CLIP model files unavailable ({e}); semantic search stays disabled until a later attempt succeeds"
                 );
-                state.retry_at = Some(Instant::now() + LOAD_RETRY_BACKOFF);
+                state.retry_at = Some(retry_deadline());
             }
         }
 
@@ -218,11 +261,16 @@ impl SemanticSearchEngine {
         tokenizer: Arc<Tokenizer>,
         device: Arc<Device>,
         pool: DbPool,
+        data_path: &str,
     ) -> Self {
         Self {
-            loaded: RwLock::new(Some(LoadedModel { model, tokenizer })),
+            loaded: RwLock::new(Some(LoadedModel {
+                model,
+                tokenizer,
+                _trim: HeapTrim,
+            })),
             load_state: Mutex::new(LoadState::default()),
-            data_path: "./data".to_string(),
+            data_path: data_path.to_string(),
             device,
             pool,
             last_use_ms: AtomicU64::new(0),
@@ -234,8 +282,9 @@ impl SemanticSearchEngine {
         self.started.elapsed().as_millis() as u64
     }
 
-    /// Records a use at the point the caller commits to inference, so a long
-    /// video encode keeps the model alive for its whole run.
+    /// Stamps the last-use clock when a use begins, so the idle window counts
+    /// from the start of the work. The work itself is kept safe by its own
+    /// clone, not by this timestamp.
     fn touch(&self) {
         self.last_use_ms.store(self.now_ms(), Ordering::Relaxed);
     }
@@ -262,23 +311,13 @@ impl SemanticSearchEngine {
             }
         }
 
-        if state.paths.is_none() {
-            // The startup resolve failed — retry that (network) step here once,
-            // never per request.
-            let data_path = self.data_path.clone();
-            match tokio::task::spawn_blocking(move || resolve_model_paths(&data_path)).await {
-                Ok(Ok(paths)) => state.paths = Some(paths),
-                Ok(Err(e)) => return Err(self.fail(state, e)),
-                Err(e) => {
-                    return Err(self.fail(state, anyhow::anyhow!("resolve task failed: {e}")));
-                }
-            }
-        }
-
-        let paths = state
-            .paths
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("CLIP model paths unresolved"))?;
+        // The request path never resolves or downloads; the startup attempt and
+        // the monitor's background retry own that.
+        let Some(paths) = state.paths.clone() else {
+            return Err(anyhow::anyhow!(
+                "CLIP model files are unavailable; retrying in the background"
+            ));
+        };
         let device = self.device.clone();
         match tokio::task::spawn_blocking(move || load_from_paths(&paths, &device)).await {
             Ok(Ok(loaded)) => {
@@ -287,20 +326,63 @@ impl SemanticSearchEngine {
                 *self.loaded.write().await = Some(loaded);
                 Ok(returned)
             }
-            Ok(Err(e)) => Err(self.fail(state, e)),
-            Err(e) => Err(self.fail(state, anyhow::anyhow!("model load task failed: {e}"))),
+            Ok(Err(e)) => Err(self.arm_retry(state, e)),
+            Err(e) => Err(self.arm_retry(state, anyhow::anyhow!("model load task failed: {e}"))),
         }
     }
 
     /// Arms the retry backoff and hands the error back.
-    fn fail(
+    fn arm_retry(
         &self,
         mut state: tokio::sync::MutexGuard<'_, LoadState>,
         error: anyhow::Error,
     ) -> anyhow::Error {
-        state.retry_at = Some(Instant::now() + LOAD_RETRY_BACKOFF);
+        state.retry_at = Some(retry_deadline());
         log::warn!("CLIP model unavailable: {error}");
         error
+    }
+
+    /// Re-attempts the model-file resolve after a failed startup attempt. Runs
+    /// from the idle monitor, so nothing on the request path touches the
+    /// network.
+    async fn retry_missing_model_files(&self) {
+        if self.loaded.read().await.is_some() {
+            return;
+        }
+
+        // Pre-check under the lock, then release it: a cold-cache resolve can
+        // be a multi-minute download and must not block a waiting request.
+        {
+            let state = self.load_state.lock().await;
+            if state.paths.is_some()
+                || state
+                    .retry_at
+                    .is_some_and(|deadline| Instant::now() < deadline)
+            {
+                return;
+            }
+        }
+
+        let data_path = self.data_path.clone();
+        let resolved =
+            match tokio::task::spawn_blocking(move || resolve_model_paths(&data_path)).await {
+                Ok(result) => result,
+                Err(e) => Err(anyhow::anyhow!("resolve task failed: {e}")),
+            };
+
+        let mut state = self.load_state.lock().await;
+        match resolved {
+            Ok(paths) if state.paths.is_none() => {
+                log::info!("CLIP model files ready: {}", paths.weights.display());
+                state.paths = Some(paths);
+                state.retry_at = None;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                state.retry_at = Some(retry_deadline());
+                log::warn!("CLIP model files still unavailable: {e}");
+            }
+        }
     }
 
     /// Materializes the model now instead of on first use.
@@ -308,9 +390,11 @@ impl SemanticSearchEngine {
         self.ensure_loaded().await.map(|_| ())
     }
 
-    /// Spawns the task that drops the weights once they have been unused for
-    /// [`CLIP_IDLE_TIMEOUT`]. The task holds a weak reference, so it ends with
-    /// the engine.
+    /// Spawns the maintenance task: it drops the weights once they have been
+    /// unused for [`CLIP_IDLE_TIMEOUT`], and retries the model-file resolve
+    /// after a failed startup attempt so no request ever performs that
+    /// (network) step. The task holds a weak reference, so it ends with the
+    /// engine.
     pub fn start_idle_monitor(self: &Arc<Self>) {
         let engine = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -321,35 +405,35 @@ impl SemanticSearchEngine {
                 let Some(engine) = engine.upgrade() else {
                     break;
                 };
-                engine.unload_if_idle().await;
+                engine.retry_missing_model_files().await;
+                engine.unload_if_idle();
             }
         });
     }
 
     /// Drops the weights when the idle window has passed. The memory itself is
-    /// freed when the last in-flight encode releases its own clone.
-    async fn unload_if_idle(&self) {
+    /// freed when the last in-flight encode releases its own clone, so the RSS
+    /// figures below can legitimately match.
+    fn unload_if_idle(&self) {
         // Readers only hold this lock for the clone, so `try_write` either gets
         // it immediately or skips to the next tick.
         let Ok(mut loaded) = self.loaded.try_write() else {
             return;
         };
-        if loaded.is_none()
-            || !should_unload(
-                self.now_ms(),
-                self.last_use_ms.load(Ordering::Relaxed),
-                CLIP_IDLE_TIMEOUT,
-            )
-        {
+        let now_ms = self.now_ms();
+        let last_use_ms = self.last_use_ms.load(Ordering::Relaxed);
+        if loaded.is_none() || !should_unload(now_ms, last_use_ms, CLIP_IDLE_TIMEOUT) {
             return;
         }
 
         let rss_before = rss_mib();
+        // Dropping the last clone frees the tensors and then trims the
+        // allocator (see `LoadedModel::trim`), so the reading below is honest.
         *loaded = None;
         drop(loaded);
         log::info!(
             "CLIP model unloaded after {}s idle (RSS {} MiB → {} MiB)",
-            CLIP_IDLE_TIMEOUT.as_secs(),
+            now_ms.saturating_sub(last_use_ms) / 1000,
             rss_label(rss_before),
             rss_label(rss_mib())
         );
@@ -856,6 +940,7 @@ pub(crate) fn load_from_paths(paths: &ModelPaths, device: &Device) -> Result<Loa
     Ok(LoadedModel {
         model: Arc::new(model),
         tokenizer: Arc::new(tokenizer),
+        _trim: HeapTrim,
     })
 }
 
@@ -880,6 +965,27 @@ fn rss_mib() -> Option<u64> {
 
 fn rss_label(rss: Option<u64>) -> String {
     rss.map_or_else(|| "?".to_string(), |mib| mib.to_string())
+}
+
+/// Loads the model once per test binary for the modules that need one.
+///
+/// `OnceLock`, not `LazyLock`: the initializer downloads the weights when the
+/// cache is cold, so a failed attempt must be retried by the next test instead
+/// of poisoning every test that touches the cell.
+#[cfg(test)]
+pub(crate) fn cached_test_model() -> (LoadedModel, Arc<Device>) {
+    use std::sync::OnceLock;
+
+    static MODEL_CACHE: OnceLock<(LoadedModel, Arc<Device>)> = OnceLock::new();
+    MODEL_CACHE
+        .get_or_init(|| {
+            let device = Arc::new(Device::Cpu);
+            // Relative to the project root, where `cargo test` runs.
+            let paths = resolve_model_paths("./data").expect("Failed to resolve model files");
+            let loaded = load_from_paths(&paths, &device).expect("Failed to load model");
+            (loaded, device)
+        })
+        .clone()
 }
 
 /// Ensures exactly `CONTEXT_LENGTH` tokens: pads short inputs with EOT and
@@ -1125,30 +1231,10 @@ mod tests {
     use crate::video_processor::tests::acquire_test_env_lock;
     use chrono::Utc;
     use serde_json::json;
-    use std::sync::OnceLock;
-
-    type CachedModel = (LoadedModel, Arc<Device>);
-
-    // OnceLock, not LazyLock: the initializer downloads the weights when the
-    // cache is cold, and a failed download must be retried by the next test
-    // instead of poisoning every test that touches this cell.
-    static MODEL_CACHE: OnceLock<CachedModel> = OnceLock::new();
-
-    fn get_cached_model() -> CachedModel {
-        MODEL_CACHE
-            .get_or_init(|| {
-                let device = Arc::new(Device::Cpu);
-                // Ensure the path is correct relative to the project root where `cargo test` runs
-                let paths = resolve_model_paths("./data").expect("Failed to resolve model files");
-                let loaded = load_from_paths(&paths, &device).expect("Failed to load model");
-                (loaded, device)
-            })
-            .clone()
-    }
 
     fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
-        let (loaded, device) = get_cached_model();
-        SemanticSearchEngine::new_with_model(loaded.model, loaded.tokenizer, device, pool)
+        let (loaded, device) = cached_test_model();
+        SemanticSearchEngine::new_with_model(loaded.model, loaded.tokenizer, device, pool, "./data")
     }
 
     #[test]

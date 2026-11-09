@@ -7,6 +7,8 @@ default-run = "turbo-pix"
 [dependencies]
 # Memory allocator
 mimalloc = "0.1.48"
+# malloc_trim, so an unloaded model actually returns its heap to the OS
+libc = "0.2"
 
 # Web framework
 warp = { version = "0.4.2", features = ["server", "multipart", "test"] }

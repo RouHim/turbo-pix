@@ -522,34 +522,13 @@ mod tests {
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration as TokioDuration};
 
-    use std::sync::OnceLock;
-
     use crate::cache_manager::CacheManager;
     use crate::db::{create_test_db_pool, DbPool, Photo};
     use crate::semantic_search::NoopSemanticSearch;
 
-    type CachedModel = (
-        std::sync::Arc<candle_transformers::models::clip::ClipModel>,
-        std::sync::Arc<tokenizers::Tokenizer>,
-        std::sync::Arc<candle_core::Device>,
-    );
-
-    // OnceLock, not LazyLock: the initializer downloads the weights when the
-    // cache is cold, so a failed attempt must be retried rather than poison.
-    static MODEL_CACHE: OnceLock<CachedModel> = OnceLock::new();
-
     fn get_cached_scheduler_model(pool: crate::db::DbPool) -> SemanticSearchEngine {
-        let (model, tokenizer, device) = MODEL_CACHE
-            .get_or_init(|| {
-                let device = std::sync::Arc::new(candle_core::Device::Cpu);
-                let paths = crate::semantic_search::resolve_model_paths("./data")
-                    .expect("Failed to resolve model files");
-                let loaded = crate::semantic_search::load_from_paths(&paths, &device)
-                    .expect("Failed to load model");
-                (loaded.model, loaded.tokenizer, device)
-            })
-            .clone();
-        SemanticSearchEngine::new_with_model(model, tokenizer, device, pool)
+        let (loaded, device) = crate::semantic_search::cached_test_model();
+        SemanticSearchEngine::new_with_model(loaded.model, loaded.tokenizer, device, pool, "./data")
     }
 
     struct TestEnvironment {

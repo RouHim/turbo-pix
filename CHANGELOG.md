@@ -1,3 +1,16 @@
+# [2.51.0](https://github.com/RouHim/turbo-pix/compare/2.50.0...2.51.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **semantic:** keep the musl linker happy and trim once per model, not per use ([fa8f7e2](https://github.com/RouHim/turbo-pix/commit/fa8f7e255fad0f8df754b2de5633dcec665155d1))
+* **semantic:** return the unloaded model's heap to the OS ([cc74690](https://github.com/RouHim/turbo-pix/commit/cc74690658aa17e8c4af57738f3e82b3be780fe2))
+
+
+### Features
+
+* **semantic:** load the CLIP model on first use and drop it when idle ([4ffdd7e](https://github.com/RouHim/turbo-pix/commit/4ffdd7e734a3f4524842cc4db2f0d5b77656808c))
+
 # [2.50.0](https://github.com/RouHim/turbo-pix/compare/2.49.6...2.50.0) (2026-11-08)
 
 

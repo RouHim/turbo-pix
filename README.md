@@ -143,7 +143,7 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 
 ### AI Models
 
-Normally AI models are downloaded automatically when you first use the semantic search feature. If you want to download
+AI models are resolved (and downloaded when they are missing) when the application starts. If you want to download
 them manually, you can run:
 
 ```shell
@@ -155,6 +155,10 @@ Or with Docker:
 ```shell
 docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 ```
+
+The CLIP weights (~580MB of RAM) are loaded on first use and released again after ten minutes without one, so an idle
+server does not keep them resident. The first semantic search (or the first indexing run that needs embeddings) after
+that pays a short reload; the rest of the application is unaffected.
 
 ## Supported Formats
 

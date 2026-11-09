@@ -1,3 +1,10 @@
+## [2.51.1](https://github.com/RouHim/turbo-pix/compare/2.51.0...2.51.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **build:** link mimalloc through libmimalloc-sys so musl builds resolve mi_collect ([4a48d1e](https://github.com/RouHim/turbo-pix/commit/4a48d1e97a8307ee3c1674b35121aa5015a56b5c))
+
 # [2.51.0](https://github.com/RouHim/turbo-pix/compare/2.50.0...2.51.0) (2026-11-09)
 
 

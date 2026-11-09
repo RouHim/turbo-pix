@@ -16,10 +16,11 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // Initialize engine (loads models)
+    // Initialize engine (resolves the model files; the weights load on first use)
     println!("Loading models...");
     let start_load = Instant::now();
-    let engine = Arc::new(SemanticSearchEngine::new(pool.clone(), "./data")?);
+    let engine = Arc::new(SemanticSearchEngine::new(pool.clone(), "./data"));
+    engine.warm_up().await?;
     println!("Models loaded in {:.2?}", start_load.elapsed());
 
     let test_data = Path::new("test-data");

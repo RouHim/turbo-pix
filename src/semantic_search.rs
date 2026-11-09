@@ -147,19 +147,26 @@ pub(crate) struct LoadedModel {
     pub(crate) tokenizer: Arc<Tokenizer>,
     // Drop guard, never read: MUST stay the last field, because struct fields
     // drop in declaration order, so the tensors above are freed before it walks
-    // the arenas. That is what makes the trim follow the last clone instead of
-    // the logical unload.
-    _trim: HeapTrim,
+    // the arenas. It is shared by every clone, so the trim runs exactly once —
+    // when the last clone (the logical unload point) drops — instead of on
+    // every clone drop.
+    _trim: Arc<HeapTrim>,
 }
 
 /// Returns the freed heap to the OS when the model it belongs to is gone.
-#[derive(Clone)]
 struct HeapTrim;
 
 impl Drop for HeapTrim {
     fn drop(&mut self) {
         release_freed_memory();
     }
+}
+
+// The symbol is linked by the `mimalloc` dependency that also provides the
+// global allocator on musl builds; the crate itself exposes no binding for it.
+#[cfg(target_env = "musl")]
+unsafe extern "C" {
+    fn mi_collect(force: bool);
 }
 
 /// Hands freed heap back to the OS.
@@ -267,7 +274,7 @@ impl SemanticSearchEngine {
             loaded: RwLock::new(Some(LoadedModel {
                 model,
                 tokenizer,
-                _trim: HeapTrim,
+                _trim: Arc::new(HeapTrim),
             })),
             load_state: Mutex::new(LoadState::default()),
             data_path: data_path.to_string(),
@@ -427,10 +434,13 @@ impl SemanticSearchEngine {
         }
 
         let rss_before = rss_mib();
-        // Dropping the last clone frees the tensors and then trims the
-        // allocator (see `LoadedModel::trim`), so the reading below is honest.
-        *loaded = None;
+        // Take the model out and release the lock BEFORE it is dropped: the
+        // last clone frees 577 MiB and then trims the allocator (see
+        // `LoadedModel::_trim`), and that work must not block a search that is
+        // waiting to reload. The reading below still happens after the trim.
+        let unloaded = loaded.take();
         drop(loaded);
+        drop(unloaded);
         log::info!(
             "CLIP model unloaded after {}s idle (RSS {} MiB → {} MiB)",
             now_ms.saturating_sub(last_use_ms) / 1000,
@@ -940,7 +950,7 @@ pub(crate) fn load_from_paths(paths: &ModelPaths, device: &Device) -> Result<Loa
     Ok(LoadedModel {
         model: Arc::new(model),
         tokenizer: Arc::new(tokenizer),
-        _trim: HeapTrim,
+        _trim: Arc::new(HeapTrim),
     })
 }
 

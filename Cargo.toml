@@ -5,8 +5,6 @@ edition = "2021"
 default-run = "turbo-pix"
 
 [dependencies]
-# Memory allocator
-mimalloc = "0.1.48"
 # malloc_trim, so an unloaded model actually returns its heap to the OS
 libc = "0.2"
 
@@ -62,11 +60,12 @@ log = "0.4"
 env_logger = "0.11"
 
 
-# `mi_collect` for the musl build that installs mimalloc globally. Target-scoped
-# so a glibc build keeps using `malloc_trim` and does not link mimalloc's C
-# library into every binary.
+# musl-only: the `mi_collect` helper plus the global allocator installed by
+# `#[cfg(target_env = "musl")]` in src/main.rs. Target-scoped so a glibc build
+# keeps using `malloc_trim` and does not link mimalloc's C library into every binary.
 [target.'cfg(target_env = "musl")'.dependencies]
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
+mimalloc = "0.1.48"
 
 [dev-dependencies]
 tempfile = "3.0"

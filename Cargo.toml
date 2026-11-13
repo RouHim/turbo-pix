@@ -5,9 +5,6 @@ edition = "2021"
 default-run = "turbo-pix"
 
 [dependencies]
-# Memory allocator
-mimalloc = "0.1.48"
-
 # Web framework
 warp = { version = "0.4.2", features = ["server", "multipart", "test"] }
 
@@ -59,6 +56,9 @@ tokio-util = { version = "0.7", features = ["io"] }
 log = "0.4"
 env_logger = "0.11"
 
+# Global allocator for musl builds only (see `#[cfg(target_env = "musl")]` in src/main.rs).
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1.48"
 
 [dev-dependencies]
 tempfile = "3.0"

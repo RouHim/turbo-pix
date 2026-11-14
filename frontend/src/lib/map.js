@@ -4,8 +4,14 @@
 // node --test (tests/map-aggregates.test.js) — the api client is injected.
 import { isPrefixQuery } from './query.js';
 
-/** Server cap for /api/search/semantic (src/handlers_search.rs MAX_LIMIT). */
-const SEMANTIC_PAGE_SIZE = 200;
+/**
+ * Server cap for /api/search/semantic: the backend clamps every request to
+ * `MAX_LIMIT` in src/handlers_search.rs, so this page size must never exceed
+ * it. No module is shared between Rust and JS, so the copy is pinned by
+ * tests/map-page-size.test.js, which parses `MAX_LIMIT` out of the Rust source
+ * and fails `npm run test:unit` when the two drift. Change both together.
+ */
+export const SEMANTIC_PAGE_SIZE = 200;
 
 /** Bound parallel /api/photos/{hash} hydration so a semantic page cannot
  *  flood the server (the grid hydrates one page at a time; the map needs the

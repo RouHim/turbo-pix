@@ -1,6 +1,67 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
+/**
+ * Watch the page's own timer queue, so a queued write can be waited for
+ * instead of slept through.
+ *
+ * `TimelineSlider` trails its live scrub write behind a timer
+ * (`LIVE_COMMIT_MS`). Asserting that a refused selection left NO write behind
+ * means asserting about the write that could still land, and the observable
+ * form of that is the app's timer queue: with the queue tracked, "the write
+ * either fired or was cancelled" is a condition to wait on rather than a
+ * wall-clock guess. Only `setTimeout`/`clearTimeout` are wrapped, and only to
+ * count ids — the callback, its `this`, and its extra arguments are the
+ * platform's, so nothing the page schedules behaves differently.
+ */
+async function trackScheduledWrites(page) {
+  await page.evaluate(() => {
+    const pending = new Set();
+    const realSetTimeout = window.setTimeout;
+    const realClearTimeout = window.clearTimeout;
+    const publish = () => {
+      window.__pendingWrites = pending.size;
+    };
+    window.__pendingWrites = 0;
+    window.setTimeout = function trackedSetTimeout(callback, delayMs, ...args) {
+      let id = null;
+      id = realSetTimeout.call(
+        window,
+        function runTrackedTimeout() {
+          pending.delete(id);
+          publish();
+          return callback.apply(window, args);
+        },
+        delayMs
+      );
+      pending.add(id);
+      publish();
+      return id;
+    };
+    window.clearTimeout = function trackedClearTimeout(id) {
+      pending.delete(id);
+      publish();
+      return realClearTimeout.call(window, id);
+    };
+    window.__stopTrackingWrites = () => {
+      window.setTimeout = realSetTimeout;
+      window.clearTimeout = realClearTimeout;
+      delete window.__stopTrackingWrites;
+      delete window.__pendingWrites;
+    };
+  });
+}
+
+/**
+ * Wait until every timer armed since `trackScheduledWrites` has settled (fired
+ * or been cancelled), then stop tracking. `polling: 'raf'` is deliberate: a
+ * timer-based poll would itself be tracked and could never see an empty queue.
+ */
+async function settleScheduledWrites(page) {
+  await page.waitForFunction(() => window.__pendingWrites === 0, null, { polling: 'raf' });
+  await page.evaluate(() => window.__stopTrackingWrites());
+}
+
 test.describe('Timeline', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -161,24 +222,43 @@ test.describe('Timeline', () => {
 
     const client = await page.context().newCDPSession(page);
     const touchPoint = (x, y) => ({ x, y, radiusX: 5, radiusY: 5, force: 1 });
-    // Two fingers 80px apart, spread symmetrically to 272px (≈3.4×).
+    // Two fingers 80px apart, spread symmetrically to 272px (≈3.4×) in twelve
+    // moves. The stream carries explicit timestamps and is dispatched back to
+    // back: the zoom is a ratio per move (`current / previous`, telescoping to
+    // 272/80), so nothing the timeline reads depends on how long the moves take,
+    // and pacing them with a wall-clock sleep only made the gesture's timing
+    // depend on the machine.
+    const PINCH_STEP_MS = 16;
+    // Event time must never move backwards for the browser's input pipeline,
+    // and this test pinches twice. The first stream is dated over the 13 steps
+    // that have already elapsed; a second one starting sooner than that picks
+    // up where the first ended.
+    let lastEventAt = 0;
     const pinch = async () => {
       const lane = await page.locator('.timeline-lane').boundingBox();
       const cx = lane.x + lane.width / 2;
       const cy = lane.y + lane.height / 2;
+      const startedAt = Math.max(Date.now() - 13 * PINCH_STEP_MS, lastEventAt);
+      lastEventAt = startedAt + 13 * PINCH_STEP_MS;
+      const at = (index) => (startedAt + index * PINCH_STEP_MS) / 1000;
       await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
       await client.send('Input.dispatchTouchEvent', {
         type: 'touchStart',
         touchPoints: [touchPoint(cx - 40, cy), touchPoint(cx + 40, cy)],
+        timestamp: at(0),
       });
       for (let i = 1; i <= 12; i += 1) {
         await client.send('Input.dispatchTouchEvent', {
           type: 'touchMove',
           touchPoints: [touchPoint(cx - 40 - i * 8, cy), touchPoint(cx + 40 + i * 8, cy)],
+          timestamp: at(i),
         });
-        await page.waitForTimeout(25);
       }
-      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchEnd',
+        touchPoints: [],
+        timestamp: at(13),
+      });
       await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
     };
     const lane = await page.locator('.timeline-lane').boundingBox();
@@ -956,15 +1036,18 @@ test.describe('Timeline', () => {
     });
 
     // AND: the same holds for a brush confined to one empty month, live scrub
-    // included (the pending scrub write would land 100 ms later, so the wait is
-    // what makes "nothing happened" an assertion rather than a race)
+    // included: the live write is queued behind `TimelineSlider`'s trailing
+    // timer, so tracking that queue and waiting for it to settle is what makes
+    // "nothing happened" an assertion rather than a race — a write the guard
+    // failed to refuse would fire here and land in the URL below.
+    await trackScheduledWrites(page);
     const april = await page.locator('.timeline-column[data-period-start="24147"]').boundingBox();
     const midY = april.y + april.height / 2;
     await page.mouse.move(april.x + april.width / 2, midY);
     await page.mouse.down();
     await page.mouse.move(april.x + april.width / 2 + 6, midY, { steps: 3 });
     await page.mouse.up();
-    await page.waitForTimeout(200);
+    await settleScheduledWrites(page);
     expect(TestHelpers.getUrlState(page)).toMatchObject({
       year: 2012,
       month: null,
@@ -1025,9 +1108,13 @@ test.describe('Timeline', () => {
       '23664'
     );
 
-    // AND: FR-013 — nothing re-frames the drill away. Re-assert after a full
-    // animation frame budget: a revert would land on fit-all's decades.
-    await page.waitForTimeout(250);
+    // AND: FR-013 — nothing re-frames the drill away. The re-frame is a Svelte
+    // effect (a microtask flush, not a delay), so waiting out the app's own
+    // frame budget — two painted frames — is a condition on the render loop
+    // rather than a wall-clock guess: a revert would have landed by then.
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    );
     await expect(page.locator('.timeline-column').first()).toHaveAttribute('data-unit', '12');
 
     // AND: the grid holds the decade's photos only — legacy_01, March 1962

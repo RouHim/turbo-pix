@@ -1,12 +1,34 @@
 import { test, expect } from '@playwright/test';
 import { TestHelpers } from '../setup/test-helpers.js';
 
-const CLUSTER_DAYS_AGO = 7;
-
 // The E2E port is env-overridable (TURBO_PIX_E2E_PORT), so assert the app root
 // by path + query instead of by host:port.
 const isAppRoot = (url) => url.pathname === '/' && url.search === '';
-const ARCHIVE_DAYS_AGO = 400;
+
+/**
+ * The months the seeding actually produced, read from the server's own timeline
+ * aggregate.
+ *
+ * `tests/e2e/setup/global-setup.js` owns the seeded offsets (`CLUSTER_DAYS_AGO`,
+ * `ARCHIVE_DAYS_AGO`); recomputing them here from `Date.now()` duplicated that
+ * knowledge, and a change on the seeding side silently turned the expected
+ * bucket into a month the library has no photos in. The density buckets are
+ * keyed by the seeded dates, so the newest bucket is the recent cluster's month
+ * and the oldest is the far end of the library — the expectations move with the
+ * seeder instead of drifting away from it.
+ */
+async function seededMonths(page) {
+  const response = await page.request.get('/api/photos/timeline');
+  expect(response.ok()).toBeTruthy();
+  const density = (await response.json()).density || [];
+  expect(density.length, 'the seeded library must span at least two months').toBeGreaterThan(1);
+  const newest = density[density.length - 1];
+  const oldest = density[0];
+  return {
+    recent: { year: newest.year, month: newest.month },
+    oldest: { year: oldest.year, month: oldest.month },
+  };
+}
 
 test.describe('URL Routing', () => {
   test.beforeEach(async ({ page }) => {
@@ -156,11 +178,6 @@ test.describe('URL Routing', () => {
   });
 
   test.describe('Timeline URL', () => {
-    const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
-    const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
-    const recentYear = recentDate.getFullYear();
-    const recentMonth = recentDate.getMonth() + 1;
-
     test('should write ?year= and ?month= when a month is selected in the timeline', async ({
       page,
     }) => {
@@ -215,20 +232,25 @@ test.describe('URL Routing', () => {
     });
 
     test('should restore timeline from URL on page load', async ({ page }) => {
-      // GIVEN: URL contains year and month params
+      // GIVEN: URL contains year and month params, for the month the seeding
+      // actually populated (the recent cluster)
+      const { recent } = await seededMonths(page);
+
       // WHEN: User navigates directly
-      await TestHelpers.goto(page, `/?year=${recentYear}&month=${recentMonth}`);
+      await TestHelpers.goto(page, `/?year=${recent.year}&month=${recent.month}`);
       await TestHelpers.waitForPhotosToLoad(page);
 
       // THEN: Timeline state reflects the URL params
       const state = TestHelpers.getUrlState(page);
-      expect(state.year).toBe(recentYear);
-      expect(state.month).toBe(recentMonth);
+      expect(state.year).toBe(recent.year);
+      expect(state.month).toBe(recent.month);
     });
 
     test('should clear timeline params when reset', async ({ page }) => {
+      const { recent } = await seededMonths(page);
+
       // GIVEN: User has timeline filter active
-      await TestHelpers.goto(page, `/?year=${recentYear}&month=${recentMonth}`);
+      await TestHelpers.goto(page, `/?year=${recent.year}&month=${recent.month}`);
       await TestHelpers.waitForPhotosToLoad(page);
 
       // WHEN: User clears the timeline filter (navigates to root)
@@ -417,9 +439,8 @@ test.describe('URL Routing', () => {
     });
 
     test('should preserve timeline params when switching views', async ({ page }) => {
-      const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
-      const year = recentDate.getFullYear();
-      const month = recentDate.getMonth() + 1;
+      const { recent } = await seededMonths(page);
+      const { year, month } = recent;
 
       // GIVEN: User has timeline filter active
       await TestHelpers.goto(page, `/?year=${year}&month=${month}`);
@@ -469,9 +490,8 @@ test.describe('URL Routing', () => {
     });
 
     test('should handle full URL with all params', async ({ page }) => {
-      const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
-      const year = recentDate.getFullYear();
-      const month = recentDate.getMonth() + 1;
+      const { recent } = await seededMonths(page);
+      const { year, month } = recent;
 
       // GIVEN: A deep link with every param
       // WHEN: User navigates to full URL
@@ -553,9 +573,8 @@ test.describe('URL Routing', () => {
     });
 
     test('should handle search + timeline together', async ({ page }) => {
-      const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
-      const year = recentDate.getFullYear();
-      const month = recentDate.getMonth() + 1;
+      const { recent } = await seededMonths(page);
+      const { year, month } = recent;
 
       // GIVEN: URL has both search and timeline
       // WHEN: User navigates with combined params
@@ -570,9 +589,10 @@ test.describe('URL Routing', () => {
     });
 
     test('should handle sort + timeline together', async ({ page }) => {
-      const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
-      const year = archiveDate.getFullYear();
-      const month = archiveDate.getMonth() + 1;
+      // The far end of the library, so the two params are read from different
+      // buckets than the recent-cluster tests above.
+      const { oldest } = await seededMonths(page);
+      const { year, month } = oldest;
 
       // GIVEN: URL has both sort and timeline
       // WHEN: User navigates with combined params

@@ -287,63 +287,81 @@ export class TestHelpers {
     await this.performSwipe(page, startX, startY, startX, startY + distance, options.stepDelay);
   }
 
-  // Target .viewer-main so events bubble: .viewer-main (SwipeableViewer enablePan) → #photo-viewer (GestureManager)
-  // Uses setTimeout spacing between touchmove events so GestureManager
-  // computes realistic velocity via Date.now() deltas.
+  /**
+   * Drag one finger from (startX, startY) to (endX, endY) across the viewer.
+   *
+   * Target `.viewer-main` so events bubble: `.viewer-main` (SwipeableViewer's
+   * own touch handling) → `#photo-viewer` (GestureManager).
+   *
+   * The gesture's CLASSIFICATION depends on its timing: `GestureManager` turns
+   * consecutive `touchmove`s into a velocity from `Date.now()` deltas (px/ms),
+   * and both the swipe recognizer (0.3 px/ms) and `handlePanEnd`'s
+   * `shouldNavigate` branch on it. Pacing the stream with `setTimeout` handed
+   * that classification to the event loop: under load the same drag dribbled in
+   * late, fell under the threshold, and the "swipe" navigated nowhere (or a
+   * deliberately slow swipe read as a fast one). So the events are dispatched
+   * back to back, synchronously, against a virtual clock: `Date.now` is stubbed
+   * for the duration of the dispatch and advances exactly `stepDelay` per move,
+   * which is what makes `stepDelay` a velocity rather than a hope. The clock
+   * starts `steps * stepDelay` in the past, so the gesture ENDS at real "now"
+   * and leaves no timestamp in the future behind — the pan animations that start
+   * on release read `Date.now()` again once the stub is gone.
+   */
   static async performSwipe(page, startX, startY, endX, endY, stepDelay = 16) {
     await page.evaluate(
-      ({ sx, sy, ex, ey, delay }) =>
-        new Promise((resolve) => {
-          const target = document.querySelector('.viewer-main') || document.body;
+      ({ sx, sy, ex, ey, stepMs }) => {
+        const target = document.querySelector('.viewer-main') || document.body;
+        const steps = 10;
+        const realDateNow = Date.now;
+        let clock = realDateNow() - steps * stepMs;
+        Date.now = () => clock;
+        if (Date.now() !== clock) {
+          throw new Error('performSwipe: Date.now cannot be virtualised in this page');
+        }
 
-          const createTouch = (id, x, y) =>
-            new Touch({
-              identifier: id,
-              target,
-              clientX: x,
-              clientY: y,
-              pageX: x,
-              pageY: y,
-              radiusX: 2,
-              radiusY: 2,
-              rotationAngle: 0,
-              force: 0.5,
-            });
+        const createTouch = (id, x, y) =>
+          new Touch({
+            identifier: id,
+            target,
+            clientX: x,
+            clientY: y,
+            pageX: x,
+            pageY: y,
+            radiusX: 2,
+            radiusY: 2,
+            rotationAngle: 0,
+            force: 0.5,
+          });
 
-          const dispatch = (type, touches, changed) =>
-            target.dispatchEvent(
-              new TouchEvent(type, {
-                bubbles: true,
-                cancelable: true,
-                touches,
-                changedTouches: changed,
-              })
-            );
+        const dispatch = (type, touches, changed) =>
+          target.dispatchEvent(
+            new TouchEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              touches,
+              changedTouches: changed,
+            })
+          );
 
+        try {
           const startTouch = createTouch(1, sx, sy);
           dispatch('touchstart', [startTouch], [startTouch]);
 
-          const steps = 10;
-          let step = 1;
+          for (let step = 1; step <= steps; step += 1) {
+            clock += stepMs;
+            const x = sx + ((ex - sx) * step) / steps;
+            const y = sy + ((ey - sy) * step) / steps;
+            const moveTouch = createTouch(1, x, y);
+            dispatch('touchmove', [moveTouch], [moveTouch]);
+          }
 
-          const nextStep = () => {
-            if (step <= steps) {
-              const x = sx + ((ex - sx) * step) / steps;
-              const y = sy + ((ey - sy) * step) / steps;
-              const moveTouch = createTouch(1, x, y);
-              dispatch('touchmove', [moveTouch], [moveTouch]);
-              step++;
-              setTimeout(nextStep, delay);
-            } else {
-              const endTouch = createTouch(1, ex, ey);
-              dispatch('touchend', [], [endTouch]);
-              resolve();
-            }
-          };
-
-          setTimeout(nextStep, delay);
-        }),
-      { sx: startX, sy: startY, ex: endX, ey: endY, delay: stepDelay }
+          const endTouch = createTouch(1, ex, ey);
+          dispatch('touchend', [], [endTouch]);
+        } finally {
+          Date.now = realDateNow;
+        }
+      },
+      { sx: startX, sy: startY, ex: endX, ey: endY, stepMs: stepDelay }
     );
   }
 

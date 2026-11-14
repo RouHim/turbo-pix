@@ -1,6 +1,9 @@
 // SwipeableViewer - handles swipe navigation, vertical dismiss, and rubber-band effects
 // Ported from static/js/viewer.js
 
+/** Length of the slide that follows a completed horizontal swipe, in ms. */
+const SLIDE_MS = 300;
+
 export class SwipeableViewer {
   constructor(viewer) {
     this.viewer = viewer;
@@ -10,6 +13,10 @@ export class SwipeableViewer {
     this.isDragging = false;
     this.isAnimating = false;
     this.touchStartPoint = null;
+    // A swipe's navigation is decided in `handlePanEnd` and performed when the
+    // slide ends; `flushPendingNavigation` is the one place that swap happens.
+    this.pendingNavigation = null;
+    this.navigationTimer = null;
 
     this.currentTranslateY = 0;
     this.isDraggingDown = false;
@@ -94,6 +101,18 @@ export class SwipeableViewer {
 
   destroy() {
     this.interruptAnimation();
+    // A slide that was still running carried a decided navigation. `$effect`
+    // re-runs (a re-bound media element, a photos refresh) tear this viewer down
+    // inside that window, and cancelling the frame alone would swallow a swipe
+    // the user already made — the photo simply never changes. Flush it before
+    // the elements go.
+    clearTimeout(this.navigationTimer);
+    this.navigationTimer = null;
+    const pending = this.pendingNavigation;
+    this.pendingNavigation = null;
+    if (pending) {
+      void this.performNavigation(pending);
+    }
     const main = this.elements?.main;
     if (main) {
       main.removeEventListener('touchstart', this._onMainTouchStart);
@@ -164,9 +183,23 @@ export class SwipeableViewer {
     }
 
     const targetX = direction === 'next' ? -this.getViewportWidth() : this.getViewportWidth();
-    this.animateTo(targetX, async () => {
-      await this.navigate(direction);
-    });
+    // The decision is taken here, but the photo swap waits for the slide. Two
+    // things can swallow that window: a teardown cancels the frame (see
+    // `destroy`), and a throttled frame loop never reaches the callback at all —
+    // Chromium stops `requestAnimationFrame` entirely for a hidden or occluded
+    // page, and the slide is the only thing that would have run. So the decision
+    // is parked and flushed by whichever comes first, the slide's completion or
+    // a timer just past its duration; `flushPendingNavigation` runs it once.
+    this.pendingNavigation = direction;
+    clearTimeout(this.navigationTimer);
+    this.navigationTimer = setTimeout(() => void this.flushPendingNavigation(), SLIDE_MS + 50);
+    this.animateTo(
+      targetX,
+      async () => {
+        await this.flushPendingNavigation();
+      },
+      SLIDE_MS
+    );
 
     return true;
   }
@@ -441,6 +474,32 @@ export class SwipeableViewer {
     this.viewer.triggerHapticFeedback('light');
     this.render(0);
     this.updateAdjacentSources();
+  }
+
+  /**
+   * Runs the navigation a finished swipe decided on, exactly once.
+   *
+   * Two callers race for it: the slide's completion and `destroy()`. Whoever
+   * gets there first clears the parked decision, so a teardown can never both
+   * flush it and let the animation flush it again.
+   */
+  async flushPendingNavigation() {
+    clearTimeout(this.navigationTimer);
+    this.navigationTimer = null;
+    const direction = this.pendingNavigation;
+    this.pendingNavigation = null;
+    if (direction) await this.navigate(direction);
+  }
+
+  /** The swap without the slide's cosmetic tail (used from `destroy()`). */
+  async performNavigation(direction) {
+    if (direction === 'next') {
+      await this.viewer.showNext();
+    }
+
+    if (direction === 'previous') {
+      await this.viewer.showPrevious();
+    }
   }
 
   finishInteraction() {

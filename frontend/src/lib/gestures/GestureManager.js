@@ -75,8 +75,25 @@ export class GestureManager {
     this.element.addEventListener('touchcancel', this._handleTouchCancel);
   }
 
+  /**
+   * The gesture clock: the touch event's own `timeStamp`, not the handler's
+   * `Date.now()`.
+   *
+   * Velocity is `px / ms`, and sampling the clock when the HANDLER runs folds
+   * main-thread scheduling into the measurement: the same drag measured late (a
+   * long task, a paint under load) reports a larger delta and therefore a
+   * slower — often sub-threshold — velocity, so a real swipe quietly stops
+   * navigating. The event carries the time it was generated, which is both the
+   * accurate number for a real finger and the deterministic one for a test that
+   * sets it (a synthetic event's `timeStamp` is writable). `Date.now()` stays
+   * the fallback for a platform that reports 0.
+   */
+  eventTime(event) {
+    return event?.timeStamp > 0 ? event.timeStamp : Date.now();
+  }
+
   handleTouchStart(e) {
-    const timestamp = Date.now();
+    const timestamp = this.eventTime(e);
 
     if (this.touches.size === 0) {
       this.resetGestureTracking();
@@ -126,7 +143,7 @@ export class GestureManager {
   handleTouchMove(e) {
     if (this.touches.size === 0) return;
 
-    const timestamp = Date.now();
+    const timestamp = this.eventTime(e);
 
     // Update touch positions and velocities
     Array.from(e.touches).forEach((touch) => {
@@ -172,7 +189,7 @@ export class GestureManager {
   }
 
   handleTouchEnd(e) {
-    const timestamp = Date.now();
+    const timestamp = this.eventTime(e);
 
     // Get remaining touches
     const remainingTouches = new Set(Array.from(e.touches).map((t) => t.identifier));

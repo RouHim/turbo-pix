@@ -294,31 +294,39 @@ export class TestHelpers {
    * own touch handling) → `#photo-viewer` (GestureManager).
    *
    * The gesture's CLASSIFICATION depends on its timing: `GestureManager` turns
-   * consecutive `touchmove`s into a velocity from `Date.now()` deltas (px/ms),
-   * and both the swipe recognizer (0.3 px/ms) and `handlePanEnd`'s
-   * `shouldNavigate` branch on it. Pacing the stream with `setTimeout` handed
-   * that classification to the event loop: under load the same drag dribbled in
-   * late, fell under the threshold, and the "swipe" navigated nowhere (or a
-   * deliberately slow swipe read as a fast one). So the events are dispatched
-   * back to back, synchronously, against a virtual clock: `Date.now` is stubbed
-   * for the duration of the dispatch and advances exactly `stepDelay` per move,
-   * which is what makes `stepDelay` a velocity rather than a hope. The clock
-   * starts `steps * stepDelay` in the past, so the gesture ENDS at real "now"
-   * and leaves no timestamp in the future behind — the pan animations that start
-   * on release read `Date.now()` again once the stub is gone.
+   * consecutive `touchmove`s into a velocity (px/ms), and both the swipe
+   * recognizer (0.3 px/ms) and `handlePanEnd`'s `shouldNavigate` branch on it.
+   * It reads each event's own `timeStamp`, so the stream carries its timing
+   * explicitly — `stepDelay` IS the per-move elapsed milliseconds, not a sleep.
+   * That is why the events can be dispatched back to back: nothing about the
+   * classification depends on when the event loop gets around to them, and a
+   * deliberately slow swipe stays slow no matter how loaded the machine is.
    */
   static async performSwipe(page, startX, startY, endX, endY, stepDelay = 16) {
+    // Wait for the viewer's own gesture surface, not a timeout: `SwipeableViewer.mount`
+    // is what prepends `.viewer-adjacent-next` and binds the touch listeners, and the
+    // Svelte action is what attaches `__gestureManager` — both run in an effect AFTER
+    // the `.active` class `verifyViewerOpen` waits for. Dispatching into that window
+    // produced no pan at all (the handlers ignored the stream), so the swipe silently
+    // did nothing on whichever attempt lost the race.
+    await page.waitForFunction(
+      () => {
+        const main = document.querySelector('.viewer-main');
+        return Boolean(
+          main && main.__gestureManager && main.querySelector('.viewer-adjacent-next')
+        );
+      },
+      null,
+      { timeout: 10000 }
+    );
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
     await page.evaluate(
       ({ sx, sy, ex, ey, stepMs }) => {
         const target = document.querySelector('.viewer-main') || document.body;
         const steps = 10;
-        const realDateNow = Date.now;
-        let clock = realDateNow() - steps * stepMs;
-        Date.now = () => clock;
-        if (Date.now() !== clock) {
-          throw new Error('performSwipe: Date.now cannot be virtualised in this page');
-        }
-
+        // A positive base keeps the synthetic clock clear of the app's
+        // `timeStamp > 0` fallback to `Date.now()`.
+        const clockBase = 1000;
         const createTouch = (id, x, y) =>
           new Touch({
             identifier: id,
@@ -333,33 +341,31 @@ export class TestHelpers {
             force: 0.5,
           });
 
-        const dispatch = (type, touches, changed) =>
-          target.dispatchEvent(
-            new TouchEvent(type, {
-              bubbles: true,
-              cancelable: true,
-              touches,
-              changedTouches: changed,
-            })
-          );
+        // `timeStamp` is a getter on Event.prototype; defining it on the instance
+        // is what lets the stream carry a synthetic clock.
+        const dispatch = (type, touches, changed, at) => {
+          const event = new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches,
+            changedTouches: changed,
+          });
+          Object.defineProperty(event, 'timeStamp', { value: at });
+          target.dispatchEvent(event);
+        };
 
-        try {
-          const startTouch = createTouch(1, sx, sy);
-          dispatch('touchstart', [startTouch], [startTouch]);
+        const startTouch = createTouch(1, sx, sy);
+        dispatch('touchstart', [startTouch], [startTouch], clockBase);
 
-          for (let step = 1; step <= steps; step += 1) {
-            clock += stepMs;
-            const x = sx + ((ex - sx) * step) / steps;
-            const y = sy + ((ey - sy) * step) / steps;
-            const moveTouch = createTouch(1, x, y);
-            dispatch('touchmove', [moveTouch], [moveTouch]);
-          }
-
-          const endTouch = createTouch(1, ex, ey);
-          dispatch('touchend', [], [endTouch]);
-        } finally {
-          Date.now = realDateNow;
+        for (let step = 1; step <= steps; step += 1) {
+          const x = sx + ((ex - sx) * step) / steps;
+          const y = sy + ((ey - sy) * step) / steps;
+          const moveTouch = createTouch(1, x, y);
+          dispatch('touchmove', [moveTouch], [moveTouch], clockBase + step * stepMs);
         }
+
+        const endTouch = createTouch(1, ex, ey);
+        dispatch('touchend', [], [endTouch], clockBase + (steps + 1) * stepMs);
       },
       { sx: startX, sy: startY, ex: endX, ey: endY, stepMs: stepDelay }
     );

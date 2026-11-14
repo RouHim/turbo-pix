@@ -189,12 +189,20 @@
    * pairs with the initial `transition-property: all`, so that write becomes a
    * transition: the container — and then the thumbnails inside it, one nesting
    * level per frame — still compute `hidden` when `popupopen` fires, and
-   * Chromium refuses focus on a hidden element. Retry on the frames the
-   * transition needs; the cap keeps a popup that never gets a thumbnail from
-   * spinning, and a closed popup ends the retries.
+   * Chromium refuses focus on a hidden element.
+   *
+   * The wait is therefore on the OBSERVED state, not on a frame budget: the
+   * thumbnail focus is retried until the element actually computes visible. A
+   * fixed budget (it was eight frames) lost the race as soon as the mount took
+   * one frame longer — the keyboard user then landed nowhere, and the reduction
+   * only showed up under load. The cap is a safety net against a popup that
+   * never gets a thumbnail; a closed popup ends the retries.
    */
-  function focusFirstPopupItem(popupNode, popupEl, framesLeft = 8) {
-    popupNode.querySelector('button')?.focus();
+  function focusFirstPopupItem(popupNode, popupEl, framesLeft = 60) {
+    const target = popupNode.querySelector('button');
+    if (target && getComputedStyle(target).visibility !== 'hidden') {
+      target.focus();
+    }
     // Done once focus is inside the popup at all: the thumbnail focus landed, or
     // the user has already moved on within it.
     if (popupEl.contains(document.activeElement) || !popupNode.isConnected || framesLeft === 0) {

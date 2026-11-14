@@ -22,46 +22,50 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 
 ## Findings table
 
-| ID | Category | File:Line | Severity | Effort | Status | Description | Recommendation |
-|---|---|---|---|---|---|---|---|
-| F1 | Dead code | `src/lib.rs:15` (commented module); `src/db_schema.rs` whole file | Med | S | **FIXED** | Stale pre-migration schema; uses `rusqlite` (not a dep), superseded by sqlx migrations | Delete file |
-| F2 | Dead code | `src/lib.rs:46-50` | Med | S | **FIXED** | 5 root re-exports (`Config`, `create_db_pool`, `SemanticSearch`, `extract_frames_batch`, `extract_video_metadata`) with zero consumers — benchmark and main use direct module paths | Remove re-exports |
-| F3 | Test debt | `tests/i18n.test.js:1`, `tests/setup.js:2` | Med | S | **FIXED** | Orphaned vitest files: vitest not in package.json/lock; playwright testDir excludes them; they test `mockLL`/`global.utils` that don't exist post-migration | Delete files |
-| F4 | Duplication | `image_editor.rs:317-357` vs `metadata_writer.rs:205-256` | Med | M | **FIXED** | Identical EXIF Writer→JPEG/PNG set_exif→write blocks; format strings already diverged (`"jpg"\|"jpeg"` vs `"jpeg"`) | Extract shared helper |
-| F5 | Complexity | `PhotoGrid.svelte:62` (30), `ViewerMetadataEdit.svelte:116` (22), `PhotoViewer.svelte:586` (20), `:1058` (19), `:323` (17), `recognizers.js:37` (18) | Med | M | **FIXED** | 6 functions ≥17 cyclomatic complexity (playbook: 21+ critical) | Split per function (see Fixed section) |
-| F6 | Dead code | `src/db.rs:935` | Low | S | **FIXED** | Empty `#[cfg(test)] impl Photo {}` block | Remove |
-| F7 | Duplication | `PhotoViewer.svelte:67-81`, `ViewerMetadata.svelte:14-22` | Low | S | **FIXED** | `isVideoFile`/`isRawFile`/`isCollagePhoto` defined twice (plus a third definition consumed via `this.viewer.isVideoFile`) | Move to `utils.js` |
-| F8 | Dead code | `blurhash.js:212` | Low | S | **FIXED** | `createCanvas` exported but only used internally by `toDataURL` | Drop `export` |
-| F9 | Consistency rot | `app.css` (1761 lines) | Low | L | **REJECTED (user decision)** | Global `.viewer-*`/`.sidebar`/`.photo-card-*` rules coexist with scoped styles; learnings document hard-won battles over this split | Move into scoped styles — not worth the risk now; E2E pins behavior, payoff small |
-| F10 | Duplication | `handlers_static.rs:27-89` | Low | S | **FIXED** | `build_route_for_file`/`build_route_for_binary_file` identical except str/bytes body | Merge into one byte-based builder |
-| F11 | Duplication | `handlers_photo.rs:382`, `image_editor.rs:265`, `metadata_extractor.rs:103`, `metadata_writer.rs:88/284/919` | Med | M | **FIXED** (with F4) | `exif::Reader::new()` + `read_from_container` boilerplate at 6 sites | Shared reader helper |
-| F12 | Deps | `Cargo.toml` `kamadak-exif` | — | — | **REJECTED** | cargo-machete false positive: crate's lib name is `exif`, used in 4 files | Add to machete ignore list if it annoys |
-| F13 | Test debt | `housekeeping_manager.rs`, `file_scanner.rs`, `cache_manager.rs` | Low | M | **Not worth doing** | Small leaf modules (2.5-3.7KB) with zero tests; logic is trivial and exercised indirectly via E2E | Write unit tests only when the modules change |
-| F14 | Documentation drift | `CHANGELOG.md` (1319 lines) | Low | S | **Not worth doing** | semantic-release generates empty sections for dependency bumps (normal for this toolchain) | Nothing to fix |
-| F15 | Consistency rot | `constants.js:22` vs `mimetype_detector.rs:37-66` / `raw_processor.rs:361` | Low | S | **FIXED** | Frontend and backend extension lists match today but nothing pinned them; drift breaks video flagging or detection silently | Parity test added (`frontend_extension_lists_match_backend`) |
-| F16 | Complexity | `api.js:84` `getPhotos` (16) | Low | S | **Not worth doing** | 11 sequential independent `if (param) set()` — complexity score misleading; a lookup table would hurt readability | Leave |
-| F17 | Complexity | `TimelineSlider.svelte:253` route-restore effect | Low | S | **FIXED** (guarded) | Complexity 16; effect is documented as fragile (AGENTS.md learning: must read `route.year`/`route.month` before the drag guard) | Extracted `restoreFilterFromRoute`, kept the dependency-read contract intact |
+| ID  | Category            | File:Line                                                                                                                                            | Severity | Effort | Status                       | Description                                                                                                                                                                         | Recommendation                                                                    |
+| --- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| F1  | Dead code           | `src/lib.rs:15` (commented module); `src/db_schema.rs` whole file                                                                                    | Med      | S      | **FIXED**                    | Stale pre-migration schema; uses `rusqlite` (not a dep), superseded by sqlx migrations                                                                                              | Delete file                                                                       |
+| F2  | Dead code           | `src/lib.rs:46-50`                                                                                                                                   | Med      | S      | **FIXED**                    | 5 root re-exports (`Config`, `create_db_pool`, `SemanticSearch`, `extract_frames_batch`, `extract_video_metadata`) with zero consumers — benchmark and main use direct module paths | Remove re-exports                                                                 |
+| F3  | Test debt           | `tests/i18n.test.js:1`, `tests/setup.js:2`                                                                                                           | Med      | S      | **FIXED**                    | Orphaned vitest files: vitest not in package.json/lock; playwright testDir excludes them; they test `mockLL`/`global.utils` that don't exist post-migration                         | Delete files                                                                      |
+| F4  | Duplication         | `image_editor.rs:317-357` vs `metadata_writer.rs:205-256`                                                                                            | Med      | M      | **FIXED**                    | Identical EXIF Writer→JPEG/PNG set_exif→write blocks; format strings already diverged (`"jpg"\|"jpeg"` vs `"jpeg"`)                                                                 | Extract shared helper                                                             |
+| F5  | Complexity          | `PhotoGrid.svelte:62` (30), `ViewerMetadataEdit.svelte:116` (22), `PhotoViewer.svelte:586` (20), `:1058` (19), `:323` (17), `recognizers.js:37` (18) | Med      | M      | **FIXED**                    | 6 functions ≥17 cyclomatic complexity (playbook: 21+ critical)                                                                                                                      | Split per function (see Fixed section)                                            |
+| F6  | Dead code           | `src/db.rs:935`                                                                                                                                      | Low      | S      | **FIXED**                    | Empty `#[cfg(test)] impl Photo {}` block                                                                                                                                            | Remove                                                                            |
+| F7  | Duplication         | `PhotoViewer.svelte:67-81`, `ViewerMetadata.svelte:14-22`                                                                                            | Low      | S      | **FIXED**                    | `isVideoFile`/`isRawFile`/`isCollagePhoto` defined twice (plus a third definition consumed via `this.viewer.isVideoFile`)                                                           | Move to `utils.js`                                                                |
+| F8  | Dead code           | `blurhash.js:212`                                                                                                                                    | Low      | S      | **FIXED**                    | `createCanvas` exported but only used internally by `toDataURL`                                                                                                                     | Drop `export`                                                                     |
+| F9  | Consistency rot     | `app.css` (1761 lines)                                                                                                                               | Low      | L      | **REJECTED (user decision)** | Global `.viewer-*`/`.sidebar`/`.photo-card-*` rules coexist with scoped styles; learnings document hard-won battles over this split                                                 | Move into scoped styles — not worth the risk now; E2E pins behavior, payoff small |
+| F10 | Duplication         | `handlers_static.rs:27-89`                                                                                                                           | Low      | S      | **FIXED**                    | `build_route_for_file`/`build_route_for_binary_file` identical except str/bytes body                                                                                                | Merge into one byte-based builder                                                 |
+| F11 | Duplication         | `handlers_photo.rs:382`, `image_editor.rs:265`, `metadata_extractor.rs:103`, `metadata_writer.rs:88/284/919`                                         | Med      | M      | **FIXED** (with F4)          | `exif::Reader::new()` + `read_from_container` boilerplate at 6 sites                                                                                                                | Shared reader helper                                                              |
+| F12 | Deps                | `Cargo.toml` `kamadak-exif`                                                                                                                          | —        | —      | **REJECTED**                 | cargo-machete false positive: crate's lib name is `exif`, used in 4 files                                                                                                           | Add to machete ignore list if it annoys                                           |
+| F13 | Test debt           | `housekeeping_manager.rs`, `file_scanner.rs`, `cache_manager.rs`                                                                                     | Low      | M      | **Not worth doing**          | Small leaf modules (2.5-3.7KB) with zero tests; logic is trivial and exercised indirectly via E2E                                                                                   | Write unit tests only when the modules change                                     |
+| F14 | Documentation drift | `CHANGELOG.md` (1319 lines)                                                                                                                          | Low      | S      | **Not worth doing**          | semantic-release generates empty sections for dependency bumps (normal for this toolchain)                                                                                          | Nothing to fix                                                                    |
+| F15 | Consistency rot     | `constants.js:22` vs `mimetype_detector.rs:37-66` / `raw_processor.rs:361`                                                                           | Low      | S      | **FIXED**                    | Frontend and backend extension lists match today but nothing pinned them; drift breaks video flagging or detection silently                                                         | Parity test added (`frontend_extension_lists_match_backend`)                      |
+| F16 | Complexity          | `api.js:84` `getPhotos` (16)                                                                                                                         | Low      | S      | **Not worth doing**          | 11 sequential independent `if (param) set()` — complexity score misleading; a lookup table would hurt readability                                                                   | Leave                                                                             |
+| F17 | Complexity          | `TimelineSlider.svelte:253` route-restore effect                                                                                                     | Low      | S      | **FIXED** (guarded)          | Complexity 16; effect is documented as fragile (AGENTS.md learning: must read `route.year`/`route.month` before the drag guard)                                                     | Extracted `restoreFilterFromRoute`, kept the dependency-read contract intact      |
 
 ## Fixed this run
 
 ### F1+F2+F3+F6+F8 — Dead code removal (5 files, one unit)
+
 - Deleted `src/db_schema.rs`, `tests/i18n.test.js`, `tests/setup.js`.
 - Removed 5 unused root re-exports from `src/lib.rs` and the empty `impl Photo {}` test block in `src/db.rs`.
 - Dropped the `export` from `createCanvas` in `frontend/src/lib/blurhash.js`.
 - Verification: `cargo check --all-targets`, `cargo clippy -- -D warnings` clean (unused imports would have errored).
 
 ### F4+F11 — Shared EXIF helpers (`src/exif_helpers.rs`, new, 76 lines)
+
 - `read_exif<R: BufRead + Seek>` / `read_exif_from_path` / `build_exif_buffer` / `write_exif_to_image`.
 - Updated 4 callers: `metadata_extractor.rs` (1 site), `handlers_photo.rs` (1 site, preserved distinct open-vs-read error responses), `image_editor.rs` (2 blocks), `metadata_writer.rs` (2 blocks).
 - Error messages preserved byte-for-byte; `write_exif_to_image` accepts `jpg`|`jpeg`|`png` (both caller dialects).
 - Tests: existing `metadata_writer` (19) + `image_editor` (6) + `metadata_extractor` (56) suites — all pass unchanged, covering JPEG/PNG round-trips, pixel preservation, multi-write cycles.
 
 ### F10 — Merged static route builders
+
 - `build_route_for_file` + `build_route_for_binary_file` → one `build_route(path, content: &[u8])` + `build_asset_response` fn item.
 - Added `static_routes_serve_index_assets_and_spa_fallback` (tokio test): index at `/` with no-cache, every embedded asset served byte-identical, SPA fallback for unknown GET paths, `/api/*` still 404.
 - Requires warp `test` feature (added to Cargo.toml).
 
 ### F5 — Complexity splits (7 functions)
+
 - **PhotoGrid.loadPhotos 30 → ~8**: extracted `applyResetState`, `loadSemanticPage` (returns `null` on stale, preserving the no-append early-return semantics), `loadRegularPage`, `appendPhotos`. All hard-won edge-case comments preserved (dedupe signature, semantic staleness guard, cooldown reset).
 - **ViewerMetadataEdit.handleSubmit 22 → ~5**: extracted `buildUpdatesFromForm` (validation + payload; returns `{updates}` or `{error}`).
 - **PhotoViewer.onKeydown 19 → ~4**: switch → `viewerKeyHandlers` dispatch table + `onKeydown` guard wrapper.
@@ -72,9 +76,11 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 - Verification: eslint complexity re-scan dropped from 10 warnings to 1 (`api.getPhotos`, verdict: not worth doing).
 
 ### F7 — File-type helpers consolidated
+
 - `utils.js` now exports `isVideoFile`/`isRawFile`/`isCollagePhoto`; PhotoViewer and ViewerMetadata import them. `SwipeableViewer` still consumes `this.viewer.isVideoFile` via the exposed API (unchanged).
 
 ### F15 — Extension parity test
+
 - `mimetype_detector.rs::frontend_extension_lists_match_backend` parses `frontend/src/lib/constants.js` (include_str) and asserts the video/RAW lists match the backend exactly, in both directions (detector + `raw_processor::is_raw_file`).
 
 ## Top 5 remaining
@@ -118,3 +124,13 @@ The repo has been through 7+ adversarial review rounds; most architectural debt 
 - `test-data/` binaries and `.spec/` planning docs.
 - `knip`/`madge`/`depcheck`/`cargo-udeps`/`cargo-audit` not installed — dead-export scan done manually (found F8), unused-deps via machete only (found F12 false positive).
 - E2E specs were counted (150 tests, 23 specs) but not line-audited.
+
+## Repo-maintenance run — 2026-11-14
+
+Deliberately **not** done this run, one reason each:
+
+- **`src/mp4_metadata.rs` (8,847 lines) and `frontend/src/components/PhotoViewer.svelte` (2,736 lines) splits** — both are the most behavior-pinned files of their layer (byte-level box fixtures on one side, staleness-guarded async continuations plus the heaviest E2E coverage on the other); splitting them without a feature touch buys no behavior and risks silent regressions.
+- **`libsqlite3-sys` 0.37 → 0.39** — blocked upstream: `sqlx-sqlite` 0.9.0 requires `>=0.30.1, <0.38.0`, so the major bump has to wait for sqlx.
+- **`sqlite-vec` tag upgrade** — currently pinned to commit `606e000` instead of a tag; switching to a movable tag would change the code a build links, so it stays a deliberate pin.
+- **Playwright wall-clock budgets and shared-fixture rewrites** — the E2E suite runs sequentially against one server, port, and database; tightening timeouts or sharing fixtures would change what the suite verifies, so it is left to a dedicated E2E change.
+- **Permanently skipped MOOV-fix E2E (`tests/e2e/specs/video-moov.e2e.spec.js`) and the `RUN_VIDEO_TESTS`-gated Rust tests** — CI never enables either; deferred by decision and documented as a known gap, not an oversight.

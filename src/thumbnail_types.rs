@@ -168,12 +168,9 @@ pub enum CacheError {
 
 pub type CacheResult<T> = Result<T, CacheError>;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
     pub duration: f64,
-    pub width: i32,
-    pub height: i32,
 }
 
 #[cfg(test)]

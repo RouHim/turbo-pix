@@ -87,6 +87,26 @@ pub fn with_cache(
     warp::any().map(move || cache_manager.clone())
 }
 
+/// A 404 body matching [`handle_rejection`]'s not-found shape.
+///
+/// Handlers must reply directly instead of `reject::not_found()`: inside warp's
+/// `or`, a `NotFound` rejection is dropped when a sibling route on the same path
+/// rejects with `MethodNotAllowed`, so a handler-level not-found would surface
+/// as 405. Because the route already matched, replying directly is the only way
+/// to produce a real 404.
+pub fn not_found_reply() -> warp::reply::Response {
+    warp::reply::with_status(
+        warp::reply::json(&ErrorResponse {
+            error: "Not Found".to_string(),
+            code: 404,
+            error_code: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }),
+        warp::http::StatusCode::NOT_FOUND,
+    )
+    .into_response()
+}
+
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
     let message;

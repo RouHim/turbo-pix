@@ -359,4 +359,109 @@ mod tests {
         assert_eq!(listing.total, 1);
         assert_eq!(listing.photos[0].filename, "one.jpg");
     }
+
+    /// One page of a date-ordered album listing.
+    async fn album_page(pool: &DbPool, album_id: i64, limit: i64, offset: i64) -> Listing {
+        let query = unfiltered_query();
+        list(
+            pool,
+            ListingRequest {
+                query: &query,
+                album: Some(album_id),
+                sort: Some("date"),
+                order: Some("asc"),
+                page: Some(ListingPage { limit, offset }),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Seven members paged three at a time, with an eighth photo in the library
+    /// that is not a member: the `COUNT(*)` reports the whole membership (not
+    /// the library), while each page holds only its slice, the pages partition
+    /// the members with no overlap or duplicate, and a photo deleted from the
+    /// library stops being counted and served.
+    #[tokio::test]
+    async fn album_pages_partition_the_membership_and_drop_deleted_photos() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let seeded = seed(
+            &pool,
+            &[
+                ("m1.jpg", "m1", "2021-01-01T10:00:00Z"),
+                ("m2.jpg", "m2", "2021-01-02T10:00:00Z"),
+                ("m3.jpg", "m3", "2021-01-03T10:00:00Z"),
+                ("x.jpg", "x", "2021-01-03T12:00:00Z"),
+                ("m4.jpg", "m4", "2021-01-04T10:00:00Z"),
+                ("m5.jpg", "m5", "2021-01-05T10:00:00Z"),
+                ("m6.jpg", "m6", "2021-01-06T10:00:00Z"),
+                ("m7.jpg", "m7", "2021-01-07T10:00:00Z"),
+            ],
+        )
+        .await;
+        let album = crate::albums::create(&pool, "Seven").await.unwrap();
+        let hashes: Vec<String> = seeded
+            .iter()
+            .filter(|photo| photo.filename != "x.jpg")
+            .map(|photo| photo.hash_sha256.clone())
+            .collect();
+        assert_eq!(hashes.len(), 7);
+        crate::albums::add_members(&pool, album.id, &hashes)
+            .await
+            .unwrap();
+
+        let first = album_page(&pool, album.id, 3, 0).await;
+        assert_eq!(first.total, 7);
+        assert_eq!(names(&first), vec!["m1.jpg", "m2.jpg", "m3.jpg"]);
+
+        let second = album_page(&pool, album.id, 3, 3).await;
+        assert_eq!(second.total, 7);
+        assert_eq!(names(&second), vec!["m4.jpg", "m5.jpg", "m6.jpg"]);
+
+        let third = album_page(&pool, album.id, 3, 6).await;
+        assert_eq!(third.total, 7);
+        assert_eq!(names(&third), vec!["m7.jpg"]);
+
+        let paged: Vec<String> = first
+            .photos
+            .into_iter()
+            .chain(second.photos)
+            .chain(third.photos)
+            .map(|photo| photo.filename)
+            .collect();
+        assert_eq!(
+            paged,
+            vec!["m1.jpg", "m2.jpg", "m3.jpg", "m4.jpg", "m5.jpg", "m6.jpg", "m7.jpg"]
+        );
+        let unique: std::collections::HashSet<&String> = paged.iter().collect();
+        assert_eq!(unique.len(), 7, "pages must not repeat a member: {paged:?}");
+
+        // m4 leaves the library: the membership row cascades away, so neither
+        // the count nor any page may still mention it.
+        let departed = seeded
+            .iter()
+            .find(|photo| photo.filename == "m4.jpg")
+            .unwrap();
+        sqlx::query("DELETE FROM photos WHERE hash_sha256 = ?")
+            .bind(&departed.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM album_members WHERE album_id = ?")
+                .bind(album.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, 6);
+
+        let first = album_page(&pool, album.id, 3, 0).await;
+        assert_eq!(first.total, 6);
+        assert_eq!(names(&first), vec!["m1.jpg", "m2.jpg", "m3.jpg"]);
+
+        let second = album_page(&pool, album.id, 3, 3).await;
+        assert_eq!(second.total, 6);
+        assert_eq!(names(&second), vec!["m5.jpg", "m6.jpg", "m7.jpg"]);
+    }
 }

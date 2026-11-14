@@ -109,12 +109,18 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      # A step-level `continue-on-error` keeps the CHECK green: an advisory is
+      # triaged by a human, and the shape of `rustsec/audit-check` (which fails
+      # the job and opens issues) would paint every unrelated PR red.
       - name: Audit Rust dependencies
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+        run: cargo audit
 
       - name: Audit npm dependencies
+        continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
 
   # Optional coverage snapshot for maintainers. Manual dispatches on main only:

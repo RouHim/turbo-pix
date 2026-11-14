@@ -201,48 +201,9 @@ test.describe('indexing empty state', () => {
     await expect(page.locator('[data-photo-id]')).toBeVisible({ timeout: 15000 });
   });
 
-  test('large ring mode shown for first-time user during active indexing with 0 photos', async ({
-    page,
-  }) => {
-    // GIVEN first-time user (no localStorage key)
-    await page.addInitScript(() => {
-      window.localStorage.removeItem('turbopix_has_indexed');
-    });
-
-    // AND indexing active, 0 photos
-    await mockIndexingStatus(
-      page,
-      buildStatus({
-        active_phase_id: 'semantic_vectors',
-        photos_indexed: 0,
-        phases: [
-          buildPhase({ id: 'discovering', state: 'done' }),
-          buildPhase({ id: 'metadata', state: 'done' }),
-          buildPhase({
-            id: 'semantic_vectors',
-            state: 'running',
-            kind: 'determinate',
-            processed: 5,
-            total: 50,
-          }),
-          buildPhase({ id: 'geo_resolution' }),
-          buildPhase({ id: 'collages' }),
-          buildPhase({ id: 'housekeeping' }),
-        ],
-      })
-    );
-    await mockEmptyPhotos(page);
-
-    // WHEN page loads
-    await TestHelpers.goto(page);
-
-    // THEN the orbit ring renders in "large" mode
-    const ring = page.locator('[data-phase-ring]');
-    await expect(ring).toHaveAttribute('data-ring-mode', 'large', { timeout: 10000 });
-
-    // AND the indexing-in-progress empty state is visible
-    await expect(page.locator('.indexing-in-progress')).toBeVisible();
-  });
+  // The first-run large ring is asserted by indexing-orbit.e2e.spec.js
+  // ("renders the orbit ring with all phase segments"), whose subject is the
+  // ring itself; this spec keeps the empty-state claims.
 
   test('hides load-more container during first-run indexing with zero photos', async ({ page }) => {
     // GIVEN indexing is active (metadata done, semantic_vectors running)

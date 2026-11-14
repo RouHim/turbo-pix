@@ -6,7 +6,7 @@ use crate::db::DbPool;
 use crate::saved_searches::{
     self, CreateError, SavedSearch, SavedSearchFilter, VALID_SORTS, VALID_VIEWS,
 };
-use crate::warp_helpers::{with_db, DatabaseError, ValidationError};
+use crate::warp_helpers::{not_found_reply, with_db, DatabaseError, ValidationError};
 
 /// Cap on JSON request bodies; the one in handlers_photo.rs is private.
 const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
@@ -34,26 +34,6 @@ pub struct RenameSavedSearchRequest {
 }
 
 type CreateFields = (String, Option<String>, String, String, SavedSearchFilter);
-
-/// Generic 404 reply matching `handle_rejection`'s not-found shape.
-///
-/// NOT a `reject::not_found()`: in warp's `or` combinator, a `NotFound`
-/// rejection is silently dropped when a sibling route on the same path
-/// rejects with `MethodNotAllowed` (reject.rs `combine` ignores NotFound),
-/// so a handler-level not-found would surface as 405. Because this route
-/// already matched, replying directly is the only way to produce a real 404.
-fn not_found_reply() -> warp::reply::Response {
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    warp::reply::with_status(
-        warp::reply::json(&serde_json::json!({
-            "error": "Not Found",
-            "code": 404,
-            "timestamp": timestamp,
-        })),
-        StatusCode::NOT_FOUND,
-    )
-    .into_response()
-}
 
 fn validate_name(name: &str) -> Result<String, ValidationError> {
     let trimmed = name.trim();

@@ -44,10 +44,14 @@ Here are some key differences:
 - **Metadata Display**: View camera settings, date taken, and GPS coordinates
 - **Dark Mode**: Switch between light and dark themes
 - **Favorites**: Mark photos to find them later
+- **Albums**: Group photos and videos into albums you create, rename, and delete
+- **Collages**: Generate collage candidates from a selection and accept or reject them
+- **Saved Searches**: Store a search and re-run it later
+- **Batch Selection**: Select many items at once to favorite, export, delete, or add them to an album
+- **Housekeeping**: Review duplicate and issue candidates and keep or delete them
 - **Mobile Support**: Works on phones and tablets
 - **Self-Hosted Container Support**: Runs on your own computer or as a container, no cloud services
 - **RAW Support**: Supports various RAW image formats
-- **Speedy**: Written in Rust for performance
 
 ## Run the application
 
@@ -86,14 +90,18 @@ services:
 
 ### Prerequisites
 
-- ffmpeg
+- Node.js 26 and npm — builds the frontend bundle
+- A stable Rust toolchain with `rustfmt` and `clippy` (see `rust-toolchain.toml`) — builds the binary
+- ffmpeg and ffprobe on `PATH` — tested with 6.x from distro packages and 9.0 in the container image
 
 ### Installation
 
-Download the latest release for your system from the [releases page](https://github.com/RouHim/turbo-pix/releases):
+Releases are Linux musl builds for `x86_64` and `aarch64`
+(`turbo-pix-x86_64-unknown-linux-musl`, `turbo-pix-aarch64-unknown-linux-musl`); there is no macOS or Windows build.
+Pick the binary matching your architecture from the [releases page](https://github.com/RouHim/turbo-pix/releases):
 
 ```shell
-# Assuming you run a x86/x64 system, if not adjust the binary name to download
+# x86_64/aarch64 Linux — change the binary name below if you run on ARM64
 LATEST_VERSION=$(curl -L -s -H 'Accept: application/json' https://github.com/RouHim/turbo-pix/releases/latest | \
 sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/') && \
 curl -L -o turbo-pix https://github.com/RouHim/turbo-pix/releases/download/$LATEST_VERSION/turbo-pix-x86_64-unknown-linux-musl && \
@@ -120,18 +128,24 @@ Building from source requires the frontend bundle first: `npm install && npm run
 
 All configuration is done via environment variables:
 
-| Name                               | Description                                                                                                                                                                                    | Default value                                    | Required |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------- |
-| `TURBO_PIX_PHOTO_PATHS`            | Comma-separated list of photo directories to scan                                                                                                                                              | `./photos`                                       | Yes      |
-| `TURBO_PIX_DATA_PATH`              | Data directory for database, cache, and AI models                                                                                                                                              | `./data`                                         | No       |
-| `TURBO_PIX_PORT`                   | Port on which the application should listen                                                                                                                                                    | `18473`                                          | No       |
-| `TURBO_PIX_HOST`                   | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access                                                                                                                      | `127.0.0.1`                                      | No       |
-| `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated | _(loopback names)_                               | No       |
-| `TURBO_PIX_LOCALE`                 | Default UI locale (`en`, `de`)                                                                                                                                                                 | `en`                                             | No       |
-| `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                   | `https://nominatim.openstreetmap.org`            | No       |
-| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                      | `20`                                             | No       |
-| `TURBO_PIX_TILE_URL`               | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view                                                                                                                         | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No       |
-| `RUST_LOG`                         | Log level (trace, debug, info, warn, error)                                                                                                                                                    | `info`                                           | No       |
+| Name                               | Description                                                                                                                                                                                                                                          | Default value                                    | Required                      |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ----------------------------- |
+| `TURBO_PIX_PHOTO_PATHS`            | Comma-separated list of photo directories to scan                                                                                                                                                                                                    | `./photos`                                       | Yes                           |
+| `TURBO_PIX_DATA_PATH`              | Data directory for database, cache, and AI models                                                                                                                                                                                                    | `./data`                                         | No                            |
+| `TURBO_PIX_PORT`                   | Port on which the application should listen                                                                                                                                                                                                          | `18473`                                          | No                            |
+| `TURBO_PIX_HOST`                   | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access                                                                                                                                                                            | `127.0.0.1`                                      | No                            |
+| `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated, and `docker-compose.yml` refuses to start without it | _(loopback names)_                               | Yes when binding non-loopback |
+| `TURBO_PIX_LOCALE`                 | Default UI locale (`en`, `de`)                                                                                                                                                                                                                       | `en`                                             | No                            |
+| `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                                                                         | `https://nominatim.openstreetmap.org`            | No                            |
+| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `GET /api/photos/{hash}/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                                                      | `20`                                             | No                            |
+| `TURBO_PIX_TILE_URL`               | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view                                                                                                                                                                               | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No                            |
+| `TURBO_PIX_MAX_CACHE_SIZE_MB`      | Maximum thumbnail cache size in megabytes                                                                                                                                                                                                            | `1024`                                           | No                            |
+| `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` | Per-conversion ffmpeg timeout in seconds                                                                                                                                                                                                             | `300`                                            | No                            |
+| `TURBO_PIX_MAX_TRANSCODES`         | Concurrent video conversions; `0` disables transcoding. Default scales with the CPU count (`min(max(nproc/2,1),4)`)                                                                                                                                  | _(nproc-derived)_                                | No                            |
+| `FFMPEG_PATH`                      | ffmpeg binary to invoke                                                                                                                                                                                                                              | `ffmpeg`                                         | No                            |
+| `FFPROBE_PATH`                     | ffprobe binary to invoke                                                                                                                                                                                                                             | `ffprobe`                                        | No                            |
+| `TRANSCODE_CACHE_DIR`              | Root of the whole-file transcode cache                                                                                                                                                                                                               | `{DATA_PATH}/cache/transcoded`                   | No                            |
+| `RUST_LOG`                         | Log level (trace, debug, info, warn, error). The binary calls `env_logger::init()` without a default filter, so a native run logs only `error`; the container image and `docker-compose.yml` set `info`                                              | `error` (native), `info` (container)             | No                            |
 
 ### Derived Paths
 
@@ -139,6 +153,7 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 
 - **Database**: `{DATA_PATH}/database/turbo-pix.db`
 - **Thumbnails**: `{DATA_PATH}/cache/thumbnails/`
+- **Transcode cache**: `{DATA_PATH}/cache/transcoded/`
 - **AI Models**: `{DATA_PATH}/models/`
 
 ### AI Models
@@ -159,6 +174,15 @@ docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 The CLIP weights (~580MB of RAM) are loaded on first use — typically the startup indexing run — and released again
 after ten minutes without one, so a server that sits idle does not keep them resident. The first semantic search (or the
 first indexing run that needs embeddings) after that pays a short reload; the rest of the application is unaffected.
+
+## Supported Platforms
+
+Only what this repository actually exercises:
+
+- **OS**: Linux. Release binaries are static musl builds for `x86_64` and `aarch64`; macOS and Windows are neither built nor tested.
+- **Browsers**: Chromium-based browsers. The Playwright suite runs a single Chromium project; Firefox and Safari are untested.
+- **Toolchain**: Node.js 26 (CI and the container image) and a stable Rust toolchain (`rust-toolchain.toml`).
+- **ffmpeg**: 6.x from distro packages, as CI installs it, and 9.0, the version baked into the container image.
 
 ## Supported Formats
 

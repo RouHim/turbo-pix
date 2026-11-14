@@ -56,3 +56,5 @@ test-server.pid
 .sisyphus/
 .worktrees/
 .superpowers/
+# Generated review output; design.json and live/config.json stay tracked.
+.impeccable/critique/

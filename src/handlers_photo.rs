@@ -4420,7 +4420,14 @@ mod tests {
             .expect("response body must be a valid ZIP");
         assert_eq!(archive.len(), 3);
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .unwrap()
+                    .name()
+                    .expect("zip entry name must decode")
+                    .to_string()
+            })
             .collect();
         assert!(names.contains(&"same.jpg".to_string()));
         assert!(names.contains(&"same-2.jpg".to_string()));

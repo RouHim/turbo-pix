@@ -27,6 +27,13 @@ test.describe('Videos', () => {
 
     // THEN: Videos are displayed
     expect(videoCards.length).toBeGreaterThan(0);
+
+    // AND: each card is addressable by the photo it shows — the hash in
+    // `data-photo-id` is what the viewer and every card-addressing spec select
+    // on (`[data-photo-id="<hash>"]`), so a card without it cannot be opened
+    // or asserted on at all.
+    const photoId = await videoCards[0].getAttribute('data-photo-id');
+    expect(photoId).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test('should open video viewer', async ({ page }) => {
@@ -56,21 +63,5 @@ test.describe('Videos', () => {
     // WHEN: Viewer loads
     // THEN: Video element should be present (seeded videos are always indexed)
     await expect(page.locator(TestHelpers.selectors.viewerVideo)).toBeVisible();
-  });
-
-  test('should use correct selectors for video cards', async ({ page }) => {
-    // GIVEN: User is on videos view
-    await TestHelpers.navigateToView(page, 'videos');
-    await TestHelpers.waitForPhotosToLoad(page);
-    const videoCards = await TestHelpers.getPhotoCards(page);
-    expect(videoCards.length).toBeGreaterThan(0);
-
-    // WHEN: User checks video card attributes
-    const firstCard = videoCards[0];
-    const photoId = await firstCard.getAttribute('data-photo-id');
-
-    // THEN: Card has data-photo-id attribute
-    expect(photoId).toBeTruthy();
-    expect(photoId.length).toBeGreaterThan(0);
   });
 });

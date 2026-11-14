@@ -20,7 +20,7 @@ A viewer, not a management suite. Where Immich, PhotoPrism, Lychee or Piwigo ask
 
 ## Operating Context
 
-Self-hosted on the operator's own machine and reached over the LAN; no cloud services. Runs as a Docker container or a native binary; `ffmpeg` is the only external prerequisite. The directory layout is never reorganized or renamed in the background — files change only through explicit user actions (EXIF metadata edits, rotation, housekeeping cleanup). Indexing is automatic: a startup scan plus a nightly incremental rescan. UI locales are EN and DE; dark mode is supported. Video playback is decided server-side per request and may transcode through a bounded worker pool.
+Self-hosted on the operator's own machine and reached over the LAN; no cloud services. Runs as a Docker container or a native binary; `ffmpeg` is the only external prerequisite. The directory layout is never reorganized or renamed in the background — files change only through explicit user actions (EXIF metadata edits, rotation, housekeeping cleanup), with one exception: during indexing TurboPix rewrites a video whose `moov` atom sits at the end of the file in place. That rewrite is a lossless stream copy (no re-encode) that only moves the index to the front, so all streams and the media payload survive unchanged and the file keeps its length. Indexing is automatic: a startup scan plus a nightly incremental rescan. UI locales are EN and DE; dark mode is supported. Video playback is decided server-side per request and may transcode through a bounded worker pool.
 
 ## Capabilities and Constraints
 

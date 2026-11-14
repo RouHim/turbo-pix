@@ -7,7 +7,7 @@ use crate::db::DbPool;
 use crate::handlers_photo::{
     PhotosResponse, DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE,
 };
-use crate::warp_helpers::{with_db, DatabaseError, ValidationError};
+use crate::warp_helpers::{not_found_reply, with_db, DatabaseError, ValidationError};
 
 const MAX_JSON_BODY_BYTES: u64 = 1024 * 1024;
 
@@ -53,23 +53,6 @@ pub struct AddMembersResponse {
 pub struct RemoveMembersResponse {
     pub removed: u64,
     pub total: i64,
-}
-
-/// 404 reply matching `handle_rejection`'s not-found shape. Emitted directly
-/// (not `reject::not_found()`) for the same reason as the saved-searches route:
-/// inside warp's `or`, a NotFound rejection is dropped when a sibling route on
-/// the same path rejects with MethodNotAllowed, surfacing as 405 instead of 404.
-fn not_found_reply() -> warp::reply::Response {
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    warp::reply::with_status(
-        warp::reply::json(&serde_json::json!({
-            "error": "Not Found",
-            "code": 404,
-            "timestamp": timestamp,
-        })),
-        StatusCode::NOT_FOUND,
-    )
-    .into_response()
 }
 
 fn validate_name(name: &str) -> Result<String, ValidationError> {

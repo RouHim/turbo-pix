@@ -39,7 +39,7 @@ jobs:
         run: npm run format:check
 
       - name: Run Rust linter
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run frontend linters
         run: npm run lint
@@ -86,6 +86,88 @@ jobs:
 
       - name: Build release
         run: cargo build --profile production
+
+  # Dependency advisories. Deliberately non-blocking: a fresh advisory is
+  # triaged by a human, and it must never fail an unrelated pull request.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      # A step-level `continue-on-error` keeps the CHECK green: an advisory is
+      # triaged by a human, and the shape of `rustsec/audit-check` (which fails
+      # the job and opens issues) would paint every unrelated PR red.
+      - name: Audit Rust dependencies
+        continue-on-error: true
+        run: cargo audit
+
+      - name: Audit npm dependencies
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+  # Optional coverage snapshot for maintainers. Manual dispatches on main only:
+  # it never runs on pull_request, and no job lists it in `needs:` — so it can
+  # never gate a merge or the release pipeline.
+  rust-coverage:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # build.rs embeds dist/ and panics without it.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate Rust coverage
+        run: npm run coverage:rust
+
+      - name: Upload Rust coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-coverage-lcov
+          path: target/coverage/lcov.info
+          retention-days: 14
+
   e2e-tests:
     runs-on: ubuntu-latest
 

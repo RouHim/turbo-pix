@@ -9,7 +9,7 @@ default-run = "turbo-pix"
 libc = "0.2"
 
 # Web framework
-warp = { version = "0.4.2", features = ["server", "multipart", "test"] }
+warp = { version = "0.4.2", features = ["server"] }
 
 # Database
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
@@ -19,7 +19,7 @@ libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 clokwerk = "0.4"
 
 # Image processing & MIME
-image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "hdr", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
+image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 kamadak-exif = "0.6"
 img-parts = "0.4" # For JPEG/PNG segment manipulation when writing EXIF
 fast-blurhash = "1.0"
@@ -31,7 +31,7 @@ candle-nn = "0.11.0"
 candle-transformers = "0.11.0"
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
 tokenizers = "0.23.0"
-sqlite-vec = { git = "https://github.com/vlasky/sqlite-vec", tag = "v0.2.4-alpha" }
+sqlite-vec = { git = "https://github.com/vlasky/sqlite-vec", rev = "606e0002934632b6cf39d06b1f9c7c3b188fa77d" } # v0.2.4-alpha, pinned: a movable tag could swap the code a build links
 zerocopy = "0.8"
 
 # Serialization
@@ -40,7 +40,7 @@ serde_json = "1.0"
 ureq = "3"
 
 # Utilities
-zip = "8.0" # archive export (already in Cargo.lock via candle-core)
+zip = "9.0"
 async-trait = "0.1"
 sha2 = "0.11"
 chrono = { version = "0.4", features = ["serde", "unstable-locales"] }
@@ -69,6 +69,9 @@ mimalloc = "0.1.48"
 
 [dev-dependencies]
 tempfile = "3.0"
+# `test` is only needed by the handler tests (`warp::test::request`); keeping it
+# here means a production build no longer compiles warp's test server.
+warp = { version = "0.4.2", features = ["test"] }
 
 [profile.production]
 inherits = "release"

@@ -53,6 +53,7 @@ export default [
         FileReader: 'readonly',
         FormData: 'readonly',
         DOMParser: 'readonly',
+        getComputedStyle: 'readonly',
         ResizeObserver: 'readonly',
         MutationObserver: 'readonly',
         MediaMetadata: 'readonly',

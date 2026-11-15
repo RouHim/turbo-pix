@@ -76,7 +76,7 @@ impl MimeType {
         &self.type_
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn subtype(&self) -> &str {
         &self.subtype
     }

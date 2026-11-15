@@ -7,8 +7,12 @@ services:
       - "18473:18473"
     volumes:
       - ./data:/data
-      - /home/rouven/Pictures:/photos:ro
+      # Point this at your own library; the container only ever reads it.
+      - ${TURBO_PIX_PHOTO_PATH:-./photos}:/photos:ro
     environment:
       - RUST_LOG=info
       - TURBO_PIX_HOST=0.0.0.0
+      # Required for a non-loopback bind: without it the Host header is not
+      # pinned and a DNS-rebinding page could reach this unauthenticated API.
+      - TURBO_PIX_ALLOWED_HOSTS=${TURBO_PIX_ALLOWED_HOSTS:?set this to the hostname/IP you reach TurboPix on, e.g. 192.168.0.36}
     restart: unless-stopped

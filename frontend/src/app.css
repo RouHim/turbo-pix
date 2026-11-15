@@ -785,7 +785,9 @@
     visibility var(--transition-medium);
 
   &.fade-in {
-    animation: viewer-fade-in var(--transition-slow) ease-out;
+    /* --transition-slow already carries the easing; a second timing function
+       made the previous shorthand invalid, so the fade never ran at all. */
+    animation: viewer-fade-in var(--transition-slow);
   }
 
   &.active {

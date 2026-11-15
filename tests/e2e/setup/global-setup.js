@@ -67,6 +67,20 @@ function videoDate(daysAgo) {
   return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
 }
 
+/**
+ * A seed fixture a spec depends on must exist. A missing one used to only warn,
+ * which silently downgraded whole specs to skips (or asserted against a thinner
+ * library) while the run stayed green — a broken checkout looked like a passing
+ * one. Fail global setup fast instead, naming the missing path and the list it
+ * came from, so it is obvious which seed to restore.
+ */
+function requireFixture(source, seedList) {
+  if (!existsSync(source)) {
+    throw new Error(`Missing fixture ${source} — required by ${seedList}`);
+  }
+  return source;
+}
+
 function pinnedVideoDate(filename) {
   const entry = VIDEO_FIXTURES.find(([name]) => name === filename);
   if (!entry) {
@@ -332,10 +346,10 @@ async function seedTestMedia() {
   const photosDir = path.join(TEST_DATA_DIR, 'photos');
   const recentDate = new Date(Date.now() - CLUSTER_DAYS_AGO * 24 * 60 * 60 * 1000);
   const archiveDate = new Date(Date.now() - ARCHIVE_DAYS_AGO * 24 * 60 * 60 * 1000);
-  const clusterSource = path.join('test-data', 'car.jpg');
-  if (!existsSync(clusterSource)) {
-    throw new Error(`Missing cluster source image at ${clusterSource}`);
-  }
+  const clusterSource = requireFixture(
+    path.join('test-data', 'car.jpg'),
+    'the photo seeding loop (cluster_* and archive_* counts, LEGACY_PHOTOS)'
+  );
 
   for (let i = 1; i <= RECENT_PHOTO_COUNT; i += 1) {
     const filename = `cluster_${String(i).padStart(2, '0')}.jpg`;
@@ -405,12 +419,8 @@ async function seedTestMedia() {
   // matrix's direct-play row for a progressive h264+aac MP4 is covered by
   // test_video.mp4.
   for (const [fixture, daysAgo] of VIDEO_FIXTURES) {
-    const source = path.join('test-data', fixture);
+    const source = requireFixture(path.join('test-data', fixture), 'VIDEO_FIXTURES');
     const destination = path.join(photosDir, fixture);
-    if (!existsSync(source)) {
-      console.warn(`Video fixture not found at ${source}`);
-      continue;
-    }
     const date = videoDate(daysAgo);
     if (fixture === 'test_video_multitrack.mp4') {
       // Remuxed to keep both audio tracks, not copied: see

@@ -287,63 +287,87 @@ export class TestHelpers {
     await this.performSwipe(page, startX, startY, startX, startY + distance, options.stepDelay);
   }
 
-  // Target .viewer-main so events bubble: .viewer-main (SwipeableViewer enablePan) → #photo-viewer (GestureManager)
-  // Uses setTimeout spacing between touchmove events so GestureManager
-  // computes realistic velocity via Date.now() deltas.
+  /**
+   * Drag one finger from (startX, startY) to (endX, endY) across the viewer.
+   *
+   * Target `.viewer-main` so events bubble: `.viewer-main` (SwipeableViewer's
+   * own touch handling) → `#photo-viewer` (GestureManager).
+   *
+   * The gesture's CLASSIFICATION depends on its timing: `GestureManager` turns
+   * consecutive `touchmove`s into a velocity (px/ms), and both the swipe
+   * recognizer (0.3 px/ms) and `handlePanEnd`'s `shouldNavigate` branch on it.
+   * It reads each event's own `timeStamp`, so the stream carries its timing
+   * explicitly — `stepDelay` IS the per-move elapsed milliseconds, not a sleep.
+   * That is why the events can be dispatched back to back: nothing about the
+   * classification depends on when the event loop gets around to them, and a
+   * deliberately slow swipe stays slow no matter how loaded the machine is.
+   */
   static async performSwipe(page, startX, startY, endX, endY, stepDelay = 16) {
+    // Wait for the viewer's own gesture surface, not a timeout: `SwipeableViewer.mount`
+    // is what prepends `.viewer-adjacent-next` and binds the touch listeners, and the
+    // Svelte action is what attaches `__gestureManager` — both run in an effect AFTER
+    // the `.active` class `verifyViewerOpen` waits for. Dispatching into that window
+    // produced no pan at all (the handlers ignored the stream), so the swipe silently
+    // did nothing on whichever attempt lost the race.
+    await page.waitForFunction(
+      () => {
+        const main = document.querySelector('.viewer-main');
+        return Boolean(
+          main && main.__gestureManager && main.querySelector('.viewer-adjacent-next')
+        );
+      },
+      null,
+      { timeout: 10000 }
+    );
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
     await page.evaluate(
-      ({ sx, sy, ex, ey, delay }) =>
-        new Promise((resolve) => {
-          const target = document.querySelector('.viewer-main') || document.body;
+      ({ sx, sy, ex, ey, stepMs }) => {
+        const target = document.querySelector('.viewer-main') || document.body;
+        const steps = 10;
+        // A positive base keeps the synthetic clock clear of the app's
+        // `timeStamp > 0` fallback to `Date.now()`.
+        const clockBase = 1000;
+        const createTouch = (id, x, y) =>
+          new Touch({
+            identifier: id,
+            target,
+            clientX: x,
+            clientY: y,
+            pageX: x,
+            pageY: y,
+            radiusX: 2,
+            radiusY: 2,
+            rotationAngle: 0,
+            force: 0.5,
+          });
 
-          const createTouch = (id, x, y) =>
-            new Touch({
-              identifier: id,
-              target,
-              clientX: x,
-              clientY: y,
-              pageX: x,
-              pageY: y,
-              radiusX: 2,
-              radiusY: 2,
-              rotationAngle: 0,
-              force: 0.5,
-            });
+        // `timeStamp` is a getter on Event.prototype; defining it on the instance
+        // is what lets the stream carry a synthetic clock.
+        const dispatch = (type, touches, changed, at) => {
+          const event = new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches,
+            changedTouches: changed,
+          });
+          Object.defineProperty(event, 'timeStamp', { value: at });
+          target.dispatchEvent(event);
+        };
 
-          const dispatch = (type, touches, changed) =>
-            target.dispatchEvent(
-              new TouchEvent(type, {
-                bubbles: true,
-                cancelable: true,
-                touches,
-                changedTouches: changed,
-              })
-            );
+        const startTouch = createTouch(1, sx, sy);
+        dispatch('touchstart', [startTouch], [startTouch], clockBase);
 
-          const startTouch = createTouch(1, sx, sy);
-          dispatch('touchstart', [startTouch], [startTouch]);
+        for (let step = 1; step <= steps; step += 1) {
+          const x = sx + ((ex - sx) * step) / steps;
+          const y = sy + ((ey - sy) * step) / steps;
+          const moveTouch = createTouch(1, x, y);
+          dispatch('touchmove', [moveTouch], [moveTouch], clockBase + step * stepMs);
+        }
 
-          const steps = 10;
-          let step = 1;
-
-          const nextStep = () => {
-            if (step <= steps) {
-              const x = sx + ((ex - sx) * step) / steps;
-              const y = sy + ((ey - sy) * step) / steps;
-              const moveTouch = createTouch(1, x, y);
-              dispatch('touchmove', [moveTouch], [moveTouch]);
-              step++;
-              setTimeout(nextStep, delay);
-            } else {
-              const endTouch = createTouch(1, ex, ey);
-              dispatch('touchend', [], [endTouch]);
-              resolve();
-            }
-          };
-
-          setTimeout(nextStep, delay);
-        }),
-      { sx: startX, sy: startY, ex: endX, ey: endY, delay: stepDelay }
+        const endTouch = createTouch(1, ex, ey);
+        dispatch('touchend', [], [endTouch], clockBase + (steps + 1) * stepMs);
+      },
+      { sx: startX, sy: startY, ex: endX, ey: endY, stepMs: stepDelay }
     );
   }
 

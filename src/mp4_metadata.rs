@@ -7847,7 +7847,7 @@ mod tests {
     fn ffprobe_reports_the_patched_date_and_moov_at_end_files_work_too() {
         use std::process::Command;
 
-        if !video_tests_enabled() {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("Skipping ffprobe patch test: RUN_VIDEO_TESTS not set");
             return;
         }
@@ -7924,7 +7924,7 @@ mod tests {
     fn ffprobe_reports_the_patched_location() {
         use std::process::Command;
 
-        if !video_tests_enabled() {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("Skipping ffprobe location test: RUN_VIDEO_TESTS not set");
             return;
         }
@@ -8003,7 +8003,7 @@ mod tests {
     fn ffprobe_reports_the_patched_loci_location() {
         use std::process::Command;
 
-        if !video_tests_enabled() {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("Skipping ffprobe loci test: RUN_VIDEO_TESTS not set");
             return;
         }
@@ -8084,15 +8084,6 @@ mod tests {
             reported.contains("+48.2500+016.5000/"),
             "ffprobe reads the patched position back: {reported}"
         );
-    }
-
-    /// `RUN_VIDEO_TESTS` is the project-wide switch for tests that shell out to
-    /// ffmpeg/ffprobe; the byte-level tests never depend on it.
-    fn video_tests_enabled() -> bool {
-        matches!(
-            std::env::var("RUN_VIDEO_TESTS").as_deref(),
-            Ok("1") | Ok("true")
-        )
     }
 
     fn parse_ffprobe_time(value: &str) -> DateTime<Utc> {

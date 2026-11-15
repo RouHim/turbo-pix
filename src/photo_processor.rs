@@ -879,8 +879,7 @@ mod tests {
     }
 
     fn should_run_video_tests(filename: &str) -> bool {
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("RUN_VIDEO_TESTS not set to '1' or 'true'; skipping video tests");
             return false;
         }

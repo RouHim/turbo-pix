@@ -165,8 +165,8 @@ impl Drop for HeapTrim {
 // `mi_collect` has to come from the crate that builds mimalloc's C library: its
 // build script emits the link line, so every binary that links this crate also
 // gets the archive. A hand-written `extern "C"` only resolved for binaries that
-// already referenced the `mimalloc` crate — the container build's
-// `benchmark_video` did not, and the release build failed to link.
+// already referenced the `mimalloc` crate — the container build's second binary
+// did not, and the release build failed to link.
 #[cfg(target_env = "musl")]
 use libmimalloc_sys::mi_collect;
 
@@ -1626,8 +1626,7 @@ mod tests {
             return;
         }
 
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("Skipping video embedding test: RUN_VIDEO_TESTS not set");
             return;
         }
@@ -1685,8 +1684,7 @@ mod tests {
             return;
         }
 
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+        if !crate::video_processor::tests::video_tests_enabled() {
             eprintln!("Skipping video search test: RUN_VIDEO_TESTS not set");
             return;
         }

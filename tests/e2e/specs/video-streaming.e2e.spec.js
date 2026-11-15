@@ -1083,7 +1083,14 @@ test.describe('On-the-fly streaming playback', () => {
   });
 
   test('a seek restart keeps the declared duration', async ({ page }) => {
-    test.setTimeout(60_000);
+    // The per-test budget is the OUTER bound of four bounded waits — 30 s for
+    // playback to start, the 25 s in-page cap below (the test's own failure
+    // channel: it resolves `false` and the expectation reports it), 20 s for
+    // the restarted run to settle and 30 s for it to play out — so it is the
+    // sum plus headroom. Under 105 s the runner would kill the test before the
+    // in-page cap could ever answer, and the failure would read as a timeout
+    // instead of the restart it actually is.
+    test.setTimeout(120_000);
     const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
     await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
     // The ladder is only reached after a failed attempt, and this container

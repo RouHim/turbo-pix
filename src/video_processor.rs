@@ -394,21 +394,16 @@ pub async fn extract_video_metadata(video_path: &Path) -> CacheResult<VideoMetad
         .find(|stream| stream["codec_type"] == "video")
         .ok_or_else(|| CacheError::VideoMetadataError("No video stream found".to_string()))?;
 
-    let width = video_stream["width"]
+    // A video stream without dimensions is malformed; keep rejecting it even
+    // though the values are not stored — nothing ever read them.
+    video_stream["width"]
         .as_i64()
-        .ok_or_else(|| CacheError::VideoMetadataError("Width not found".to_string()))?
-        as i32;
-
-    let height = video_stream["height"]
+        .ok_or_else(|| CacheError::VideoMetadataError("Width not found".to_string()))?;
+    video_stream["height"]
         .as_i64()
-        .ok_or_else(|| CacheError::VideoMetadataError("Height not found".to_string()))?
-        as i32;
+        .ok_or_else(|| CacheError::VideoMetadataError("Height not found".to_string()))?;
 
-    Ok(VideoMetadata {
-        duration,
-        width,
-        height,
-    })
+    Ok(VideoMetadata { duration })
 }
 
 pub fn calculate_optimal_frame_time(metadata: &VideoMetadata) -> f64 {
@@ -545,48 +540,6 @@ pub async fn extract_frames_batch(
         .map(|i| output_dir_clone.join(format!("frame_{}.jpg", i)))
         .filter(|p| p.exists())
         .collect())
-}
-
-/// Check if a video uses HEVC codec
-pub async fn is_hevc_video(video_path: &Path) -> CacheResult<bool> {
-    let video_path = video_path.to_path_buf();
-    let ffprobe_path = get_ffprobe_path();
-    let ffprobe_path_for_err = ffprobe_path.clone();
-
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new(ffprobe_path)
-            .args([
-                "-v",
-                "quiet",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                video_path.to_string_lossy().as_ref(),
-            ])
-            .output()
-    })
-    .await
-    .map_err(|e| CacheError::IoError(std::io::Error::other(e)))?
-    .map_err(|e| {
-        CacheError::VideoProcessingError(format_binary_error("ffprobe", &ffprobe_path_for_err, &e))
-    })?;
-
-    if !output.status.success() {
-        return Err(CacheError::VideoProcessingError(format!(
-            "ffprobe exited with status: {}",
-            output.status
-        )));
-    }
-
-    let codec = String::from_utf8(output.stdout)
-        .map_err(|e| CacheError::VideoProcessingError(format!("Invalid UTF-8 output: {}", e)))?
-        .trim()
-        .to_lowercase();
-
-    Ok(codec == "hevc" || codec == "h265")
 }
 
 /// How often [`run_bounded`] checks whether its child has exited. Small enough
@@ -1652,12 +1605,15 @@ impl TranscodeCache {
     }
 
     /// The one place the environment is read. `main` defaults the variable
-    /// from config, so this fallback only serves tests and embedded callers.
+    /// from config, so this fallback only serves tests and embedded callers —
+    /// it derives the same `{DATA_PATH}/cache/transcoded` path the config
+    /// defaults produce, so both spellings cannot point at different trees.
     pub fn from_env() -> Self {
-        Self::new(
-            std::env::var("TRANSCODE_CACHE_DIR")
-                .unwrap_or_else(|_| "./data/cache/transcoded".to_string()),
-        )
+        Self::new(std::env::var("TRANSCODE_CACHE_DIR").unwrap_or_else(|_| {
+            let data_path =
+                std::env::var("TURBO_PIX_DATA_PATH").unwrap_or_else(|_| "./data".to_string());
+            format!("{}/cache/transcoded", data_path)
+        }))
     }
 
     fn namespace_dir(&self, namespace: &str) -> PathBuf {
@@ -1777,11 +1733,6 @@ fn namespace_dir(cache_dir: &Path, ns: &str) -> PathBuf {
     } else {
         cache_dir.join(ns)
     }
-}
-
-/// Get the path for a transcoded video in the cache
-pub fn get_transcoded_path(cache_dir: &Path, original_hash: &str) -> PathBuf {
-    namespace_dir(cache_dir, "transcoded").join(format!("{}.mp4", original_hash))
 }
 
 /// Transcode cache path versioned by the source's content fingerprint (file
@@ -2009,9 +1960,18 @@ pub(crate) mod tests {
             .join(filename)
     }
 
+    /// The one spelling of the `RUN_VIDEO_TESTS` switch. Four test modules gate
+    /// their ffmpeg/ffprobe work on it and used to disagree (one accepted only
+    /// `"1"`/`"true"` case-sensitively), so the same environment could run a
+    /// test in one module and skip its twin in another.
+    pub(crate) fn video_tests_enabled() -> bool {
+        std::env::var("RUN_VIDEO_TESTS")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     fn should_run_video_tests(filename: &str) -> bool {
-        let run_var = std::env::var("RUN_VIDEO_TESTS").unwrap_or_default();
-        if !(run_var == "1" || run_var.eq_ignore_ascii_case("true")) {
+        if !video_tests_enabled() {
             eprintln!("RUN_VIDEO_TESTS not set to '1' or 'true'; skipping video tests");
             return false;
         }
@@ -2871,27 +2831,13 @@ pub(crate) mod tests {
         let metadata = metadata.unwrap();
 
         assert!(metadata.duration > 0.0, "Duration should be positive");
-        assert_eq!(metadata.width, 1920, "Width should match expected");
-        assert_eq!(metadata.height, 1080, "Height should match expected");
     }
 
     #[tokio::test]
     async fn test_video_frame_timing_calculation() {
-        let short_video = VideoMetadata {
-            duration: 2.0,
-            width: 320,
-            height: 240,
-        };
-        let medium_video = VideoMetadata {
-            duration: 30.0,
-            width: 320,
-            height: 240,
-        };
-        let long_video = VideoMetadata {
-            duration: 3600.0,
-            width: 320,
-            height: 240,
-        };
+        let short_video = VideoMetadata { duration: 2.0 };
+        let medium_video = VideoMetadata { duration: 30.0 };
+        let long_video = VideoMetadata { duration: 3600.0 };
 
         let short_time = calculate_optimal_frame_time(&short_video);
         let medium_time = calculate_optimal_frame_time(&medium_video);
@@ -3863,27 +3809,6 @@ pub(crate) mod tests {
         );
         assert!(
             err_str.contains("/nonexistent/ffmpeg"),
-            "expected path in: {err_str}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_error_message_not_found_ffprobe_is_hevc() {
-        // GIVEN a nonexistent ffprobe path
-        let _guard = TestEnvGuard::set("FFPROBE_PATH", "/nonexistent/ffprobe");
-
-        // WHEN is_hevc_video is called
-        let result = is_hevc_video(Path::new("/any/video")).await;
-
-        // THEN the error message reports "not found at" with the path
-        let err = result.unwrap_err();
-        let err_str = err.to_string();
-        assert!(
-            err_str.contains("not found at"),
-            "expected 'not found at' in: {err_str}"
-        );
-        assert!(
-            err_str.contains("/nonexistent/ffprobe"),
             "expected path in: {err_str}"
         );
     }

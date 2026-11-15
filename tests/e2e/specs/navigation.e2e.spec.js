@@ -8,69 +8,26 @@ test.describe('Navigation', () => {
     await TestHelpers.waitForPhotosToLoad(page);
   });
 
-  test('should load homepage successfully', async ({ page }) => {
-    // GIVEN: User navigates to the homepage
-    // WHEN: Page loads
-    // THEN: Photos are displayed
+  // The per-view specs (favorites, videos, collages, housekeeping) each own the
+  // claim "this sidebar entry activates its view"; url-routing owns "a direct
+  // load activates the all view". What none of them cover is the walk itself —
+  // one session switching through every entry and back — so that is the only
+  // case kept here.
+  test('should switch views through the sidebar walk', async ({ page }) => {
+    // GIVEN: User is on the homepage with photos loaded and the all view active
     const photos = await TestHelpers.getPhotoCards(page);
     expect(photos.length).toBeGreaterThan(0);
-
-    // AND: All view button is active
     await TestHelpers.verifyActiveView(page, 'all');
-  });
 
-  test('should navigate to favorites view', async ({ page }) => {
-    // GIVEN: User is on the homepage
-    // WHEN: User clicks the favorites button
-    await TestHelpers.navigateToView(page, 'favorites');
+    // WHEN: User walks the sidebar through every view and back to all
+    // THEN: each click activates that view (navigateToView verifies it)
+    for (const view of ['favorites', 'videos', 'collages', 'housekeeping', 'all']) {
+      await TestHelpers.navigateToView(page, view);
+    }
 
-    // THEN: Favorites view is active
-    await TestHelpers.verifyActiveView(page, 'favorites');
-  });
-
-  test('should navigate to videos view', async ({ page }) => {
-    // GIVEN: User is on the homepage
-    // WHEN: User clicks the videos button
-    await TestHelpers.navigateToView(page, 'videos');
-
-    // THEN: Videos view is active
-    await TestHelpers.verifyActiveView(page, 'videos');
-  });
-
-  test('should navigate to collages view', async ({ page }) => {
-    // GIVEN: User is on the homepage
-    // WHEN: User clicks the collages button
-    await TestHelpers.navigateToView(page, 'collages');
-
-    // THEN: Collages view is active
-    await TestHelpers.verifyActiveView(page, 'collages');
-  });
-
-  test('should navigate to housekeeping view', async ({ page }) => {
-    // GIVEN: User is on the homepage
-    // WHEN: User clicks the housekeeping button
-    await TestHelpers.navigateToView(page, 'housekeeping');
-
-    // THEN: Housekeeping view is active
-    await TestHelpers.verifyActiveView(page, 'housekeeping');
-  });
-
-  test('should navigate between multiple views', async ({ page }) => {
-    // GIVEN: User is on the homepage
-    // WHEN: User navigates through different views
-    await TestHelpers.navigateToView(page, 'favorites');
-    await TestHelpers.verifyActiveView(page, 'favorites');
-
-    await TestHelpers.navigateToView(page, 'videos');
-    await TestHelpers.verifyActiveView(page, 'videos');
+    // AND: the grid still shows photos after the walk, not a stranded empty view
     await TestHelpers.waitForPhotosToLoad(page);
-
-    await TestHelpers.navigateToView(page, 'all');
-    await TestHelpers.verifyActiveView(page, 'all');
-    await TestHelpers.waitForPhotosToLoad(page);
-
-    // THEN: Each view transition is successful
-    const photos = await TestHelpers.getPhotoCards(page);
-    expect(photos.length).toBeGreaterThan(0);
+    const photosAfterWalk = await TestHelpers.getPhotoCards(page);
+    expect(photosAfterWalk.length).toBeGreaterThan(0);
   });
 });

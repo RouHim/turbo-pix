@@ -45,7 +45,8 @@ Here are some key differences:
 - **Dark Mode**: Switch between light and dark themes
 - **Favorites**: Mark photos to find them later
 - **Albums**: Group photos and videos into albums you create, rename, and delete
-- **Collages**: Generate collage candidates from a selection and accept or reject them
+- **Collages**: Generate collage candidates from your recent photo days — at least ten photos on a day,
+  within the last 30 days — then accept or reject them
 - **Saved Searches**: Store a search and re-run it later
 - **Batch Selection**: Select many items at once to favorite, export, delete, or add them to an album
 - **Housekeeping**: Review duplicate and issue candidates and keep or delete them
@@ -92,7 +93,7 @@ services:
 
 - Node.js 26 and npm — builds the frontend bundle
 - A stable Rust toolchain with `rustfmt` and `clippy` (see `rust-toolchain.toml`) — builds the binary
-- ffmpeg and ffprobe on `PATH` — tested with 6.x from distro packages and 9.0 in the container image
+- ffmpeg and ffprobe on `PATH` — tested with 8.x (8.0.1, as CI installs it) and 9.0 in the container image
 
 ### Installation
 
@@ -134,7 +135,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_DATA_PATH`              | Data directory for database, cache, and AI models                                                                                                                                                                                                    | `./data`                                         | No                            |
 | `TURBO_PIX_PORT`                   | Port on which the application should listen                                                                                                                                                                                                          | `18473`                                          | No                            |
 | `TURBO_PIX_HOST`                   | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access                                                                                                                                                                            | `127.0.0.1`                                      | No                            |
-| `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; **required when binding non-loopback** — the API is unauthenticated, and `docker-compose.yml` refuses to start without it | _(loopback names)_                               | Yes when binding non-loopback |
+| `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; required by `docker-compose.yml`, otherwise strongly recommended — a native binary only logs a startup warning            | _(loopback names)_                               | Yes for compose               |
 | `TURBO_PIX_LOCALE`                 | Default UI locale (`en`, `de`)                                                                                                                                                                                                                       | `en`                                             | No                            |
 | `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                                                                         | `https://nominatim.openstreetmap.org`            | No                            |
 | `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `GET /api/photos/{hash}/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                                                      | `20`                                             | No                            |
@@ -182,7 +183,7 @@ Only what this repository actually exercises:
 - **OS**: Linux. Release binaries are static musl builds for `x86_64` and `aarch64`; macOS and Windows are neither built nor tested.
 - **Browsers**: Chromium-based browsers. The Playwright suite runs a single Chromium project; Firefox and Safari are untested.
 - **Toolchain**: Node.js 26 (CI and the container image) and a stable Rust toolchain (`rust-toolchain.toml`).
-- **ffmpeg**: 6.x from distro packages, as CI installs it, and 9.0, the version baked into the container image.
+- **ffmpeg**: 8.x (8.0.1 from distro packages, as CI installs it) and 9.0, the version baked into the container image.
 
 ## Supported Formats
 

@@ -25,9 +25,14 @@ pre-production and breaking changes are allowed (see `AGENTS.md`).
   - When `TURBO_PIX_ALLOWED_HOSTS` is set (comma-separated), the `Host` header
     must additionally match one of those names. Without an explicit list, a
     loopback bind pins `Host` to `127.0.0.1`, `localhost` and `::1`; a
-    non-loopback bind (`0.0.0.0` for LAN/Docker) **must** set
-    `TURBO_PIX_ALLOWED_HOSTS`, otherwise every LAN host is rejected
-    (`src/config.rs`).
+    non-loopback bind (`0.0.0.0` for LAN/Docker) leaves the list **empty**, and
+    an empty list applies no `Host` check at all — a request is then accepted
+    whenever its `Origin` hostname matches whatever `Host` name it carries.
+    That is the DNS-rebinding exposure: a rebinding page reaches the server
+    under its own hostname, which is both `Origin` and `Host`. A LAN bind
+    therefore **should** set `TURBO_PIX_ALLOWED_HOSTS`; while it is missing the
+    server only logs a startup warning (`src/config.rs`, `src/warp_helpers.rs`,
+    `src/main.rs`).
 - **No CORS allowance.** There is no `Access-Control-Allow-*` response at all;
   cross-origin browser reads are refused, not allowed with a wildcard.
 
@@ -36,9 +41,18 @@ pre-production and breaking changes are allowed (see `AGENTS.md`).
 ### Photo hash
 
 `{hash}` in every path is a photo's `hash_sha256` exactly as returned by a
-listing or by `GET /api/photos/{hash}`. It is a hash of the file's path string (not
-of its bytes), so it survives in-place metadata edits and only changes on
-rotation; thumbnail and transcode caches fold in size+mtime on top of it.
+listing or by `GET /api/photos/{hash}`. In steady state it is a hash of the
+file's **path string** (not of its bytes), so it survives in-place metadata
+edits and external overwrites alike; thumbnail and transcode caches fold in
+size+mtime on top of it.
+
+Rotation is the one exception. `POST /api/photos/{hash}/rotate` rewrites the
+file and re-keys the row to a hash of the written **file bytes**, which is the
+hash the response returns. That key is **transient**: the next rescan (at
+startup, then on the nightly schedule) re-derives the path hash and re-keys the
+row again, carrying `is_favorite` and album memberships across. A client that
+keeps the post-rotation hash therefore gets `404`s once that rescan runs; read
+the photo again instead of caching the returned hash.
 
 ### Error envelope
 
@@ -49,7 +63,6 @@ this body:
 {
   "error": "Database error",
   "code": 500,
-  "error_code": "invalid_date",
   "timestamp": "2026-11-14T10:00:00+00:00"
 }
 ```
@@ -58,7 +71,21 @@ this body:
   server paths stay in the log).
 - `code` — duplicate of the HTTP status.
 - `error_code` — present **only** on the video-metadata refusals (machine-readable
-  action key); omitted everywhere else.
+  action key); omitted everywhere else. A `400` refusal then looks like this:
+
+  ```json
+  {
+    "error": "Invalid creation date",
+    "code": 400,
+    "error_code": "invalid_date",
+    "timestamp": "2026-11-14T10:00:00+00:00"
+  }
+  ```
+
+  The codes are `invalid_date` and `invalid_coordinates` (`400`),
+  `file_read_only` (`403`), `file_missing` (`404`), `unsupported_container`
+  (`415`), and `no_writable_slot`, `no_location_carrier` and
+  `unrepresentable_value` (`422`).
 - `timestamp` — RFC 3339, UTC.
 
 Statuses any route can answer, before its handler runs:
@@ -162,9 +189,11 @@ the top level and appear instead as `metadata.location.latitude` /
 }
 ```
 
-`taken_at`, `metadata` and the two `file_modified`/`date_indexed` values are the
-file's facts: no route writes them from client input, and the next scan
-reconciles them.
+`taken_at`, `metadata` and `file_modified` are the file's facts: no route writes
+them from client input, and every scan pass re-derives them (the upsert's
+`ON CONFLICT … DO UPDATE` re-states all three). `date_indexed` is not one of
+them — it is stamped on first insert and the scan's conflict clause leaves it
+alone, so it keeps the moment the row first appeared.
 
 ### `GET /api/photos` — grid listing
 
@@ -251,8 +280,12 @@ files are streamed as-is.
 
 - **Response `200`**: file bytes with `content-type` (RAW → `image/jpeg`),
   `content-length`, `cache-control: public, max-age=31536000`.
-- **Statuses**: `200`; `404` (no row, or backing file gone — a missing file is a
-  `404`, never a lying `content-length`); `500` when RAW decode/encode fails.
+- **Statuses**: `200`; `404` (no row; or, for a non-RAW source, a backing file
+  gone — that path stats the file before streaming, so a missing file is a
+  `404`, never a lying `content-length`); `500` when RAW decode/encode fails —
+  the RAW branch hands the path straight to `decode_raw_to_dynamic_image`, so a
+  missing RAW file surfaces there as a decode failure (`{"error":"Database
+  error"}`), not a `404`.
 - Byte ranges are **not** implemented on this route.
 - Source: `src/handlers_photo.rs` (`get_photo_file`)
 
@@ -342,6 +375,23 @@ ignored and the full representation is served (RFC 9110 §14.2).
 **Empty source**: `200` with `content-length: 0` and `x-transcode-warning: empty`
 (the request is not an error; the client reports the file as unusable).
 
+**`transcode=true` with no artifact on disk**: `202 Accepted` with a JSON body —
+not media bytes —
+
+```json
+{
+  "status": "transcoding",
+  "poll_url": "/api/photos/<hash>/video/status"
+}
+```
+
+returned both when this request spawns the conversion and when one is already
+running for that hash. Poll `poll_url` and re-request the byte URL until the
+artifact exists (or the status reports `Failed`/`Timeout`). When the spawn is
+refused — worker pool saturated, or transcoding unavailable — the original is
+served instead with an `x-transcode-warning` (see below), so a client must tell a
+`202` JSON body from the byte response before treating it as media.
+
 **`x-transcode-warning`** is attached only when a conversion attempt actually
 failed and the original is being served instead:
 
@@ -351,9 +401,9 @@ failed and the original is being served instead:
 
 The warning is also set on the `206` arm.
 
-- **Statuses**: `200`; `206`; `404` (unknown hash or missing backing file);
-  `416` with `content-range: bytes */<size>` for an unsatisfiable range (including
-  any range on a 0-byte file); `500`.
+- **Statuses**: `200`; `202` (transcode spawn, JSON body — see above); `206`;
+  `404` (unknown hash or missing backing file); `416` with `content-range:
+  bytes */<size>` for an unsatisfiable range; `500`.
 - A byte request for a **directly playable** source ignores `transcode=true` and
   serves the original.
 - Source: `src/handlers_video.rs` (`get_video_file`)
@@ -375,7 +425,7 @@ Poll target after a whole-file conversion is spawned.
 
 ```json
 {
-  "state": "in_progress",
+  "state": "InProgress",
   "hash": "…",
   "started_at": "2026-11-14T10:00:00Z",
   "error": null,
@@ -385,10 +435,13 @@ Poll target after a whole-file conversion is spawned.
 }
 ```
 
-  `state` is one of `pending` | `in_progress` | `completed` | `failed` |
-  `timeout`; `percent` is absent when no progress signal exists; `encoder`
-  (`libx264` or a hardware encoder) is set on `completed`; `deadline_ms` is how
-  long the server will keep the job running before giving up, absent when
+  `state` is one of `Pending` | `InProgress` | `Completed` | `Failed` |
+  `Timeout` (PascalCase, per `TranscodeState`'s `rename_all`); `percent` is
+  `null` when no progress signal exists (it is not omitted); `encoder`
+  (`libx264` or a hardware encoder) is present on `Completed` only when the run
+  actually encoded a video track — an audio-only conversion, or one whose video
+  was passed through, completes with `encoder: null`; `deadline_ms` is how long
+  the server will keep the job running before giving up, absent when
   unknowable. The status store is in-memory, so a restart forgets it.
 - **Statuses**: `200`; `404` when no status is retained for that hash.
 - Source: `src/handlers_video.rs` (`get_video_status`)
@@ -511,7 +564,9 @@ Body: `{ "angle": 90 }` — only `90`, `180` or `270`.
 
 Rotations are serialized server-wide. The content hash changes, so the response
 carries a **new** hash; thumbnails and transcode artifacts for the old hash are
-dropped.
+dropped. That new hash is the transient content key described under
+[Photo hash](#photo-hash): the next rescan re-keys the row back to its path
+hash.
 
 - **Response `200`**: the updated photo object (with the new `hash_sha256`,
   `width`/`height` and `updated_at`).
@@ -625,7 +680,9 @@ Progress of the background scan, polled by the UI.
 ## Albums
 
 An album is `{ "id": 1, "name": "Trip", "created_at": "…", "updated_at": "…" }`.
-Names are trimmed, must be non-empty and at most 200 characters (`400` otherwise).
+Names are trimmed, must be non-empty and at most 200 **bytes** of UTF-8 (`400`
+otherwise) — so umlauts and other multi-byte characters count for two or more
+apiece.
 
 ### `GET /api/albums`
 
@@ -759,7 +816,8 @@ A saved search is
 - `view` must be one of `all`, `favorites`, `videos`, `collages`, `housekeeping`.
 - `sort` must be one of `date_desc`, `date_asc`, `name_asc`, `name_desc`,
   `size_desc`, `size_asc`.
-- Names are trimmed, non-empty, ≤200 characters.
+- Names are trimmed, non-empty, ≤200 **bytes** of UTF-8 (the same byte-based
+  check the album routes use, so multi-byte characters count for more than one).
 
 ### `GET /api/saved-searches`
 

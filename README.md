@@ -1,10 +1,11 @@
-# TurboPix
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/RouHim/turbo-pix/main/.github/readme/banner.svg" width="600">
 </p>
 
+<p align="center">
 A fast, self-hosted photo and video viewer that reads your folders in place.
+</p>
+
 
 ![TurboPix photo grid](.github/readme/screenshot.webp)
 

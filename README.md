@@ -197,21 +197,6 @@ Only what this repository actually exercises:
 
 - MP4, MOV, AVI, MKV, WebM, M4V
 
-Playback is native-first and decided server-side per request: the server compares
-each file's capabilities (codec, container, bit depth, layout) with the codecs the
-browser declares and picks direct play, a lossless remux (container/layout only,
-e.g. moving the `moov` atom so playback can start immediately), or a conversion.
-Videos the browser cannot decode are streamed as fragmented MP4 straight out of
-ffmpeg while they convert, so playback starts long before the conversion
-finishes; seeking works through Media Source Extensions, which needs no secure
-context (WebCodecs does, and TurboPix is usually served over plain HTTP on the
-LAN). Conversions run in a bounded worker pool (`TURBO_PIX_MAX_TRANSCODES`): a
-stream request that finds the pool full waits up to
-`TURBO_PIX_STREAM_QUEUE_WAIT_SECS` for a slot and otherwise answers `503` with
-`Retry-After` while the viewer keeps its waiting notice on screen. Converted and
-remuxed artifacts are cached and reused on the next open, and the viewer offers
-the original file as an escape hatch if a conversion keeps failing.
-
 ## Limitations
 
 - **HEIC Support**: Limited due to [image-rs issue #1375](https://github.com/image-rs/image/issues/1375)

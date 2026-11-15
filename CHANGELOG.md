@@ -1,3 +1,11 @@
+## [2.51.10](https://github.com/RouHim/turbo-pix/compare/2.51.9...2.51.10) (2026-11-15)
+
+
+### Bug Fixes
+
+* **viewer:** never drop a decided swipe; wait for real visibility before focus ([d4dd46f](https://github.com/RouHim/turbo-pix/commit/d4dd46f8e712860a1b87ef7966b99c16d6e5bfa8))
+* **viewer:** validate a parked swipe decision instead of trusting it ([d10a4c4](https://github.com/RouHim/turbo-pix/commit/d10a4c40a7fcc14f97d9430c2830e9cfc44643b8))
+
 ## [2.51.9](https://github.com/RouHim/turbo-pix/compare/2.51.8...2.51.9) (2026-11-14)
 
 ## [2.51.8](https://github.com/RouHim/turbo-pix/compare/2.51.7...2.51.8) (2026-11-13)

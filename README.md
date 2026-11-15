@@ -20,11 +20,14 @@ A fast, self-hosted photo and video viewer that reads your folders in place.
 docker run -p 18473:18473 \
   -v /path/to/pictures:/photos:ro \
   -v ./data:/data \
-  -e TURBO_PIX_ALLOWED_HOSTS=192.168.0.36 \
+  -e TURBO_PIX_ALLOWED_HOSTS=localhost,192.168.0.36 \
   rouhim/turbo-pix
 ```
 
-Set `TURBO_PIX_ALLOWED_HOSTS` to the hostname or IP you use to reach TurboPix.
+`TURBO_PIX_ALLOWED_HOSTS` is a comma-separated list of every hostname or IP you use to reach TurboPix. The sample
+allows `localhost` for the URL below and the LAN address `192.168.0.36`; replace the latter with your own. A request
+whose `Host` is not on the list is rejected, so write actions such as favorites, edits and deletion fail with `403`
+even though browsing still works.
 
 Native alternative: download a release binary from the [releases page](https://github.com/RouHim/turbo-pix/releases),
 create the data directory, and start the app.
@@ -51,14 +54,16 @@ Open <http://localhost:18473>, or `http://<host>:18473` from another device. The
 downloads the search model (~580 MB). Later starts only process new or changed files, and a nightly rescan keeps the
 index current. The UI shows indexing progress.
 
-Configuration, supported formats, video playback details and build instructions are in [DEVELOPMENT.md](DEVELOPMENT.md).
+Configuration, supported formats and build instructions are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Troubleshooting and help
 
 - **No photos**: check `TURBO_PIX_PHOTO_PATHS` and restart with `RUST_LOG=info` to see the scan log.
 - **Another device cannot connect**: set `TURBO_PIX_HOST=0.0.0.0` and `TURBO_PIX_ALLOWED_HOSTS` to the IP or hostname
   you use. The container already binds `0.0.0.0`.
-- **Videos do not play**: install `ffmpeg` and `ffprobe` on `PATH` (native install only).
+- **Startup fails with `ffmpeg binary not found`**: the process checks both binaries before it serves anything, so
+  install `ffmpeg` and `ffprobe` on `PATH`, or set `FFMPEG_PATH` / `FFPROBE_PATH` to their locations (native install
+  only; the container ships both).
 - **Slow first start**: indexing and the model download run in the background; the UI shows progress.
 - Help: [open an issue](https://github.com/RouHim/turbo-pix/issues) or [buy me a coffee](https://buymeacoffee.com/rouhim).
 

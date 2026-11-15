@@ -55,6 +55,9 @@ Building from source requires the frontend bundle first: `npm install && npm run
 services:
   turbo-pix:
     image: rouhim/turbo-pix
+    environment:
+      TURBO_PIX_HOST: 0.0.0.0
+      TURBO_PIX_ALLOWED_HOSTS: localhost,192.168.0.36
     volumes:
       - /path/to/pictures:/photos:ro # could be mounted read only
       - ./data:/data

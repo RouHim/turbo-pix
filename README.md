@@ -19,11 +19,15 @@ A fast, self-hosted photo and video viewer that reads your folders in place.
 
 ```shell
 docker run -p 18473:18473 \
-  -v /path/to/pictures:/photos:ro \
+  -v /path/to/pictures:/photos \
   -v ./data:/data \
   -e TURBO_PIX_ALLOWED_HOSTS=localhost,192.168.0.36 \
   rouhim/turbo-pix
 ```
+
+The photo mount must be writable: TurboPix writes metadata edits, rotation and the scan's faststart rewrite into
+your files, and deletion removes them, so a read-only mount answers those actions with `403` while browsing and
+playback keep working.
 
 `TURBO_PIX_ALLOWED_HOSTS` is a comma-separated list of every hostname or IP you use to reach TurboPix. The sample
 allows `localhost` for the URL below and the LAN address `192.168.0.36`; replace the latter with your own. A request

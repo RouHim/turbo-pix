@@ -59,7 +59,7 @@ services:
       TURBO_PIX_HOST: 0.0.0.0
       TURBO_PIX_ALLOWED_HOSTS: localhost,192.168.0.36
     volumes:
-      - /path/to/pictures:/photos:ro # could be mounted read only
+      - /path/to/pictures:/photos # must be writable: edits, rotation and deletion write in place
       - ./data:/data
     ports:
       - '18473:18473'

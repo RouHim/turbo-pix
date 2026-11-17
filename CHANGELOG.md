@@ -1,3 +1,13 @@
+# [2.52.0](https://github.com/RouHim/turbo-pix/compare/2.51.10...2.52.0) (2026-11-17)
+
+### Bug Fixes
+
+* **viewer:** keep action buttons unclipped on hover ([4681b4d](https://github.com/RouHim/turbo-pix/commit/4681b4d82a0c4c872813a35c66631cf9948d5a67))
+
+### Features
+
+* **gallery:** show only the capture date on cards ([05b9021](https://github.com/RouHim/turbo-pix/commit/05b9021c4e77cd9794f43053fe7ab95399c66386))
+
 ## [2.51.10](https://github.com/RouHim/turbo-pix/compare/2.51.9...2.51.10) (2026-11-15)
 
 

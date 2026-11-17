@@ -166,7 +166,10 @@
     border: 1px solid var(--glass-border, var(--divider-color));
     box-shadow: var(--shadow-medium);
     border-radius: var(--radius-md);
-    padding: var(--space-2);
+    /* The hover scale (1.1) needs vertical room: the bar keeps its 58px height
+       by trading 4px of outer padding for 4px of inner padding, which is the
+       box the scroll container clips against. */
+    padding: var(--space-1) var(--space-2);
     z-index: 10;
     max-width: 88%;
   }
@@ -196,6 +199,8 @@
   .viewer-controls-inner {
     display: flex;
     gap: var(--space-2);
+    /* Vertical padding is the hover-scale headroom (see .viewer-controls). */
+    padding: var(--space-1) 0;
     overflow: auto hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;

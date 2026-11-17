@@ -1,3 +1,10 @@
+## [2.52.1](https://github.com/RouHim/turbo-pix/compare/2.52.0...2.52.1) (2026-11-17)
+
+### Bug Fixes
+
+* **metadata:** report a read-only library instead of a database error ([4eda5bb](https://github.com/RouHim/turbo-pix/commit/4eda5bba82a8911fbf640f70bf45d9e574188f29))
+* **startup:** surface a read-only medium when the stale probe cannot be removed ([bc59abb](https://github.com/RouHim/turbo-pix/commit/bc59abb93fba947449128027bb58e0485990b49c))
+
 # [2.52.0](https://github.com/RouHim/turbo-pix/compare/2.51.10...2.52.0) (2026-11-17)
 
 ### Bug Fixes

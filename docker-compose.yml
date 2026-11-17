@@ -7,8 +7,10 @@ services:
       - "18473:18473"
     volumes:
       - ./data:/data
-      # Point this at your own library; the container only ever reads it.
-      - ${TURBO_PIX_PHOTO_PATH:-./photos}:/photos:ro
+      # Point this at your own library. The mount must stay WRITABLE: metadata
+      # edits, rotation and the scan's in-place faststart rewrite all write
+      # into the library (a read-only mount refuses them with 403).
+      - ${TURBO_PIX_PHOTO_PATH:-./photos}:/photos
     environment:
       - RUST_LOG=info
       - TURBO_PIX_HOST=0.0.0.0

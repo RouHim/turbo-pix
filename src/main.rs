@@ -101,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting TurboPix server on Port {}", port);
     info!("Photo paths: {:?}", config.photo_paths);
+    warn_about_read_only_photo_paths(&config.photo_paths);
     info!("Data path: {}", config.data_path);
     info!("Database: {}", config.db_path);
     info!("Cache path: {}", config.cache.thumbnail_cache_path);
@@ -197,6 +198,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     warp::serve(routes).run((host, port)).await;
 
     Ok(())
+}
+
+/// Reports a photo library this process cannot write BEFORE the user hits the
+/// first save.
+///
+/// A read-only photo mount is a supported deployment (browsing, playback,
+/// thumbnails and transcodes all work), but metadata edits, rotation and
+/// deletion write into the library and will be refused. The probe is a real
+/// create+remove in the directory — permission bits lie under ACLs, root and
+/// mount options — and it is named without an image extension so a crash
+/// between the two steps cannot leave something the scanner would index.
+fn warn_about_read_only_photo_paths(photo_paths: &[String]) {
+    for photo_path in photo_paths {
+        let root = std::path::Path::new(photo_path);
+        if !root.is_dir() {
+            continue;
+        }
+        let probe = root.join(format!(".turbo-pix-write-probe-{}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+            }
+            // A leftover probe from this very pid is not evidence of anything;
+            // treat it as writable rather than cry wolf.
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+                ) =>
+            {
+                log::warn!(
+                    "Photo directory {} is read-only ({}). Browsing and playback work, but \
+                     metadata edits, rotation and deletion will be refused.",
+                    root.display(),
+                    err
+                );
+            }
+            Err(err) => log::warn!(
+                "Could not verify write access to photo directory {}: {}",
+                root.display(),
+                err
+            ),
+        }
+    }
 }
 
 fn check_port(host: &str, port: u16) -> Option<Result<(), Box<dyn Error>>> {

@@ -80,6 +80,36 @@ impl std::fmt::Display for ImageEditError {
 
 impl std::error::Error for ImageEditError {}
 
+/// The one message a photo library that refuses writes reports. It names what
+/// the operator can act on (the mount or its permissions), never the path.
+const READ_ONLY_LIBRARY: &str = "Photo directory is mounted as read-only";
+
+/// Classifies a failed write into the library.
+///
+/// A medium that refuses the write — a read-only mount, a directory or file
+/// this process may not write — is a condition the user can fix, so it takes
+/// the dedicated `PermissionDenied` variant (the handlers answer it with 403
+/// and the UI shows the localized read-only message). Every other I/O error
+/// stays a write failure. Without the split, rotating or deleting on a
+/// read-only library answered the sanitized `Database error`.
+fn write_failure(context: &str, err: std::io::Error) -> ImageEditError {
+    match err.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem => {
+            ImageEditError::PermissionDenied(READ_ONLY_LIBRARY.to_string())
+        }
+        _ => ImageEditError::WriteError(format!("{context}: {err}")),
+    }
+}
+
+/// [`write_failure`] for `image`'s encoder, which wraps the same I/O error in
+/// its own type.
+fn image_write_failure(context: &str, err: image::ImageError) -> ImageEditError {
+    match err {
+        image::ImageError::IoError(io) => write_failure(context, io),
+        other => ImageEditError::WriteError(format!("{context}: {other}")),
+    }
+}
+
 /// Rotates an image file by the specified angle
 ///
 /// This performs a TRUE rotation:
@@ -220,7 +250,7 @@ pub async fn rotate_image(
     ));
     rotated_img
         .save(&temp_path)
-        .map_err(|e| ImageEditError::WriteError(format!("Failed to save rotated image: {}", e)))?;
+        .map_err(|e| image_write_failure("Failed to save rotated image", e))?;
 
     // Carry the original EXIF (orientation reset to 1) into the rotated file.
     // The re-encoded temp file has no EXIF, so this also serves as the
@@ -241,7 +271,7 @@ pub async fn rotate_image(
     std::fs::rename(&temp_path, file_path).map_err(|e| {
         // Cleanup temp file if rename fails
         let _ = std::fs::remove_file(&temp_path);
-        ImageEditError::WriteError(format!("Failed to replace original file: {}", e))
+        write_failure("Failed to replace original file", e)
     })?;
 
     // Recompute file hash (content changed)
@@ -370,6 +400,7 @@ fn carry_exif_with_reset_orientation(
     // Generate new EXIF data and write it back
     let exif_bytes = crate::exif_helpers::build_exif_buffer(&new_fields)?;
     crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes)
+        .map_err(|error| error.to_string())
 }
 
 /// Computes SHA256 hash of file
@@ -412,15 +443,7 @@ pub async fn delete_photo(
 
     // Delete the original file
     if file_path.exists() {
-        std::fs::remove_file(file_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(30) {
-                return ImageEditError::PermissionDenied(
-                    "Photo directory is mounted as read-only".to_string(),
-                );
-            }
-
-            ImageEditError::WriteError(format!("Failed to delete file: {}", e))
-        })?;
+        std::fs::remove_file(file_path).map_err(|e| write_failure("Failed to delete file", e))?;
         log::info!("Deleted file: {}", photo.file_path);
     } else {
         log::warn!(
@@ -809,10 +832,38 @@ mod tests {
             Err(ImageEditError::PermissionDenied(msg)) => msg,
             _ => String::new(),
         };
-        assert_eq!(message, "Photo directory is mounted as read-only");
+        assert_eq!(message, READ_ONLY_LIBRARY);
         assert!(!message.contains(&photo.file_path));
 
         fs::set_permissions(&read_only_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The medium classifications every library write shares. They are what the
+    /// handlers turn into a 403 and the UI renders as the localized read-only
+    /// message; a read-only mount used to answer "Database error" here.
+    #[test]
+    fn write_failure_classifies_a_refusing_medium_as_permission_denied() {
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ReadOnlyFilesystem,
+        ] {
+            let error = write_failure("Failed to save rotated image", std::io::Error::from(kind));
+            match error {
+                ImageEditError::PermissionDenied(message) => {
+                    assert_eq!(message, READ_ONLY_LIBRARY);
+                }
+                other => panic!("{kind:?} must classify as PermissionDenied, got {other:?}"),
+            }
+        }
+
+        let error = write_failure(
+            "Failed to delete file",
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        assert!(
+            matches!(&error, ImageEditError::WriteError(message) if message.starts_with("Failed to delete file")),
+            "an unexpected I/O error stays a write failure, got {error:?}"
+        );
     }
 
     #[tokio::test]

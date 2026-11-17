@@ -52,18 +52,19 @@ pub struct ValidationError {
 
 impl reject::Reject for ValidationError {}
 
-/// A refused video metadata edit, already classified: the status and the
-/// machine-readable `code` are decided where the container failure is known
-/// (`handlers_photo::video_metadata_rejection`), so the rejection handler only
-/// has to render them.
+/// A refused metadata edit, already classified: the status and the
+/// machine-readable `code` are decided where the file failure is known
+/// (`handlers_photo::video_metadata_rejection` for containers,
+/// `handlers_photo::metadata_write_rejection` for JPEG/PNG), so the rejection
+/// handler only has to render them.
 #[derive(Debug)]
-pub struct VideoMetadataError {
+pub struct MetadataRefusal {
     pub status: warp::http::StatusCode,
     pub code: &'static str,
     pub message: String,
 }
 
-impl reject::Reject for VideoMetadataError {}
+impl reject::Reject for MetadataRefusal {}
 
 pub fn with_db(db_pool: DbPool) -> impl Filter<Extract = (DbPool,), Error = Infallible> + Clone {
     warp::any().map(move || db_pool.clone())
@@ -132,12 +133,12 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
     } else if err.find::<CrossOriginRequest>().is_some() {
         code = warp::http::StatusCode::FORBIDDEN;
         message = "Cross-origin request rejected".to_string();
-    } else if let Some(video_error) = err.find::<VideoMetadataError>() {
+    } else if let Some(refusal) = err.find::<MetadataRefusal>() {
         // The refusal class (and with it the status) was decided where the
-        // container told us what was wrong; the client translates the code.
-        code = video_error.status;
-        message = video_error.message.clone();
-        error_code = Some(video_error.code);
+        // file told us what was wrong; the client translates the code.
+        code = refusal.status;
+        message = refusal.message.clone();
+        error_code = Some(refusal.code);
     } else if let Some(validation_error) = err.find::<ValidationError>() {
         code = warp::http::StatusCode::BAD_REQUEST;
         message = validation_error.message.clone();

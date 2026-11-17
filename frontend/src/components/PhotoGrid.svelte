@@ -19,6 +19,7 @@
   import { isPrefixQuery } from '../lib/query.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import PhotoCard from './PhotoCard.svelte';
+  import DateScrubber from './DateScrubber.svelte';
 
   const DEFAULT_BATCH_SIZE = APP_CONSTANTS.DEFAULT_BATCH_SIZE;
 
@@ -219,9 +220,12 @@
     // Dedupe identical concurrent loads (effect + onMount can both fire);
     // reloadToken is bumped by handleIndexingCompleted so a completion
     // reload is never swallowed by the dedupe.
-    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.to_year}|${route.to_month}|${route.album}|${photoGridState.currentPage}|${reloadToken}`;
+    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.to_year}|${route.to_month}|${route.album}|${photoGridState.currentPage}|${photoGridState.windowEpoch}|${reloadToken}`;
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
+    // A date-scrubber jump replaces `photos`/`currentPage` and bumps this
+    // epoch; a page fetched for the previous window must not be appended.
+    const windowEpochAtStart = photoGridState.windowEpoch;
 
     // A newer load superseded a pending min-display timer; drop it so the
     // stale load's finally block can't clear the new load's loading state.
@@ -255,6 +259,7 @@
         photosList = await loadRegularPage(signal);
       }
 
+      if (photoGridState.windowEpoch !== windowEpochAtStart) return;
       appendPhotos(photosList);
       // Backend recovered: allow the next scroll-triggered retry immediately.
       lastLoadErrorAt = null;
@@ -525,6 +530,8 @@
       : $t('ui.photos_count', { values: { count: total }, default: '{count} photos' })}
   </div>
 {/if}
+
+<DateScrubber />
 
 <div
   id="photo-grid"

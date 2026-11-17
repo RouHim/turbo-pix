@@ -39,6 +39,10 @@ export const photoGridState = $state({
   hasMore: true,
   currentQuery: '',
   semanticSearchMode: false,
+  // Bumped whenever the date-scrubber window replaces the listing or resets
+  // `currentPage`; the grid's load dedupe includes it so re-anchoring can never
+  // be swallowed by a previous signature.
+  windowEpoch: 0,
   // Exact result count of the current regular load; null while it is unknown
   // (semantic search and album pages do not report one).
   total: null,

@@ -3,6 +3,36 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use exif::{Field, In, Rational, Tag, Value};
 
+/// Why a metadata edit was refused.
+///
+/// The variants are wire decisions, not decoration: the handler answers
+/// [`MetadataWriteError::InvalidCoordinates`] with a 400, a read-only medium
+/// with 403 `file_read_only` (the same code the container writer reports), and
+/// every other refusal with the sanitized 500.
+#[derive(Debug)]
+pub enum MetadataWriteError {
+    /// Out-of-range or unpaired GPS input, refused before the file is touched.
+    InvalidCoordinates(String),
+    /// The medium refused the write: permission denied or a read-only
+    /// filesystem (mount option, ownership).
+    ReadOnly(String),
+    /// Anything the file itself refuses: an unsupported format, a serializer
+    /// failure, or an unexpected I/O error.
+    Failed(String),
+}
+
+impl std::fmt::Display for MetadataWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCoordinates(message) | Self::ReadOnly(message) | Self::Failed(message) => {
+                write!(f, "{message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MetadataWriteError {}
+
 /// Updates EXIF metadata in an image file
 /// Only updates the specified fields, preserves all other EXIF data and image content
 ///
@@ -13,33 +43,37 @@ pub fn update_metadata(
     taken_at: Option<DateTime<Utc>>,
     latitude: Option<f64>,
     longitude: Option<f64>,
-) -> Result<(), String> {
+) -> Result<(), MetadataWriteError> {
     // Validate GPS coordinates
     if let Some(lat) = latitude {
         if !(-90.0..=90.0).contains(&lat) {
-            return Err(format!(
+            return Err(MetadataWriteError::InvalidCoordinates(format!(
                 "Latitude out of range: {} (must be -90 to 90)",
                 lat
-            ));
+            )));
         }
     }
 
     if let Some(lng) = longitude {
         if !(-180.0..=180.0).contains(&lng) {
-            return Err(format!(
+            return Err(MetadataWriteError::InvalidCoordinates(format!(
                 "Longitude out of range: {} (must be -180 to 180)",
                 lng
-            ));
+            )));
         }
     }
 
     // GPS coordinates must be provided together or not at all
     match (latitude, longitude) {
         (Some(_), None) => {
-            return Err("Latitude provided without longitude".to_string());
+            return Err(MetadataWriteError::InvalidCoordinates(
+                "Latitude provided without longitude".to_string(),
+            ));
         }
         (None, Some(_)) => {
-            return Err("Longitude provided without latitude".to_string());
+            return Err(MetadataWriteError::InvalidCoordinates(
+                "Longitude provided without latitude".to_string(),
+            ));
         }
         _ => {}
     }
@@ -49,32 +83,32 @@ pub fn update_metadata(
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-        .ok_or_else(|| "File has no extension".to_string())?;
+        .ok_or_else(|| MetadataWriteError::Failed("File has no extension".to_string()))?;
 
     let format = match extension.as_str() {
         "jpg" | "jpeg" => "jpeg",
         "png" => "png",
         "cr2" | "cr3" | "nef" | "arw" | "dng" | "orf" | "rw2" => {
-            return Err(format!(
+            return Err(MetadataWriteError::Failed(format!(
                 "RAW format '.{}' is not supported for EXIF writing. \
                 Only JPEG and PNG are supported. \
                 Convert to JPEG/PNG first or use specialized RAW editing tools.",
                 extension
-            ));
+            )));
         }
         "webp" | "heic" | "heif" | "avif" => {
-            return Err(format!(
+            return Err(MetadataWriteError::Failed(format!(
                 "Format '.{}' is not currently supported for EXIF writing. \
                 Only JPEG and PNG are supported. Convert to JPEG/PNG first.",
                 extension
-            ));
+            )));
         }
         _ => {
-            return Err(format!(
+            return Err(MetadataWriteError::Failed(format!(
                 "Unsupported file extension '.{}' for EXIF writing. \
                 Only JPEG (.jpg, .jpeg) and PNG (.png) are supported.",
                 extension
-            ));
+            )));
         }
     };
 
@@ -187,8 +221,18 @@ pub fn update_metadata(
     }
 
     // Generate new EXIF data and write it back into the image file
-    let exif_bytes = crate::exif_helpers::build_exif_buffer(&new_fields)?;
-    crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes)
+    let exif_bytes =
+        crate::exif_helpers::build_exif_buffer(&new_fields).map_err(MetadataWriteError::Failed)?;
+    crate::exif_helpers::write_exif_to_image(file_path, format, exif_bytes).map_err(|error| {
+        match error {
+            crate::exif_helpers::ExifWriteError::ReadOnly(message) => {
+                MetadataWriteError::ReadOnly(message)
+            }
+            crate::exif_helpers::ExifWriteError::Failed(message) => {
+                MetadataWriteError::Failed(message)
+            }
+        }
+    })
 }
 
 /// Decides whether an existing EXIF field survives the rewrite.
@@ -377,7 +421,10 @@ mod tests {
 
         let result = update_metadata(&image_path, None, Some(91.0), Some(0.0));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Latitude out of range"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Latitude out of range"));
 
         let result = update_metadata(&image_path, None, Some(-91.0), Some(0.0));
         assert!(result.is_err());
@@ -390,7 +437,10 @@ mod tests {
 
         let result = update_metadata(&image_path, None, Some(0.0), Some(181.0));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Longitude out of range"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Longitude out of range"));
 
         let result = update_metadata(&image_path, None, Some(0.0), Some(-181.0));
         assert!(result.is_err());
@@ -403,11 +453,14 @@ mod tests {
 
         let result = update_metadata(&image_path, None, Some(40.0), None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("without longitude"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("without longitude"));
 
         let result = update_metadata(&image_path, None, None, Some(-74.0));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("without latitude"));
+        assert!(result.unwrap_err().to_string().contains("without latitude"));
     }
 
     #[test]
@@ -819,7 +872,7 @@ mod tests {
 
         // THEN: Should fail with clear error message
         assert!(result.is_err(), "Should reject RAW formats");
-        let error = result.unwrap_err();
+        let error = result.unwrap_err().to_string();
         assert!(
             error.contains("RAW format") || error.contains("not supported"),
             "Error should mention RAW format, got: {}",

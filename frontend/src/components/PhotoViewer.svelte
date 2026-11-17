@@ -1,6 +1,6 @@
 <script>
   import { get } from 'svelte/store';
-  import { t } from '../lib/i18n.js';
+  import { t, translateError } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { photoGridState } from '../lib/state.svelte.js';
@@ -1738,9 +1738,13 @@
         };
       }
     } catch (error) {
+      // The API error carries "HTTP <status>: <message>"; localize the message
+      // so a read-only library reports why the rotation was refused instead of
+      // the raw transport text.
+      const match = error.message?.match(/HTTP \d+: (.+)/);
       addToast(
         get(t)('notifications.error', { default: 'Error' }),
-        error.message ||
+        translateError(match?.[1] || error.message || '') ||
           get(t)('notifications.rotationFailed', { default: 'Failed to rotate photo' }),
         'error',
         5000
@@ -1804,7 +1808,7 @@
     } catch (error) {
       let msg = get(t)('notifications.deletionFailed', { default: 'Failed to delete photo' });
       const match = error.message?.match(/HTTP \d+: (.+)/);
-      if (match?.[1]) msg = match[1];
+      if (match?.[1]) msg = translateError(match[1]);
       addToast(get(t)('notifications.error', { default: 'Error' }), msg, 'error', 5000);
       isLoading = false;
     }

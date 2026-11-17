@@ -17,8 +17,8 @@ use crate::mp4_metadata::{self, Mp4MetadataError, VideoMetadataEdit, VideoSaveEr
 use crate::photo_listing::{self, ListingPage, ListingRequest};
 use crate::photo_reply::PhotoReply;
 use crate::warp_helpers::{
-    handle_rejection, with_cache, with_db, DatabaseError, NotFoundError, PermissionError,
-    ValidationError, VideoMetadataError,
+    handle_rejection, with_cache, with_db, DatabaseError, MetadataRefusal, NotFoundError,
+    PermissionError, ValidationError,
 };
 
 /// Cap for JSON request bodies (favorite/metadata/rotate). All three payloads
@@ -592,23 +592,14 @@ pub async fn update_photo_metadata(
     let file_path = Path::new(&photo.file_path);
 
     // Update EXIF in the file
-    if let Err(e) = metadata_writer::update_metadata(
+    if let Err(error) = metadata_writer::update_metadata(
         file_path,
         taken_at,
         metadata_req.latitude,
         metadata_req.longitude,
     ) {
-        log::error!("Failed to update EXIF: {}", e);
-        // Out-of-range/unpaired GPS coordinates are client input errors, not
-        // server failures — the metadata_writer rejects them before touching
-        // the file ("Latitude out of range…", "…without longitude",
-        // "…without latitude").
-        if e.starts_with("Latitude") || e.starts_with("Longitude") {
-            return Err(reject::custom(ValidationError { message: e }));
-        }
-        return Err(reject::custom(DatabaseError {
-            message: format!("Failed to update EXIF: {}", e),
-        }));
+        log::error!("Failed to update EXIF: {}", error);
+        return Err(metadata_write_rejection(error));
     }
 
     // The file is the authority and it just changed: read it back and let the
@@ -679,11 +670,41 @@ fn video_metadata_rejection(err: Mp4MetadataError) -> Rejection {
     };
 
     log::error!("Refused video metadata edit: {} ({} {})", err, status, code);
-    reject::custom(VideoMetadataError {
+    reject::custom(MetadataRefusal {
         status,
         code,
         message: err.to_string(),
     })
+}
+
+/// Classify an EXIF-write refusal the way [`video_metadata_rejection`]
+/// classifies a container refusal: invalid input is the client's (400), a
+/// medium that refuses the write is an actionable condition the client can fix
+/// (`file_read_only`, 403 — the photo directory is mounted read-only or this
+/// process may not write it), and everything else is a server fault on the
+/// sanitized 500 path. Without the split, a read-only photo directory answered
+/// `Database error` and pointed the user at the database instead of the mount —
+/// while the same directory's videos already named `file_read_only`.
+fn metadata_write_rejection(error: metadata_writer::MetadataWriteError) -> Rejection {
+    match error {
+        metadata_writer::MetadataWriteError::InvalidCoordinates(message) => {
+            reject::custom(ValidationError { message })
+        }
+        metadata_writer::MetadataWriteError::ReadOnly(message) => {
+            log::error!(
+                "Refused image metadata edit: {} (403 Forbidden file_read_only)",
+                message
+            );
+            reject::custom(MetadataRefusal {
+                status: warp::http::StatusCode::FORBIDDEN,
+                code: "file_read_only",
+                message,
+            })
+        }
+        metadata_writer::MetadataWriteError::Failed(message) => reject::custom(DatabaseError {
+            message: format!("Failed to update EXIF: {}", message),
+        }),
+    }
 }
 
 /// Maps a container-save failure. A clean refusal keeps its 4xx code; a failed
@@ -1105,6 +1126,13 @@ pub async fn rotate_photo(
             // The row write is done; the reply carries the file's facts (the
             // index is keyed by path, which survives the hash re-key).
             Ok(warp::reply::json(&PhotoReply::from_row(updated_photo)))
+        }
+        Err(image_editor::ImageEditError::PermissionDenied(msg)) => {
+            // A library that refuses the write (read-only mount, missing
+            // permission) is the client's to fix; the shared 500 would only
+            // say "Database error".
+            log::warn!("Permission denied rotating photo {}: {}", photo_hash, msg);
+            Err(reject::custom(PermissionError { message: msg }))
         }
         Err(e) => {
             log::error!("Failed to rotate image: {}", e);
@@ -3559,7 +3587,7 @@ mod tests {
         ] {
             let rejection = video_metadata_rejection(err);
             let refusal = rejection
-                .find::<VideoMetadataError>()
+                .find::<MetadataRefusal>()
                 .unwrap_or_else(|| panic!("{expected_code}: expected a coded refusal"));
             assert_eq!(refusal.status.as_u16(), expected_status, "{expected_code}");
             assert_eq!(refusal.code, expected_code);
@@ -3569,7 +3597,38 @@ mod tests {
         // on: it takes the generic 500 with no code at all.
         let rejection =
             video_metadata_rejection(Mp4MetadataError::Io(std::io::Error::other("disk gone")));
-        assert!(rejection.find::<VideoMetadataError>().is_none());
+        assert!(rejection.find::<MetadataRefusal>().is_none());
+        assert!(rejection.find::<DatabaseError>().is_some());
+    }
+
+    /// The image half of the refusal table: a medium that refuses the write is
+    /// the same actionable `file_read_only` the container path reports, because
+    /// a read-only photo directory answers both an image and a video save. It
+    /// used to reach the client as the sanitized 500 ("Database error"), which
+    /// named the wrong subsystem and hid the mount as the cause.
+    #[test]
+    fn image_refusal_table_maps_every_writer_failure() {
+        use crate::metadata_writer::MetadataWriteError;
+
+        let rejection = metadata_write_rejection(MetadataWriteError::ReadOnly(
+            "Failed to write JPEG: Read-only file system (os error 30)".to_string(),
+        ));
+        let refusal = rejection
+            .find::<MetadataRefusal>()
+            .expect("a read-only medium is a coded refusal");
+        assert_eq!(refusal.status.as_u16(), 403);
+        assert_eq!(refusal.code, "file_read_only");
+
+        let rejection = metadata_write_rejection(MetadataWriteError::InvalidCoordinates(
+            "Latitude out of range: 91".to_string(),
+        ));
+        assert!(rejection.find::<ValidationError>().is_some());
+        assert!(rejection.find::<MetadataRefusal>().is_none());
+
+        let rejection = metadata_write_rejection(MetadataWriteError::Failed(
+            "Unsupported file extension '.webp'".to_string(),
+        ));
+        assert!(rejection.find::<MetadataRefusal>().is_none());
         assert!(rejection.find::<DatabaseError>().is_some());
     }
 

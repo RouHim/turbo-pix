@@ -34,6 +34,7 @@
     "month_select": "Month",
     "photos_count": "{count} photos",
     "photos_count_one": "1 photo",
+    "date_scrubber_label": "Date position",
     "clear_timeline_filter": "Clear timeline filter",
     "timeline_no_photos_month": "No photos",
     "timeline_overview_label": "Timeline overview",

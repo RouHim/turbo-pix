@@ -261,6 +261,7 @@
     cursor: pointer;
     background: var(--surface-color);
     border: 1px solid var(--divider-color);
+    aspect-ratio: 1;
     animation: fade-in 0.6s ease-out forwards;
     opacity: 0;
     content-visibility: auto;
@@ -531,6 +532,7 @@
       border: none;
       display: flex;
       flex-direction: column;
+      aspect-ratio: auto;
     }
 
     .photo-card-overlay {

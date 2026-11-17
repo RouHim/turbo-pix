@@ -216,6 +216,34 @@ fn warn_about_read_only_photo_paths(photo_paths: &[String]) {
             continue;
         }
         let probe = root.join(format!(".turbo-pix-write-probe-{}", std::process::id()));
+        let warn_read_only = |err: &std::io::Error| {
+            log::warn!(
+                "Photo directory {} is read-only ({}). Browsing and playback work, but \
+                 metadata edits, rotation and deletion will be refused.",
+                root.display(),
+                err
+            );
+        };
+        // Clear a probe left behind by an earlier process with this same pid
+        // (the container entrypoint pins the app to pid 1) so `create_new`
+        // tests the medium instead of the leftover. On a read-only medium the
+        // unlink itself is where the refusal surfaces: the stale file cannot
+        // be removed, so `create_new` would answer `AlreadyExists` — never
+        // `EROFS` — and the read-only diagnosis would be lost.
+        match std::fs::remove_file(&probe) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+                ) =>
+            {
+                warn_read_only(&err);
+                continue;
+            }
+            Err(_) => {}
+        }
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -224,21 +252,13 @@ fn warn_about_read_only_photo_paths(photo_paths: &[String]) {
             Ok(_) => {
                 let _ = std::fs::remove_file(&probe);
             }
-            // A leftover probe from this very pid is not evidence of anything;
-            // treat it as writable rather than cry wolf.
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err)
                 if matches!(
                     err.kind(),
                     std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
                 ) =>
             {
-                log::warn!(
-                    "Photo directory {} is read-only ({}). Browsing and playback work, but \
-                     metadata edits, rotation and deletion will be refused.",
-                    root.display(),
-                    err
-                );
+                warn_read_only(&err);
             }
             Err(err) => log::warn!(
                 "Could not verify write access to photo directory {}: {}",

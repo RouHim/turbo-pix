@@ -2,9 +2,9 @@
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { addToast } from '../lib/state.svelte.js';
-  import { formatDate, formatFileSize, getThumbnailUrl, getPhotoUrl } from '../lib/utils.js';
+  import { getThumbnailUrl, getPhotoUrl } from '../lib/utils.js';
   import { toDataURL } from '../lib/blurhash.js';
-  import { t } from '../lib/i18n.js';
+  import { t, getLocale } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
   import { longpress } from '../lib/longpress.js';
 
@@ -19,19 +19,20 @@
 
   // --- Derived state ---
   const isVideo = $derived(photo?.metadata?.video?.codec != null);
-  const title = $derived.by(
+  // The filename is the card's accessible name only — the gallery itself stays
+  // free of filesystem text. The viewer shows the filename.
+  const accessibleLabel = $derived.by(
     () =>
       photo?.filename ||
       `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`
   );
-  const meta = $derived.by(() => {
-    if (!photo) return '';
-    const parts = [];
-    if (photo.taken_at) parts.push(formatDate(photo.taken_at));
-    const camera = photo.metadata?.camera;
-    if (camera?.make && camera?.model) parts.push(`${camera.make} ${camera.model}`);
-    if (photo.file_size) parts.push(formatFileSize(photo.file_size));
-    return parts.join(' • ');
+  // A contact sheet carries the date, not the filesystem record. Camera,
+  // file size and filename stay in the viewer's metadata panel.
+  const dateLabel = $derived.by(() => {
+    if (!photo?.taken_at) return '';
+    const date = new Date(photo.taken_at);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString(getLocale(), { dateStyle: 'medium' });
   });
   const blurhashUrl = $derived.by(() => {
     if (photo?.blurhash) {
@@ -152,7 +153,7 @@
     class="photo-card-open-layer"
     role="button"
     tabindex="0"
-    aria-label={title}
+    aria-label={accessibleLabel}
     aria-pressed={selectionMode ? selected : undefined}
     onkeydown={(e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -187,7 +188,7 @@
         <img
           class="photo-card-image"
           src="{getThumbnailUrl(photo, 'medium')}&format=jpeg"
-          alt={title}
+          alt={accessibleLabel}
           loading="lazy"
           decoding="async"
           onload={onImageLoad}
@@ -206,8 +207,7 @@
   </div>
 
   <div class="photo-card-overlay">
-    <div class="photo-card-title">{title}</div>
-    <div class="photo-card-meta">{meta}</div>
+    <div class="photo-card-meta">{dateLabel}</div>
   </div>
 
   {#if !selectionMode}
@@ -388,15 +388,6 @@
     opacity: 1;
   }
 
-  .photo-card-title {
-    color: white;
-    font-size: var(--font-md);
-    font-weight: var(--font-semibold);
-    margin-bottom: 6px;
-    text-shadow: 0 1px 2px rgb(0 0 0 / 50%);
-    letter-spacing: -0.2px;
-  }
-
   .photo-card-meta {
     color: rgb(255 255 255 / 90%);
     font-size: var(--font-sm);
@@ -549,16 +540,6 @@
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       padding: var(--space-1) var(--space-1) 0;
-    }
-
-    .photo-card-title {
-      color: var(--text-primary);
-      font-size: var(--font-xs);
-      text-shadow: none;
-      margin-bottom: 2px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
 
     .photo-card-meta {

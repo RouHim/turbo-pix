@@ -63,6 +63,11 @@
     return formatter.format(new Date(2000, activeMonth % 12, 1));
   });
   const activeYear = $derived(activeMonth === null ? '' : String(Math.floor(activeMonth / 12)));
+  /* The accessible name must start with the visible text (WCAG 2.5.3): the
+     caption shows the month/year and means "back to newest". */
+  const captionLabel = $derived(
+    `${activeMonth === null ? '—' : shortMonth} ${activeYear} – ${newestLabel}`
+  );
 
   const periodLabel = (index) => formatPeriodName(index, monthName);
   const countLabel = (index) => {
@@ -260,7 +265,7 @@
     type="button"
     class="date-caption"
     data-testid="date-caption"
-    aria-label={newestLabel}
+    aria-label={captionLabel}
     title={newestLabel}
     onpointerenter={() => (hovered = true)}
     onpointerleave={() => (hovered = false)}
@@ -376,30 +381,28 @@
     flex-direction: column;
   }
 
+  /* One-line date stamp: a full year needs more than the lane's 56px, so the
+     pill is 64px wide and leans 10px over the content edge (2px clear of the
+     viewport). Solid surface: the label must stay readable over photos, and a
+     blur under a 25px pill only costs paint. */
   .date-caption {
     display: flex;
-    width: calc(100% - var(--space-2));
-    min-height: 44px;
-    flex-direction: column;
+    width: 64px;
     align-items: center;
     justify-content: center;
-    gap: 1px;
-    margin: var(--space-1) auto 0;
+    gap: 2px;
+    margin: var(--space-1) 2px 0 -10px;
     border: 1px solid var(--glass-border, var(--divider-color));
     border-radius: var(--radius-full);
-    padding-block: var(--space-2);
-    background: var(--glass-bg);
+    padding-block: 5px;
+    padding-inline: 2px;
+    background: var(--surface-color);
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-body);
     line-height: 1.1;
     text-align: center;
     pointer-events: auto;
-    transition:
-      color var(--transition-medium),
-      border-color var(--transition-medium);
-    backdrop-filter: blur(16px) saturate(1.5);
-    -webkit-backdrop-filter: blur(16px) saturate(1.5);
   }
 
   .date-caption:focus-visible {
@@ -407,30 +410,16 @@
     outline-offset: -2px;
   }
 
-  @supports not (backdrop-filter: blur(1px)) {
-    .date-caption {
-      background: var(--surface-color);
-    }
-  }
-
-  @media (prefers-reduced-transparency: reduce) {
-    .date-caption {
-      background: var(--surface-color);
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-    }
-  }
-
   .date-caption-month {
     color: var(--text-secondary);
     font-size: var(--font-xs);
     font-weight: var(--font-medium);
-    letter-spacing: 0.08em;
+    letter-spacing: 0;
     text-transform: uppercase;
   }
 
   .date-caption-year {
-    font-size: var(--font-base);
+    font-size: var(--font-xs);
     font-weight: var(--font-semibold);
     font-variant-numeric: tabular-nums;
   }
@@ -672,22 +661,13 @@
   }
 
   /* Dormant until wanted: the marks keep a faint density spine as the only
-     affordance; the caption, labels and thumb fade in on hover, keyboard
-     focus or an active drag. Opacity only — display or visibility would drop
-     the slider out of the tab order. */
-  .date-caption {
-    opacity: 1;
-  }
-
+     affordance; the caption stays legible, while the labels and thumb fade in
+     on hover, keyboard focus or an active drag. Opacity only — display or
+     visibility would drop the slider out of the tab order. */
   .date-decades,
   .date-thumb {
     opacity: 0;
     transition: opacity var(--transition-medium);
-  }
-
-  .date-rail:is(:hover, :focus-within, .dragging) .date-caption {
-    border-bottom-color: var(--divider-color);
-    color: var(--text-primary);
   }
 
   .date-rail:is(:hover, :focus-within, .dragging) .date-decades,

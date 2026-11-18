@@ -14,8 +14,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "format": "prettier --write \"frontend/**/*.{js,css,svelte,html}\" \"vite.config.js\" \"eslint.config.js\" \"playwright.config.js\" \"tests/**/*.{js,mjs}\"",
-    "format:check": "prettier --check \"frontend/**/*.{js,css,svelte,html}\" \"vite.config.js\" \"eslint.config.js\" \"playwright.config.js\" \"tests/**/*.{js,mjs}\"",
+    "format": "prettier --write \"frontend/**/*.{js,css,svelte,html}\" \"frontend/src/i18n/*.json\" \"vite.config.js\" \"eslint.config.js\" \"playwright.config.js\" \"tests/**/*.{js,mjs}\"",
+    "format:check": "prettier --check \"frontend/**/*.{js,css,svelte,html}\" \"frontend/src/i18n/*.json\" \"vite.config.js\" \"eslint.config.js\" \"playwright.config.js\" \"tests/**/*.{js,mjs}\"",
     "lint:js": "eslint --no-warn-ignored --max-warnings 0 \"frontend/src/**/*.{js,svelte}\" \"vite.config.js\" \"eslint.config.js\"",
     "lint": "npm run lint:js && npm run lint:css",
     "lint:css": "stylelint \"frontend/src/**/*.css\"",

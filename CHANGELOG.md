@@ -1,3 +1,15 @@
+# [2.53.0](https://github.com/RouHim/turbo-pix/compare/2.52.2...2.53.0) (2026-11-18)
+
+### Bug Fixes
+
+* **gallery:** polish the date rail caption and pending states ([577e223](https://github.com/RouHim/turbo-pix/commit/577e223ff79d3e90320881f6b668419be9acf889))
+
+### Features
+
+* **gallery:** add a date scrollbar with anchored bidirectional loading ([7dd2509](https://github.com/RouHim/turbo-pix/commit/7dd250991f59bc4949fea60d35dc3c06884e09ec))
+* **gallery:** dormant glass rail and anchored jumps ([5196fcd](https://github.com/RouHim/turbo-pix/commit/5196fcd43fd7366267fbf34cbaf9aab364df55b8))
+* **gallery:** render the date stamp as a single-line label ([f611082](https://github.com/RouHim/turbo-pix/commit/f611082e30e7f43d4122547f0d8fcc3037c61d9c))
+
 ## [2.52.2](https://github.com/RouHim/turbo-pix/compare/2.52.1...2.52.2) (2026-11-18)
 
 ## [2.52.1](https://github.com/RouHim/turbo-pix/compare/2.52.0...2.52.1) (2026-11-17)

@@ -27,6 +27,9 @@ pub struct Config {
     pub locale: String,
     pub nominatim_url: String,
     pub tile_url: String,
+    /// Face detection/recognition is on by default, like CLIP. The kill
+    /// switch skips the face phase and hides the People surface.
+    pub face_recognition_enabled: bool,
 }
 
 impl Config {
@@ -87,6 +90,9 @@ impl Config {
             .unwrap_or_else(|_| "300".to_string())
             .parse()?;
 
+        let face_recognition_enabled =
+            parse_bool_env(env::var("TURBO_PIX_FACE_RECOGNITION").ok().as_deref(), true);
+
         let cache = CacheConfig {
             thumbnail_cache_path,
             max_cache_size_mb,
@@ -104,7 +110,19 @@ impl Config {
             locale,
             nominatim_url,
             tile_url,
+            face_recognition_enabled,
         })
+    }
+}
+
+fn parse_bool_env(value: Option<&str>, default: bool) -> bool {
+    match value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        _ => default,
     }
 }
 
@@ -320,6 +338,26 @@ mod tests {
                 "invalid transcode_timeout_secs must error"
             );
             restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
+        });
+    }
+
+    #[test]
+    fn face_recognition_is_on_by_default_and_has_a_kill_switch() {
+        with_env_lock(|| {
+            let original = env::var("TURBO_PIX_FACE_RECOGNITION").ok();
+            env::remove_var("TURBO_PIX_FACE_RECOGNITION");
+            assert!(Config::from_env().unwrap().face_recognition_enabled);
+
+            env::set_var("TURBO_PIX_FACE_RECOGNITION", "false");
+            assert!(!Config::from_env().unwrap().face_recognition_enabled);
+
+            env::set_var("TURBO_PIX_FACE_RECOGNITION", "0");
+            assert!(!Config::from_env().unwrap().face_recognition_enabled);
+
+            env::set_var("TURBO_PIX_FACE_RECOGNITION", "true");
+            assert!(Config::from_env().unwrap().face_recognition_enabled);
+
+            restore_env_var("TURBO_PIX_FACE_RECOGNITION", original);
         });
     }
 

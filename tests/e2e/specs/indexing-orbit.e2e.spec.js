@@ -5,6 +5,7 @@ const PHASE_IDS = [
   'discovering',
   'metadata',
   'semantic_vectors',
+  'faces',
   'geo_resolution',
   'collages',
   'housekeeping',
@@ -89,6 +90,7 @@ test.describe('Indexing orbit', () => {
             total: 100,
           }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -103,7 +105,7 @@ test.describe('Indexing orbit', () => {
     const ring = page.locator('[data-phase-ring]');
     await expect(ring).toBeVisible();
     await expect(ring).toHaveAttribute('data-ring-mode', 'large');
-    await expect(ring.locator('[data-phase-id]')).toHaveCount(6);
+    await expect(ring.locator('[data-phase-id]')).toHaveCount(7);
   });
 
   test('shows determinate progress at roughly fifty percent', async ({ page }) => {
@@ -122,6 +124,7 @@ test.describe('Indexing orbit', () => {
             total: 100,
           }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -142,7 +145,7 @@ test.describe('Indexing orbit', () => {
           Number.parseFloat(element.style.strokeDashoffset)
         );
       })
-      .toBeCloseTo(62.83, 1);
+      .toBeCloseTo(49.65, 1);
   });
 
   test('shows the orbit dot while discovering is indeterminate', async ({ page }) => {
@@ -159,6 +162,7 @@ test.describe('Indexing orbit', () => {
           }),
           buildPhase({ id: 'metadata' }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -194,6 +198,7 @@ test.describe('Indexing orbit', () => {
             total: 100,
           }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -212,7 +217,7 @@ test.describe('Indexing orbit', () => {
           return Number.parseFloat(element.style.strokeDashoffset);
         });
       })
-      .toBeCloseTo(94.25, 1);
+      .toBeCloseTo(74.5, 1);
   });
 
   test('marks each phase with the expected state attribute', async ({ page }) => {
@@ -279,6 +284,7 @@ test.describe('Indexing orbit', () => {
               processed: 0,
               total: 100,
             }),
+            buildPhase({ id: 'faces' }),
             buildPhase({ id: 'geo_resolution' }),
             buildPhase({ id: 'collages' }),
             buildPhase({ id: 'housekeeping' }),
@@ -304,6 +310,7 @@ test.describe('Indexing orbit', () => {
               processed: 0,
               total: 100,
             }),
+            buildPhase({ id: 'faces' }),
             buildPhase({ id: 'geo_resolution' }),
             buildPhase({ id: 'collages' }),
             buildPhase({ id: 'housekeeping' }),
@@ -329,6 +336,7 @@ test.describe('Indexing orbit', () => {
               processed: 10,
               total: 100,
             }),
+            buildPhase({ id: 'faces' }),
             buildPhase({ id: 'geo_resolution' }),
             buildPhase({ id: 'collages' }),
             buildPhase({ id: 'housekeeping' }),
@@ -370,6 +378,7 @@ test.describe('Indexing orbit', () => {
               total: 100,
             }),
             buildPhase({ id: 'semantic_vectors', kind: 'determinate', total: 100 }),
+            buildPhase({ id: 'faces' }),
             buildPhase({ id: 'geo_resolution' }),
             buildPhase({ id: 'collages' }),
             buildPhase({ id: 'housekeeping' }),
@@ -395,6 +404,7 @@ test.describe('Indexing orbit', () => {
               processed: 10,
               total: 100,
             }),
+            buildPhase({ id: 'faces' }),
             buildPhase({ id: 'geo_resolution' }),
             buildPhase({ id: 'collages' }),
             buildPhase({ id: 'housekeeping' }),
@@ -460,6 +470,7 @@ test.describe('Indexing orbit', () => {
             total: 100,
           }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -495,6 +506,7 @@ test.describe('Indexing orbit', () => {
             total: 100,
           }),
           buildPhase({ id: 'semantic_vectors' }),
+          buildPhase({ id: 'faces' }),
           buildPhase({ id: 'geo_resolution' }),
           buildPhase({ id: 'collages' }),
           buildPhase({ id: 'housekeeping' }),
@@ -738,6 +750,6 @@ test.describe('Indexing orbit', () => {
 
     // THEN the page should remain usable
     await expect(page.locator('[data-phase-ring]')).toHaveAttribute('data-ring-mode', 'hidden');
-    await expect(page.locator('[data-phase-ring] [data-phase-id]')).toHaveCount(6);
+    await expect(page.locator('[data-phase-ring] [data-phase-id]')).toHaveCount(7);
   });
 });

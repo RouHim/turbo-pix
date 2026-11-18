@@ -13,6 +13,9 @@ export const appState = $state({
   // Raster tile endpoint served by GET /api/config (TURBO_PIX_TILE_URL).
   // null = not configured → the map renders without a tile layer.
   tileUrl: null,
+  // GET /api/config: false hides the People nav and turns a deep-linked
+  // People route back into All Photos.
+  faceRecognitionEnabled: true,
 });
 
 /**
@@ -126,6 +129,22 @@ export async function loadSavedSearches() {
     savedSearches.splice(0, savedSearches.length, ...(data?.saved_searches || []));
   } catch (error) {
     console.error('Failed to load saved searches', error);
+  }
+}
+
+export const people = $state([]);
+let peopleLoadToken = 0;
+
+export async function loadPeople(includeHidden = false) {
+  const token = ++peopleLoadToken;
+  try {
+    const data = await api.getPeople({ includeHidden });
+    if (token !== peopleLoadToken) return true;
+    people.splice(0, people.length, ...(data?.people || []));
+    return true;
+  } catch (error) {
+    console.error('Failed to load people', error);
+    return false;
   }
 }
 

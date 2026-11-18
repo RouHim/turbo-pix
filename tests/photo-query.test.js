@@ -18,6 +18,7 @@ function routeFromSearch(search) {
     to_year: int('to_year'),
     to_month: int('to_month'),
     album: int('album'),
+    person: int('person'),
   };
 }
 
@@ -111,6 +112,14 @@ test('sort field/order split matches the grid contract', () => {
   assert.deepEqual(routeToPhotoQuery({ sort: 'size_desc' }), { sort: 'size', order: 'desc' });
   assert.deepEqual(routeToPhotoQuery({ sort: 'name_asc' }), { sort: 'name', order: 'asc' });
   assert.deepEqual(routeToPhotoQuery({ sort: 'date' }), { sort: 'date', order: 'desc' });
+});
+
+test('person scope passes through for the grid only', () => {
+  assert.equal(routeToPhotoQuery({ view: 'people', person: 7 }, { view: 'grid' }).person, 7);
+  assert.equal(
+    'person' in routeToPhotoQuery({ view: 'people', person: 7 }, { view: 'map' }),
+    false
+  );
 });
 
 test('album scope passes through for the map only', () => {

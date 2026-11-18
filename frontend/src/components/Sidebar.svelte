@@ -20,6 +20,7 @@
     { id: 'videos', key: 'ui.videos', fallback: 'Videos' },
     { id: 'albums', key: 'albums.sectionTitle', fallback: 'Albums' },
     { id: 'map', key: 'ui.map', fallback: 'Map' },
+    { id: 'people', key: 'ui.people', fallback: 'People' },
     { id: 'collages', key: 'ui.collages', fallback: 'Collages' },
     { id: 'housekeeping', key: 'ui.housekeeping', fallback: 'Housekeeping' },
   ];
@@ -44,14 +45,23 @@
       appState.sidebarOpen = false;
       return;
     }
-    if (route.view === view && route.album == null && (view !== 'albums' || route.query == null)) {
+    if (
+      route.view === view &&
+      route.album == null &&
+      route.person == null &&
+      (view !== 'albums' || route.query == null)
+    ) {
       // Close the drawer even when tapping the already-active view (mobile).
       appState.sidebarOpen = false;
       return;
     }
     // Albums list shows no search results: entering it with ?q= set would
     // render the grid under an album-list header, so clear the query.
-    pushState(view === 'albums' ? { view, album: null, query: null } : { view, album: null });
+    pushState(
+      view === 'albums'
+        ? { view, album: null, query: null, person: null }
+        : { view, album: null, person: null }
+    );
     appState.sidebarOpen = false;
   }
 
@@ -193,16 +203,18 @@
           ? route.view === 'all' && route.album == null
           : route.view === view.id && view.id !== 'albums'}
       {@const isActive = view.id === 'albums' ? isAlbumsNav : isAllNav}
-      <button
-        type="button"
-        class="nav-item"
-        class:active={isActive}
-        data-view={view.id}
-        aria-current={isActive ? 'page' : undefined}
-        onclick={() => navigate(view.id)}
-      >
-        {$t(view.key, { default: view.fallback })}
-      </button>
+      {#if view.id !== 'people' || appState.faceRecognitionEnabled}
+        <button
+          type="button"
+          class="nav-item"
+          class:active={isActive}
+          data-view={view.id}
+          aria-current={isActive ? 'page' : undefined}
+          onclick={() => navigate(view.id)}
+        >
+          {$t(view.key, { default: view.fallback })}
+        </button>
+      {/if}
     {/each}
 
     {#if savedSearches.length > 0}

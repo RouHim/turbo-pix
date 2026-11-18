@@ -34,6 +34,10 @@ tokenizers = "0.23.0"
 sqlite-vec = { git = "https://github.com/vlasky/sqlite-vec", rev = "606e0002934632b6cf39d06b1f9c7c3b188fa77d" } # v0.2.4-alpha, pinned: a movable tag could swap the code a build links
 zerocopy = "0.8"
 
+# Face detection/recognition. The static ONNX Runtime archive is supplied by
+# scripts/fetch-ort.sh; `ORT_LIB_PATH` must point at its lib directory.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-23"] }
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

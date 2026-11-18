@@ -1,6 +1,15 @@
 import { normalizeDateFilter } from './timelineRoute.js';
 
-const validViews = ['all', 'favorites', 'videos', 'albums', 'collages', 'housekeeping', 'map'];
+const validViews = [
+  'all',
+  'favorites',
+  'videos',
+  'albums',
+  'collages',
+  'housekeeping',
+  'map',
+  'people',
+];
 const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc', 'size_asc'];
 
 const defaultState = {
@@ -13,6 +22,7 @@ const defaultState = {
   to_year: null,
   to_month: null,
   album: null,
+  person: null,
 };
 
 export const route = $state({ ...defaultState });
@@ -33,6 +43,7 @@ function parseUrl(url) {
     to_year: parsePositiveInteger(url.searchParams.get('to_year')),
     to_month: parsePositiveInteger(url.searchParams.get('to_month')),
     album: parsePositiveInteger(url.searchParams.get('album')),
+    person: parsePositiveInteger(url.searchParams.get('person')),
   });
 }
 
@@ -40,6 +51,9 @@ function normalizeState(state) {
   const view = validViews.includes(state.view) ? state.view : defaultState.view;
   const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
   const dateFilter = normalizeDateFilter(state);
+  // A person filter only exists on the People surface; a stray ?person= on
+  // another view cannot silently scope that view's grid.
+  const person = view === 'people' ? parsePositiveInteger(state.person) : null;
 
   return {
     view,
@@ -51,6 +65,7 @@ function normalizeState(state) {
     to_year: dateFilter.to_year,
     to_month: dateFilter.to_month,
     album: parsePositiveInteger(state.album),
+    person,
   };
 }
 
@@ -120,6 +135,10 @@ function buildUrl(state = {}) {
 
   if (normalizedState.album !== null) {
     url.searchParams.set('album', String(normalizedState.album));
+  }
+
+  if (normalizedState.person !== null) {
+    url.searchParams.set('person', String(normalizedState.person));
   }
 
   return `${url.pathname}${url.search}`;

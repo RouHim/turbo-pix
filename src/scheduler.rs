@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use crate::cache_manager::CacheManager;
 use crate::collage_generator;
 use crate::db::DbPool;
+use crate::face_recognition::FaceRecognition;
 use crate::geo_location::NominatimClient;
 use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
@@ -94,6 +95,7 @@ pub struct IndexingPhases {
     pub metadata: PhaseCounters,
     pub geo_resolution: PhaseCounters,
     pub semantic_vectors: PhaseCounters,
+    pub faces: PhaseCounters,
     pub collages: PhaseCounters,
     pub housekeeping: PhaseCounters,
 }
@@ -111,6 +113,7 @@ impl IndexingPhases {
             metadata: PhaseCounters::new(),
             geo_resolution: PhaseCounters::new(),
             semantic_vectors: PhaseCounters::new(),
+            faces: PhaseCounters::new(),
             collages: PhaseCounters::new(),
             housekeeping: PhaseCounters::new(),
         }
@@ -121,6 +124,7 @@ impl IndexingPhases {
         self.metadata.reset();
         self.geo_resolution.reset();
         self.semantic_vectors.reset();
+        self.faces.reset();
         self.collages.reset();
         self.housekeeping.reset();
     }
@@ -131,6 +135,7 @@ impl IndexingPhases {
             "metadata" => Some(&self.metadata),
             "geo_resolution" => Some(&self.geo_resolution),
             "semantic_vectors" => Some(&self.semantic_vectors),
+            "faces" => Some(&self.faces),
             "collages" => Some(&self.collages),
             "housekeeping" => Some(&self.housekeeping),
             _ => None,
@@ -191,12 +196,21 @@ impl IndexingStatus {
     }
 }
 
+/// The two indexing pipelines the scheduler calls. Grouping them keeps the
+/// constructor's wiring arguments below clippy's limit without hiding a
+/// dependency behind a generic bag.
+pub struct Pipelines {
+    pub semantic_search: Arc<dyn SemanticSearch>,
+    pub face_recognition: Arc<dyn FaceRecognition>,
+}
+
 #[derive(Clone)]
 pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
     db_pool: DbPool,
     cache_manager: CacheManager,
     semantic_search: Arc<dyn SemanticSearch>,
+    face_recognition: Arc<dyn FaceRecognition>,
     data_path: PathBuf,
     locale: String,
     nominatim_url: String,
@@ -211,11 +225,15 @@ impl PhotoScheduler {
         photo_paths: Vec<PathBuf>,
         db_pool: DbPool,
         cache_manager: CacheManager,
-        semantic_search: Arc<dyn SemanticSearch>,
+        pipelines: Pipelines,
         data_path: PathBuf,
         locale: String,
         nominatim_url: String,
     ) -> Self {
+        let Pipelines {
+            semantic_search,
+            face_recognition,
+        } = pipelines;
         let mut photo_paths = photo_paths;
         let collages_path = data_path.join("collages").join("accepted");
 
@@ -235,6 +253,7 @@ impl PhotoScheduler {
             db_pool,
             cache_manager,
             semantic_search,
+            face_recognition,
             data_path,
             locale,
             nominatim_url,
@@ -477,6 +496,16 @@ impl PhotoScheduler {
             Err(e) => error!("Phase 2 failed: {}", e),
         }
 
+        // Phase 2b: Face detection/recognition. Disabled by the operator or
+        // when the feature is off; the phase then leaves no counter work.
+        if self.face_recognition.enabled() {
+            info!("Phase 2b: Detecting and recognising faces");
+            self.status.set_phase("faces").await;
+            if let Err(e) = self.face_recognition.index_pending(&self.status).await {
+                error!("Phase 2b (face recognition) failed: {}", e);
+            }
+        }
+
         // Phase 3: Geo resolution
         info!("Phase 3: Resolving photo geo locations");
         self.status.set_phase("geo_resolution").await;
@@ -506,7 +535,7 @@ impl PhotoScheduler {
         }
 
         info!(
-            "Rescan completed (five-phase): {} photos indexed, {} errors",
+            "Rescan completed (six-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
         Ok(())
@@ -553,7 +582,10 @@ mod tests {
                 photo_paths,
                 db_pool.clone(),
                 cache_manager.clone(),
-                semantic_search,
+                Pipelines {
+                    semantic_search,
+                    face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
+                },
                 data_path,
                 "en".to_string(),
                 "https://nominatim.openstreetmap.org".to_string(),
@@ -581,7 +613,10 @@ mod tests {
                 photo_paths,
                 db_pool.clone(),
                 cache_manager.clone(),
-                semantic_search,
+                Pipelines {
+                    semantic_search,
+                    face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
+                },
                 data_path,
                 "en".to_string(),
                 "https://nominatim.openstreetmap.org".to_string(),
@@ -842,7 +877,10 @@ mod tests {
             invalid_paths,
             db_pool,
             cache_manager,
-            semantic_search,
+            Pipelines {
+                semantic_search,
+                face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
+            },
             data_path,
             "en".to_string(),
             "https://nominatim.openstreetmap.org".to_string(),

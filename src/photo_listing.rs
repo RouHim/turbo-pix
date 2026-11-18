@@ -116,6 +116,7 @@ mod tests {
             month: None,
             to_year: None,
             to_month: None,
+            person: None,
         }
     }
 
@@ -260,6 +261,7 @@ mod tests {
                     month: Some(2),
                     to_year: Some(2020),
                     to_month: Some(3),
+                    person: None,
                 },
                 album: None,
                 sort: Some("date"),
@@ -309,6 +311,7 @@ mod tests {
                     month: None,
                     to_year: None,
                     to_month: None,
+                    person: None,
                 },
                 album: None,
                 sort: Some("filename"),
@@ -463,5 +466,57 @@ mod tests {
         let second = album_page(&pool, album.id, 3, 3).await;
         assert_eq!(second.total, 6);
         assert_eq!(names(&second), vec!["m5.jpg", "m6.jpg", "m7.jpg"]);
+    }
+
+    #[tokio::test]
+    async fn person_filter_returns_only_that_persons_photos() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photos = seed(
+            &pool,
+            &[
+                ("anna-1.jpg", "anna1", "2020-01-01T10:00:00Z"),
+                ("bob-1.jpg", "bob1", "2020-01-02T10:00:00Z"),
+            ],
+        )
+        .await;
+        let person: i64 = sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for photo in &photos[..1] {
+            sqlx::query(
+                "INSERT INTO faces
+                 (photo_hash, face_index, person_id, bbox_x, bbox_y, bbox_w, bbox_h, quality)
+                 VALUES (?, 0, ?, 0.0, 0.0, 1.0, 1.0, 1.0)",
+            )
+            .bind(&photo.hash_sha256)
+            .bind(person)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let query = SearchQuery {
+            q: None,
+            year: None,
+            month: None,
+            to_year: None,
+            to_month: None,
+            person: Some(person),
+        };
+        let listing = list(
+            &pool,
+            ListingRequest {
+                query: &query,
+                album: None,
+                sort: None,
+                order: None,
+                page: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names(&listing), vec!["anna-1.jpg"]);
     }
 }

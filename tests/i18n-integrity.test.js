@@ -93,7 +93,7 @@ test('i18n key integrity', () => {
   // These counts are load-bearing: a parse regression (or a new phase/month/
   // weekday added without the dictionaries being updated) must fail loudly
   // instead of vacantly passing the existence check below.
-  assert.equal(enums['phase.id'].length, 6, 'PHASES parse drifted — expected 6 ids');
+  assert.equal(enums['phase.id'].length, 7, 'PHASES parse drifted — expected 7 ids');
   assert.equal(enums.monthKey.length, 12, 'MONTH_KEYS parse drifted — expected 12 keys');
   assert.equal(enums.weekdayKey.length, 7, 'WEEKDAY_KEYS parse drifted — expected 7 keys');
 

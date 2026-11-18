@@ -8,6 +8,8 @@ pub struct SearchQuery {
     pub month: Option<i32>,
     pub to_year: Option<i32>,
     pub to_month: Option<i32>,
+    /// Restrict the listing to one person's faces.
+    pub person: Option<i64>,
 }
 
 // Timeline related structs

@@ -31,6 +31,7 @@ loading. Each night, TurboPix checks for new photos and updates the database acc
   within the last 30 days — then accept or reject them
 - **Saved Searches**: Store a search and re-run it later
 - **Batch Selection**: Select many items at once to favorite, export, delete, or add them to an album
+- **People**: Group detected faces into people, rename or hide clusters, and filter the grid by person
 - **Housekeeping**: Review duplicate and issue candidates and keep or delete them
 - **Mobile Support**: Works on phones and tablets
 - **Self-Hosted Container Support**: Runs on your own computer or as a container, no cloud services
@@ -42,12 +43,21 @@ loading. Each night, TurboPix checks for new photos and updates the database acc
 
 - Node.js 26 and npm - builds the frontend bundle
 - A stable Rust toolchain with `rustfmt` and `clippy` (see `rust-toolchain.toml`) - builds the binary
+- `7z` (p7zip) and `curl` - fetch the pinned static ONNX Runtime
 - ffmpeg and ffprobe on `PATH` - tested with 8.x (8.0.1, as CI installs it) and 9.0 in the container image
 
 ### Build
 
-Building from source requires the frontend bundle first: `npm install && npm run build` (writes `dist/`), then
-`cargo build --release`.
+Building from source requires the frontend bundle first: `npm install && npm run build` (writes `dist/`). The face
+pipeline links a static ONNX Runtime archive, so fetch it and export its path before the Rust build:
+
+```shell
+eval "$(./scripts/fetch-ort.sh --export)"
+cargo build --release
+```
+
+The helper downloads the pinned archive (x86_64 glibc for local builds, x86_64/aarch64 musl for releases) and verifies
+its SHA-256. The container build does this in a separate stage.
 
 ## Docker Compose
 
@@ -83,6 +93,7 @@ All configuration is done via environment variables:
 | `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                                                                         | `https://nominatim.openstreetmap.org`            | No                            |
 | `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `GET /api/photos/{hash}/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                                                      | `20`                                             | No                            |
 | `TURBO_PIX_TILE_URL`               | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view                                                                                                                                                                               | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No                            |
+| `TURBO_PIX_FACE_RECOGNITION`       | Enable face detection/recognition and the People view. `false`/`0`/`no`/`off` skips the phase and hides the People surface; existing data is retained                                                                                                | `true`                                           | No                            |
 | `TURBO_PIX_MAX_CACHE_SIZE_MB`      | Maximum thumbnail cache size in megabytes                                                                                                                                                                                                            | `1024`                                           | No                            |
 | `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` | Per-conversion ffmpeg timeout in seconds                                                                                                                                                                                                             | `300`                                            | No                            |
 | `TURBO_PIX_MAX_TRANSCODES`         | Concurrent video conversions; `0` disables transcoding. Default scales with the CPU count (`min(max(nproc/2,1),4)`)                                                                                                                                  | _(nproc-derived)_                                | No                            |
@@ -98,7 +109,8 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 - **Database**: `{DATA_PATH}/database/turbo-pix.db`
 - **Thumbnails**: `{DATA_PATH}/cache/thumbnails/`
 - **Transcode cache**: `{DATA_PATH}/cache/transcoded/`
-- **AI Models**: `{DATA_PATH}/models/`
+- **AI Models**: `{DATA_PATH}/models/` (CLIP) and `{DATA_PATH}/models/face/` (SCRFD + ArcFace)
+- **Face crops**: `{DATA_PATH}/cache/faces/`
 
 ### AI models
 
@@ -118,6 +130,12 @@ docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 The CLIP weights (~580MB of RAM) are loaded on first use - typically the startup indexing run - and released again
 after ten minutes without one, so a server that sits idle does not keep them resident. The first semantic search (or the
 first indexing run that needs embeddings) after that pays a short reload; the rest of the application is unaffected.
+
+Face recognition uses SCRFD-2.5G (detector, ~3.3 MB) and antelopev2 R100 (recognition, ~260.7 MB), downloaded from the
+pinned `immich-app` HuggingFace revisions and verified by SHA-256. The weights are licensed for non-commercial use only;
+see `NOTICE`. To seed an offline/air-gapped installation, place the two files at
+`{DATA_PATH}/models/face/detector.onnx` and `{DATA_PATH}/models/face/recognizer.onnx`; they are verified when loaded.
+The face phase runs after semantic vectors. `TURBO_PIX_FACE_RECOGNITION=false` skips it entirely.
 
 ## Supported platforms
 

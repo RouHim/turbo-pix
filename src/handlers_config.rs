@@ -5,16 +5,19 @@ use warp::Filter;
 struct ConfigResponse {
     default_locale: String,
     tile_url: String,
+    face_recognition_enabled: bool,
 }
 
 pub fn build_config_routes(
     default_locale: String,
     tile_url: String,
+    face_recognition_enabled: bool,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("api" / "config").and(warp::get()).map(move || {
         warp::reply::json(&ConfigResponse {
             default_locale: default_locale.clone(),
             tile_url: tile_url.clone(),
+            face_recognition_enabled,
         })
     })
 }
@@ -28,6 +31,7 @@ mod tests {
         let routes = build_config_routes(
             "de".to_string(),
             "http://tiles.lan/{z}/{x}/{y}.png".to_string(),
+            false,
         );
         let res = warp::test::request()
             .path("/api/config")
@@ -37,5 +41,6 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
         assert_eq!(body["default_locale"], "de");
         assert_eq!(body["tile_url"], "http://tiles.lan/{z}/{x}/{y}.png");
+        assert_eq!(body["face_recognition_enabled"], false);
     }
 }

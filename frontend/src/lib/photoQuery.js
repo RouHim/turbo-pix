@@ -37,6 +37,7 @@ export function routeToPhotoQuery(route, { view = 'grid' } = {}) {
   if (route.month != null) params.month = route.month;
   if (route.to_year != null) params.toYear = route.to_year;
   if (route.to_month != null) params.toMonth = route.to_month;
+  if (view === 'grid' && route.person != null) params.person = route.person;
   if (view === 'map' && route.album != null) params.album = route.album;
 
   return params;

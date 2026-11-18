@@ -4,13 +4,53 @@ use std::path::PathBuf;
 #[derive(Clone)]
 pub struct CacheManager {
     thumbnail_cache_dir: PathBuf,
+    /// Face crops live beside the thumbnail cache (`{data}/cache/faces`).
+    face_cache_dir: PathBuf,
 }
 
 impl CacheManager {
     pub fn new(thumbnail_cache_dir: PathBuf) -> Self {
+        let face_cache_dir = thumbnail_cache_dir
+            .parent()
+            .map(|parent| parent.join("faces"))
+            .unwrap_or_else(|| PathBuf::from("faces"));
         Self {
             thumbnail_cache_dir,
+            face_cache_dir,
         }
+    }
+
+    /// Path of one face crop. The hash prefix is part of the filename, so
+    /// `clear_for_hash` can remove every crop a photo owns.
+    pub fn face_crop_path(&self, hash: &str, face_id: i64) -> PathBuf {
+        self.face_cache_dir.join(format!("{hash}_{face_id}.jpg"))
+    }
+
+    /// Removes every face crop for a photo, called when its face rows are
+    /// re-indexed or the photo is deleted.
+    pub async fn clear_face_crops_for_hash(
+        &self,
+        hash: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let prefix = format!("{hash}_");
+        if let Ok(entries) = std::fs::read_dir(&self.face_cache_dir) {
+            for entry in entries.filter_map(|entry| entry.ok()) {
+                let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                if !name.starts_with(&prefix) {
+                    continue;
+                }
+                if let Err(error) = std::fs::remove_file(entry.path()) {
+                    error!(
+                        "Failed to remove face crop {}: {}",
+                        entry.path().display(),
+                        error
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Removes all cached thumbnails for a photo hash.
@@ -59,6 +99,7 @@ impl CacheManager {
             }
         }
 
+        self.clear_face_crops_for_hash(hash).await?;
         Ok(())
     }
 

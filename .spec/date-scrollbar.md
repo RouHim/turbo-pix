@@ -67,11 +67,15 @@ The rail must read as part of the contact sheet: dormant until wanted, then a fl
 
 **Acceptance**
 
-1. Given the pointer is elsewhere and the slider is unfocused, then only a faint density spine (the month marks at low opacity, the current month in a faint primary tick) marks the edge; the lane, its caption, decade labels and thumb are hidden, and the grid keeps its normal 24 px right edge under the rail's hit area.
+1. Given the pointer is elsewhere and the slider is unfocused, then only a faint density spine (the month marks at low opacity), the current month's caption in an inset glass capsule (`--glass-bg` + blur, full radius) and the active month as a primary tick at ≥3:1 mark the edge; the lane, decade labels and thumb are hidden, and the grid keeps its normal 24 px right edge.
 2. Given the pointer enters the rail or keyboard focus reaches the slider, then the glass lane fades in as one 0.3s `cubic-bezier(0.4, 0, 0.2, 1)` moment over the grid — `--glass-bg` with `blur(16px) saturate(1.5)`, the glass hairline at its left edge and `--shadow-light` — together with the caption, decade labels, thumb and full-strength marks.
-3. Given the pointer leaves or focus exits, then the lane returns to the dormant spine; an in-flight drag keeps it open; the reveal never reflows the grid (no gutter is reserved).
+3. Given the pointer leaves or focus exits, then the lane returns to the dormant spine; an in-flight drag keeps it open; Escape cancels a drag/preview; the reveal never reflows the grid (no gutter is reserved).
 4. Given either theme, then the revealed marks, decade labels and caption hold at least 3:1 against the glass lane; the pointer near the top puts the bubble below the fixed sort row; the bubble is the only raised solid surface.
 5. Given `prefers-reduced-motion`, then the states switch without transition; given `prefers-reduced-transparency` or no `backdrop-filter`, the lane falls back to the solid `--surface-color`.
+6. Given the rail is revealed, then its hover hit area is the full lane: the header's Select/Sort controls stay clickable at the content's edge (the header reserves the lane's inset) and the lane never intercepts their pointers.
+7. Given the pointer is over the track, then the bubble and a ghost segment preview the nearest month under the pointer before pointerdown commits it.
+8. Given a jump is in flight, then the grid is `aria-busy`, the bubble reads "Jump to …" with the dot-wave, a finished jump raises the localized success toast, and a failed jump offers the retry next to the error toast.
+9. Given the slider, then its numeric value increases toward newer months (ArrowUp increases, ArrowDown decreases) while the month text stays the readout.
 
 ## Functional Requirements
 
@@ -85,9 +89,9 @@ The rail must read as part of the contact sheet: dormant until wanted, then a fl
 - **FR-008**: Upward and downward loading are both automatic; the top indicator uses the app's dot-wave language and is centred over the grid.
 - **FR-009**: The native scrollbar is hidden only while the rail is shown; `overflow-anchor` is opted out deliberately and card pinning is done explicitly.
 - **FR-010**: Cards keep `content-visibility: auto`; the desktop card is square (`aspect-ratio: 1`) so its height is correct under size containment. The mobile card keeps its below-tile caption (aspect ratio unset there).
-- **FR-011**: The rail is keyboard operable with slider semantics, a visible focus ring, and localized labels in English and German.
+- **FR-011**: The rail is keyboard operable with slider semantics, a visible focus ring, and localized labels in English and German. The slider's numeric value increases toward newer months: ArrowUp increases it, ArrowDown decreases it.
 - **FR-012**: The rail is hidden for unsupported surfaces, non-date sorts and periods too small to scroll; no stale filter or selection is written.
-- **FR-013**: The rail is dormant until wanted: the lane, caption, decade labels and thumb are opacity-hidden, while the month marks keep a faint density spine (current month in a faint primary tick). `:hover`, `:focus-within` (keyboard) and an active drag reveal a glass lane (`--glass-bg` + `blur(16px) saturate(1.5)`, glass hairline at the left, `--shadow-light`) that fades in over the grid in one 0.3s transition; leaving returns to the spine. The rail overlays the content's right edge and reserves no gutter, so the reveal never reflows the grid; the `--surface-color` solid fallback takes over under `prefers-reduced-transparency` or no `backdrop-filter`. Opacity only for the labels/caption/thumb — never `display`/`visibility`, so the slider stays in the tab order. The active month is the primary accent, the other months are quiet ink brightened on hover, the secondaries are `--text-secondary`; revealed marks/labels/caption hold ≥3:1 in both themes; `prefers-reduced-motion` switches states without transition.
+- **FR-013**: The rail is dormant until wanted: the lane, decade labels and thumb are opacity-hidden; the current month stays in an inset glass capsule (full radius, month secondary, year primary) and the active month as a primary tick at ≥3:1, while the month marks keep a faint density spine. `:hover`, `:focus-within` (keyboard) and an active drag reveal a glass lane (`--glass-bg` + `blur(16px) saturate(1.5)`, glass hairline at the left, `--shadow-light`) that fades in over the grid in one 0.3s transition; leaving returns to the spine. The rail's root is the lane's hover hit area; `--date-rail-inset` keeps the header's controls clear of the lane. The rail overlays the content's right edge and reserves no gutter, so the reveal never reflows the grid; the `--surface-color` solid fallback takes over under `prefers-reduced-transparency` or no `backdrop-filter`. Opacity only for the lane/decade labels/thumb — never `display`/`visibility`, so the slider stays in the tab order. The active month is the primary accent, the other months are quiet ink brightened on hover, the secondaries are `--text-secondary`; revealed marks/labels/caption hold ≥3:1 in both themes; `prefers-reduced-motion` switches states without transition.
 - **FR-014**: A failed jump keeps the window and scroll position and shows the localized `errors.date_jump_failed` toast instead of silently doing nothing.
 
 ## Key Entities
@@ -101,7 +105,7 @@ The rail must read as part of the contact sheet: dormant until wanted, then a fl
 ## Edge Cases
 
 - Undated photos sort last in descending and first in ascending order; the anchor offset adds them only for ascending.
-- A mid-page anchor starts the window with the page's prefix, so upward growth begins without a hole.
+- A mid-page anchor starts the window with the page's suffix (from the anchor onward); the dropped prefix is re-fetched by the earlier page, so upward growth begins without a hole.
 - A period whose months are all empty never activates; activation is a no-op on zero-photo months.
 - A failed density fetch hides the rail; the grid and the native scrollbar are untouched.
 - A failed jump keeps the window and shows the localized jump-failure toast.
@@ -117,7 +121,7 @@ The rail must read as part of the contact sheet: dormant until wanted, then a fl
 - Native scroll anchoring is suppressed by transform changes in the anchor chain; the card entrance animation animates `translateY`. Preferring explicit card pinning and `overflow-anchor: none` is the deliberate contract; the alternative is an opacity-only entrance animation. Source: CSS Scroll Anchoring spec overview and the prepend/anchor analysis article.
 - `contain-intrinsic-size: auto <length>` uses the last rendered size and falls back to the length for never-rendered boxes; the card's square shape makes the height deterministic under `aspect-ratio: 1`. Source: MDN `contain-intrinsic-size`.
 - Prototype evidence (throwaway branch): 1,254 photos / 361 months; jumps place the month at the header; upward/downward cycles stay at the 300 cap with zero console errors; filter scoping (`2017`, `2012–2015`) and the small-filter hide were verified.
-- The dormant rail keeps the library's density as the affordance: the month marks at 0.32 opacity, the caption/labels/thumb at opacity 0, the slider still focusable; hover/focus/drag restore them through the 0.3s token, with the focus ring doubling on the thumb and the drag keeping the lane open while the pointer is captured outside it.
+- The dormant rail keeps the library's density as the affordance: the month marks at 0.32 opacity, the caption visible in an inset glass capsule, the decade labels/thumb at opacity 0, the slider still focusable; hover/focus/drag restore them through the 0.3s token, with the focus ring doubling on the thumb and the drag keeping the lane open while the pointer is captured outside it.
 - The lane floats over the grid as glass (`--glass-bg`, blur 16px, hairline + `--shadow-light`) while the content keeps its normal 24px right padding, so the reveal reflows nothing; the backdrop-filter lives on a `::before` so the reveal is an opacity fade, and the solid `--surface-color`/no-blur fallback wins under reduced transparency or missing backdrop-filter.
 - Polish evidence (1440×900, real backend, 1,254 photos / 361 months): a 1 px segment click resolves to November 2025 (bubble and `aria-valuetext`); a filtered jump lands the first visible card at top = 64 px (the header line) with the bubble reading March 1998; the top loader centre equals the grid centre (860 px); the light-theme ratios are 3.42 (pending mark), 4.47 (active mark), 6.93 (label/caption) and the dark-theme ratios 4.78/4.13/8.97; axe reports no violations on the rail; mobile hides the rail and keeps the 16 px padding.
 
@@ -138,4 +142,6 @@ The rail must read as part of the contact sheet: dormant until wanted, then a fl
 - **SC-005**: Keyboard-only users can step, jump and clear with announced month and count; EN/DE labels are complete.
 - **SC-006**: The top loader is visible and announced during upward loads; reduced-motion users see static dots.
 - **SC-007**: The lane, its marks and its labels hold at least 3:1 contrast in both themes, and the rail region is axe-clean.
-- **SC-008**: The rail stays discoverable while dormant (the density spine) and reveals fully over the grid on pointer hover and keyboard focus without reflowing it, returning to the spine when left.
+- **SC-008**: The rail stays discoverable while dormant (the current month caption plus the active tick at ≥3:1) and reveals fully over the grid on pointer hover and keyboard focus without reflowing it, returning to the spine when left; the header's controls remain clickable at the content's edge while the rail shows.
+- **SC-009**: The hover previews the nearest month under the pointer before the click commits it, and the slider's value increases toward newer months.
+- **SC-010**: A jump announces its busy state through the grid's `aria-busy` and its outcome through the success/error toast; a failed jump can be retried inline.

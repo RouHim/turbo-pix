@@ -43,6 +43,9 @@ export const photoGridState = $state({
   // `currentPage`; the grid's load dedupe includes it so re-anchoring can never
   // be swallowed by a previous signature.
   windowEpoch: 0,
+  // A date-scrubber jump or earlier load is in flight; the grid mirrors this
+  // into aria-busy so the jump is announced as busy.
+  windowBusy: false,
   // Exact result count of the current regular load; null while it is unknown
   // (semantic search and album pages do not report one).
   total: null,

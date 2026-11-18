@@ -12,7 +12,7 @@
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import { normalizeDateFilter } from '../lib/timelineRoute.js';
-  import { buildTimelineModel } from '../lib/timeline.js';
+  import { buildTimelineModel, formatPeriodName } from '../lib/timeline.js';
   import {
     anchorOffset,
     bottomTrim,
@@ -31,6 +31,11 @@
   const desktop = new MediaQuery(`(min-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT + 1}px)`);
   const activeLocale = $derived($locale || 'en');
 
+  const monthName = (month) => {
+    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
+    return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
+  };
+
   let density = $state(null);
   let densityLoading = false;
   let visibleMonth = $state(null);
@@ -39,6 +44,8 @@
   let sentinelEl = $state(null);
   let earlierBusy = $state(false);
   let contentCenter = $state(0);
+  let pendingJump = $state(false);
+  let failedMonth = $state(null);
 
   // Bounded window bookkeeping.
   let startOffset = 0;
@@ -217,11 +224,14 @@
    * mid-page (the anchor page's dropped prefix).
    */
   async function loadEarlier({ place = false } = {}) {
-    if (upLoading || !scrollEl || !canScrub || startOffset <= 0) return;
+    // `windowBusy` covers the anchor jump: it has already replaced the listing
+    // and moved `startOffset`, so a wheel-up mid-jump must not fetch the page
+    // before the new offset and prepend it to the old window.
+    if (upLoading || windowBusy || !scrollEl || !canScrub || startOffset <= 0) return;
     const step = earlierPage(startOffset, BATCH);
     if (step === null) return;
     upLoading = true;
-    windowBusy = true;
+    setWindowBusy(true);
     showEarlier();
     const gen = upGen;
     try {
@@ -255,7 +265,9 @@
       );
     } finally {
       upLoading = false;
-      windowBusy = false;
+      // A jump or reset that superseded this fetch owns the busy flag now; the
+      // superseded fetch must not release its lock.
+      if (gen === upGen) setWindowBusy(false);
       hideEarlier();
       void balanceWindow();
     }
@@ -316,17 +328,24 @@
     });
     const page = Math.floor(offset / BATCH) + 1;
     const skip = offset - (page - 1) * BATCH;
-    upGen += 1;
-    windowBusy = true;
-    startOffset = offset;
+    const gen = upGen + 1;
+    upGen = gen;
+    setWindowBusy(true);
     try {
       const response = await api.getPhotos({
         page,
         limit: BATCH,
         ...routeToPhotoQuery(route, { view: 'grid' }),
       });
+      // A newer jump or a scope change owns the listing now; applying this
+      // response would leave the grid on the old scope's anchored window and
+      // make `currentPage` point into the middle of the new listing.
+      if (gen !== upGen) return false;
       const items = (response.photos ?? []).slice(skip);
       if (items.length === 0) return false;
+      // Only a loaded window may move `startOffset`: a failed jump leaves the
+      // existing window (and its offset) untouched.
+      startOffset = offset;
       photoGridState.photos = items;
       // `currentPage` is the NEXT page the grid will fetch (appendPhotos
       // increments it after a load), so the anchor's own page must not repeat.
@@ -350,7 +369,9 @@
       );
       return false;
     } finally {
-      windowBusy = false;
+      // A superseded call must not clear the busy flag of the jump that
+      // replaced it.
+      if (gen === upGen) setWindowBusy(false);
     }
   }
 
@@ -358,11 +379,28 @@
     const next = snapMonth(model, index);
     if (next === null) return;
     targetMonth = next;
+    pendingJump = true;
+    failedMonth = null;
     const anchored = await anchorTo(next);
-    if (anchored) {
-      // Content above the target plus the target itself at the top edge.
-      void loadEarlier({ place: true });
+    pendingJump = false;
+    if (!anchored) {
+      failedMonth = next;
+      targetMonth = null;
+      measureVisibleMonth();
+      return;
     }
+    // Content above the target plus the target itself at the top edge.
+    void loadEarlier({ place: true });
+    addToast(
+      $t('notifications.success', { default: 'Success' }),
+      $t('notifications.date_jump_done', {
+        locale: activeLocale,
+        values: { period: formatPeriodName(next, monthName) },
+        default: 'Jumped to {period}',
+      }),
+      'success',
+      3000
+    );
     if (stickyTimer !== null) clearTimeout(stickyTimer);
     stickyTimer = setTimeout(() => {
       stickyTimer = null;
@@ -380,6 +418,12 @@
     if (targetMonth !== null) void settleOn(targetMonth);
   };
 
+  const cancelScrub = () => {
+    targetMonth = null;
+    pendingJump = false;
+    measureVisibleMonth();
+  };
+
   function onScroll() {
     if (performance.now() < suppressUntil) return;
     targetMonth = null;
@@ -390,8 +434,35 @@
     if (event.deltaY < 0 && scrollEl && scrollEl.scrollTop <= 0) void loadEarlier();
   };
 
+  /** Mirrors the window lock into the grid so assistive tech sees the jump. */
+  function setWindowBusy(value) {
+    windowBusy = value;
+    photoGridState.windowBusy = value;
+  }
+
+  /**
+   * Forgets the anchored window: a listing reload replaces the photos with
+   * page 1 while the scope key stays the same, so the stale offset would
+   * prepend a middle-of-library page on top of it.
+   */
+  function resetWindow() {
+    upGen += 1;
+    startOffset = 0;
+    windowActive = false;
+    // A reload abandons the window unconditionally; a fetch it superseded must
+    // not leave the lock latched now that it can no longer release it itself.
+    setWindowBusy(false);
+    targetMonth = null;
+    pendingJump = false;
+    failedMonth = null;
+  }
+
   function handleReloadRequest() {
-    if (enabled) void fetchDensity();
+    // The grid reloads page 1 regardless of the viewport, so the window must
+    // be forgotten even when the rail is dormant (`enabled` folds in the
+    // media query, which `scopeKey` does not cover).
+    resetWindow();
+    void fetchDensity();
   }
 
   $effect(() => {
@@ -401,16 +472,16 @@
   $effect(() => {
     if (!scrollEl) return;
     scrollEl.classList.toggle('date-scrubber-active', showRail);
+    // Reserve the lane's edge for the view header only: the glass floats over
+    // the grid, but Select/Sort must stay clickable at the content's edge.
+    scrollEl.style.setProperty('--date-rail-inset', showRail ? '32px' : '');
   });
 
   $effect(() => {
     const nextScope = scopeKey;
     if (nextScope === lastScope) return;
     lastScope = nextScope;
-    upGen += 1;
-    startOffset = 0;
-    windowActive = false;
-    targetMonth = null;
+    resetWindow();
     scheduleMeasure();
   });
 
@@ -440,6 +511,7 @@
     scrollTarget?.addEventListener('scroll', onScroll, { passive: true });
     scrollTarget?.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('photosReloadRequested', handleReloadRequest);
+    window.addEventListener('indexingCompleted', handleReloadRequest);
 
     const onResize = () => {
       updateContentCenter();
@@ -455,6 +527,10 @@
     if (grid) observer.observe(grid);
 
     return () => {
+      // A teardown must invalidate an in-flight anchor jump: its continuation
+      // would otherwise write the old listing after a remounted grid started
+      // loading page 1.
+      resetWindow();
       if (rafId) cancelAnimationFrame(rafId);
       if (stickyTimer !== null) clearTimeout(stickyTimer);
       if (earlierHideTimer !== null) clearTimeout(earlierHideTimer);
@@ -462,8 +538,10 @@
       scrollTarget?.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('photosReloadRequested', handleReloadRequest);
+      window.removeEventListener('indexingCompleted', handleReloadRequest);
       observer.disconnect();
       scrollTarget?.classList.remove('date-scrubber-active');
+      scrollTarget?.style.removeProperty('--date-rail-inset');
     };
   });
 </script>
@@ -475,8 +553,11 @@
     {model}
     {descending}
     {activeMonth}
+    pending={pendingJump}
+    {failedMonth}
     onScrub={scrubTo}
     onScrubEnd={endScrub}
+    onCancel={cancelScrub}
     onJump={settleOn}
   />
 {/if}

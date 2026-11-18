@@ -300,6 +300,9 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: var(--space-6);
+    /* Only the header reserves the rail's edge; the grid floats beneath the
+       glass. Set by DateScrubber while the rail shows. */
+    padding-right: var(--date-rail-inset, 0px);
   }
 
   /* The Map view fills the shell instead of scrolling: the map owns the

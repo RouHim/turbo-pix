@@ -125,6 +125,24 @@ test('decadeStarts picks the oldest populated month per decade', () => {
   assert.deepEqual(decadeStarts([]), []);
 });
 
+test('decadeStarts keeps each decade start for an oldest-first list', () => {
+  const months = [
+    toMonthIndex(2012, 3),
+    toMonthIndex(2014, 8),
+    toMonthIndex(2019, 7),
+    toMonthIndex(2021, 2),
+    toMonthIndex(2025, 1),
+  ];
+  assert.deepEqual(decadeStarts(months), [
+    { decade: 2010, month: toMonthIndex(2012, 3) },
+    { decade: 2020, month: toMonthIndex(2021, 2) },
+  ]);
+  // A single-decade range is labelled at its start, not at its end.
+  assert.deepEqual(decadeStarts([toMonthIndex(2012, 3)]), [
+    { decade: 2010, month: toMonthIndex(2012, 3) },
+  ]);
+});
+
 test('snapMonthInDirection follows the direction of travel across gaps', () => {
   const sparse = buildTimelineModel([
     { year: 1998, month: 3, count: 2 },

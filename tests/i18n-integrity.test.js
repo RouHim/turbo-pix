@@ -87,6 +87,7 @@ test('i18n key integrity', () => {
     'phase.id': parsePhaseIds(orbitText),
     monthKey: parseArrayEnum(constantsText, 'MONTH_KEYS'),
     weekdayKey: parseArrayEnum(constantsText, 'WEEKDAY_KEYS'),
+    period: true,
   };
 
   // These counts are load-bearing: a parse regression (or a new phase/month/

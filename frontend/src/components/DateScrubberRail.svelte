@@ -15,9 +15,20 @@
   } from '../lib/dateScrubber.js';
 
   /** @type {{ model: any, descending: boolean, activeMonth: number|null,
+   *   pending: boolean, failedMonth: number|null,
    *   onScrub: (index: number) => void, onScrubEnd: () => void,
-   *   onJump: (index: number) => void }} */
-  const { model, descending, activeMonth, onScrub, onScrubEnd, onJump } = $props();
+   *   onCancel: () => void, onJump: (index: number) => void }} */
+  const {
+    model,
+    descending,
+    activeMonth,
+    pending,
+    failedMonth,
+    onScrub,
+    onScrubEnd,
+    onCancel,
+    onJump,
+  } = $props();
 
   const activeLocale = $derived($locale || 'en');
   const BUBBLE_MIN_TOP = 96;
@@ -26,6 +37,7 @@
   let trackEl = $state(null);
   let dragging = $state(false);
   let hovered = $state(false);
+  let hoveredMonth = $state(null);
   let focused = $state(false);
   let dragPointerId = null;
   let thumbTop = $state(0);
@@ -64,11 +76,40 @@
         });
   };
 
-  const sliderLabel = $derived($t('ui.date_scrubber_label', { default: 'Date position' }));
+  const sliderLabel = $derived($t('ui.date_scrubber_label', { default: 'Jump to a month' }));
+  const newestLabel = $derived($t('ui.date_scrubber_newest', { default: 'Back to newest' }));
+  const retryLabel = $derived($t('ui.date_scrubber_retry', { default: 'Retry' }));
   const valueText = $derived(
     activeMonth === null ? '' : `${periodLabel(activeMonth)} · ${countLabel(activeMonth)}`
   );
-  const bubbleTop = $derived(Math.max(trackOffset + thumbTop, BUBBLE_MIN_TOP));
+  const newestIndex = $derived(descending ? model.maxIndex : model.minIndex);
+  const centerOf = (month) =>
+    segmentMetrics.find((metric) => metric.month === month)?.center ?? thumbTop;
+  const bubbleMonth = $derived(
+    failedMonth ?? (pending || dragging ? activeMonth : (hoveredMonth ?? activeMonth))
+  );
+  const jumpLabel = $derived(
+    activeMonth === null
+      ? ''
+      : $t('ui.date_scrubber_jump_to', {
+          locale: activeLocale,
+          values: { period: periodLabel(activeMonth) },
+          default: 'Jump to {period}…',
+        })
+  );
+  const bubbleTop = $derived(
+    Math.max(
+      trackOffset +
+        (failedMonth !== null
+          ? centerOf(failedMonth)
+          : pending
+            ? thumbTop
+            : hoveredMonth !== null && !dragging
+              ? centerOf(hoveredMonth)
+              : thumbTop),
+      BUBBLE_MIN_TOP
+    )
+  );
 
   /** The month whose segment center is nearest to the pointer. */
   function monthAt(clientY) {
@@ -100,6 +141,16 @@
     dragPointerId = null;
     dragging = false;
     onScrubEnd();
+  }
+
+  function cancelDrag() {
+    if (!dragging) return;
+    if (trackEl && dragPointerId !== null && trackEl.hasPointerCapture(dragPointerId)) {
+      trackEl.releasePointerCapture(dragPointerId);
+    }
+    dragPointerId = null;
+    dragging = false;
+    onCancel();
   }
 
   // Segment metrics and decade anchors only change with the track's layout;
@@ -168,6 +219,13 @@
   });
 
   function handleKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelDrag();
+      hovered = false;
+      hoveredMonth = null;
+      return;
+    }
     const base = activeMonth ?? (descending ? model.maxIndex : model.minIndex);
     const towardTop = descending ? 1 : -1;
     const step = (direction, monthsToStep) => {
@@ -198,10 +256,19 @@
 <svelte:window onblur={() => endDrag()} />
 
 <div class="date-rail" class:dragging bind:this={railEl} data-testid="date-rail">
-  <div class="date-caption" aria-hidden="true" data-testid="date-caption">
+  <button
+    type="button"
+    class="date-caption"
+    data-testid="date-caption"
+    aria-label={newestLabel}
+    title={newestLabel}
+    onpointerenter={() => (hovered = true)}
+    onpointerleave={() => (hovered = false)}
+    onclick={() => onJump(newestIndex)}
+  >
     <span class="date-caption-month">{activeMonth === null ? '—' : shortMonth}</span>
     <span class="date-caption-year">{activeYear}</span>
-  </div>
+  </button>
 
   <div class="date-track-wrap">
     <div
@@ -214,10 +281,16 @@
       aria-orientation="vertical"
       aria-valuemin={1}
       aria-valuemax={Math.max(1, months.length)}
-      aria-valuenow={activePosition}
+      aria-valuenow={months.length - activePosition + 1}
       aria-valuetext={valueText}
-      onpointerenter={() => (hovered = true)}
-      onpointerleave={() => (hovered = false)}
+      onpointerenter={(event) => {
+        hovered = true;
+        hoveredMonth = monthAt(event.clientY);
+      }}
+      onpointerleave={() => {
+        hovered = false;
+        hoveredMonth = null;
+      }}
       onfocus={() => (focused = true)}
       onblur={() => (focused = false)}
       onpointerdown={(event) => {
@@ -229,8 +302,11 @@
         scrubToPointer(event.clientY);
       }}
       onpointermove={(event) => {
-        if (!dragging || event.pointerId !== dragPointerId) return;
-        scrubToPointer(event.clientY);
+        if (dragging && event.pointerId === dragPointerId) {
+          scrubToPointer(event.clientY);
+          return;
+        }
+        hoveredMonth = monthAt(event.clientY);
       }}
       onpointerup={(event) => endDrag(event)}
       onpointercancel={(event) => endDrag(event)}
@@ -242,6 +318,7 @@
           <div
             class="date-segment"
             class:active={month === activeMonth}
+            class:ghost={month === hoveredMonth && month !== activeMonth}
             data-month={month}
             style:flex-grow={monthCount(model, month)}
           ></div>
@@ -262,15 +339,26 @@
     </div>
   </div>
 
-  {#if (hovered || dragging || focused) && activeMonth !== null}
-    <div
-      class="date-bubble"
-      style:top={`${bubbleTop}px`}
-      data-testid="date-bubble"
-      aria-hidden="true"
-    >
-      <span class="date-bubble-month">{periodLabel(activeMonth)}</span>
-      <span class="date-bubble-count">{countLabel(activeMonth)}</span>
+  {#if (hovered || dragging || focused || pending || failedMonth !== null) && bubbleMonth !== null}
+    <div class="date-bubble" style:top={`${bubbleTop}px`} data-testid="date-bubble">
+      {#if failedMonth !== null}
+        <span class="date-bubble-month">{periodLabel(failedMonth)}</span>
+        <span class="date-bubble-count">{countLabel(failedMonth)}</span>
+        <button type="button" class="date-bubble-retry" onclick={() => onJump(failedMonth)}>
+          {retryLabel}
+        </button>
+      {:else if pending}
+        <span class="date-bubble-month">{jumpLabel}</span>
+        <span class="date-bubble-count">{countLabel(activeMonth)}</span>
+        <span class="date-bubble-dots" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+      {:else}
+        <span class="date-bubble-month">{periodLabel(bubbleMonth)}</span>
+        <span class="date-bubble-count">{countLabel(bubbleMonth)}</span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -290,26 +378,60 @@
 
   .date-caption {
     display: flex;
+    width: calc(100% - var(--space-2));
     min-height: 44px;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 1px;
-    border-bottom: 1px solid var(--divider-color);
+    margin: var(--space-1) auto 0;
+    border: 1px solid var(--glass-border, var(--divider-color));
+    border-radius: var(--radius-full);
     padding-block: var(--space-2);
-    color: var(--text-secondary);
+    background: var(--glass-bg);
+    color: var(--text-primary);
+    cursor: pointer;
     font-family: var(--font-body);
     line-height: 1.1;
     text-align: center;
+    pointer-events: auto;
+    transition:
+      color var(--transition-medium),
+      border-color var(--transition-medium);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  }
+
+  .date-caption:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+    .date-caption {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .date-caption {
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
   }
 
   .date-caption-month {
+    color: var(--text-secondary);
     font-size: var(--font-xs);
     font-weight: var(--font-medium);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .date-caption-year {
-    font-size: var(--font-xs);
+    font-size: var(--font-base);
+    font-weight: var(--font-semibold);
     font-variant-numeric: tabular-nums;
   }
 
@@ -328,6 +450,7 @@
     width: 20px;
     cursor: grab;
     outline: none;
+    pointer-events: auto;
     touch-action: none;
     user-select: none;
   }
@@ -344,8 +467,6 @@
     display: flex;
     width: 4px;
     flex-direction: column;
-    opacity: 0.32;
-    transition: opacity var(--transition-medium);
   }
 
   .date-segment {
@@ -353,15 +474,25 @@
     min-height: 1px;
     border-radius: var(--radius-full);
     background: color-mix(in oklch, var(--text-secondary) 70%, transparent);
-    transition: background var(--transition-fast);
+    opacity: 0.32;
+    transition:
+      opacity var(--transition-medium),
+      background var(--transition-fast);
   }
 
-  .date-track:hover .date-segment:not(.active) {
+  .date-track:hover .date-segment:not(.active):not(.ghost) {
     background: color-mix(in oklch, var(--text-secondary) 85%, transparent);
   }
 
   .date-segment.active {
+    min-height: 3px;
     background: var(--primary-color);
+    opacity: 1;
+  }
+
+  .date-segment.ghost {
+    background: color-mix(in oklch, var(--primary-color) 55%, transparent);
+    opacity: 1;
   }
 
   .date-thumb {
@@ -452,6 +583,58 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .date-bubble-retry {
+    border: 0;
+    padding: 0 2px;
+    background: transparent;
+    color: var(--primary-color);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-xs);
+    text-decoration: underline;
+    pointer-events: auto;
+  }
+
+  .date-bubble-retry:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+
+  .date-bubble-dots {
+    display: inline-flex;
+    gap: 3px;
+  }
+
+  .date-bubble-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--primary-color);
+    animation: bubble-dot 1.2s ease-in-out infinite;
+  }
+
+  .date-bubble-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .date-bubble-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes bubble-dot {
+    0%,
+    60%,
+    100% {
+      opacity: 0.5;
+      transform: translateY(0);
+    }
+
+    30% {
+      opacity: 1;
+      transform: translateY(-2px);
+    }
+  }
+
   /* The revealed lane floats over the grid: a glass layer behind the rail's
      content, fading in on hover, keyboard focus and drag. The background sits
      on a pseudo-element so the backdrop-filter arrives with the opacity fade;
@@ -492,17 +675,24 @@
      affordance; the caption, labels and thumb fade in on hover, keyboard
      focus or an active drag. Opacity only — display or visibility would drop
      the slider out of the tab order. */
-  .date-caption,
+  .date-caption {
+    opacity: 1;
+  }
+
   .date-decades,
   .date-thumb {
     opacity: 0;
     transition: opacity var(--transition-medium);
   }
 
-  .date-rail:is(:hover, :focus-within, .dragging) .date-caption,
+  .date-rail:is(:hover, :focus-within, .dragging) .date-caption {
+    border-bottom-color: var(--divider-color);
+    color: var(--text-primary);
+  }
+
   .date-rail:is(:hover, :focus-within, .dragging) .date-decades,
   .date-rail:is(:hover, :focus-within, .dragging) .date-thumb,
-  .date-rail:is(:hover, :focus-within, .dragging) .date-segments {
+  .date-rail:is(:hover, :focus-within, .dragging) .date-segment {
     opacity: 1;
   }
 
@@ -512,8 +702,10 @@
     .date-decades,
     .date-thumb,
     .date-segments,
-    .date-segment {
+    .date-segment,
+    .date-bubble-dots span {
       transition: none;
+      animation: none;
     }
   }
 

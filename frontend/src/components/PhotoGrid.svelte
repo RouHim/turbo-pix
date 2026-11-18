@@ -538,7 +538,7 @@
   class="photo-grid"
   role="region"
   aria-label={$t('ui.photo_grid_label', { default: 'Photo grid' })}
-  aria-busy={loading}
+  aria-busy={loading || photoGridState.windowBusy}
 >
   {#if loading && photos.length === 0}
     <div class="grid-loading-status" role="status">

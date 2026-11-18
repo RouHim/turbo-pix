@@ -48,7 +48,8 @@ export const snapMonth = (model, index) => {
 /**
  * One entry per populated decade, keyed by its oldest populated month, in the
  * input's order. The rail passes its newest-first month list so the labels run
- * top-to-bottom with the track while marking the decade's chronological start.
+ * top-to-bottom with the track while marking the decade's chronological start;
+ * an oldest-first list (`date_asc`) keeps that same per-decade start.
  *
  * @param {number[]} months populated month indices, newest first
  * @returns {Array<{ decade: number, month: number }>}
@@ -57,7 +58,11 @@ export const decadeStarts = (months) => {
   const starts = new Map();
   for (const month of months) {
     const decade = Math.floor(Math.floor(month / MONTHS_PER_YEAR) / 10) * 10;
-    starts.set(decade, month);
+    // Keep the minimum, not the last seen month: the rail also passes an
+    // oldest-first list for `date_asc`, where "last" would be the decade's
+    // newest month and every label would slide to the decade's end.
+    const previous = starts.get(decade);
+    if (previous === undefined || month < previous) starts.set(decade, month);
   }
   return [...starts.entries()].map(([decade, month]) => ({ decade, month }));
 };

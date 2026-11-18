@@ -1,0 +1,24 @@
+TurboPix
+Copyright 2026 Rouven H.
+
+The TurboPix source code is licensed under the MIT License (see LICENSE).
+
+Third-party components distributed with, or downloaded by, TurboPix:
+
+- ONNX Runtime (https://github.com/microsoft/onnxruntime), MIT License.
+  The release binary links a static ONNX Runtime build supplied by
+  RapidAI/OnnxruntimeBuilder (https://github.com/RapidAI/OnnxruntimeBuilder),
+  Apache License 2.0.
+
+- SCRFD-2.5G and antelopev2 R100 face models
+  (https://github.com/deepinsight/insightface), InsightFace model license.
+  These model weights are available for non-commercial research purposes only
+  and are NOT covered by TurboPix's MIT License. TurboPix does not bundle the
+  weights; the application downloads them at runtime after the operator enables
+  face recognition (default on). Commercial use requires a separate license
+  from the model authors.
+
+- CLIP ViT-B/32 (https://huggingface.co/openai/clip-vit-base-patch32), MIT
+  License.
+
+See the upstream projects for the complete license texts and attribution.

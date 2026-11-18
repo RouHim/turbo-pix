@@ -12,8 +12,10 @@
     exitSelectionMode,
     albums,
     loadAlbums,
+    people,
+    loadPeople,
   } from './lib/state.svelte.js';
-  import { route, init as initRouter } from './lib/router.svelte.js';
+  import { route, init as initRouter, replaceState } from './lib/router.svelte.js';
   import { api } from './lib/api.js';
   import { performance } from './lib/utils.js';
   import { APP_CONSTANTS } from './lib/constants.js';
@@ -28,6 +30,7 @@
   import CollagesView from './components/CollagesView.svelte';
   import AlbumsView from './components/AlbumsView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
+  import PeopleView from './components/PeopleView.svelte';
   import MapView from './components/MapView.svelte';
   import PhotoViewer from './components/PhotoViewer.svelte';
   import IndexingOrbit from './components/IndexingOrbit.svelte';
@@ -42,6 +45,7 @@
     collages: 'ui.collages',
     housekeeping: 'ui.housekeeping',
     map: 'ui.map',
+    people: 'ui.people',
   };
 
   const titleFallbacks = {
@@ -52,6 +56,7 @@
     collages: 'Collages',
     housekeeping: 'Housekeeping',
     map: 'Map',
+    people: 'People',
   };
 
   let ready = $state(false);
@@ -61,9 +66,12 @@
           $t('albums.sectionTitle', { default: 'Albums' }))
       : route.query
         ? null // search results title handled separately
-        : $t(titleKeys[route.view] || 'ui.all_photos', {
-            default: titleFallbacks[route.view] || 'All Photos',
-          })
+        : route.person != null
+          ? (people.find((person) => person.id === route.person)?.name ??
+            $t('ui.person_unnamed', { default: 'Person' }))
+          : $t(titleKeys[route.view] || 'ui.all_photos', {
+              default: titleFallbacks[route.view] || 'All Photos',
+            })
   );
 
   // Same breakpoint the scoped CSS uses (max-width: 768px), so the drawer
@@ -100,6 +108,15 @@
     });
   });
 
+  // A disabled feature must also retire a People route reached through
+  // history (the initial deep link is handled after initRouter).
+  $effect(() => {
+    if (!ready) return;
+    if (appState.faceRecognitionEnabled) return;
+    if (route.view !== 'people') return;
+    replaceState({ view: 'all', person: null });
+  });
+
   // FR-013: selection never leaks across surfaces. A different view OR a
   // different query is a different surface (semantic search results are one);
   // sort/date-range changes keep the same result set, so they do not clear.
@@ -107,6 +124,7 @@
     route.view;
     route.query;
     route.album;
+    route.person;
     untrack(() => {
       if (selectionState.active) exitSelectionMode();
     });
@@ -151,14 +169,20 @@
         const config = await api.getConfig();
         defaultLocale = config?.default_locale || 'en';
         appState.tileUrl = config?.tile_url ?? null;
+        appState.faceRecognitionEnabled = config?.face_recognition_enabled !== false;
       } catch {
         // config endpoint may not be ready; fall through
       }
       initI18n(defaultLocale);
       initRouter();
-      // Populate the albums store on fresh loads so deep-linked album
-      // titles (route.album) resolve without AlbumsView/AlbumPicker mounting.
+      // Populate the albums/people stores on fresh loads so deep-linked
+      // titles resolve without their view mounting.
       loadAlbums();
+      if (appState.faceRecognitionEnabled) {
+        loadPeople();
+      } else if (route.view === 'people') {
+        replaceState({ view: 'all', person: null });
+      }
       ready = true;
     })();
 
@@ -190,10 +214,10 @@
         {/if}
       </h2>
       <div class="content-actions">
-        {#if route.view !== 'collages' && route.view !== 'housekeeping' && (route.view !== 'albums' || route.query != null)}
+        {#if route.view !== 'collages' && route.view !== 'housekeeping' && !(route.view === 'people' && route.person == null) && (route.view !== 'albums' || route.query != null)}
           <SortControls />
         {/if}
-        {#if route.view !== 'map'}
+        {#if route.view !== 'map' && !(route.view === 'people' && route.person == null)}
           <button
             type="button"
             class="select-mode-btn"
@@ -220,7 +244,7 @@
       </div>
     </div>
 
-    {#if route.view !== 'collages' && route.view !== 'housekeeping' && (route.view !== 'albums' || route.query != null) && route.album == null}
+    {#if route.view !== 'collages' && route.view !== 'housekeeping' && route.view !== 'people' && (route.view !== 'albums' || route.query != null) && route.album == null}
       <TimelineSlider />
     {/if}
 
@@ -243,6 +267,8 @@
         <MapView />
       {:else if route.view === 'albums' && route.album == null && route.query == null}
         <AlbumsView />
+      {:else if route.view === 'people' && route.person == null}
+        <PeopleView />
       {:else}
         <PhotoGrid />
       {/if}

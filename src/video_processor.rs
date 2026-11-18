@@ -2728,6 +2728,7 @@ pub(crate) mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
 
         (config, temp_dir)

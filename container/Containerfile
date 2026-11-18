@@ -14,6 +14,18 @@ COPY frontend ./frontend
 RUN npm ci && npm run build
 
 # # # # # # # # # # # # # # # # # # # #
+# Static ONNX Runtime (face pipeline)
+# # # # # # # # # # # # # # # # # # # #
+FROM alpine:3 AS ort
+ARG TARGETARCH
+RUN apk add --no-cache curl p7zip
+COPY scripts/fetch-ort.sh /fetch-ort.sh
+RUN chmod +x /fetch-ort.sh && \
+    if [ "$TARGETARCH" = "arm64" ]; then TARGET=aarch64-unknown-linux-musl; \
+    else TARGET=x86_64-unknown-linux-musl; fi; \
+    DEST=/opt/ort /fetch-ort.sh --target "$TARGET"
+
+# # # # # # # # # # # # # # # # # # # #
 # Application Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 ARG TARGETARCH
@@ -36,6 +48,7 @@ COPY src ./src
 COPY migrations ./migrations
 COPY assets ./assets
 COPY --from=frontend-build /app/dist ./dist
+COPY --from=ort /opt/ort /opt/ort
 
 # Determine the Rust target triple based on architecture
 ARG TARGETARCH
@@ -51,7 +64,8 @@ RUN RUST_TARGET=$(cat /tmp/rust-target) && \
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     SQLITE3_INCLUDE=$(find /root/.cargo -path "*/libsqlite3-sys-*/sqlite3" -type d 2>/dev/null | head -n1) && \
-    CFLAGS="-I${SQLITE3_INCLUDE}" cargo build --profile production --target ${RUST_TARGET}
+    ORT_LIB_PATH=/opt/ort/lib CFLAGS="-I${SQLITE3_INCLUDE}" \
+    cargo build --profile production --target ${RUST_TARGET}
 
 FROM alpine:3 AS ca-certs
 RUN apk --no-cache add ca-certificates

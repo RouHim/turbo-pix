@@ -7,10 +7,11 @@ use crate::db::DbPool;
 use crate::scheduler::{IndexingPhases, IndexingStatus};
 use crate::warp_helpers::with_db;
 
-const CANONICAL_PHASES: [(&str, &str); 6] = [
+const CANONICAL_PHASES: [(&str, &str); 7] = [
     ("discovering", "indeterminate"),
     ("metadata", "determinate"),
     ("semantic_vectors", "determinate"),
+    ("faces", "determinate"),
     ("geo_resolution", "determinate"),
     ("collages", "indeterminate"),
     ("housekeeping", "indeterminate"),
@@ -191,23 +192,23 @@ mod tests {
     fn test_build_phases_geo_resolution_active() {
         let data = make_phases((500, 500), (500, 500), (500, 500));
         let phases = build_phases(true, false, "geo_resolution", &data);
-        assert_eq!(phases.len(), 6);
+        assert_eq!(phases.len(), 7);
         assert!(
-            phases[0..3].iter().all(|p| p.state == "done"),
-            "discovering, metadata, semantic_vectors should be done"
+            phases[0..4].iter().all(|p| p.state == "done"),
+            "discovering, metadata, semantic_vectors and faces should be done"
         );
-        assert_eq!(phases[3].state, "active");
-        assert_eq!(phases[3].kind, "determinate");
-        assert_eq!(phases[3].id, "geo_resolution");
+        assert_eq!(phases[4].state, "active");
+        assert_eq!(phases[4].kind, "determinate");
+        assert_eq!(phases[4].id, "geo_resolution");
         assert!(
-            phases[4..6].iter().all(|p| p.state == "pending"),
+            phases[5..7].iter().all(|p| p.state == "pending"),
             "collages and housekeeping should be pending"
         );
     }
 
     #[test]
     fn test_canonical_phases_includes_geo_resolution() {
-        assert_eq!(CANONICAL_PHASES.len(), 6);
+        assert_eq!(CANONICAL_PHASES.len(), 7);
         assert!(
             CANONICAL_PHASES
                 .iter()
@@ -215,9 +216,14 @@ mod tests {
             "geo_resolution must be in CANONICAL_PHASES"
         );
         assert_eq!(
-            CANONICAL_PHASES[3],
+            CANONICAL_PHASES[4],
             ("geo_resolution", "determinate"),
-            "geo_resolution must be at index 3 (after semantic_vectors, before collages)"
+            "geo_resolution must be at index 4 (after faces, before collages)"
+        );
+        assert_eq!(
+            CANONICAL_PHASES[3],
+            ("faces", "determinate"),
+            "faces must run after semantic_vectors"
         );
     }
 
@@ -225,28 +231,29 @@ mod tests {
     fn test_build_phases_idle() {
         let data = IndexingPhases::new();
         let phases = build_phases(false, false, "idle", &data);
-        assert_eq!(phases.len(), 6);
+        assert_eq!(phases.len(), 7);
         assert!(phases.iter().all(|p| p.state == "pending"));
         assert_eq!(phases[0].id, "discovering");
         assert_eq!(phases[1].id, "metadata");
         assert_eq!(phases[2].id, "semantic_vectors");
-        assert_eq!(phases[3].id, "geo_resolution");
-        assert_eq!(phases[4].id, "collages");
-        assert_eq!(phases[5].id, "housekeeping");
+        assert_eq!(phases[3].id, "faces");
+        assert_eq!(phases[4].id, "geo_resolution");
+        assert_eq!(phases[5].id, "collages");
+        assert_eq!(phases[6].id, "housekeeping");
     }
 
     #[test]
     fn test_build_phases_complete() {
         let data = make_phases((100, 100), (100, 100), (100, 100));
         let phases = build_phases(false, true, "idle", &data);
-        assert_eq!(phases.len(), 6);
+        assert_eq!(phases.len(), 7);
         assert!(phases.iter().all(|p| p.state == "done"));
         assert_eq!(phases[1].processed, 100);
         assert_eq!(phases[1].total, Some(100));
         assert_eq!(phases[2].processed, 100);
         assert_eq!(phases[2].total, Some(100));
-        assert_eq!(phases[3].processed, 100);
-        assert_eq!(phases[3].total, Some(100));
+        assert_eq!(phases[4].processed, 100);
+        assert_eq!(phases[4].total, Some(100));
     }
 
     #[test]
@@ -262,6 +269,7 @@ mod tests {
         assert_eq!(phases[3].state, "pending");
         assert_eq!(phases[4].state, "pending");
         assert_eq!(phases[5].state, "pending");
+        assert_eq!(phases[6].state, "pending");
     }
 
     #[test]
@@ -279,6 +287,7 @@ mod tests {
         assert_eq!(phases[3].state, "pending");
         assert_eq!(phases[4].state, "pending");
         assert_eq!(phases[5].state, "pending");
+        assert_eq!(phases[6].state, "pending");
     }
 
     #[test]
@@ -289,19 +298,20 @@ mod tests {
         assert_eq!(phases[1].state, "done");
         assert_eq!(phases[2].state, "done");
         assert_eq!(phases[3].state, "done");
-        assert_eq!(phases[4].state, "active");
-        assert_eq!(phases[4].kind, "indeterminate");
-        assert_eq!(phases[4].total, None);
-        assert_eq!(phases[5].state, "pending");
+        assert_eq!(phases[4].state, "done");
+        assert_eq!(phases[5].state, "active");
+        assert_eq!(phases[5].kind, "indeterminate");
+        assert_eq!(phases[5].total, None);
+        assert_eq!(phases[6].state, "pending");
     }
 
     #[test]
     fn test_build_phases_housekeeping_active() {
         let data = make_phases((500, 500), (500, 500), (100, 100));
         let phases = build_phases(true, false, "housekeeping", &data);
-        assert!(phases[0..5].iter().all(|p| p.state == "done"));
-        assert_eq!(phases[5].state, "active");
-        assert_eq!(phases[5].kind, "indeterminate");
+        assert!(phases[0..6].iter().all(|p| p.state == "done"));
+        assert_eq!(phases[6].state, "active");
+        assert_eq!(phases[6].kind, "indeterminate");
     }
 
     #[test]
@@ -334,6 +344,7 @@ mod tests {
                 "discovering",
                 "metadata",
                 "semantic_vectors",
+                "faces",
                 "geo_resolution",
                 "collages",
                 "housekeeping"
@@ -349,7 +360,8 @@ mod tests {
         assert_eq!(phases[1].kind, "determinate");
         assert_eq!(phases[2].kind, "determinate");
         assert_eq!(phases[3].kind, "determinate");
-        assert_eq!(phases[4].kind, "indeterminate");
+        assert_eq!(phases[4].kind, "determinate");
         assert_eq!(phases[5].kind, "indeterminate");
+        assert_eq!(phases[6].kind, "indeterminate");
     }
 }

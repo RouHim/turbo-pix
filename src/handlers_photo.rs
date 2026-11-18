@@ -44,6 +44,7 @@ pub struct PhotoQuery {
     pub month: Option<i32>,
     pub to_year: Option<i32>,
     pub to_month: Option<i32>,
+    pub person: Option<i64>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -88,6 +89,7 @@ async fn fetch_photos(
         month: query.month,
         to_year: query.to_year,
         to_month: query.to_month,
+        person: query.person,
     };
     photo_listing::list(
         db_pool,
@@ -163,6 +165,7 @@ pub async fn list_map_photos(
         month: query.month,
         to_year: query.to_year,
         to_month: query.to_month,
+        person: None,
     };
 
     match photo_listing::list(

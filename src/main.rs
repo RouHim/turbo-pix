@@ -10,18 +10,20 @@ use turbo_pix::cache_manager::CacheManager;
 use turbo_pix::config;
 use turbo_pix::db;
 use turbo_pix::db_pool;
+use turbo_pix::face_recognition::{self, FaceRecognition, FaceRecognitionEngine};
 use turbo_pix::handlers_albums::build_albums_routes;
 use turbo_pix::handlers_collage::build_collage_routes;
 use turbo_pix::handlers_config::build_config_routes;
 use turbo_pix::handlers_health::build_health_routes;
 use turbo_pix::handlers_housekeeping::build_housekeeping_routes;
 use turbo_pix::handlers_indexing::build_indexing_routes;
+use turbo_pix::handlers_people::build_people_routes;
 use turbo_pix::handlers_photo::build_photo_routes;
 use turbo_pix::handlers_saved_searches::build_saved_searches_routes;
 use turbo_pix::handlers_search::build_search_routes;
 use turbo_pix::handlers_static::build_static_routes;
 use turbo_pix::handlers_thumbnail::build_thumbnail_routes;
-use turbo_pix::scheduler::PhotoScheduler;
+use turbo_pix::scheduler::{PhotoScheduler, Pipelines};
 use turbo_pix::semantic_search::{self, SemanticSearch, SemanticSearchEngine};
 use turbo_pix::thumbnail_generator::ThumbnailGenerator;
 use turbo_pix::video_encoder;
@@ -44,6 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--download-models") {
         info!("Downloading AI models...");
         semantic_search::download_models(&config.data_path)?;
+        if config.face_recognition_enabled {
+            face_recognition::model::download_face_models(&config.data_path)?;
+        }
         info!("Download complete. You can now run tests.");
         return Ok(());
     }
@@ -150,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(
         db_pool.clone(),
-        cache_manager,
+        cache_manager.clone(),
         config.data_path.clone().into(),
     );
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
@@ -162,10 +167,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.locale.clone(),
         semantic_search,
     );
+    let people_routes = build_people_routes(db_pool.clone(), cache_manager.clone());
     let housekeeping_routes = build_housekeeping_routes(db_pool.clone());
     let saved_searches_routes = build_saved_searches_routes(db_pool.clone());
     let albums_routes = build_albums_routes(db_pool.clone());
-    let config_routes = build_config_routes(config.locale.clone(), config.tile_url.clone());
+    let config_routes = build_config_routes(
+        config.locale.clone(),
+        config.tile_url.clone(),
+        config.face_recognition_enabled,
+    );
     let static_routes = build_static_routes();
 
     // Security posture: reject cross-origin browser requests (no CORS
@@ -181,6 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or(search_routes)
                 .or(indexing_routes)
                 .or(collage_routes)
+                .or(people_routes)
                 .or(housekeeping_routes)
                 .or(saved_searches_routes)
                 .or(albums_routes)
@@ -321,11 +332,25 @@ async fn initialize_services(
     // Initialize and start photo scheduler
     let photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
     let data_path = PathBuf::from(&config.data_path);
+    let face_recognition: Arc<dyn FaceRecognition> = Arc::new(FaceRecognitionEngine::new(
+        db_pool.clone(),
+        cache_manager.clone(),
+        thumbnail_generator.clone(),
+        &config.data_path,
+        config.face_recognition_enabled,
+    ));
+    if !config.face_recognition_enabled {
+        info!("Face recognition disabled by TURBO_PIX_FACE_RECOGNITION");
+    }
+
     let photo_scheduler = PhotoScheduler::new(
         photo_paths,
         db_pool.clone(),
         cache_manager.clone(),
-        semantic_search.clone(),
+        Pipelines {
+            semantic_search: semantic_search.clone(),
+            face_recognition,
+        },
         data_path,
         config.locale.clone(),
         config.nominatim_url.clone(),

@@ -56,8 +56,10 @@ TURBO_PIX_DATA_PATH=data \
 ## Usage
 
 Open <http://localhost:18473>, or `http://<host>:18473` from another device. The first start scans your library and
-downloads the search model (~580 MB). Later starts only process new or changed files, and a nightly rescan keeps the
-index current. The UI shows indexing progress.
+downloads the search model (~580 MB) and the face models (~264 MB). Later starts only process new or changed files, and a
+nightly rescan keeps the index current. The UI shows indexing progress. Face recognition groups detected faces into
+people; rename or hide clusters there, or click a person to filter the grid. Set
+`TURBO_PIX_FACE_RECOGNITION=false` to skip face indexing and hide the People view.
 
 Configuration, supported formats and build instructions are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -79,4 +81,5 @@ Configuration, supported formats and build instructions are in [DEVELOPMENT.md](
 
 ## License
 
-[MIT](LICENSE)
+The TurboPix source code is [MIT](LICENSE). The optional face models are licensed for non-commercial use only and are
+not covered by the MIT license; see [NOTICE](NOTICE).

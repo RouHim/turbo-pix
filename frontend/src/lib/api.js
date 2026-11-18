@@ -119,6 +119,7 @@ class TurboPixAPI {
     if (params.month !== undefined) searchParams.set('month', params.month);
     if (params.toYear !== undefined) searchParams.set('to_year', params.toYear);
     if (params.toMonth !== undefined) searchParams.set('to_month', params.toMonth);
+    if (params.person !== undefined) searchParams.set('person', params.person);
 
     const queryString = searchParams.toString();
     const endpoint = `/api/photos${queryString ? `?${queryString}` : ''}`;
@@ -207,6 +208,29 @@ class TurboPixAPI {
 
   async getConfig() {
     return this.request('/api/config');
+  }
+
+  /**
+   * Person clusters for the People view.
+   * @param {{ includeHidden?: boolean }} params
+   */
+  async getPeople(params = {}, options = {}) {
+    const searchParams = new URLSearchParams();
+    if (params.includeHidden) searchParams.set('include_hidden', 'true');
+    const queryString = searchParams.toString();
+    return this.request(`/api/people${queryString ? `?${queryString}` : ''}`, options);
+  }
+
+  async updatePerson(id, changes, options = {}) {
+    return this.request(`/api/people/${id}`, {
+      ...options,
+      method: 'PATCH',
+      body: JSON.stringify(changes),
+    });
+  }
+
+  faceCropUrl(faceId) {
+    return `/api/faces/${faceId}/crop`;
   }
 
   /**

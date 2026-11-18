@@ -14,6 +14,8 @@
   import cpu from 'feather-icons/dist/icons/cpu.svg?raw';
   import download from 'feather-icons/dist/icons/download.svg?raw';
   import edit2 from 'feather-icons/dist/icons/edit-2.svg?raw';
+  import eye from 'feather-icons/dist/icons/eye.svg?raw';
+  import eyeOff from 'feather-icons/dist/icons/eye-off.svg?raw';
   import fileText from 'feather-icons/dist/icons/file-text.svg?raw';
   import grid from 'feather-icons/dist/icons/grid.svg?raw';
   import heart from 'feather-icons/dist/icons/heart.svg?raw';
@@ -34,6 +36,7 @@
   import square from 'feather-icons/dist/icons/square.svg?raw';
   import sun from 'feather-icons/dist/icons/sun.svg?raw';
   import trash2 from 'feather-icons/dist/icons/trash-2.svg?raw';
+  import users from 'feather-icons/dist/icons/users.svg?raw';
   import video from 'feather-icons/dist/icons/video.svg?raw';
   import x from 'feather-icons/dist/icons/x.svg?raw';
   import zap from 'feather-icons/dist/icons/zap.svg?raw';
@@ -54,6 +57,8 @@
     cpu,
     download,
     'edit-2': edit2,
+    eye,
+    'eye-off': eyeOff,
     'file-text': fileText,
     grid,
     heart,
@@ -74,6 +79,7 @@
     square,
     sun,
     'trash-2': trash2,
+    users,
     video,
     x,
     zap,

@@ -174,6 +174,7 @@ pub async fn list_album_photos(
         month: None,
         to_year: None,
         to_month: None,
+        person: None,
     };
     let listing = match crate::photo_listing::list(
         &db_pool,

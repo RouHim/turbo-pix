@@ -15,6 +15,7 @@
     { id: 'discovering', icon: 'camera' },
     { id: 'metadata', icon: 'file-text' },
     { id: 'semantic_vectors', icon: 'cpu' },
+    { id: 'faces', icon: 'users' },
     { id: 'geo_resolution', icon: 'map-pin' },
     { id: 'collages', icon: 'grid' },
     { id: 'housekeeping', icon: 'check-circle' },
@@ -58,8 +59,8 @@
   }
 
   function describeArc(centerX, centerY, radius, index) {
-    const gapDegrees = 4;
-    const segmentDegrees = 60;
+    const gapDegrees = SEGMENT_GAP_DEGREES;
+    const segmentDegrees = 360 / PHASES.length;
     const startAngle = -90 + index * segmentDegrees + gapDegrees / 2;
     const endAngle = startAngle + segmentDegrees - gapDegrees;
     const start = polarToCartesian(centerX, centerY, radius, startAngle);
@@ -153,7 +154,8 @@
     closeSheet();
   }
 
-  const ARC_LENGTH = 125.66;
+  const SEGMENT_GAP_DEGREES = 4;
+  const ARC_LENGTH = (2 * Math.PI * 120 * (360 / PHASES.length - SEGMENT_GAP_DEGREES)) / 360;
 
   function updateOrbit(status) {
     cancelPendingHide();

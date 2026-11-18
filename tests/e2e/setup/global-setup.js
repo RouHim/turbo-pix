@@ -812,6 +812,11 @@ async function startServer() {
     TURBO_PIX_DATA_PATH: TEST_DATA_DIR,
     TURBO_PIX_PHOTO_PATHS: path.join(TEST_DATA_DIR, 'photos'),
     TURBO_PIX_PORT: SERVER_PORT,
+    // The face model download/inference is deliberately out of the shared
+    // fixture path: it would add a 252 MB download and CPU load to every
+    // suite. The People UI has its own mocked spec, and the Rust API tests
+    // cover the real people/face endpoints.
+    TURBO_PIX_FACE_RECOGNITION: 'false',
     // Dedicated per-run transcode cache inside the wiped test dir: the
     // default /tmp/turbo-pix survives between runs, so a previously
     // transcoded HEVC file would short-circuit the transcode flow and the

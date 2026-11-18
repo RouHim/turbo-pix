@@ -323,6 +323,12 @@ pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
         params.push(to_exclusive);
     }
 
+    if let Some(person) = query.person {
+        where_clause
+            .push_str(" AND hash_sha256 IN (SELECT photo_hash FROM faces WHERE person_id = ?)");
+        params.push(person.to_string());
+    }
+
     if let Some(q) = &query.q {
         // Split on whitespace and AND per-token conditions so combined
         // queries like "sunset is_favorite:true" work. A token with an
@@ -1624,6 +1630,7 @@ pub(crate) mod tests {
             month: None,
             to_year: None,
             to_month: None,
+            person: None,
         }
     }
 
@@ -3249,6 +3256,7 @@ pub(crate) mod tests {
             month,
             to_year,
             to_month,
+            person: None,
         }
     }
 
@@ -3688,6 +3696,7 @@ pub(crate) mod tests {
                 month: None,
                 to_year: None,
                 to_month: None,
+                person: None,
             },
             None,
             None,
@@ -3738,6 +3747,7 @@ pub(crate) mod tests {
                 month: None,
                 to_year: None,
                 to_month: None,
+                person: None,
             },
             None,
             None,
@@ -3774,6 +3784,7 @@ pub(crate) mod tests {
                 month: None,
                 to_year: None,
                 to_month: None,
+                person: None,
             },
             None,
             None,

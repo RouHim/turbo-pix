@@ -1,5 +1,7 @@
 # Rust build artifacts
 /target/
+# Fetched ONNX Runtime archives/headers (scripts/fetch-ort.sh)
+/vendor/ort/
 data/
 photos/
 collages/

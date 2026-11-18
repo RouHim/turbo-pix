@@ -32,6 +32,12 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install ORT extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Fetch static ONNX Runtime
+        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target x86_64-unknown-linux-gnu)" >> "$GITHUB_ENV"
+
       - name: Check Rust format
         run: cargo fmt --all -- --check
 
@@ -75,10 +81,18 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install ORT extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Fetch static ONNX Runtime
+        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target x86_64-unknown-linux-gnu)" >> "$GITHUB_ENV"
+
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Download AI models
+        env:
+          TURBO_PIX_FACE_RECOGNITION: 'false'
         run: cargo run -- --download-models
 
       - name: Run tests
@@ -155,6 +169,12 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install ORT extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Fetch static ONNX Runtime
+        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target x86_64-unknown-linux-gnu)" >> "$GITHUB_ENV"
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -193,6 +213,12 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install ORT extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Fetch static ONNX Runtime
+        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target x86_64-unknown-linux-gnu)" >> "$GITHUB_ENV"
+
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg sqlite3
 
@@ -200,6 +226,8 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Download AI models
+        env:
+          TURBO_PIX_FACE_RECOGNITION: 'false'
         run: cargo run -- --download-models
 
       - name: Run E2E tests
@@ -306,6 +334,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Install ORT extraction tools
+        run: apk add --no-cache curl p7zip
+
+      - name: Fetch static ONNX Runtime
+        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target ${{ matrix.target }})" >> "$GITHUB_ENV"
 
       - name: Find sqlite3.h include path
         id: sqlite3

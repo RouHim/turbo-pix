@@ -481,6 +481,7 @@ mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
 
         (config, temp_dir)
@@ -740,6 +741,7 @@ mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -800,6 +802,7 @@ mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -897,6 +900,7 @@ mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
 
         let db_pool = create_in_memory_pool().await.unwrap();
@@ -1004,6 +1008,7 @@ mod tests {
             locale: "en".to_string(),
             nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            face_recognition_enabled: false,
         };
         let db_pool = create_in_memory_pool().await.unwrap();
         let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();

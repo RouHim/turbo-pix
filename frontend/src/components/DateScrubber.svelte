@@ -474,7 +474,7 @@
     scrollEl.classList.toggle('date-scrubber-active', showRail);
     // Reserve the lane's edge for the view header only: the glass floats over
     // the grid, but Select/Sort must stay clickable at the content's edge.
-    scrollEl.style.setProperty('--date-rail-inset', showRail ? '32px' : '');
+    scrollEl.style.setProperty('--date-rail-inset', showRail ? '42px' : '');
   });
 
   $effect(() => {
@@ -586,8 +586,10 @@
     height: 0;
   }
 
-  /* The rail replaces the native bar while it is shown and reserves a 32px
-     paper margin for its labels. The banner/header is the browser's scroll
+  /* The rail replaces the native bar while it is shown and reserves its
+     paper margin plus the caption's 10px overhang (42px = 56px lane − 24px
+     main padding + 10px) for the view header, so Select/Sort stay clickable
+     clear of the caption's box. The banner/header is the browser's scroll
      anchor at the window top, so card pinning is explicit and native anchoring
      is deliberately opted out. */
   :global(.main-content.date-scrubber-active) {

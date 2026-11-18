@@ -7,7 +7,7 @@
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { photoGridState } from '../lib/state.svelte.js';
+  import { photoGridState, addToast } from '../lib/state.svelte.js';
   import { route } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
@@ -38,6 +38,7 @@
   let scrollEl = $state(null);
   let sentinelEl = $state(null);
   let earlierBusy = $state(false);
+  let contentCenter = $state(0);
 
   // Bounded window bookkeeping.
   let startOffset = 0;
@@ -99,13 +100,47 @@
       getComputedStyle(document.documentElement).getPropertyValue('--header-height')
     ) || 64;
 
-  /** Keeps a card at its current viewport position after a window mutation. */
+  /** Center of the visible grid (the rail floats over its right edge). */
+  function updateContentCenter() {
+    if (!scrollEl) return;
+    const target = document.getElementById('photo-grid') ?? scrollEl;
+    const rect = target.getBoundingClientRect();
+    contentCenter = rect.left + rect.width / 2;
+  }
+
+  /** Transform-free document position; card entrance animations offset rects. */
+  function documentTop(el) {
+    let top = 0;
+    let node = el;
+    while (node) {
+      top += node.offsetTop;
+      node = node.offsetParent;
+    }
+    return top;
+  }
+
+  /**
+   * Keeps a card at its current viewport position after a window mutation.
+   * `reference.documentTop` is the layout position captured before the
+   * mutation; `place` puts the card under the fixed header instead.
+   */
   function pinReference(reference, { place = false } = {}) {
     if (!scrollEl || !reference?.id) return;
     const el = document.querySelector(`#photo-grid [data-photo-id="${reference.id}"]`);
-    if (el) {
-      scrollEl.scrollTop += el.getBoundingClientRect().top - (place ? headerLine() : reference.top);
+    if (!el) return;
+    const newTop = documentTop(el);
+    if (place) {
+      scrollEl.scrollTop = newTop - documentTop(scrollEl) - headerLine();
+    } else if (reference.documentTop !== undefined) {
+      scrollEl.scrollTop += newTop - reference.documentTop;
     }
+  }
+
+  /** Adds the transform-free position a pin needs to restore after a mutation. */
+  function withDocumentTop(reference) {
+    if (!reference?.id) return reference;
+    const el = document.querySelector(`#photo-grid [data-photo-id="${reference.id}"]`);
+    return el ? { ...reference, documentTop: documentTop(el) } : reference;
   }
 
   /** The first card the user can see, by DOM order. */
@@ -115,7 +150,7 @@
     const cards = document.querySelectorAll('#photo-grid .photo-card');
     for (let index = 0; index < cards.length; index += 1) {
       const rect = cards[index].getBoundingClientRect();
-      if (rect.bottom > top + 1) return { index, id: cards[index].dataset.photoId, top: rect.top };
+      if (rect.bottom > top + 1) return { index, id: cards[index].dataset.photoId };
     }
     return null;
   }
@@ -165,6 +200,12 @@
       density = await api.request('/api/photos/timeline');
     } catch (error) {
       console.warn('[date-scrubber] timeline density unavailable', error);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('errors.timeline_load_failed', { default: 'Failed to load timeline data' }),
+        'error',
+        4000
+      );
     } finally {
       densityLoading = false;
     }
@@ -196,7 +237,7 @@
       // the window top, so native scroll anchoring leaves the reading card
       // behind. Pin the card explicitly; the jump additionally places it at
       // the top edge.
-      const reference = firstVisibleCard();
+      const reference = withDocumentTop(firstVisibleCard());
       photoGridState.photos = [...prepend, ...photoGridState.photos];
       startOffset -= prepend.length;
       await tick();
@@ -206,6 +247,12 @@
       scheduleMeasure();
     } catch (error) {
       console.warn('[date-scrubber] earlier page unavailable', error);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('errors.error_loading_photos', { default: 'Error Loading Photos' }),
+        'error',
+        5000
+      );
     } finally {
       upLoading = false;
       windowBusy = false;
@@ -243,7 +290,7 @@
     const photos = photoGridState.photos;
     const drop = photos.length - WINDOW_MAX_ITEMS;
     if (drop <= 0) return;
-    const reference = firstVisibleCard();
+    const reference = withDocumentTop(firstVisibleCard());
     photoGridState.photos = photos.slice(drop);
     startOffset += drop;
     await tick();
@@ -295,6 +342,12 @@
       return true;
     } catch (error) {
       console.warn('[date-scrubber] anchor page unavailable', error);
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        $t('errors.date_jump_failed', { default: 'Could not load that period' }),
+        'error',
+        4000
+      );
       return false;
     } finally {
       windowBusy = false;
@@ -383,9 +436,23 @@
   onMount(() => {
     const scrollTarget = document.querySelector('.main-content');
     scrollEl = scrollTarget;
+    updateContentCenter();
     scrollTarget?.addEventListener('scroll', onScroll, { passive: true });
     scrollTarget?.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('photosReloadRequested', handleReloadRequest);
+
+    const onResize = () => {
+      updateContentCenter();
+      scheduleMeasure();
+    };
+    window.addEventListener('resize', onResize);
+    const observer = new ResizeObserver(() => {
+      updateContentCenter();
+      scheduleMeasure();
+    });
+    if (scrollTarget) observer.observe(scrollTarget);
+    const grid = document.getElementById('photo-grid');
+    if (grid) observer.observe(grid);
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
@@ -393,7 +460,9 @@
       if (earlierHideTimer !== null) clearTimeout(earlierHideTimer);
       scrollTarget?.removeEventListener('scroll', onScroll);
       scrollTarget?.removeEventListener('wheel', onWheel);
+      window.removeEventListener('resize', onResize);
       window.removeEventListener('photosReloadRequested', handleReloadRequest);
+      observer.disconnect();
       scrollTarget?.classList.remove('date-scrubber-active');
     };
   });
@@ -413,7 +482,13 @@
 {/if}
 
 {#if earlierBusy}
-  <div class="earlier-loading" data-testid="date-earlier-loading" role="status" aria-live="polite">
+  <div
+    class="earlier-loading"
+    data-testid="date-earlier-loading"
+    style:left={`${contentCenter}px`}
+    role="status"
+    aria-live="polite"
+  >
     <span class="dot-wave" aria-hidden="true">
       <span class="dot-wave-dot"></span>
       <span class="dot-wave-dot"></span>
@@ -430,9 +505,10 @@
     height: 0;
   }
 
-  /* The rail replaces the native bar while it is shown. The banner/header is
-     the browser's scroll anchor at the window top, so card pinning is explicit
-     and native anchoring is deliberately opted out. */
+  /* The rail replaces the native bar while it is shown and reserves a 32px
+     paper margin for its labels. The banner/header is the browser's scroll
+     anchor at the window top, so card pinning is explicit and native anchoring
+     is deliberately opted out. */
   :global(.main-content.date-scrubber-active) {
     scrollbar-width: none;
     overflow-anchor: none;
@@ -446,13 +522,20 @@
   .earlier-loading {
     position: fixed;
     top: calc(var(--header-height) + var(--space-3));
-    left: 50%;
+    left: 0;
     z-index: var(--z-sticky);
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-full);
+    background: var(--surface-color);
+    background: var(--glass-bg);
+    box-shadow: var(--shadow-medium);
     pointer-events: none;
     transform: translateX(-50%);
+    backdrop-filter: blur(16px) saturate(1.5);
   }
 
   .dot-wave {

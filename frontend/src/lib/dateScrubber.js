@@ -46,6 +46,23 @@ export const snapMonth = (model, index) => {
 };
 
 /**
+ * One entry per populated decade, keyed by its oldest populated month, in the
+ * input's order. The rail passes its newest-first month list so the labels run
+ * top-to-bottom with the track while marking the decade's chronological start.
+ *
+ * @param {number[]} months populated month indices, newest first
+ * @returns {Array<{ decade: number, month: number }>}
+ */
+export const decadeStarts = (months) => {
+  const starts = new Map();
+  for (const month of months) {
+    const decade = Math.floor(Math.floor(month / MONTHS_PER_YEAR) / 10) * 10;
+    starts.set(decade, month);
+  }
+  return [...starts.entries()].map(([decade, month]) => ({ decade, month }));
+};
+
+/**
  * Nearest populated month at or after `index` in `direction` (+1 = newer,
  * -1 = older). Keyboard steps use this so a step into a gap lands on the next
  * populated month *in the direction of travel*, instead of snapping back to

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   anchorOffset,
   bottomTrim,
+  decadeStarts,
   earlierPage,
   monthCount,
   monthOfPhoto,
@@ -104,6 +105,24 @@ test('anchorOffset adds undated photos ahead of the listing in ascending order',
   assert.equal(anchorOffset(model, apr1998, { descending: false }), 2);
   assert.equal(anchorOffset(model, mar1998, { descending: false }), 0);
   assert.equal(anchorOffset(model, apr1998, { descending: false, totalPhotos: 12 }), 4);
+});
+
+test('decadeStarts picks the oldest populated month per decade', () => {
+  const months = [
+    toMonthIndex(2025, 12),
+    toMonthIndex(2025, 1),
+    toMonthIndex(2019, 7),
+    toMonthIndex(2012, 3),
+    toMonthIndex(2004, 11),
+    toMonthIndex(1998, 3),
+  ];
+  assert.deepEqual(decadeStarts(months), [
+    { decade: 2020, month: toMonthIndex(2025, 1) },
+    { decade: 2010, month: toMonthIndex(2012, 3) },
+    { decade: 2000, month: toMonthIndex(2004, 11) },
+    { decade: 1990, month: toMonthIndex(1998, 3) },
+  ]);
+  assert.deepEqual(decadeStarts([]), []);
 });
 
 test('snapMonthInDirection follows the direction of travel across gaps', () => {

@@ -48,6 +48,82 @@ test.describe('Date scrubber', () => {
     expect(await scrollbarWidth(page)).toBe('none');
   });
 
+  test('keeps the full rail dormant until hover or focus, with a faint density hint', async ({
+    page,
+  }) => {
+    await openAllPhotos(page);
+    const rail = page.getByTestId('date-rail');
+    const thumb = page.getByTestId('date-thumb');
+    const caption = page.getByTestId('date-caption');
+
+    await expect(thumb).toHaveCSS('opacity', '0');
+    await expect(caption).toHaveCSS('opacity', '0');
+    const hint = Number(
+      await page.getByTestId('date-segments').evaluate((el) => getComputedStyle(el).opacity)
+    );
+    expect(hint).toBeGreaterThan(0.2);
+    expect(hint).toBeLessThan(0.5);
+
+    await rail.hover();
+    await expect(thumb).toHaveCSS('opacity', '1');
+    await expect(caption).toHaveCSS('opacity', '1');
+
+    await page.mouse.move(700, 400);
+    await expect(thumb).toHaveCSS('opacity', '0');
+
+    await page.getByTestId('date-track').focus();
+    await expect(thumb).toHaveCSS('opacity', '1');
+    await expect(thumb).toHaveCSS('box-shadow', /0px 0px 0px 2px/);
+  });
+
+  test('floats a glass lane over the grid without reserving a gutter', async ({ page }) => {
+    await openAllPhotos(page);
+    const rail = page.getByTestId('date-rail');
+    const railBox = await rail.boundingBox();
+    const gridMetrics = () =>
+      page.evaluate(() => {
+        const cards = [...document.querySelectorAll('#photo-grid .photo-card')];
+        return {
+          cardRight: Math.max(...cards.map((card) => card.getBoundingClientRect().right)),
+          paddingRight: getComputedStyle(document.querySelector('[data-testid="main-content"]'))
+            .paddingRight,
+        };
+      });
+    const before = await gridMetrics();
+    expect(Math.round(before.cardRight)).toBeGreaterThan(Math.round(railBox.x));
+    expect(Number.parseFloat(before.paddingRight)).toBeLessThan(railBox.width);
+    expect(await rail.evaluate((el) => getComputedStyle(el, '::before').opacity)).toBe('0');
+
+    await rail.hover();
+    await expect
+      .poll(() => rail.evaluate((el) => getComputedStyle(el, '::before').opacity))
+      .toBe('1');
+    const glass = await rail.evaluate((el) => {
+      const style = getComputedStyle(el, '::before');
+      return { background: style.backgroundColor, blur: style.backdropFilter };
+    });
+    expect(glass.background).not.toBe('rgba(0, 0, 0, 0)');
+    expect(glass.blur).toContain('blur');
+    const after = await gridMetrics();
+    expect(Math.round(after.cardRight)).toBe(Math.round(before.cardRight));
+    expect(after.paddingRight).toBe(before.paddingRight);
+  });
+
+  test.describe('reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' });
+
+    test('reveals the rail without transition', async ({ page }) => {
+      await openAllPhotos(page);
+      const thumb = page.getByTestId('date-thumb');
+      const duration = Number.parseFloat(
+        await thumb.evaluate((el) => getComputedStyle(el).transitionDuration)
+      );
+      expect(duration).toBeLessThan(0.05);
+      await page.getByTestId('date-rail').hover();
+      await expect(thumb).toHaveCSS('opacity', '1');
+    });
+  });
+
   test('jumps to the oldest month without writing a date filter', async ({ page }) => {
     await openAllPhotos(page);
     const buckets = await density(page);

@@ -16,10 +16,10 @@ A desktop user opens All Photos, drags the rail to March 1998, and browses.
 
 **Acceptance**
 
-1. Given the unfiltered all-photos view, when the user activates a month on the rail, then the grid shows the listing from that month's first photo and that month's first row sits directly under the fixed header whenever the content below it can still fill the viewport; at the terminal edge of the listing the scroll clamps and the target is visible in the viewport instead.
+1. Given the unfiltered all-photos view, when the user activates a month on the rail, then the grid shows the listing from that month's first photo and that month's first row's layout top (not its entrance-animation transform) sits directly under the fixed header whenever the content below it can still fill the viewport; at the terminal edge of the listing the scroll clamps and the target is visible in the viewport instead. A 1 px mark is a valid target: activation resolves the nearest month mark's centre.
 2. Given that jump, when the user scrolls up, then newer photos load above and the card the user is looking at does not move.
 3. Given that jump, when the user scrolls down, then older photos append and the window stays bounded.
-4. Given the jump, when it completes, then the rail thumb names the target month and its photo count.
+4. Given the jump, when it completes, then the rail thumb names the target month and its photo count, and the bubble sits below the fixed sort row when the thumb is near the top of the lane.
 
 ### Scenario 2 - The rail follows the active date filter (P1)
 
@@ -27,8 +27,8 @@ A user filters to 2017 with the timeline lane.
 
 **Acceptance**
 
-1. Given `year=2017`, when the rail renders, then its track spans only 2017's populated months and the only year label is 2017.
-2. Given `2012–2015`, then the track spans that range and labels 2012–2015.
+1. Given `year=2017`, when the rail renders, then its track spans only 2017's populated months and the only decade label is 2010.
+2. Given `2012–2015`, then the track spans that range with a single 2010 decade label at the range's start.
 3. Given a filtered track, when the user jumps to a month, then the route filter is unchanged (no month is written).
 4. Given the filter is cleared, then the rail returns to the whole-library scale.
 5. Given a single-month filter or fewer than two populated months, then the rail is hidden and the native scrollbar is available.
@@ -48,7 +48,7 @@ A user filters to 2017 with the timeline lane.
 **Acceptance**
 
 1. Given more than 300 loaded cards, when the grid grows, then the window trims a whole page from the side away from the viewport and the visible card stays put; the cap is `WINDOW_MAX_ITEMS = 300`.
-2. Given an upward load, then the top dot-wave indicator appears (same three-dot language as the bottom loader), stays at least 350 ms, and announces itself to assistive tech.
+2. Given an upward load, then the top dot-wave indicator appears centred over the grid (same three-dot language as the bottom loader), stays at least 350 ms, and announces itself to assistive tech.
 3. Given the window has reached the oldest loaded page, then upward scrolling loads that page again without duplicates or gaps.
 4. Given the viewport is scrolled away from the page top, then the upward trigger comes from a top sentinel; a wheel at the absolute top still triggers a load.
 
@@ -61,20 +61,34 @@ A user filters to 2017 with the timeline lane.
 3. Given any rail state, no URL parameter is written by the rail itself; Back/Forward only restores the filter.
 4. Given `prefers-reduced-motion`, the loader dots do not animate.
 
+### Scenario 6 - The dormant glass lane (P2)
+
+The rail must read as part of the contact sheet: dormant until wanted, then a floating instrument over the grid.
+
+**Acceptance**
+
+1. Given the pointer is elsewhere and the slider is unfocused, then only a faint density spine (the month marks at low opacity, the current month in a faint primary tick) marks the edge; the lane, its caption, decade labels and thumb are hidden, and the grid keeps its normal 24 px right edge under the rail's hit area.
+2. Given the pointer enters the rail or keyboard focus reaches the slider, then the glass lane fades in as one 0.3s `cubic-bezier(0.4, 0, 0.2, 1)` moment over the grid — `--glass-bg` with `blur(16px) saturate(1.5)`, the glass hairline at its left edge and `--shadow-light` — together with the caption, decade labels, thumb and full-strength marks.
+3. Given the pointer leaves or focus exits, then the lane returns to the dormant spine; an in-flight drag keeps it open; the reveal never reflows the grid (no gutter is reserved).
+4. Given either theme, then the revealed marks, decade labels and caption hold at least 3:1 against the glass lane; the pointer near the top puts the bubble below the fixed sort row; the bubble is the only raised solid surface.
+5. Given `prefers-reduced-motion`, then the states switch without transition; given `prefers-reduced-transparency` or no `backdrop-filter`, the lane falls back to the solid `--surface-color`.
+
 ## Functional Requirements
 
 - **FR-001**: The rail is navigation only: it never writes the route filter; the timeline lane keeps filtering.
-- **FR-002**: The rail renders at the right edge at desktop widths only, replacing the native scrollbar while visible; the native scrollbar returns whenever the rail is hidden.
-- **FR-003**: The track is count-proportional over the populated months of the current scope, with at least 1 px per month and collision-filtered year labels.
-- **FR-004**: The thumb names the month of the top visible photo; the bubble shows that month and its photo count; the jump places the target's first photo directly under the header, except at the terminal edge of the listing where the scroll range clamps and the target stays visible.
+- **FR-002**: The rail renders at the right edge at desktop widths only, overlaying the content's right edge (the content keeps its normal 24 px right padding; no gutter is reserved) and replacing the native scrollbar while visible; the native scrollbar returns whenever the rail is hidden.
+- **FR-003**: The track is count-proportional over the populated months of the current scope, with at least 1 px per month and collision-filtered decade labels; a 1 px mark resolves to the nearest month on activation.
+- **FR-004**: The thumb names the month of the top visible photo; the bubble shows that month and its photo count and stays below the fixed sort row; the jump places the target's first photo's layout top directly under the header (its entrance-animation transform excluded), except at the terminal edge of the listing where the scroll range clamps and the target stays visible.
 - **FR-005**: Without a date filter the track spans the whole library; with one it spans exactly the filtered months, sliced client-side from the existing density payload (no backend change).
 - **FR-006**: A jump resolves the month to the listing offset from the density, fetches that page, and keeps the listing from the anchor onward. Upward loads fetch the page containing the preceding item and take only the prefix before the window start.
 - **FR-007**: The loaded window never exceeds `WINDOW_MAX_ITEMS`; trims happen on the side away from the viewport, whole pages from the bottom, and preserve the visible card by identity.
-- **FR-008**: Upward and downward loading are both automatic; the top indicator uses the app's dot-wave language.
+- **FR-008**: Upward and downward loading are both automatic; the top indicator uses the app's dot-wave language and is centred over the grid.
 - **FR-009**: The native scrollbar is hidden only while the rail is shown; `overflow-anchor` is opted out deliberately and card pinning is done explicitly.
 - **FR-010**: Cards keep `content-visibility: auto`; the desktop card is square (`aspect-ratio: 1`) so its height is correct under size containment. The mobile card keeps its below-tile caption (aspect ratio unset there).
 - **FR-011**: The rail is keyboard operable with slider semantics, a visible focus ring, and localized labels in English and German.
 - **FR-012**: The rail is hidden for unsupported surfaces, non-date sorts and periods too small to scroll; no stale filter or selection is written.
+- **FR-013**: The rail is dormant until wanted: the lane, caption, decade labels and thumb are opacity-hidden, while the month marks keep a faint density spine (current month in a faint primary tick). `:hover`, `:focus-within` (keyboard) and an active drag reveal a glass lane (`--glass-bg` + `blur(16px) saturate(1.5)`, glass hairline at the left, `--shadow-light`) that fades in over the grid in one 0.3s transition; leaving returns to the spine. The rail overlays the content's right edge and reserves no gutter, so the reveal never reflows the grid; the `--surface-color` solid fallback takes over under `prefers-reduced-transparency` or no `backdrop-filter`. Opacity only for the labels/caption/thumb — never `display`/`visibility`, so the slider stays in the tab order. The active month is the primary accent, the other months are quiet ink brightened on hover, the secondaries are `--text-secondary`; revealed marks/labels/caption hold ≥3:1 in both themes; `prefers-reduced-motion` switches states without transition.
+- **FR-014**: A failed jump keeps the window and scroll position and shows the localized `errors.date_jump_failed` toast instead of silently doing nothing.
 
 ## Key Entities
 
@@ -90,6 +104,8 @@ A user filters to 2017 with the timeline lane.
 - A mid-page anchor starts the window with the page's prefix, so upward growth begins without a hole.
 - A period whose months are all empty never activates; activation is a no-op on zero-photo months.
 - A failed density fetch hides the rail; the grid and the native scrollbar are untouched.
+- A failed jump keeps the window and shows the localized jump-failure toast.
+- A 1 px month mark is clickable; the nearest mark centre resolves the target month.
 - A metadata save re-reads the density so a moved photo changes the track.
 - A date filter change resets the window and the thumb to the scoped scale; the grid reloads its first page as before.
 - Opening the viewer and returning does not reset the window (the viewer is an overlay).
@@ -101,6 +117,9 @@ A user filters to 2017 with the timeline lane.
 - Native scroll anchoring is suppressed by transform changes in the anchor chain; the card entrance animation animates `translateY`. Preferring explicit card pinning and `overflow-anchor: none` is the deliberate contract; the alternative is an opacity-only entrance animation. Source: CSS Scroll Anchoring spec overview and the prepend/anchor analysis article.
 - `contain-intrinsic-size: auto <length>` uses the last rendered size and falls back to the length for never-rendered boxes; the card's square shape makes the height deterministic under `aspect-ratio: 1`. Source: MDN `contain-intrinsic-size`.
 - Prototype evidence (throwaway branch): 1,254 photos / 361 months; jumps place the month at the header; upward/downward cycles stay at the 300 cap with zero console errors; filter scoping (`2017`, `2012–2015`) and the small-filter hide were verified.
+- The dormant rail keeps the library's density as the affordance: the month marks at 0.32 opacity, the caption/labels/thumb at opacity 0, the slider still focusable; hover/focus/drag restore them through the 0.3s token, with the focus ring doubling on the thumb and the drag keeping the lane open while the pointer is captured outside it.
+- The lane floats over the grid as glass (`--glass-bg`, blur 16px, hairline + `--shadow-light`) while the content keeps its normal 24px right padding, so the reveal reflows nothing; the backdrop-filter lives on a `::before` so the reveal is an opacity fade, and the solid `--surface-color`/no-blur fallback wins under reduced transparency or missing backdrop-filter.
+- Polish evidence (1440×900, real backend, 1,254 photos / 361 months): a 1 px segment click resolves to November 2025 (bubble and `aria-valuetext`); a filtered jump lands the first visible card at top = 64 px (the header line) with the bubble reading March 1998; the top loader centre equals the grid centre (860 px); the light-theme ratios are 3.42 (pending mark), 4.47 (active mark), 6.93 (label/caption) and the dark-theme ratios 4.78/4.13/8.97; axe reports no violations on the rail; mobile hides the rail and keeps the 16 px padding.
 
 ## Assumptions
 
@@ -118,3 +137,5 @@ A user filters to 2017 with the timeline lane.
 - **SC-004**: The rail is absent (and the native scrollbar present) on every unsupported surface and for periods with at most one populated month or one page of photos.
 - **SC-005**: Keyboard-only users can step, jump and clear with announced month and count; EN/DE labels are complete.
 - **SC-006**: The top loader is visible and announced during upward loads; reduced-motion users see static dots.
+- **SC-007**: The lane, its marks and its labels hold at least 3:1 contrast in both themes, and the rail region is axe-clean.
+- **SC-008**: The rail stays discoverable while dormant (the density spine) and reveals fully over the grid on pointer hover and keyboard focus without reflowing it, returning to the spine when left.

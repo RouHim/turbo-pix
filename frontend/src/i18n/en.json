@@ -222,6 +222,7 @@
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",
+    "date_jump_failed": "Could not load that period",
     "photoNotFound": "Photo not found",
     "databaseError": "Database error occurred",
     "failedToLoadPhoto": "Failed to load photo",

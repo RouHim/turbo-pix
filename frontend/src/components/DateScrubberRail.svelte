@@ -1,13 +1,18 @@
 <script>
-  // The quiet date rail: count-proportional months, collision-filtered year
-  // labels, a fixed pill thumb and a stage bubble. Navigation only — it never
-  // writes the route filter.
+  // The quiet date rail: a paper margin carrying decade ticks, a
+  // count-proportional month track, a fixed pill thumb and a stage bubble.
+  // Navigation only — it never writes the route filter.
   import { tick } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { formatPeriodName } from '../lib/timeline.js';
-  import { monthCount, monthsWithPhotos, snapMonthInDirection } from '../lib/dateScrubber.js';
+  import {
+    decadeStarts,
+    monthCount,
+    monthsWithPhotos,
+    snapMonthInDirection,
+  } from '../lib/dateScrubber.js';
 
   /** @type {{ model: any, descending: boolean, activeMonth: number|null,
    *   onScrub: (index: number) => void, onScrubEnd: () => void,
@@ -15,21 +20,37 @@
   const { model, descending, activeMonth, onScrub, onScrubEnd, onJump } = $props();
 
   const activeLocale = $derived($locale || 'en');
+  const BUBBLE_MIN_TOP = 96;
 
+  let railEl = $state(null);
   let trackEl = $state(null);
   let dragging = $state(false);
   let hovered = $state(false);
+  let focused = $state(false);
+  let dragPointerId = null;
   let thumbTop = $state(0);
-  let yearMarks = $state([]);
+  let trackOffset = $state(0);
+  let decadeMarks = $state([]);
+  let segmentMetrics = $state([]);
   let resizeNonce = $state(0);
 
   const months = $derived(monthsWithPhotos(model, descending));
-  const layoutKey = $derived(`${activeMonth}:${months.length}:${resizeNonce}:${descending}`);
+  const decadeAnchors = $derived(decadeStarts(months));
+  const activePosition = $derived(
+    activeMonth === null || months.length === 0 ? 1 : Math.max(1, months.indexOf(activeMonth) + 1)
+  );
 
   const monthName = (month) => {
     const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
     return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
   };
+
+  const shortMonth = $derived.by(() => {
+    if (activeMonth === null) return '';
+    const formatter = new Intl.DateTimeFormat(activeLocale, { month: 'short' });
+    return formatter.format(new Date(2000, activeMonth % 12, 1));
+  });
+  const activeYear = $derived(activeMonth === null ? '' : String(Math.floor(activeMonth / 12)));
 
   const periodLabel = (index) => formatPeriodName(index, monthName);
   const countLabel = (index) => {
@@ -47,49 +68,92 @@
   const valueText = $derived(
     activeMonth === null ? '' : `${periodLabel(activeMonth)} · ${countLabel(activeMonth)}`
   );
+  const bubbleTop = $derived(Math.max(trackOffset + thumbTop, BUBBLE_MIN_TOP));
 
-  function monthAt(clientY, target = null) {
-    const direct = target?.closest?.('[data-month]');
-    if (direct) return Number(direct.dataset.month);
-    if (!trackEl) return null;
-    const rect = trackEl.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.left + rect.width / 2, clientY);
-    const segment = hit?.closest?.('[data-month]');
-    return segment ? Number(segment.dataset.month) : null;
+  /** The month whose segment center is nearest to the pointer. */
+  function monthAt(clientY) {
+    if (!trackEl || segmentMetrics.length === 0) return null;
+    const y = clientY - trackEl.getBoundingClientRect().top;
+    let bestMonth = null;
+    let bestDistance = Infinity;
+    for (const metric of segmentMetrics) {
+      const distance = Math.abs(metric.center - y);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMonth = metric.month;
+      }
+    }
+    return bestMonth;
   }
 
-  function scrubToPointer(clientY, target = null) {
-    const month = monthAt(clientY, target);
+  function scrubToPointer(clientY) {
+    const month = monthAt(clientY);
     if (month !== null) onScrub(month);
   }
 
+  function endDrag(event = null) {
+    if (!dragging) return;
+    if (event?.pointerId !== undefined && event.pointerId !== dragPointerId) return;
+    if (trackEl && dragPointerId !== null && trackEl.hasPointerCapture(dragPointerId)) {
+      trackEl.releasePointerCapture(dragPointerId);
+    }
+    dragPointerId = null;
+    dragging = false;
+    onScrubEnd();
+  }
+
+  // Segment metrics and decade anchors only change with the track's layout;
+  // the thumb follows the active month on every scrub tick.
   $effect(() => {
-    if (!trackEl || activeMonth === null || layoutKey === null) return;
+    const list = months;
+    resizeNonce;
+    if (!railEl || !trackEl || list.length === 0) return;
     const measure = async () => {
       await tick();
-      if (!trackEl) return;
+      if (!railEl || !trackEl) return;
       const trackRect = trackEl.getBoundingClientRect();
-      const activeEl = trackEl.querySelector(`[data-month="${activeMonth}"]`);
-      if (activeEl) {
-        const rect = activeEl.getBoundingClientRect();
-        thumbTop = rect.top - trackRect.top + rect.height / 2;
-      }
+      const railRect = railEl.getBoundingClientRect();
+      trackOffset = trackRect.top - railRect.top;
+      const elements = trackEl.querySelectorAll('[data-month]');
+      segmentMetrics = [...elements].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          month: Number(element.dataset.month),
+          center: rect.top - trackRect.top + rect.height / 2,
+        };
+      });
       const marks = [];
       let lastTop = -Infinity;
-      let seenYear = null;
-      for (const month of months) {
-        const year = Math.floor(month / 12);
-        if (year === seenYear) continue;
-        seenYear = year;
-        const el = trackEl.querySelector(`[data-month="${month}"]`);
-        if (!el) continue;
-        const top = el.getBoundingClientRect().top - trackRect.top;
+      for (const anchor of decadeAnchors) {
+        const element = trackEl.querySelector(`[data-month="${anchor.month}"]`);
+        if (!element) continue;
+        const top =
+          element.getBoundingClientRect().top -
+          trackRect.top +
+          element.getBoundingClientRect().height / 2;
         if (top - lastTop >= 16) {
-          marks.push({ year, top });
+          marks.push({ decade: anchor.decade, top });
           lastTop = top;
         }
       }
-      yearMarks = marks;
+      decadeMarks = marks;
+    };
+    measure();
+  });
+
+  $effect(() => {
+    const active = activeMonth;
+    const list = months;
+    resizeNonce;
+    if (!trackEl || active === null || list.length === 0) return;
+    const measure = async () => {
+      await tick();
+      if (!trackEl) return;
+      const activeEl = trackEl.querySelector(`[data-month="${active}"]`);
+      if (!activeEl) return;
+      const trackRect = trackEl.getBoundingClientRect();
+      const rect = activeEl.getBoundingClientRect();
+      thumbTop = rect.top - trackRect.top + rect.height / 2;
     };
     measure();
   });
@@ -106,8 +170,8 @@
   function handleKey(event) {
     const base = activeMonth ?? (descending ? model.maxIndex : model.minIndex);
     const towardTop = descending ? 1 : -1;
-    const step = (direction, months) => {
-      const next = snapMonthInDirection(model, base + direction * months, direction);
+    const step = (direction, monthsToStep) => {
+      const next = snapMonthInDirection(model, base + direction * monthsToStep, direction);
       if (next !== null) onJump(next);
     };
     const steps = {
@@ -131,68 +195,77 @@
   }
 </script>
 
-<div class="date-rail" class:revealed={hovered || dragging} data-testid="date-rail">
-  <div
-    class="date-track"
-    data-testid="date-track"
-    bind:this={trackEl}
-    role="slider"
-    tabindex="0"
-    aria-label={sliderLabel}
-    aria-orientation="vertical"
-    aria-valuemin={model.minIndex}
-    aria-valuemax={model.maxIndex}
-    aria-valuenow={activeMonth ?? model.minIndex}
-    aria-valuetext={valueText}
-    onpointerenter={() => (hovered = true)}
-    onpointerleave={() => (hovered = false)}
-    onpointerdown={(event) => {
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      dragging = true;
-      scrubToPointer(event.clientY, event.target);
-    }}
-    onpointermove={(event) => {
-      if (dragging) scrubToPointer(event.clientY);
-    }}
-    onpointerup={(event) => {
-      if (!dragging) return;
-      dragging = false;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      onScrubEnd();
-    }}
-    onpointercancel={() => {
-      if (!dragging) return;
-      dragging = false;
-      onScrubEnd();
-    }}
-    onkeydown={handleKey}
-  >
-    <div class="date-segments">
-      {#each months as month (month)}
-        <div
-          class="date-segment"
-          class:active={month === activeMonth}
-          data-month={month}
-          style:flex-grow={monthCount(model, month)}
-        ></div>
+<svelte:window onblur={() => endDrag()} />
+
+<div class="date-rail" class:dragging bind:this={railEl} data-testid="date-rail">
+  <div class="date-caption" aria-hidden="true" data-testid="date-caption">
+    <span class="date-caption-month">{activeMonth === null ? '—' : shortMonth}</span>
+    <span class="date-caption-year">{activeYear}</span>
+  </div>
+
+  <div class="date-track-wrap">
+    <div
+      class="date-track"
+      bind:this={trackEl}
+      data-testid="date-track"
+      role="slider"
+      tabindex="0"
+      aria-label={sliderLabel}
+      aria-orientation="vertical"
+      aria-valuemin={1}
+      aria-valuemax={Math.max(1, months.length)}
+      aria-valuenow={activePosition}
+      aria-valuetext={valueText}
+      onpointerenter={() => (hovered = true)}
+      onpointerleave={() => (hovered = false)}
+      onfocus={() => (focused = true)}
+      onblur={() => (focused = false)}
+      onpointerdown={(event) => {
+        if (dragging) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragPointerId = event.pointerId;
+        dragging = true;
+        scrubToPointer(event.clientY);
+      }}
+      onpointermove={(event) => {
+        if (!dragging || event.pointerId !== dragPointerId) return;
+        scrubToPointer(event.clientY);
+      }}
+      onpointerup={(event) => endDrag(event)}
+      onpointercancel={(event) => endDrag(event)}
+      onlostpointercapture={() => endDrag()}
+      onkeydown={handleKey}
+    >
+      <div class="date-segments" data-testid="date-segments">
+        {#each months as month (month)}
+          <div
+            class="date-segment"
+            class:active={month === activeMonth}
+            data-month={month}
+            style:flex-grow={monthCount(model, month)}
+          ></div>
+        {/each}
+      </div>
+      <div
+        class="date-thumb"
+        class:ring={focused}
+        style:top={`${thumbTop}px`}
+        data-testid="date-thumb"
+      ></div>
+    </div>
+
+    <div class="date-decades" aria-hidden="true">
+      {#each decadeMarks as mark (mark.decade)}
+        <span class="date-decade" style:top={`${mark.top}px`}>{mark.decade}</span>
       {/each}
     </div>
-    <div class="date-thumb" style:top={`${thumbTop}px`} data-testid="date-thumb"></div>
   </div>
 
-  <div class="date-years" aria-hidden="true">
-    {#each yearMarks as mark (mark.year)}
-      <span class="date-year" style:top={`${mark.top}px`}>{mark.year}</span>
-    {/each}
-  </div>
-
-  {#if (hovered || dragging) && activeMonth !== null}
+  {#if (hovered || dragging || focused) && activeMonth !== null}
     <div
       class="date-bubble"
-      style:top={`${thumbTop}px`}
+      style:top={`${bubbleTop}px`}
       data-testid="date-bubble"
       aria-hidden="true"
     >
@@ -205,19 +278,54 @@
 <style>
   .date-rail {
     position: fixed;
-    top: calc(var(--header-height) + var(--space-4));
+    top: var(--header-height);
     right: 0;
-    bottom: var(--space-4);
+    bottom: 0;
     z-index: var(--z-sticky);
+    box-sizing: border-box;
     display: flex;
-    width: 24px;
+    width: 56px;
+    flex-direction: column;
+  }
+
+  .date-caption {
+    display: flex;
+    min-height: 44px;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
+    gap: 1px;
+    border-bottom: 1px solid var(--divider-color);
+    padding-block: var(--space-2);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    line-height: 1.1;
+    text-align: center;
+  }
+
+  .date-caption-month {
+    font-size: var(--font-xs);
+    font-weight: var(--font-medium);
+  }
+
+  .date-caption-year {
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .date-track-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    margin-block: var(--space-4);
   }
 
   .date-track {
-    position: relative;
+    position: absolute;
+    top: 0;
+    right: 8px;
+    bottom: 0;
     width: 20px;
-    height: 100%;
     cursor: grab;
     outline: none;
     touch-action: none;
@@ -228,12 +336,6 @@
     cursor: grabbing;
   }
 
-  .date-track:focus-visible {
-    border-radius: var(--radius-full);
-    outline: 2px solid var(--primary-color);
-    outline-offset: 3px;
-  }
-
   .date-segments {
     position: absolute;
     top: 0;
@@ -242,18 +344,20 @@
     display: flex;
     width: 4px;
     flex-direction: column;
+    opacity: 0.32;
+    transition: opacity var(--transition-medium);
   }
 
   .date-segment {
     flex-basis: 0;
     min-height: 1px;
     border-radius: var(--radius-full);
-    background: color-mix(in oklch, var(--text-muted) 24%, transparent);
+    background: color-mix(in oklch, var(--text-secondary) 70%, transparent);
     transition: background var(--transition-fast);
   }
 
-  .revealed .date-segment {
-    background: color-mix(in oklch, var(--text-secondary) 38%, transparent);
+  .date-track:hover .date-segment:not(.active) {
+    background: color-mix(in oklch, var(--text-secondary) 85%, transparent);
   }
 
   .date-segment.active {
@@ -271,7 +375,12 @@
     background: var(--surface-elevated);
     box-shadow: var(--shadow-medium);
     pointer-events: none;
-    transition: top var(--transition-fast);
+  }
+
+  .date-thumb.ring {
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
   }
 
   .date-thumb::after {
@@ -285,22 +394,16 @@
     content: '';
   }
 
-  .date-years {
+  .date-decades {
     position: absolute;
     top: 0;
-    right: 26px;
+    right: 22px;
     bottom: 0;
-    width: 40px;
-    opacity: 0;
+    width: 32px;
     pointer-events: none;
-    transition: opacity var(--transition-fast);
   }
 
-  .revealed .date-years {
-    opacity: 1;
-  }
-
-  .date-year {
+  .date-decade {
     position: absolute;
     right: 0;
     color: var(--text-secondary);
@@ -311,9 +414,19 @@
     transform: translateY(-50%);
   }
 
+  .date-decade::after {
+    position: absolute;
+    top: 50%;
+    right: -4px;
+    width: 2px;
+    height: 1px;
+    background: var(--text-muted);
+    content: '';
+  }
+
   .date-bubble {
     position: absolute;
-    right: 72px;
+    right: 64px;
     display: flex;
     align-items: baseline;
     gap: var(--space-2);
@@ -337,6 +450,71 @@
     color: var(--text-muted);
     font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The revealed lane floats over the grid: a glass layer behind the rail's
+     content, fading in on hover, keyboard focus and drag. The background sits
+     on a pseudo-element so the backdrop-filter arrives with the opacity fade;
+     the solid fallback wins under reduced transparency or no backdrop-filter. */
+  .date-rail::before {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-left: 1px solid var(--glass-border, var(--divider-color));
+    background: var(--glass-bg);
+    box-shadow: var(--shadow-light);
+    content: '';
+    opacity: 0;
+    transition: opacity var(--transition-medium);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  }
+
+  .date-rail:is(:hover, :focus-within, .dragging)::before {
+    opacity: 1;
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+    .date-rail::before {
+      background: var(--surface-color);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .date-rail::before {
+      background: var(--surface-color);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  /* Dormant until wanted: the marks keep a faint density spine as the only
+     affordance; the caption, labels and thumb fade in on hover, keyboard
+     focus or an active drag. Opacity only — display or visibility would drop
+     the slider out of the tab order. */
+  .date-caption,
+  .date-decades,
+  .date-thumb {
+    opacity: 0;
+    transition: opacity var(--transition-medium);
+  }
+
+  .date-rail:is(:hover, :focus-within, .dragging) .date-caption,
+  .date-rail:is(:hover, :focus-within, .dragging) .date-decades,
+  .date-rail:is(:hover, :focus-within, .dragging) .date-thumb,
+  .date-rail:is(:hover, :focus-within, .dragging) .date-segments {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .date-rail::before,
+    .date-caption,
+    .date-decades,
+    .date-thumb,
+    .date-segments,
+    .date-segment {
+      transition: none;
+    }
   }
 
   @media (width <= 768px) {

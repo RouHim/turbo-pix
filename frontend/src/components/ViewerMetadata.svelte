@@ -452,6 +452,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    /* The mobile sheet's drag starts here; the browser must not consume the
+       vertical gesture as sheet scrolling first. Buttons still click. */
+    touch-action: none;
   }
 
   .photo-meta {

@@ -287,6 +287,14 @@ export class TestHelpers {
     await this.performSwipe(page, startX, startY, startX, startY + distance, options.stepDelay);
   }
 
+  static async swipeUp(page, options = {}) {
+    const viewport = page.viewportSize();
+    const startX = options.startX ?? Math.floor(viewport.width / 2);
+    const startY = options.startY ?? Math.floor(viewport.height / 2);
+    const distance = options.distance ?? 200;
+    await this.performSwipe(page, startX, startY, startX, startY - distance, options.stepDelay);
+  }
+
   /**
    * Drag one finger from (startX, startY) to (endX, endY) across the viewer.
    *
@@ -319,10 +327,24 @@ export class TestHelpers {
       null,
       { timeout: 10000 }
     );
+    await this.performSwipeOn(page, '.viewer-main', startX, startY, endX, endY, stepDelay);
+  }
+
+  /**
+   * Dispatch the same event-time touch stream at an arbitrary target. The app
+   * drawer and the details sheet listen on their own surfaces; using a real
+   * bubbling target keeps their target filters (map exclusion, sheet handoff)
+   * in the exercised path instead of bypassing them.
+   */
+  static async performSwipeOn(page, selector, startX, startY, endX, endY, stepDelay = 16) {
+    await page.waitForFunction((sel) => Boolean(document.querySelector(sel)), selector, {
+      timeout: 10000,
+    });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
     await page.evaluate(
-      ({ sx, sy, ex, ey, stepMs }) => {
-        const target = document.querySelector('.viewer-main') || document.body;
+      ({ sel, sx, sy, ex, ey, stepMs }) => {
+        const target = document.querySelector(sel);
+        if (!target) throw new Error(`Swipe target not found: ${sel}`);
         const steps = 10;
         // A positive base keeps the synthetic clock clear of the app's
         // `timeStamp > 0` fallback to `Date.now()`.
@@ -367,7 +389,7 @@ export class TestHelpers {
         const endTouch = createTouch(1, ex, ey);
         dispatch('touchend', [], [endTouch], clockBase + (steps + 1) * stepMs);
       },
-      { sx: startX, sy: startY, ex: endX, ey: endY, stepMs: stepDelay }
+      { sel: selector, sx: startX, sy: startY, ex: endX, ey: endY, stepMs: stepDelay }
     );
   }
 

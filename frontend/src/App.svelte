@@ -319,6 +319,11 @@
     padding: calc(var(--header-height) + var(--space-6)) var(--space-6) var(--space-6);
     background: var(--background-color);
     container-type: inline-size;
+    /* The drawer owns horizontal swipes; without this the browser treats the
+       first horizontal move as a scroll attempt and cancels the touch stream
+       before preventDefault can run. Vertical scrolling and page pinch-zoom
+       stay available; the map/timeline/date-rail children set their own. */
+    touch-action: pan-y pinch-zoom;
   }
 
   /* The mobile drawer overlays the content, so only desktop reclaims width.

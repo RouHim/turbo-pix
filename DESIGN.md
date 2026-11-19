@@ -271,6 +271,7 @@ Borders are 1px hairlines at half-opacity ink — never solid lines — with one
 - **Text-first:** sidebar items are label-only buttons at 15px, padding 12px 16px, 6px radius; hover tints Paper Shade and darkens the label; the active item fills Deep Slate with white 500-weight text.
 - **Header:** 64px glass bar with a hairline-bottom and `--shadow-light`; the logo is Playfair at 24px.
 - **Mobile:** the sidebar slides in as a drawer over a 40% black scrim; the header collapses to icon buttons at 44px.
+- **Mobile gestures:** the drawer and the viewer details sheet track the finger one-to-one and settle on the same 0.3s easing (30% travel or a 0.3 px/ms flick decides the state). The drawer opens from a horizontal swipe except on the map, timeline and date rail; the sheet opens upward from the unzoomed photo and closes downward before the viewer. `prefers-reduced-motion` keeps the state change and drops the settle animation.
 
 ### Chips & Pills
 

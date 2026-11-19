@@ -4,6 +4,15 @@
 /** Length of the slide that follows a completed horizontal swipe, in ms. */
 const SLIDE_MS = 300;
 
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+}
+
+/** Reduced motion keeps the state change but drops the spatial animation. */
+function motionDuration(duration) {
+  return prefersReducedMotion() ? 0 : duration;
+}
+
 export class SwipeableViewer {
   constructor(viewer) {
     this.viewer = viewer;
@@ -18,12 +27,26 @@ export class SwipeableViewer {
     this.pendingNavigation = null;
     this.pendingFromHash = null;
     this.navigationTimer = null;
+    // True from the end of the slide until the new media is in place: the
+    // neighbour preview is the visible photo in that window, so a new gesture
+    // must not navigate from the off-screen active element.
+    this.isNavigating = false;
+    // The hash the in-flight swipe is loading. A reset for a DIFFERENT photo
+    // (keyboard/arrow navigation) must be allowed to take the track back.
+    this.navigationTargetHash = null;
+    // The photo-area half of a details-sheet drag (the sheet element owns the
+    // other half in DetailsSheetGesture).
+    this.sheetDragActive = false;
 
     this.currentTranslateY = 0;
     this.isDraggingDown = false;
     this.currentScale = 1;
     this.currentOpacity = 1;
     this.rubberBandScale = 1;
+    // A touch that interrupts the slide owns the track from that point; if it
+    // ends as a tap instead of a pan, the transform must still be recovered.
+    this.interruptedSlide = false;
+    this.panStarted = false;
 
     this.adjacent = {
       previous: null,
@@ -37,10 +60,17 @@ export class SwipeableViewer {
     this.adjacent.previous = this.createAdjacentImage('previous');
     this.adjacent.next = this.createAdjacentImage('next');
     this._onMainTouchStart = (event) => {
-      if (!this.viewer.isOpen || event.touches.length !== 1 || !this.viewer.gestureManager) {
+      if (
+        !this.viewer.isOpen ||
+        this.isNavigating ||
+        event.touches.length !== 1 ||
+        !this.viewer.gestureManager
+      ) {
         return;
       }
 
+      this.interruptedSlide = this.isAnimating || Boolean(this.pendingNavigation);
+      this.panStarted = false;
       this.interruptAnimation();
       // A slide interrupted here will never reach its completion callback, so
       // the decision it parked has to be dropped with it: the armed timer would
@@ -70,22 +100,41 @@ export class SwipeableViewer {
       }
 
       if (this.viewer.controls?.isZoomed() || Math.abs(deltaX) > Math.abs(deltaY)) {
+        this.panStarted = true;
         this.viewer.gestureManager.startPan();
         // The GestureManager's touchmove listener runs BEFORE this one (it is
         // registered first via the Svelte action), so on this event it saw
         // activeGesture still null and could not prevent the native scroll.
         // Cancel it here — the pan-initiating move must not scroll the page.
         event.preventDefault();
-      } else if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > 0) {
+      } else if (Math.abs(deltaY) > Math.abs(deltaX)) {
+        // Both directions start a pan: down may dismiss the viewer, up may
+        // open the details sheet, and which one applies is decided in
+        // handleVerticalPan.
+        this.panStarted = true;
         this.viewer.gestureManager.startPan();
         event.preventDefault();
       }
     };
     this._onMainTouchEnd = () => {
       this.touchStartPoint = null;
+      if (this.interruptedSlide && !this.panStarted) {
+        // A tap that only interrupted the slide: no pan end will run, so the
+        // off-screen transform has to be put back here.
+        this.handleTouchCancel();
+      }
+      this.interruptedSlide = false;
+      this.panStarted = false;
     };
     this._onMainTouchCancel = () => {
       this.touchStartPoint = null;
+      this.interruptedSlide = false;
+      this.panStarted = false;
+      if (this.sheetDragActive) {
+        this.sheetDragActive = false;
+        this.viewer.cancelSheetDrag();
+        return;
+      }
       if (this.isDraggingDown) {
         this.snapBackVertical();
         return;
@@ -146,6 +195,7 @@ export class SwipeableViewer {
     // `isOpen` before calling this, so a session that ended this way must not
     // let its decision fire if the same photo is reopened within the window.
     // Everything else is validated in `flushPendingNavigation`.
+    let cancelledStaleDecision = false;
     if (!this.viewer.isOpen) {
       this.cancelPendingNavigation();
     } else if (
@@ -157,16 +207,37 @@ export class SwipeableViewer {
       // time: navigating back to the source photo inside the same window would
       // satisfy the flush-time hash guard and replay a swipe already overridden.
       this.cancelPendingNavigation();
+      cancelledStaleDecision = true;
     }
+
+    // A media load that lands during a live drag, the settle animation or the
+    // post-slide load must not yank the track back under the finger (or hide
+    // the neighbour that is currently the visible photo). The gesture or the
+    // navigation path owns the reset in those windows. A stale decision is the
+    // exception: its slide is no longer allowed to finish, so it is torn down.
+    const navigatingThisPhoto =
+      this.isNavigating && this.viewer.getCurrentPhoto()?.hash_sha256 === this.navigationTargetHash;
+    if (
+      this.viewer.isOpen &&
+      !cancelledStaleDecision &&
+      (this.isDragging || this.isAnimating || navigatingThisPhoto || this.sheetDragActive)
+    ) {
+      return;
+    }
+
     this.interruptAnimation();
     this.isDragging = false;
     this.isAnimating = false;
+    this.isNavigating = false;
+    this.navigationTargetHash = null;
+    this.sheetDragActive = false;
     this.dragBaseTranslateX = 0;
     this.isDraggingDown = false;
     this.currentTranslateY = 0;
     this.currentScale = 1;
     this.currentOpacity = 1;
     this.rubberBandScale = 1;
+    this.setMediaGestureActive(false);
     this.render(0);
     this.hideAdjacent();
     this.updateAdjacentSources();
@@ -193,7 +264,10 @@ export class SwipeableViewer {
       return false;
     }
 
-    this.toggleSwipeClass(false);
+    // `.swiping` (transition: none) stays on through the settle animation.
+    // Re-enabling the CSS transition here would let every rAF frame start a
+    // fresh 0.3s transition, so the painted media trails the loop and ends up
+    // out of sync with the neighbour image.
 
     const direction = this.getNavigationDirection(this.currentTranslateX);
     const shouldNavigate = this.shouldNavigate(this.currentTranslateX, data.velocityX);
@@ -233,7 +307,7 @@ export class SwipeableViewer {
 
     this.interruptAnimation();
     this.cancelPendingNavigation();
-    this.toggleSwipeClass(false);
+    this.setMediaGestureActive(false);
     this.finishInteraction();
     this.render(0);
   }
@@ -247,11 +321,40 @@ export class SwipeableViewer {
       return false;
     }
 
+    // The details sheet owns the vertical gesture while it is open: a
+    // downward drag moves the sheet, never the photo or the viewer.
+    if (this.viewer.canDragDetailsSheet && this.viewer.isSidebarOpen) {
+      if (data.deltaY <= 0) {
+        return false;
+      }
+      if (!this.sheetDragActive) {
+        this.sheetDragActive = true;
+        this.viewer.beginSheetDrag(true);
+      }
+      this.viewer.updateSheetDrag(data.deltaY);
+      return true;
+    }
+
+    // Closed sheet: upward opens it, downward keeps the pull-down dismiss.
+    if (this.viewer.canDragDetailsSheet && !this.viewer.isSidebarOpen) {
+      if (data.deltaY < 0) {
+        if (!this.sheetDragActive) {
+          this.sheetDragActive = true;
+          this.viewer.beginSheetDrag(false);
+        }
+        this.viewer.updateSheetDrag(data.deltaY);
+        return true;
+      }
+    }
+
     if (data.deltaY <= 0) {
       return false;
     }
 
-    this.isDraggingDown = true;
+    if (!this.isDraggingDown) {
+      this.isDraggingDown = true;
+      this.setMediaGestureActive(true);
+    }
     this.currentTranslateY = data.deltaY;
     this.currentScale = Math.max(0.7, 1 - Math.abs(data.deltaY) / 1000);
     this.currentOpacity = Math.max(0.5, 1 - Math.abs(data.deltaY) / 800);
@@ -260,6 +363,12 @@ export class SwipeableViewer {
   }
 
   handleVerticalPanEnd(data) {
+    if (this.sheetDragActive) {
+      this.sheetDragActive = false;
+      this.viewer.endSheetDrag(data.velocityY);
+      return true;
+    }
+
     if (!this.isDraggingDown) {
       return false;
     }
@@ -282,7 +391,15 @@ export class SwipeableViewer {
     const startScale = this.currentScale;
     const startOpacity = this.currentOpacity;
     const targetY = window.innerHeight;
-    const duration = 250;
+    const duration = motionDuration(250);
+
+    if (duration === 0) {
+      this.resetVerticalState();
+      this.viewer.triggerHapticFeedback('medium');
+      this.viewer.close();
+      return;
+    }
+
     const startTime = Date.now();
     this.isAnimating = true;
 
@@ -317,7 +434,13 @@ export class SwipeableViewer {
     const startY = this.currentTranslateY;
     const startScale = this.currentScale;
     const startOpacity = this.currentOpacity;
-    const duration = 300;
+    const duration = motionDuration(300);
+
+    if (duration === 0) {
+      this.resetVerticalState();
+      return;
+    }
+
     const startTime = Date.now();
     this.isAnimating = true;
 
@@ -350,6 +473,7 @@ export class SwipeableViewer {
     this.currentScale = 1;
     this.currentOpacity = 1;
     this.rubberBandScale = 1;
+    this.setMediaGestureActive(false);
     this.renderVertical();
   }
 
@@ -427,7 +551,10 @@ export class SwipeableViewer {
   }
 
   getViewportWidth() {
-    return window.innerWidth || this.elements.main?.clientWidth || 0;
+    // The main element, not the window: the desktop details column shrinks
+    // the surface the slide must cross, and its padding is part of the
+    // geometry the adjacent image is offset from.
+    return this.elements?.main?.clientWidth || window.innerWidth || 0;
   }
 
   snapBack() {
@@ -439,6 +566,16 @@ export class SwipeableViewer {
   animateTo(targetX, onComplete = null, duration = 300) {
     this.interruptAnimation();
 
+    const total = motionDuration(duration);
+    if (total === 0) {
+      this.rubberBandScale = 1;
+      this.render(targetX);
+      this.animationFrame = null;
+      this.isAnimating = false;
+      onComplete?.();
+      return;
+    }
+
     const startX = this.currentTranslateX;
     const startRubberBandScale = this.rubberBandScale;
     const startTime = Date.now();
@@ -446,7 +583,7 @@ export class SwipeableViewer {
 
     const animate = () => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min(elapsed / duration, 1);
+      const progress = Math.min(elapsed / total, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
       const translateX = startX + (targetX - startX) * eased;
 
@@ -480,22 +617,44 @@ export class SwipeableViewer {
   }
 
   async navigate(direction) {
-    this.finishInteraction();
+    const targetIndex =
+      direction === 'next' ? this.viewer.currentIndex + 1 : this.viewer.currentIndex - 1;
+    this.navigationTargetHash = this.viewer.photos[targetIndex]?.hash_sha256 ?? null;
 
-    if (direction === 'next') {
-      await this.viewer.showNext();
-    }
+    // The slide has ended with the neighbour at rest and the active media
+    // off-screen. Keep that neighbour visible while the new media loads; a
+    // reset during this window would hide it and leave a blank frame.
+    this.isNavigating = true;
+    try {
+      if (direction === 'next') {
+        await this.viewer.showNext();
+      }
 
-    if (direction === 'previous') {
-      await this.viewer.showPrevious();
+      if (direction === 'previous') {
+        await this.viewer.showPrevious();
+      }
+    } finally {
+      this.isNavigating = false;
     }
 
     // destroy() nulls this.elements/this.adjacent while the media load is
-    // pending; the continuation below must not dereference them.
-    if (!this.elements) return;
+    // pending; the continuation below must not dereference them. A viewer that
+    // closed already reset the track; a photo a newer navigation moved to owns
+    // it now, but this stale swipe still has to put its off-screen transform
+    // back before yielding.
+    const targetHash = this.navigationTargetHash;
+    this.navigationTargetHash = null;
+    if (!this.elements || !this.viewer.isOpen) return;
+    if (this.viewer.getCurrentPhoto()?.hash_sha256 !== targetHash) {
+      this.interruptAnimation();
+      this.finishInteraction();
+      this.render(0);
+      return;
+    }
 
     this.viewer.triggerHapticFeedback('light');
     this.render(0);
+    this.finishInteraction();
     this.updateAdjacentSources();
   }
 
@@ -553,13 +712,17 @@ export class SwipeableViewer {
 
   finishInteraction() {
     this.isDragging = false;
+    this.currentTranslateX = 0;
     this.dragBaseTranslateX = 0;
     this.isAnimating = false;
+    this.navigationTargetHash = null;
     this.isDraggingDown = false;
     this.currentTranslateY = 0;
     this.currentScale = 1;
     this.currentOpacity = 1;
     this.rubberBandScale = 1;
+    this.sheetDragActive = false;
+    this.setMediaGestureActive(false);
     this.toggleSwipeClass(false);
     this.hideAdjacent();
   }
@@ -609,17 +772,33 @@ export class SwipeableViewer {
     const source = this.getAdjacentSource(photo);
 
     element.dataset.available = source ? 'true' : 'false';
-    element.src = source || '';
+    if (source) {
+      element.src = source;
+    } else {
+      // An empty `src` can resolve to the document URL and issue a request.
+      element.removeAttribute('src');
+    }
     element.classList.remove('visible');
   }
 
   getAdjacentSource(photo) {
-    if (!photo || this.viewer.isVideoFile(photo.filename)) {
-      return null;
-    }
+    if (!photo) return null;
 
     const preloaded = this.viewer.preloadedImages.get(photo.hash_sha256);
-    return preloaded?.src || this.viewer.getMediaUrl(photo);
+    if (preloaded?.src) return preloaded.src;
+
+    // A video has no still image of its own; its thumbnail is what makes the
+    // incoming half of the slide legible instead of black.
+    if (this.viewer.isVideoFile(photo.filename)) {
+      return this.viewer.getThumbnailUrl(photo, 'medium');
+    }
+
+    return this.viewer.getMediaUrl(photo);
+  }
+
+  /** True while a finger or the settle animation owns the media transform. */
+  get isGestureActive() {
+    return this.isDragging || this.isAnimating || this.sheetDragActive;
   }
 
   getActiveMediaElement() {
@@ -642,5 +821,10 @@ export class SwipeableViewer {
   toggleSwipeClass(active) {
     this.elements.image?.classList.toggle('swiping', active);
     this.elements.video?.classList.toggle('swiping', active);
+  }
+
+  setMediaGestureActive(active) {
+    this.elements.image?.classList.toggle('gesture-active', active);
+    this.elements.video?.classList.toggle('gesture-active', active);
   }
 }

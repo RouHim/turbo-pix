@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { t, translateError } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
@@ -7,6 +8,7 @@
   import { addToast } from '../lib/state.svelte.js';
   import {
     getPhotoUrl,
+    getThumbnailUrl,
     getVideoUrl,
     isCollagePhoto,
     isRawFile,
@@ -25,8 +27,15 @@
   import { codecTokenFor } from '../lib/video/playbackVerification.js';
   import { isHardwareEncoder } from '../lib/video/encoderHint.js';
   import { createStreamSession, nextStreamMode } from '../lib/video/streamSession.js';
+  import { APP_CONSTANTS } from '../lib/constants.js';
   import { gestures } from '../lib/gestures/action.js';
+  import {
+    GESTURE_CLICK_SUPPRESS_MS,
+    sheetOpenProgress,
+    shouldSettleOpen,
+  } from '../lib/gestures/panelSettle.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
+  import { DetailsSheetGesture } from '../lib/viewer/DetailsSheetGesture.js';
   import Icon from './Icon.svelte';
   import AlbumPicker from './AlbumPicker.svelte';
   import ViewerControls from './ViewerControls.svelte';
@@ -114,8 +123,12 @@
     getPosition: () => videoEl?.currentTime ?? 0,
   });
   let mainEl = $state(null);
+  let sheetEl = $state(null);
   // Element focused before the viewer opened; restored on close.
   let previouslyFocusedElement = null;
+  // The last pointer gesture suppresses the synthetic click that would
+  // otherwise close the sheet (or the viewer) right after a swipe.
+  let gestureEndedAt = 0;
 
   // ── Zoom / Pan state (ported from ViewerControls) ──────────────────────────
   let zoomLevel = $state(1);
@@ -134,6 +147,13 @@
   let swipeableViewer = null;
   // gestureManager is set on mainEl.__gestureManager by the action; accessed via getter
   let metadataEditRef = $state(null);
+
+  // ── Mobile details sheet ───────────────────────────────────────────────────
+  let sheetDragging = $state(false);
+  let sheetDragFromOpen = false;
+  let sheetDragStartOffset = 0;
+  let sheetDragOffset = $state(0);
+  let detailsSheetGesture = null;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getMediaUrl(photo) {
@@ -424,6 +444,7 @@
 
   function onPanEnd(data) {
     const { velocityX, velocityY } = data;
+    noteGestureEnd();
 
     if (imageEl) imageEl.classList.remove('gesture-active');
 
@@ -484,6 +505,7 @@
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (viewerEl) viewerEl.focus({ preventScroll: true });
 
+    resetSheetDrag();
     showSidebar = false;
 
     if (updateUrlEnabled) {
@@ -546,6 +568,7 @@
     }
     previouslyFocusedElement = null;
 
+    resetSheetDrag();
     showSidebar = false;
     swipeableViewer?.reset();
 
@@ -678,34 +701,49 @@
     }
 
     const img = new Image();
-    img.onload = () => {
-      preloadedImages.set(photo.hash_sha256, img);
-      // A newer photo may have been requested while this image was loading;
-      // only display it if it is still the current one.
-      if (currentPhoto?.hash_sha256 === photo.hash_sha256) showImage(img.src);
-    };
-    img.onerror = () => {
-      // A newer photo may have been requested while this image was loading.
-      if (currentPhoto?.hash_sha256 !== photo.hash_sha256) return;
-      showToast(
-        get(t)('notifications.error', { default: 'Error' }),
-        get(t)('errors.failedToLoadImage', { default: 'Failed to load image' }),
-        'error'
-      );
-    };
-    img.src = imageUrl;
+    // Resolve only once the decoded image is actually on the element. The
+    // swipe path keeps the incoming neighbour visible and ignores new gestures
+    // until this promise settles; returning on `img.src = ...` would finish the
+    // slide while the active element is still hidden (a blank frame).
+    await new Promise((resolve) => {
+      img.onload = () => {
+        preloadedImages.set(photo.hash_sha256, img);
+        // A newer photo may have been requested while this image was loading;
+        // only display it if it is still the current one.
+        if (currentPhoto?.hash_sha256 === photo.hash_sha256) showImage(img.src);
+        resolve();
+      };
+      img.onerror = () => {
+        // A newer photo may have been requested while this image was loading.
+        if (currentPhoto?.hash_sha256 === photo.hash_sha256) {
+          showToast(
+            get(t)('notifications.error', { default: 'Error' }),
+            get(t)('errors.failedToLoadImage', { default: 'Failed to load image' }),
+            'error'
+          );
+        }
+        resolve();
+      };
+      img.src = imageUrl;
+    });
   }
 
   function showImage(src) {
     if (imageEl) {
       imageEl.src = src;
-      imageEl.style.transform = '';
-      imageEl.style.opacity = '';
+      // A load that lands mid-drag or mid-slide must not yank the media back
+      // under the finger; the navigation path settles it after the swap.
+      if (!swipeableViewer?.isGestureActive) {
+        imageEl.style.transform = '';
+        imageEl.style.opacity = '';
+      }
       imageEl.style.display = 'block';
       imageEl.classList.add('loaded');
       if (videoEl) {
-        videoEl.style.transform = '';
-        videoEl.style.opacity = '';
+        if (!swipeableViewer?.isGestureActive) {
+          videoEl.style.transform = '';
+          videoEl.style.opacity = '';
+        }
         videoEl.style.display = 'none';
       }
     }
@@ -1525,13 +1563,17 @@
     // video is shown).
     videoEl.dataset.photoHash = photo.hash_sha256;
     videoEl.src = videoUrl;
-    videoEl.style.transform = '';
-    videoEl.style.opacity = '';
+    if (!swipeableViewer?.isGestureActive) {
+      videoEl.style.transform = '';
+      videoEl.style.opacity = '';
+    }
     videoEl.style.display = 'block';
     videoEl.classList.add('loaded');
     if (imageEl) {
-      imageEl.style.transform = '';
-      imageEl.style.opacity = '';
+      if (!swipeableViewer?.isGestureActive) {
+        imageEl.style.transform = '';
+        imageEl.style.opacity = '';
+      }
       imageEl.style.display = 'none';
     }
     swipeableViewer?.reset();
@@ -1666,9 +1708,91 @@
     );
   }
 
-  // ── Sidebar ────────────────────────────────────────────────────────────────
+  // ── Sidebar / mobile details sheet ─────────────────────────────────────────
+  function isMobileLayout() {
+    return window.matchMedia(`(max-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT}px)`).matches;
+  }
+
+  function canDragDetailsSheet() {
+    return isMobileLayout() && !isCollage;
+  }
+
+  function noteGestureEnd() {
+    gestureEndedAt = performance.now();
+  }
+
+  function getSheetHeight() {
+    return sheetEl?.offsetHeight || 0;
+  }
+
+  function getCurrentSheetOffset() {
+    if (!sheetEl) return 0;
+    const transform = getComputedStyle(sheetEl).transform;
+    if (!transform || transform === 'none') return 0;
+    return new window.DOMMatrixReadOnly(transform).m42;
+  }
+
+  function applySheetOffset(offset) {
+    sheetDragOffset = Math.min(getSheetHeight(), Math.max(0, offset));
+  }
+
+  function resetSheetDrag() {
+    sheetDragging = false;
+    sheetDragOffset = 0;
+    sheetDragStartOffset = 0;
+  }
+
+  function beginSheetDrag(fromOpen) {
+    if (!canDragDetailsSheet()) return;
+    sheetDragFromOpen = fromOpen;
+    sheetDragStartOffset = getCurrentSheetOffset();
+    sheetDragging = true;
+    applySheetOffset(sheetDragStartOffset);
+  }
+
+  function updateSheetDrag(deltaY) {
+    if (!sheetDragging) return;
+    applySheetOffset(sheetDragStartOffset + deltaY);
+  }
+
+  function endSheetDrag(velocityY) {
+    if (!sheetDragging) return;
+    const height = getSheetHeight();
+    const open = shouldSettleOpen({
+      startedOpen: sheetDragFromOpen,
+      progress: sheetOpenProgress(sheetDragOffset, height),
+      // The velocity decision is expressed towards open; a finger moving up
+      // reports a negative velocityY.
+      velocity: -velocityY,
+    });
+    resetSheetDrag();
+    setDetailsOpen(open);
+    noteGestureEnd();
+  }
+
+  function cancelSheetDrag() {
+    if (!sheetDragging) return;
+    const restore = sheetDragFromOpen;
+    resetSheetDrag();
+    setDetailsOpen(restore);
+    noteGestureEnd();
+  }
+
+  function setDetailsOpen(open) {
+    if (showSidebar === open) return;
+    const focusWasInside = Boolean(sheetEl?.contains(document.activeElement));
+    showSidebar = open;
+    if (open) return;
+    resetSheetDrag();
+    if (focusWasInside) {
+      requestAnimationFrame(() => {
+        viewerEl?.querySelector('.metadata-btn')?.focus({ preventScroll: true });
+      });
+    }
+  }
+
   function toggleSidebar() {
-    showSidebar = !showSidebar;
+    setDetailsOpen(!showSidebar);
   }
 
   // ── Rotate ─────────────────────────────────────────────────────────────────
@@ -1907,6 +2031,10 @@
   const viewerKeyHandlers = {
     Escape: (e) => {
       e.preventDefault();
+      if (showSidebar) {
+        setDetailsOpen(false);
+        return;
+      }
       close();
     },
     ArrowLeft: (e) => {
@@ -1968,6 +2096,13 @@
   }
 
   function onMainClick(e) {
+    // A completed drag emits a click on some platforms; it must not toggle
+    // the sheet or dismiss the viewer a second time.
+    if (performance.now() - gestureEndedAt < GESTURE_CLICK_SUPPRESS_MS) return;
+    if (showSidebar && isMobileLayout()) {
+      setDetailsOpen(false);
+      return;
+    }
     if (e.target === mainEl) close();
   }
 
@@ -1986,7 +2121,10 @@
     };
   });
 
-  // Initialize SwipeableViewer after mount
+  // Initialize SwipeableViewer after mount. `untrack` is load-bearing: mount's
+  // reset reads currentPhoto/photos/isOpen, and without it every photo change
+  // re-ran this effect — destroying the viewer mid-slide, re-creating the
+  // adjacent images and hiding the incoming preview during the load.
   $effect(() => {
     if (mainEl && imageEl && videoEl) {
       const elements = {
@@ -1994,13 +2132,27 @@
         image: imageEl,
         video: videoEl,
       };
-      swipeableViewer = new SwipeableViewer(thisForSwipe);
-      swipeableViewer.mount(elements);
-      return () => {
-        swipeableViewer?.destroy();
-        swipeableViewer = null;
-      };
+      return untrack(() => {
+        swipeableViewer = new SwipeableViewer(thisForSwipe);
+        swipeableViewer.mount(elements);
+        return () => {
+          swipeableViewer?.destroy();
+          swipeableViewer = null;
+        };
+      });
     }
+  });
+
+  // The details sheet owns its own downward drag; the photo-area half of the
+  // same interaction routes through SwipeableViewer into the same methods.
+  $effect(() => {
+    if (!sheetEl) return;
+    detailsSheetGesture = new DetailsSheetGesture(thisForSwipe);
+    detailsSheetGesture.mount(sheetEl);
+    return () => {
+      detailsSheetGesture?.destroy();
+      detailsSheetGesture = null;
+    };
   });
 
   // Document-level mouse events for drag (matches original ViewerControls)
@@ -2103,6 +2255,12 @@
     get elements() {
       return { main: mainEl, image: imageEl, video: videoEl };
     },
+    get isSidebarOpen() {
+      return showSidebar;
+    },
+    get canDragDetailsSheet() {
+      return canDragDetailsSheet();
+    },
     controls: {
       reset: resetZoom,
       isZoomed,
@@ -2110,10 +2268,16 @@
     showNext,
     showPrevious,
     close,
+    beginSheetDrag,
+    updateSheetDrag,
+    endSheetDrag,
+    cancelSheetDrag,
+    noteGestureEnd,
     triggerHapticFeedback,
     isVideoFile,
     isCollagePhoto,
     getMediaUrl,
+    getThumbnailUrl,
     getCurrentPhoto() {
       return currentPhoto;
     },
@@ -2237,13 +2401,21 @@
       {/if}
     </div>
 
-    <div class="viewer-sidebar" id="viewer-sidebar" class:show={showSidebar}>
+    <div
+      class="viewer-sidebar"
+      id="viewer-sidebar"
+      data-testid="viewer-sidebar"
+      class:show={showSidebar}
+      class:dragging={sheetDragging}
+      style:transform={sheetDragging ? `translateY(${sheetDragOffset}px)` : undefined}
+      bind:this={sheetEl}
+      inert={!showSidebar}
+      aria-hidden={!showSidebar}
+    >
       <ViewerMetadata
         photo={currentPhoto}
         onEditMetadata={openMetadataEdit}
-        onCloseSidebar={() => {
-          showSidebar = false;
-        }}
+        onCloseSidebar={() => setDetailsOpen(false)}
       />
     </div>
   </div>
@@ -2593,9 +2765,24 @@
     }
 
     .viewer-sidebar {
-      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: transform var(--transition-medium);
       padding: var(--space-6) var(--space-5) var(--space-8) var(--space-5);
       box-shadow: 0 -4px 24px oklch(0% 0 0deg / 20%);
+      touch-action: pan-y;
+    }
+
+    /* The finger owns the transform while dragging; the closed sheet's base
+       opacity is 0, so the drag-open would otherwise be invisible until the
+       release added `.show`. */
+    .viewer-sidebar.dragging {
+      transition: none;
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .viewer-sidebar {
+      transition: none;
     }
   }
 

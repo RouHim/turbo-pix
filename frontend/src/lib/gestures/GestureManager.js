@@ -251,9 +251,14 @@ export class GestureManager {
   }
 
   handleTouchCancel() {
-    // Clean up on cancel
+    // A cancelled pinch still has to tell the consumer it ended; otherwise its
+    // `.gesture-active` class and the zoom baseline stay armed for the next
+    // pinch, which then jumps by the stale factor. Pans are reset by the
+    // consumer's own cancel path (SwipeableViewer).
+    const wasPinch = this.activeGesture === 'pinch';
     this.touches.clear();
     this.resetGestureTracking();
+    if (wasPinch) this.callbacks.onPinchEnd?.();
   }
 
   handleTap(touch) {

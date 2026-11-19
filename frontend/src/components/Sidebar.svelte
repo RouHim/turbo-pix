@@ -9,9 +9,12 @@
     appState,
     loadSavedSearches,
     savedSearches,
+    selectionState,
     setSidebarCollapsed,
   } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
+  import { APP_CONSTANTS } from '../lib/constants.js';
+  import { DrawerSwipe } from '../lib/gestures/DrawerSwipe.js';
   import { handleError } from '../lib/utils.js';
 
   const views = [
@@ -189,12 +192,44 @@
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  // Finger-tracked mobile drawer. `appState.sidebarOpen` stays the source of
+  // truth; the drag state only paints the in-between frames.
+  let drawerDragging = $state(false);
+  let drawerTranslateX = $state(0);
+  let drawerProgress = $state(0);
+
+  $effect(() => {
+    const swipe = new DrawerSwipe({
+      isEnabled: () =>
+        window.matchMedia(`(max-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT}px)`).matches &&
+        !selectionState.active &&
+        !selectionState.busy &&
+        !appState.mobileSearchOpen,
+      isOpen: () => appState.sidebarOpen,
+      onDrag: ({ translateX, progress }) => {
+        drawerDragging = true;
+        drawerTranslateX = translateX;
+        drawerProgress = progress;
+      },
+      onSettle: (open) => {
+        appState.sidebarOpen = open;
+        drawerDragging = false;
+        drawerTranslateX = 0;
+        drawerProgress = 0;
+      },
+    });
+    swipe.attach();
+    return () => swipe.detach();
+  });
 </script>
 
 <div
   class="sidebar-overlay"
   data-testid="sidebar-overlay"
   class:show={appState.sidebarOpen}
+  class:dragging={drawerDragging}
+  style:opacity={drawerDragging ? drawerProgress : undefined}
   role="presentation"
   onclick={closeSidebar}
 ></div>
@@ -205,6 +240,8 @@
   data-testid="sidebar-nav"
   class:open={appState.sidebarOpen}
   class:collapsed={appState.sidebarCollapsed}
+  class:dragging={drawerDragging}
+  style:transform={drawerDragging ? `translateX(${drawerTranslateX}px)` : undefined}
 >
   <div class="sidebar-content">
     {#each views as view (view.id)}
@@ -456,6 +493,7 @@
       background: var(--surface-color);
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
+      touch-action: pan-y;
     }
 
     .sidebar.open {
@@ -463,10 +501,18 @@
       visibility: visible;
     }
 
+    /* Finger-tracked in-between frames: the inline transform is the owner,
+       so the 0.3s settle transition must not smooth every move. */
+    .sidebar.dragging {
+      transition: none;
+      visibility: visible;
+    }
+
     .sidebar-overlay {
       display: block;
       opacity: 0;
       visibility: hidden;
+      touch-action: pan-y;
       transition:
         opacity var(--transition-medium),
         visibility var(--transition-medium);
@@ -474,6 +520,11 @@
 
     .sidebar-overlay.show {
       opacity: 1;
+      visibility: visible;
+    }
+
+    .sidebar-overlay.dragging {
+      transition: none;
       visibility: visible;
     }
 
@@ -586,6 +637,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .sidebar,
+    .sidebar-overlay,
     .sidebar-toggle {
       transition: none;
     }

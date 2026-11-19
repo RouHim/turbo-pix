@@ -19,6 +19,18 @@
         {#if toast.title}<div class="toast-title">{toast.title}</div>{/if}
         {#if toast.message}<span class="toast-message">{toast.message}</span>{/if}
       </div>
+      {#if toast.action}
+        <button
+          type="button"
+          class="toast-action"
+          onclick={() => {
+            toast.action.onClick();
+            removeToast(toast.id);
+          }}
+        >
+          {toast.action.label}
+        </button>
+      {/if}
       <button
         type="button"
         class="toast-close"
@@ -81,11 +93,34 @@
   }
   .toast-content {
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
   }
   .toast-title {
     font-weight: 600;
+  }
+  .toast-action {
+    flex: none;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--primary-ink);
+    font-family: var(--font-body);
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .toast-action:hover {
+    border-color: var(--primary-color);
+    background: var(--background-secondary);
+  }
+  .toast-action:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
   .toast-close {
     margin-left: auto;
@@ -98,6 +133,11 @@
     display: flex;
   }
   .toast-close:hover {
+    opacity: 1;
+  }
+  .toast-close:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
     opacity: 1;
   }
   /* The type is carried by the leading icon, not a side tab: a colored

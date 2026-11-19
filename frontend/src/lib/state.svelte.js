@@ -177,9 +177,9 @@ export const toasts = $state([]);
 let toastId = 0;
 const TOAST_LEAVE_MS = 300;
 
-export function addToast(title, message = '', type = 'info', duration = 4000) {
+export function addToast(title, message = '', type = 'info', duration = 4000, action = null) {
   const id = ++toastId;
-  toasts.push({ id, title, message, type, leaving: false });
+  toasts.push({ id, title, message, type, leaving: false, action });
   if (duration > 0) {
     setTimeout(() => {
       removeToast(id);

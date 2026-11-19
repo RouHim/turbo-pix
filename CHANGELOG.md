@@ -1,3 +1,15 @@
+# [2.54.0](https://github.com/RouHim/turbo-pix/compare/2.53.0...2.54.0) (2026-11-19)
+
+### Bug Fixes
+
+* **faces:** correct cosine clustering and review findings ([2fb9b5d](https://github.com/RouHim/turbo-pix/commit/2fb9b5d91435714dfee24b7aa505d87ef068bc44))
+* **faces:** harden face indexing and People edge cases ([8c217c3](https://github.com/RouHim/turbo-pix/commit/8c217c379e3593a37c510a6a1417e46278c0271a))
+* **people:** rework grid, rename dialog, and hide feedback ([e05e786](https://github.com/RouHim/turbo-pix/commit/e05e786ca1927b5e13c5586ac7133190d37c3c39))
+
+### Features
+
+* **faces:** add local face recognition and People view ([6cecf20](https://github.com/RouHim/turbo-pix/commit/6cecf20fa1663bcc3be18342d93de48afb221055))
+
 # [2.53.0](https://github.com/RouHim/turbo-pix/compare/2.52.2...2.53.0) (2026-11-18)
 
 ### Bug Fixes

@@ -29,11 +29,19 @@ async function mockConfig(page, config) {
   });
 }
 
-async function mockPeople(page, initial) {
+async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}) {
   let people = initial;
   await page.route('**/api/people**', async (route) => {
     const request = route.request();
     if (request.method() === 'PATCH') {
+      if (failPatch) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'rename failed' }),
+        });
+        return;
+      }
       const id = Number(request.url().match(/\/api\/people\/(\d+)/)?.[1]);
       const body = request.postDataJSON();
       people = people.map((item) => (item.id === id ? { ...item, ...body } : item));
@@ -46,6 +54,7 @@ async function mockPeople(page, initial) {
       return;
     }
 
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
     const includeHidden = request.url().includes('include_hidden=true');
     await route.fulfill({
       status: 200,
@@ -106,6 +115,7 @@ test.describe('People view', () => {
     await TestHelpers.navigateToView(page, 'people');
     await page.getByRole('button', { name: 'Rename' }).first().click();
     const input = page.locator('#person-name-input');
+    await expect(input).toBeFocused();
     await input.fill('Anna Schmidt');
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -113,23 +123,67 @@ test.describe('People view', () => {
     await expect(page.locator('[data-testid="person-card"]').first()).toContainText('Anna Schmidt');
   });
 
-  test('hides a person and can show hidden people again', async ({ page }) => {
+  test('keeps the rename dialog open and preserves input when saving fails', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna')], { failPatch: true });
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+
+    await page.getByRole('button', { name: 'Rename' }).click();
+    const dialog = page.locator('dialog.person-dialog');
+    const input = page.locator('#person-name-input');
+    await input.fill('Anna Schmidt');
+    await page.getByRole('button', { name: 'Save' }).click();
+
+    // THEN the dialog stays open, keeps the typed value, and shows the error inline
+    await expect(dialog).toBeVisible();
+    await expect(input).toHaveValue('Anna Schmidt');
+    await expect(dialog.getByRole('alert')).toContainText('Could not rename this person');
+
+    // AND Escape closes it and returns focus to the invoking Rename button
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Rename' })).toBeFocused();
+  });
+
+  test('shows a skeleton instead of the empty state while people load', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna')], { delayMs: 1200 });
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+
+    await expect(page.getByTestId('people-skeleton')).toBeVisible();
+    await expect(
+      page.getByText('No people yet. Face indexing runs in the background.')
+    ).toHaveCount(0);
+    await expect(page.locator('[data-testid="person-card"]')).toHaveCount(1);
+  });
+
+  test('hides a person without dropping the card or its toast action', async ({ page }) => {
     // GIVEN one visible person
     await mockPeople(page, [person(3, 'Anna')]);
     await TestHelpers.goto(page);
     await TestHelpers.navigateToView(page, 'people');
-    await expect(page.locator('[data-testid="person-card"]')).toHaveCount(1);
+    const cards = page.locator('[data-testid="person-card"]');
+    const hiddenToggle = page.getByTestId('people-hidden-toggle');
+    await expect(cards).toHaveCount(1);
+    await expect(hiddenToggle).toHaveAttribute('aria-pressed', 'false');
 
     // WHEN the user hides the person
     await page.getByRole('button', { name: 'Hide' }).click();
 
-    // THEN the default list is empty
-    await expect(page.locator('[data-testid="person-card"]')).toHaveCount(0);
+    // THEN the card stays in place with a visible hidden state and a recovery action
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText('Hidden');
+    const toastAction = page.locator('.toast-action');
+    await expect(toastAction).toHaveText('Show hidden');
 
-    // AND enabling hidden people reveals the card with its badge
-    await page.getByLabel('Show hidden people').check();
-    await expect(page.locator('[data-testid="person-card"]')).toHaveCount(1);
-    await expect(page.locator('[data-testid="person-card"]')).toContainText('Hidden');
+    // AND the toast action enables the hidden filter
+    await toastAction.click();
+    await expect(hiddenToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(cards).toHaveCount(1);
+
+    // AND switching the filter off uses server truth and removes the hidden card
+    await hiddenToggle.click();
+    await expect(cards).toHaveCount(0);
   });
 
   test('shows the one-time non-commercial model notice', async ({ page }) => {
@@ -141,6 +195,7 @@ test.describe('People view', () => {
     await expect(notice).toContainText('non-commercial');
     await notice.getByRole('button', { name: 'Dismiss' }).click();
     await expect(notice).toHaveCount(0);
+    await expect(page.getByTestId('people-hidden-toggle')).toBeFocused();
   });
 
   test('hides the People nav and redirects a deep link when disabled', async ({ page }) => {

@@ -110,11 +110,9 @@ pub async fn face_crop(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(not_found_reply()),
         Err(error) => {
             error!("Failed to read face crop {}: {error}", path.display());
-            return Ok(warp::reply::with_status(
-                warp::reply::json(&serde_json::json!({"error": "Database error"})),
-                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
-            .into_response());
+            return Err(reject::custom(DatabaseError {
+                message: error.to_string(),
+            }));
         }
     };
 

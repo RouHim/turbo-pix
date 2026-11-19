@@ -10,8 +10,8 @@ use ort::session::Session;
 
 use super::detector::decode_scrfd;
 use super::geometry::{
-    apply_affine, cosine_distance, l2_normalize, letterbox, map_landmarks_to_source,
-    map_rect_to_source, nms, similarity_transform, Detection, Point, Rect,
+    apply_affine, l2_normalize, letterbox, map_landmarks_to_source, map_rect_to_source, nms,
+    similarity_transform, Detection, Point, Rect,
 };
 use super::model::{load_models, resolve_model_paths, FaceModels};
 
@@ -52,10 +52,6 @@ impl FaceEngine {
             data_path: data_path.to_string(),
             models: Mutex::new(None),
         }
-    }
-
-    pub fn model_version(&self) -> &'static str {
-        super::model::MODEL_VERSION
     }
 
     /// Resolves/downloads and loads both sessions once. Kept public so the
@@ -111,16 +107,11 @@ impl FaceEngine {
     }
 
     fn detect(&self, image: &RgbImage) -> Result<Vec<Detection>> {
+        self.ensure_loaded()?;
         let mut guard = self
             .models
             .lock()
             .map_err(|_| anyhow::anyhow!("face model lock poisoned"))?;
-        if guard.is_none() {
-            let paths = resolve_model_paths(&self.data_path)?;
-            let threads = num_cpus::get().clamp(1, 4);
-            *guard = Some(load_models(&paths, threads)?);
-            log::info!("Face models loaded (ORT threads: {threads})");
-        }
         let models = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("face models unavailable"))?;
@@ -175,12 +166,6 @@ impl FaceEngine {
             return Ok(None);
         }
         Ok(Some(embedding))
-    }
-
-    /// Cosine distance between a probe and a stored embedding. Kept here so
-    /// callers do not need to know the vector layout.
-    pub fn distance(a: &[f32], b: &[f32]) -> f32 {
-        cosine_distance(a, b)
     }
 }
 

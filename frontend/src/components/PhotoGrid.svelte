@@ -220,7 +220,7 @@
     // Dedupe identical concurrent loads (effect + onMount can both fire);
     // reloadToken is bumped by handleIndexingCompleted so a completion
     // reload is never swallowed by the dedupe.
-    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.to_year}|${route.to_month}|${route.album}|${photoGridState.currentPage}|${photoGridState.windowEpoch}|${reloadToken}`;
+    const sig = `${reset}|${route.view}|${route.query}|${route.sort}|${route.year}|${route.month}|${route.to_year}|${route.to_month}|${route.album}|${route.person}|${photoGridState.currentPage}|${photoGridState.windowEpoch}|${reloadToken}`;
     if (sig === lastLoadSignature) return;
     lastLoadSignature = sig;
     // A date-scrubber jump replaces `photos`/`currentPage` and bumps this
@@ -412,6 +412,7 @@
     route.to_year;
     route.to_month;
     route.album;
+    route.person;
     untrack(() => loadPhotos(true));
   });
   // ===========================================================================

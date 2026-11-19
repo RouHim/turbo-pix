@@ -10,10 +10,13 @@ pub struct CacheManager {
 
 impl CacheManager {
     pub fn new(thumbnail_cache_dir: PathBuf) -> Self {
-        let face_cache_dir = thumbnail_cache_dir
-            .parent()
-            .map(|parent| parent.join("faces"))
-            .unwrap_or_else(|| PathBuf::from("faces"));
+        let face_cache_dir = thumbnail_cache_dir.join("faces");
+        Self::with_face_cache(thumbnail_cache_dir, face_cache_dir)
+    }
+
+    /// Explicit roots for production (`{data}/cache/thumbnails` and
+    /// `{data}/cache/faces`) and for tests that need a known sandbox.
+    pub fn with_face_cache(thumbnail_cache_dir: PathBuf, face_cache_dir: PathBuf) -> Self {
         Self {
             thumbnail_cache_dir,
             face_cache_dir,

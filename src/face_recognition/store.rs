@@ -260,23 +260,29 @@ async fn cluster_person(
     }
 
     let rows: Vec<(Option<i64>, f32)> = sqlx::query_as(
-        "SELECT f.person_id, v.distance
+        // vec0's MATCH ranks by its default L2 metric. The stored embeddings
+        // are L2-normalised, so that ranking is cosine-equivalent; the
+        // distance we threshold on must still be the cosine distance.
+        "SELECT f.person_id, vec_distance_cosine(v.face_vector, ?) AS distance
          FROM face_vectors v
          JOIN face_vector_mapping m ON m.id = v.rowid
          JOIN faces f ON f.id = m.face_id
          WHERE v.face_vector MATCH ? AND k = 5",
     )
     .bind(embedding.as_bytes())
+    .bind(embedding.as_bytes())
     .fetch_all(&mut **tx)
     .await?;
 
-    if let Some(person_id) = rows
+    if let Some((person_id, _)) = rows
         .into_iter()
-        .filter_map(|(person_id, distance)| person_id.filter(|_| distance <= CLUSTER_DISTANCE))
-        .min_by(|left, right| {
-            // `k = 5` is tiny; the distance comparison is cheaper than a
-            // second SQL sort and keeps the nearest person deterministic.
-            left.cmp(right)
+        .filter_map(|(person_id, distance)| {
+            person_id
+                .filter(|_| distance <= CLUSTER_DISTANCE)
+                .map(|person_id| (person_id, distance))
+        })
+        .min_by(|(_, left), (_, right)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
         })
     {
         return Ok(Some(person_id));
@@ -345,6 +351,15 @@ pub async fn face_crop_info(pool: &DbPool, face_id: i64) -> Result<Option<String
             .fetch_optional(pool)
             .await?,
     )
+}
+
+/// Forgets that a photo was indexed, so the next scan retries it.
+pub async fn clear_index_state(pool: &DbPool, photo_hash: &str) -> Result<()> {
+    sqlx::query("DELETE FROM face_index_state WHERE photo_hash = ?")
+        .bind(photo_hash)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Removes vector rows whose face mapping disappeared through a cascade.
@@ -551,9 +566,10 @@ mod tests {
             .unwrap();
 
         let mut vector_a = vec![0.0_f32; 512];
-        vector_a[0] = 1.0;
+        vector_a[0] = 0.9;
+        vector_a[1] = 0.435_89;
         let mut vector_b = vec![0.0_f32; 512];
-        vector_b[1] = 1.0;
+        vector_b[0] = 1.0;
         for (index, (person_id, vector)) in [(first, vector_a), (second, vector_b)]
             .into_iter()
             .enumerate()
@@ -586,7 +602,7 @@ mod tests {
         }
 
         let mut probe = vec![0.0_f32; 512];
-        probe[1] = 1.0;
+        probe[0] = 1.0;
         let mut tx = pool.begin().await.unwrap();
         let assigned = cluster_person(&mut tx, &probe).await.unwrap();
         tx.commit().await.unwrap();

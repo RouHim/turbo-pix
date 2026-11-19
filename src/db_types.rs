@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 // Search related structs
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
     pub year: Option<i32>,

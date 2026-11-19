@@ -45,23 +45,34 @@
       appState.sidebarOpen = false;
       return;
     }
+    // List surfaces (albums, people) show no search results: entering either
+    // with ?q= set would render the grid under a list header, so clear it.
+    const clearsQuery = view === 'albums' || view === 'people';
+    // People has no timeline slider, so a date-bounded route would keep
+    // filtering the photo query with bounds the user cannot see or clear.
+    const clearsDates = view === 'people';
+    const hasDateFilter =
+      route.year != null || route.month != null || route.to_year != null || route.to_month != null;
     if (
       route.view === view &&
       route.album == null &&
       route.person == null &&
-      (view !== 'albums' || route.query == null)
+      (!clearsQuery || route.query == null) &&
+      (!clearsDates || !hasDateFilter)
     ) {
       // Close the drawer even when tapping the already-active view (mobile).
       appState.sidebarOpen = false;
       return;
     }
-    // Albums list shows no search results: entering it with ?q= set would
-    // render the grid under an album-list header, so clear the query.
-    pushState(
-      view === 'albums'
-        ? { view, album: null, query: null, person: null }
-        : { view, album: null, person: null }
-    );
+    const changes = { view, album: null, person: null };
+    if (clearsQuery) changes.query = null;
+    if (clearsDates) {
+      changes.year = null;
+      changes.month = null;
+      changes.to_year = null;
+      changes.to_month = null;
+    }
+    pushState(changes);
     appState.sidebarOpen = false;
   }
 

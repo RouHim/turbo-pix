@@ -59,10 +59,8 @@
   }
 
   function describeArc(centerX, centerY, radius, index) {
-    const gapDegrees = SEGMENT_GAP_DEGREES;
-    const segmentDegrees = 360 / PHASES.length;
-    const startAngle = -90 + index * segmentDegrees + gapDegrees / 2;
-    const endAngle = startAngle + segmentDegrees - gapDegrees;
+    const startAngle = -90 + index * SEGMENT_DEGREES + SEGMENT_GAP_DEGREES / 2;
+    const endAngle = startAngle + SEGMENT_DEGREES - SEGMENT_GAP_DEGREES;
     const start = polarToCartesian(centerX, centerY, radius, startAngle);
     const end = polarToCartesian(centerX, centerY, radius, endAngle);
     return ['M', start.x, start.y, 'A', radius, radius, 0, 0, 1, end.x, end.y].join(' ');
@@ -88,10 +86,6 @@
     } catch {
       return false;
     }
-  }
-
-  function prefersReducedMotion() {
-    return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
   }
 
   function determineMode() {
@@ -155,7 +149,11 @@
   }
 
   const SEGMENT_GAP_DEGREES = 4;
-  const ARC_LENGTH = (2 * Math.PI * 120 * (360 / PHASES.length - SEGMENT_GAP_DEGREES)) / 360;
+  const SEGMENT_DEGREES = 360 / PHASES.length;
+  const ARC_LENGTH = (2 * Math.PI * 120 * (SEGMENT_DEGREES - SEGMENT_GAP_DEGREES)) / 360;
+  // The indeterminate dot may only travel across the drawn part of its own
+  // arc, so the keyframes sweep half of that width instead of a fixed 28deg.
+  const SWEEP_DEGREES = (SEGMENT_DEGREES - SEGMENT_GAP_DEGREES) / 2;
 
   function updateOrbit(status) {
     cancelPendingHide();
@@ -447,16 +445,15 @@
           data-phase-state={phaseState}
           stroke="currentColor"
           fill="none"
-          style="stroke-dashoffset: {dashOffset}"
+          style="stroke-dasharray: {ARC_LENGTH}; stroke-dashoffset: {dashOffset}"
         ></path>
         {#if sp?.isActive && sp.isDeterminate === false}
-          {@const midpointAngle = -90 + i * 60 + 30}
+          {@const midpointAngle = -90 + i * SEGMENT_DEGREES + SEGMENT_DEGREES / 2}
           {@const pos = polarToCartesian(140, 140, 120, midpointAngle)}
           <g
+            class="orbit-dot-runner"
             data-orbit-phase={phase.id}
-            style="transform-origin: 140px 140px; transform-box: view-box; animation: {prefersReducedMotion()
-              ? 'none'
-              : 'orbit-segment 2s ease-in-out infinite'}"
+            style="--orbit-sweep: {SWEEP_DEGREES}deg"
           >
             <circle cx={pos.x} cy={pos.y} class="orbit-dot" data-orbit-dot="true"></circle>
           </g>
@@ -634,8 +631,6 @@
     color: var(--divider-color);
     stroke-width: 16;
     stroke-linecap: round;
-    stroke-dasharray: 125.66;
-    stroke-dashoffset: 125.66;
     transition:
       stroke-dashoffset 0.5s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)),
       stroke 0.3s ease;
@@ -648,7 +643,6 @@
 
   .indexing-orbit-segment[data-phase-state='done'] {
     color: var(--primary-color);
-    stroke-dashoffset: 0;
   }
 
   .indexing-orbit-segment[data-phase-state='error'] {
@@ -677,6 +671,12 @@
     height: var(--orbit-center-icon-size);
   }
 
+  .orbit-dot-runner {
+    transform-box: view-box;
+    transform-origin: 140px 140px;
+    animation: orbit-segment 2s ease-in-out infinite;
+  }
+
   .orbit-dot {
     r: 5px;
     fill: var(--primary-color);
@@ -698,16 +698,13 @@
   }
 
   @keyframes orbit-segment {
-    0% {
-      transform: rotate(-28deg);
+    0%,
+    100% {
+      transform: rotate(calc(-1 * var(--orbit-sweep)));
     }
 
     50% {
-      transform: rotate(28deg);
-    }
-
-    100% {
-      transform: rotate(-28deg);
+      transform: rotate(var(--orbit-sweep));
     }
   }
 
@@ -886,7 +883,8 @@
       transition: none;
     }
 
-    .orbit-dot {
+    .orbit-dot,
+    .orbit-dot-runner {
       animation: none;
     }
   }

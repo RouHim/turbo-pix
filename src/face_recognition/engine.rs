@@ -179,7 +179,10 @@ fn detect_with_session(session: &mut Session, image: &RgbImage) -> Result<Vec<De
     );
 
     let target = DETECT_INPUT as usize;
-    let mut input = vec![0.0_f32; 3 * target * target];
+    // The pinned SCRFD expects the reference pipeline's black uint8 canvas
+    // before `(x - 127.5) / 128`, so letterbox padding is `-127.5 / 128` and
+    // not mid-grey.
+    let mut input = vec![-127.5_f32 / 128.0; 3 * target * target];
     let pad_x = transform.pad_x.round() as usize;
     let pad_y = transform.pad_y.round() as usize;
     for (x, y, pixel) in resized.enumerate_pixels() {
@@ -233,20 +236,22 @@ fn detect_with_session(session: &mut Session, image: &RgbImage) -> Result<Vec<De
 }
 
 fn crop_face(image: &RgbImage, bbox: Rect) -> Result<Vec<u8>> {
-    let side = bbox.w.max(bbox.h) * 1.35;
+    // One square side for both axes: clamping each edge independently would
+    // turn border faces into non-square crops that the resize visibly
+    // stretches.
+    let max_side = image.width().min(image.height()).max(1);
+    let side = ((bbox.w.max(bbox.h) * 1.35).ceil() as u32).clamp(1, max_side);
+
     let center_x = bbox.x + bbox.w / 2.0;
     let center_y = bbox.y + bbox.h / 2.0;
-    let crop = Rect::new(center_x - side / 2.0, center_y - side / 2.0, side, side)
-        .clamp(image.width() as f32, image.height() as f32);
+    let x = (center_x - side as f32 / 2.0)
+        .round()
+        .clamp(0.0, image.width().saturating_sub(side) as f32) as u32;
+    let y = (center_y - side as f32 / 2.0)
+        .round()
+        .clamp(0.0, image.height().saturating_sub(side) as f32) as u32;
 
-    let x = crop.x.floor().max(0.0) as u32;
-    let y = crop.y.floor().max(0.0) as u32;
-    let width = crop.w.ceil() as u32;
-    let height = crop.h.ceil() as u32;
-    let width = width.min(image.width().saturating_sub(x)).max(1);
-    let height = height.min(image.height().saturating_sub(y)).max(1);
-
-    let face = image::imageops::crop_imm(image, x, y, width, height).to_image();
+    let face = image::imageops::crop_imm(image, x, y, side, side).to_image();
     let face = image::imageops::resize(&face, CROP_SIZE, CROP_SIZE, FilterType::Triangle);
 
     let mut bytes = Vec::new();

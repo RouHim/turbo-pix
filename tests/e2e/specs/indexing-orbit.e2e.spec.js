@@ -681,9 +681,14 @@ test.describe('Indexing orbit', () => {
       .poll(async () => {
         return await page
           .locator('g[data-orbit-phase="housekeeping"]')
-          .evaluate((element) => element.style.animation);
+          .evaluate((element) =>
+            [
+              getComputedStyle(element).animationName,
+              getComputedStyle(element.querySelector('[data-orbit-dot]')).animationName,
+            ].join(',')
+          );
       })
-      .toContain('none');
+      .toBe('none,none');
   });
 
   test('hides the orbit once indexing is complete', async ({ page }) => {

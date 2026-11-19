@@ -143,6 +143,9 @@ export async function loadPeople(includeHidden = false) {
     people.splice(0, people.length, ...(data?.people || []));
     return true;
   } catch (error) {
+    // A superseded request that fails must not surface its error over the
+    // fresher list a newer request already applied.
+    if (token !== peopleLoadToken) return true;
     console.error('Failed to load people', error);
     return false;
   }

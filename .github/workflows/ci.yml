@@ -336,7 +336,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install ORT extraction tools
-        run: apk add --no-cache curl p7zip
+        run: apt-get update && apt-get install -y p7zip-full
 
       - name: Fetch static ONNX Runtime
         run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target ${{ matrix.target }})" >> "$GITHUB_ENV"

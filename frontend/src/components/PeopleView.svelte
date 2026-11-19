@@ -1,8 +1,8 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { addToast, loadPeople, people } from '../lib/state.svelte.js';
-  import { pushState } from '../lib/router.svelte.js';
+  import { pushState, route } from '../lib/router.svelte.js';
   import { t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
 
@@ -15,8 +15,12 @@
   let loaded = $state(false);
   let loading = $state(false);
   let loadError = $state(false);
+  // Guards the shared view state against a superseded refresh finishing last;
+  // not rendered, so a plain local is enough.
+  let refreshToken = 0;
   let noticeDismissed = $state(true);
   let brokenCovers = $state({});
+  let busyHiddenIds = $state({});
   let editingPerson = $state(null);
   let editName = $state('');
   let editInput = $state(null);
@@ -45,20 +49,41 @@
   }
 
   async function refresh() {
+    const token = ++refreshToken;
     loading = true;
     loadError = false;
     try {
-      loadError = !(await loadPeople(includeHidden));
+      const ok = await loadPeople(includeHidden);
+      // loadPeople resolves true for a superseded request without applying a
+      // list; only the newest refresh may write the shared view state, or an
+      // older one landing last would reveal the empty state or clear a
+      // failure that belongs to the list actually shown.
+      if (token !== refreshToken) return;
+      loadError = !ok;
+      // A fresh list carries fresh cover ids, so markers recorded for the
+      // previous one must not keep a crop from being requested again.
+      if (ok) brokenCovers = {};
     } finally {
-      loading = false;
-      loaded = true;
+      if (token === refreshToken) {
+        loading = false;
+        loaded = true;
+      }
     }
   }
 
   onMount(() => {
     readNotice();
     refresh();
+    window.addEventListener('indexingCompleted', onIndexingCompleted);
   });
+
+  onDestroy(() => {
+    window.removeEventListener('indexingCompleted', onIndexingCompleted);
+  });
+
+  function onIndexingCompleted() {
+    refresh();
+  }
 
   $effect(() => {
     if (!editingPerson || !dialogEl) return;
@@ -70,7 +95,17 @@
   });
 
   function openPerson(person) {
-    pushState({ view: 'people', person: person.id, query: null, album: null });
+    if (route.person === person.id) return;
+    pushState({
+      view: 'people',
+      person: person.id,
+      query: null,
+      album: null,
+      year: null,
+      month: null,
+      to_year: null,
+      to_month: null,
+    });
   }
 
   function startRename(person, event) {
@@ -108,17 +143,34 @@
     }
   }
 
+  function setHiddenBusy(id, busy) {
+    if (busy) {
+      busyHiddenIds = { ...busyHiddenIds, [id]: true };
+      return;
+    }
+    const next = { ...busyHiddenIds };
+    delete next[id];
+    busyHiddenIds = next;
+  }
+
   async function toggleHidden(person) {
+    // A second click would send the opposite PATCH while the first is in
+    // flight, and the responses merge by id without ordering.
+    if (busyHiddenIds[person.id]) return;
     const index = people.findIndex((item) => item.id === person.id);
     if (index === -1) return;
-    const previous = { ...people[index] };
-    const nextHidden = !previous.hidden;
-    people[index] = { ...previous, hidden: nextHidden };
+    const previousHidden = Boolean(people[index].hidden);
+    const nextHidden = !previousHidden;
+    people[index] = { ...people[index], hidden: nextHidden };
+    setHiddenBusy(person.id, true);
 
     try {
       const response = await api.updatePerson(person.id, { hidden: nextHidden });
-      if (response?.person) {
-        people[index] = { ...people[index], ...response.person };
+      // A refresh can splice the list while the PATCH is in flight: resolve
+      // the row by id again and leave the list alone when it is gone.
+      const currentIndex = people.findIndex((item) => item.id === person.id);
+      if (response?.person && currentIndex !== -1) {
+        people[currentIndex] = { ...people[currentIndex], ...response.person };
       }
       addToast(
         $t(nextHidden ? 'ui.people_hidden_success' : 'ui.people_unhidden_success', {
@@ -138,13 +190,20 @@
           : null
       );
     } catch {
-      people[index] = previous;
+      // Same race as the success path: re-resolve by id so the rollback
+      // cannot land on a different person and, if the row is gone, skip it.
+      const currentIndex = people.findIndex((item) => item.id === person.id);
+      if (currentIndex !== -1) {
+        people[currentIndex] = { ...people[currentIndex], hidden: previousHidden };
+      }
       addToast(
         $t('notifications.error', { default: 'Error' }),
         $t('ui.people_hide_failed', { default: 'Could not update this person' }),
         'error',
         3000
       );
+    } finally {
+      setHiddenBusy(person.id, false);
     }
   }
 
@@ -351,7 +410,18 @@
   onclose={handleDialogClose}
   oncancel={onDialogCancel}
   onclick={(event) => {
-    if (event.target === dialogEl) closeRename();
+    // Clicks inside the dialog's own padding also target the <dialog> element,
+    // so only treat coordinates outside its box as a backdrop dismissal.
+    if (event.target !== dialogEl) return;
+
+    const bounds = dialogEl.getBoundingClientRect();
+    const outside =
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom;
+
+    if (outside) closeRename();
   }}
 >
   {#if editingPerson}

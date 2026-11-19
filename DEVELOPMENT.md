@@ -110,7 +110,7 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 - **Thumbnails**: `{DATA_PATH}/cache/thumbnails/`
 - **Transcode cache**: `{DATA_PATH}/cache/transcoded/`
 - **AI Models**: `{DATA_PATH}/models/` (CLIP) and `{DATA_PATH}/models/face/` (SCRFD + ArcFace)
-- **Face crops**: `{DATA_PATH}/cache/faces/`
+- **Face crops**: `{DATA_PATH}/cache/faces/{file_hash}/{face_id}.jpg` (one directory per photo)
 
 ### AI models
 

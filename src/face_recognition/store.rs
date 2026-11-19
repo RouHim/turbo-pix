@@ -132,7 +132,8 @@ pub async fn old_faces(pool: &DbPool, photo_hash: &str) -> Result<Vec<OldFace>> 
 }
 
 /// Replaces a photo's faces and returns each new face id with its crop bytes.
-/// The caller writes the crops after the transaction commits.
+/// The index state is cleared in the same transaction; the caller writes the
+/// crops and then calls [`mark_indexed`], so an interrupted run is retried.
 pub async fn write_photo_faces(
     pool: &DbPool,
     photo: &Photo,
@@ -140,6 +141,14 @@ pub async fn write_photo_faces(
     old: &[OldFace],
 ) -> Result<Vec<(i64, Vec<u8>)>> {
     let mut tx = pool.begin().await?;
+
+    // `pending_photos` trusts this row, so it is removed here and only
+    // rewritten by `mark_indexed` once the crops are on disk. A run that
+    // dies before then leaves the photo pending for the next scan.
+    sqlx::query("DELETE FROM face_index_state WHERE photo_hash = ?")
+        .bind(&photo.hash_sha256)
+        .execute(&mut *tx)
+        .await?;
 
     // sqlite-vec rows are not covered by the FK cascade; remove them before
     // the face rows so the mapping cascade cannot strand a vector.
@@ -199,6 +208,13 @@ pub async fn write_photo_faces(
         crops.push((face_id, face.crop.clone()));
     }
 
+    tx.commit().await?;
+    Ok(crops)
+}
+
+/// Records a completed face index. Called only after every crop file is on
+/// disk, so a crash mid-write leaves the photo pending for the next scan.
+pub async fn mark_indexed(pool: &DbPool, photo: &Photo) -> Result<()> {
     sqlx::query(
         "INSERT INTO face_index_state
             (photo_hash, model_version, file_size, file_modified, indexed_at)
@@ -213,11 +229,9 @@ pub async fn write_photo_faces(
     .bind(MODEL_VERSION)
     .bind(photo.file_size)
     .bind(photo.date_modified.to_rfc3339())
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
-
-    tx.commit().await?;
-    Ok(crops)
+    Ok(())
 }
 
 /// A face that moved only slightly (rotation, re-export) keeps its manual
@@ -321,27 +335,39 @@ pub async fn update_person(
     name: Option<Option<String>>,
     hidden: Option<bool>,
 ) -> Result<Option<PersonRow>> {
-    let existing =
-        sqlx::query_as::<_, PersonRow>("SELECT id, name, hidden FROM people WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
-    let Some(existing) = existing else {
-        return Ok(None);
-    };
+    let set_name = name.is_some();
+    let name = name.flatten();
+    let set_hidden = hidden.is_some();
+    let hidden = hidden.unwrap_or(false);
 
-    let name = name.unwrap_or(existing.name);
-    let hidden = hidden.unwrap_or(existing.hidden);
-    sqlx::query(
-        "UPDATE people SET name = ?, hidden = ?, updated_at = datetime('now') WHERE id = ?",
+    // One conditional UPDATE instead of a read-modify-write: two overlapping
+    // PATCHes (one `{name}`, one `{hidden}`) cannot restore each other's
+    // stale column. `rows_affected` doubles as the existence check.
+    let result = sqlx::query(
+        "UPDATE people SET
+            name = CASE WHEN ? THEN ? ELSE name END,
+            hidden = CASE WHEN ? THEN ? ELSE hidden END,
+            updated_at = datetime('now')
+         WHERE id = ?",
     )
+    .bind(set_name)
     .bind(&name)
+    .bind(set_hidden)
     .bind(hidden)
     .bind(id)
     .execute(pool)
     .await?;
 
-    Ok(Some(PersonRow { id, name, hidden }))
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+
+    let updated =
+        sqlx::query_as::<_, PersonRow>("SELECT id, name, hidden FROM people WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    Ok(Some(updated))
 }
 
 pub async fn face_crop_info(pool: &DbPool, face_id: i64) -> Result<Option<String>> {

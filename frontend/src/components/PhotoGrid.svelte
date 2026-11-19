@@ -79,14 +79,16 @@
     photoGridState.photos = [];
     photoGridState.currentPage = 1;
     photoGridState.hasMore = true;
-    // A query scoped to the albums list (deep link or Back/Forward to
-    // /albums?q=…) runs against the all-photos scope, like SearchBar-driven
-    // searches which route to view=all. Without this the same query degrades
-    // to a text search. Album detail (route.album) and filtered views
-    // (favorites/videos) keep the regular path.
-    const isAlbumsListSearch =
-      route.view === 'albums' && route.album == null && route.query != null;
-    if (route.view !== 'all' && !isAlbumsListSearch) {
+    // A query scoped to a list surface (deep link or Back/Forward to
+    // /albums?q=… or /people?q=…) runs against the all-photos scope, like
+    // SearchBar-driven searches which route to view=all. Without this the
+    // same query degrades to a text search. Album detail (route.album) and
+    // filtered views (favorites/videos) keep the regular path.
+    const isListSearch =
+      (route.view === 'albums' || (route.view === 'people' && route.person == null)) &&
+      route.album == null &&
+      route.query != null;
+    if (route.view !== 'all' && !isListSearch) {
       photoGridState.semanticSearchMode = false;
     } else if (route.query && !isPrefixQuery(route.query)) {
       // SearchBar routes every non-prefix query semantically, so a Back

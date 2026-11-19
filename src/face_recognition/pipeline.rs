@@ -16,7 +16,8 @@ use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
 use super::engine::FaceEngine;
 use super::model::MODEL_VERSION;
 use super::store::{
-    cleanup_orphan_vectors, count_pending, old_faces, pending_photos, write_photo_faces,
+    cleanup_orphan_vectors, clear_index_state, count_pending, old_faces, pending_photos,
+    write_photo_faces,
 };
 
 const FACE_BATCH_SIZE: u32 = 10;
@@ -96,10 +97,7 @@ impl FaceRecognitionEngine {
             if let Err(error) = tokio::fs::write(&path, crop).await {
                 // The row is already committed; drop its state so the next
                 // scan re-detects this photo and writes the crop again.
-                let _ = sqlx::query("DELETE FROM face_index_state WHERE photo_hash = ?")
-                    .bind(&photo.hash_sha256)
-                    .execute(&self.pool)
-                    .await;
+                let _ = clear_index_state(&self.pool, &photo.hash_sha256).await;
                 return Err(error)
                     .with_context(|| format!("Failed to write face crop {}", path.display()));
             }
@@ -116,10 +114,6 @@ impl FaceRecognition for FaceRecognitionEngine {
     }
 
     async fn index_pending(&self, status: &IndexingStatus) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-
         cleanup_orphan_vectors(&self.pool).await?;
         let total = count_pending(&self.pool, MODEL_VERSION).await?;
         status.phases.faces.set_total(total);

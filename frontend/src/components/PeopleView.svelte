@@ -128,7 +128,7 @@
   function personLabel(person) {
     return (
       person.name ||
-      $t('ui.person_number', {
+      $t('ui.people_person_number', {
         values: { number: person.id },
         default: 'Person {number}',
       })
@@ -375,6 +375,7 @@
     border-radius: var(--radius-lg);
     background: var(--surface-color);
     color: var(--text-primary);
+    box-shadow: var(--shadow-light);
     cursor: pointer;
     text-align: left;
     transition:
@@ -384,7 +385,7 @@
 
   .person-card:hover {
     transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-heavy);
   }
 
   .person-card:focus-visible {

@@ -106,6 +106,7 @@
       to_year: item.to_year,
       to_month: item.to_month,
       album: null,
+      person: null,
     });
     appState.sidebarOpen = false;
     // NOTE: photo is deliberately not touched — same as existing view navigation.

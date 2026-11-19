@@ -43,6 +43,7 @@ RUN mkdir "/empty_dir"
 # Copy source code
 COPY Cargo.toml ./
 COPY Cargo.lock ./
+COPY .cargo ./.cargo
 COPY build.rs ./
 COPY src ./src
 COPY migrations ./migrations

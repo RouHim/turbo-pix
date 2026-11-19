@@ -312,7 +312,10 @@ async fn initialize_services(
     info!("Database initialized successfully");
 
     // Initialize cache manager
-    let cache_manager = CacheManager::new(config.cache.thumbnail_cache_path.clone().into());
+    let cache_manager = CacheManager::with_face_cache(
+        config.cache.thumbnail_cache_path.clone().into(),
+        PathBuf::from(&config.data_path).join("cache").join("faces"),
+    );
 
     // Initialize thumbnail generator
     let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;

@@ -68,7 +68,10 @@
         ? null // search results title handled separately
         : route.person != null
           ? (people.find((person) => person.id === route.person)?.name ??
-            $t('ui.person_unnamed', { default: 'Person' }))
+            $t('ui.people_person_number', {
+              values: { number: route.person },
+              default: 'Person {number}',
+            }))
           : $t(titleKeys[route.view] || 'ui.all_photos', {
               default: titleFallbacks[route.view] || 'All Photos',
             })

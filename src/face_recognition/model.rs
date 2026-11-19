@@ -6,12 +6,19 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use ort::environment::Environment;
 use ort::session::Session;
 use sha2::{Digest, Sha256};
 
-pub const MODEL_VERSION: &str = "scrfd-2.5g_antelopev2-r100-v1";
+/// ONNX Runtime permits exactly one environment per process, so it is built
+/// once and reused: a failed session load must stay retryable without a
+/// process restart.
+static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
+
+pub const MODEL_VERSION: &str = "scrfd-2.5g_antelopev2-r100-v2";
 
 const DETECTOR_REPO: (&str, &str) = ("immich-app", "buffalo_m");
 const DETECTOR_REVISION: &str = "b95a1bc582b2e58f9555673bdcfd5e14e1fbdc61";
@@ -32,7 +39,8 @@ pub struct FaceModelPaths {
 pub struct FaceModels {
     pub detector: Session,
     pub recognizer: Session,
-    _environment: ort::environment::Environment,
+    /// Shared process-wide environment kept alive for both sessions.
+    _environment: Environment,
 }
 
 /// Resolves (and, on a cold cache, downloads) the two pinned model files.
@@ -94,10 +102,7 @@ pub fn download_face_models(data_path: &str) -> Result<()> {
 /// Loads both sessions. The caller decides whether this runs on a blocking
 /// thread; session creation and the first ORT initialization are synchronous.
 pub fn load_models(paths: &FaceModelPaths, threads: usize) -> Result<FaceModels> {
-    let environment = ort::init()
-        .with_name("turbo-pix-face")
-        .build()
-        .context("Failed to initialize ONNX Runtime")?;
+    let environment = shared_environment()?;
     let threads = threads.max(1);
 
     let detector = Session::builder(&environment)
@@ -119,6 +124,24 @@ pub fn load_models(paths: &FaceModelPaths, threads: usize) -> Result<FaceModels>
         recognizer,
         _environment: environment,
     })
+}
+
+/// Returns the single process-wide ORT environment, building it on first use.
+/// Session creation may fail and be retried; the environment itself is never
+/// rebuilt, because ORT rejects a second one.
+fn shared_environment() -> Result<Environment> {
+    if let Some(environment) = ENVIRONMENT.get() {
+        return Ok(environment.clone());
+    }
+
+    let built = ort::init()
+        .with_name("turbo-pix-face")
+        .build()
+        // A concurrent caller may have won the race; reuse its environment.
+        .or_else(|error| ENVIRONMENT.get().cloned().ok_or(error))
+        .context("Failed to initialize ONNX Runtime")?;
+
+    Ok(ENVIRONMENT.get_or_init(|| built).clone())
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
@@ -155,7 +178,7 @@ mod tests {
 
     #[test]
     fn model_version_is_stable() {
-        assert_eq!(MODEL_VERSION, "scrfd-2.5g_antelopev2-r100-v1");
+        assert_eq!(MODEL_VERSION, "scrfd-2.5g_antelopev2-r100-v2");
     }
 
     #[test]

@@ -16,8 +16,8 @@ use crate::thumbnail_types::{ThumbnailFormat, ThumbnailSize};
 use super::engine::FaceEngine;
 use super::model::MODEL_VERSION;
 use super::store::{
-    cleanup_orphan_vectors, clear_index_state, count_pending, old_faces, pending_photos,
-    write_photo_faces,
+    cleanup_orphan_vectors, clear_index_state, count_pending, mark_indexed, old_faces,
+    pending_photos, write_photo_faces,
 };
 
 const FACE_BATCH_SIZE: u32 = 10;
@@ -76,35 +76,55 @@ impl FaceRecognitionEngine {
         .context("Face inference task panicked")??;
 
         let old = old_faces(&self.pool, &photo.hash_sha256).await?;
-        // Old crops belong to face ids the reindex is about to replace. Clear
-        // them before writing the new ones; a failed write leaves the face
-        // rows but the next scan retries (the state row is removed below).
+        let crops = write_photo_faces(&self.pool, photo, &faces, &old).await?;
+        // Old crops belong to face ids the reindex replaced, so they are only
+        // removed once the transaction is committed: a crash before commit
+        // leaves rows, state and crops intact, while a crash after it leaves
+        // the state row dropped so the next scan rewrites the crops.
         self.cache_manager
             .clear_face_crops_for_hash(&photo.hash_sha256)
             .await
             .map_err(|error| anyhow::anyhow!("Failed to clear face crops: {error}"))?;
 
-        let crops = write_photo_faces(&self.pool, photo, &faces, &old).await?;
         for (face_id, crop) in crops {
             let path = self
                 .cache_manager
                 .face_crop_path(&photo.hash_sha256, face_id);
-            if let Some(parent) = path.parent() {
-                if let Err(error) = tokio::fs::create_dir_all(parent).await {
-                    error!("Failed to create face cache directory: {error}");
+            let written = async {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
                 }
+                write_crop_atomically(&path, &crop).await
             }
-            if let Err(error) = tokio::fs::write(&path, crop).await {
-                // The row is already committed; drop its state so the next
-                // scan re-detects this photo and writes the crop again.
+            .await;
+            if let Err(error) = written {
+                // `write_photo_faces` already dropped the state row; clear
+                // again so no stale row can mark this half-written photo
+                // indexed.
                 let _ = clear_index_state(&self.pool, &photo.hash_sha256).await;
                 return Err(error)
                     .with_context(|| format!("Failed to write face crop {}", path.display()));
             }
         }
 
+        mark_indexed(&self.pool, photo).await?;
         Ok(())
     }
+}
+
+/// Writes a crop next to its final name and renames it into place, so a
+/// crash or a full disk never leaves a truncated JPEG at the served path.
+async fn write_crop_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let temp = path.with_extension("jpg.tmp");
+    if let Err(error) = tokio::fs::write(&temp, bytes).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    if let Err(error) = tokio::fs::rename(&temp, path).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[async_trait]

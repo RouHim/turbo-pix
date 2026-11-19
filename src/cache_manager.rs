@@ -23,37 +23,35 @@ impl CacheManager {
         }
     }
 
-    /// Path of one face crop. The hash prefix is part of the filename, so
-    /// `clear_for_hash` can remove every crop a photo owns.
+    /// Path of one face crop: `{face_cache_dir}/{hash}/{face_id}.jpg`. Crops
+    /// are grouped per photo so `clear_face_crops_for_hash` deletes one
+    /// subdirectory instead of scanning the shared cache directory.
     pub fn face_crop_path(&self, hash: &str, face_id: i64) -> PathBuf {
-        self.face_cache_dir.join(format!("{hash}_{face_id}.jpg"))
+        self.face_cache_dir
+            .join(hash)
+            .join(format!("{face_id}.jpg"))
     }
 
     /// Removes every face crop for a photo, called when its face rows are
-    /// re-indexed or the photo is deleted.
+    /// re-indexed or the photo is deleted. One `remove_dir_all` per photo:
+    /// the directory is derived cache data, so no scan is needed.
     pub async fn clear_face_crops_for_hash(
         &self,
         hash: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let prefix = format!("{hash}_");
-        if let Ok(entries) = std::fs::read_dir(&self.face_cache_dir) {
-            for entry in entries.filter_map(|entry| entry.ok()) {
-                let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-                    continue;
-                };
-                if !name.starts_with(&prefix) {
-                    continue;
-                }
-                if let Err(error) = std::fs::remove_file(entry.path()) {
-                    error!(
-                        "Failed to remove face crop {}: {}",
-                        entry.path().display(),
-                        error
-                    );
-                }
+        let dir = self.face_cache_dir.join(hash);
+        match tokio::fs::remove_dir_all(&dir).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                error!(
+                    "Failed to remove face crop directory {}: {}",
+                    dir.display(),
+                    error
+                );
+                Err(error.into())
             }
         }
-        Ok(())
     }
 
     /// Removes all cached thumbnails for a photo hash.
@@ -210,5 +208,30 @@ mod tests {
         // No thumbnails exist — must not error
         manager.clear_for_hash("deadbeef").await.unwrap();
         manager.clear_for_hash("ab").await.unwrap(); // short-hash path
+    }
+
+    #[tokio::test]
+    async fn face_crops_live_in_a_per_photo_subdirectory() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CacheManager::new(temp.path().to_path_buf());
+        let faces = temp.path().join("faces");
+
+        let first = manager.face_crop_path("hash-one", 7);
+        let second = manager.face_crop_path("hash-one", 8);
+        let other = manager.face_crop_path("hash-two", 9);
+        assert_eq!(first, faces.join("hash-one").join("7.jpg"));
+
+        for path in [&first, &second, &other] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"crop").unwrap();
+        }
+
+        // WHEN the crops of one photo are cleared
+        manager.clear_face_crops_for_hash("hash-one").await.unwrap();
+        manager.clear_face_crops_for_hash("hash-one").await.unwrap(); // idempotent
+
+        // THEN only that photo's subdirectory is gone
+        assert!(!faces.join("hash-one").exists());
+        assert!(other.exists());
     }
 }

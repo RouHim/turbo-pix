@@ -117,7 +117,13 @@
     if (!ready) return;
     if (appState.faceRecognitionEnabled) return;
     if (route.view !== 'people') return;
-    replaceState({ view: 'all', person: null });
+    // A popstate-driven flush runs inside the router's guard window, where
+    // replaceState only rewrites the route and skips the history write; one
+    // microtask later that guard has cleared, so re-check and retry then.
+    queueMicrotask(() => {
+      if (!ready || appState.faceRecognitionEnabled || route.view !== 'people') return;
+      replaceState({ view: 'all', person: null });
+    });
   });
 
   // FR-013: selection never leaks across surfaces. A different view OR a
@@ -217,10 +223,10 @@
         {/if}
       </h2>
       <div class="content-actions">
-        {#if route.view !== 'collages' && route.view !== 'housekeeping' && !(route.view === 'people' && route.person == null) && (route.view !== 'albums' || route.query != null)}
+        {#if route.view !== 'collages' && route.view !== 'housekeeping' && !(route.view === 'people' && route.person == null && route.query == null) && (route.view !== 'albums' || route.query != null)}
           <SortControls />
         {/if}
-        {#if route.view !== 'map' && !(route.view === 'people' && route.person == null)}
+        {#if route.view !== 'map' && !(route.view === 'people' && route.person == null && route.query == null)}
           <button
             type="button"
             class="select-mode-btn"
@@ -270,7 +276,7 @@
         <MapView />
       {:else if route.view === 'albums' && route.album == null && route.query == null}
         <AlbumsView />
-      {:else if route.view === 'people' && route.person == null}
+      {:else if route.view === 'people' && route.person == null && route.query == null}
         <PeopleView />
       {:else}
         <PhotoGrid />

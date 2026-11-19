@@ -1126,6 +1126,25 @@ pub async fn rotate_photo(
             // Same staleness rule as thumbnails: the content version changed, so the
             // old hash's conversions can never be served again.
             crate::video_processor::clear_transcode_cache_for_hash(&old_hash);
+            // The face crops went with the thumbnail cache above, and their
+            // `face_index_state` row follows the hash re-key (ON UPDATE
+            // CASCADE) while `update_with_old_hash` restates the pre-rotation
+            // size/mtime. The fingerprint therefore still matches, so the face
+            // phase would never rebuild the crops and every crop URL for this
+            // photo would 404 until a full scan. Dropping the state makes the
+            // photo pending for the next face phase.
+            if let Err(e) = crate::face_recognition::store::clear_index_state(
+                &db_pool,
+                &updated_photo.hash_sha256,
+            )
+            .await
+            {
+                log::warn!(
+                    "Failed to clear face index state for {}: {}",
+                    updated_photo.hash_sha256,
+                    e
+                );
+            }
             // The row write is done; the reply carries the file's facts (the
             // index is keyed by path, which survives the hash re-key).
             Ok(warp::reply::json(&PhotoReply::from_row(updated_photo)))
@@ -2433,6 +2452,52 @@ mod tests {
         assert_eq!(body["taken_at"], "2024-05-01T10:00:00Z");
         assert_eq!(body["metadata"]["location"]["latitude"], 48.1);
         assert_eq!(body["metadata"]["location"]["longitude"], 11.5);
+    }
+
+    /// Rotation deletes the photo's face crops (they live in the thumbnail
+    /// cache) and the state row follows the hash re-key. Because the row
+    /// writer restates the pre-rotation size/mtime, a surviving state row
+    /// would still match the fingerprint and the face phase would never
+    /// rebuild the crops; the handler must drop it instead.
+    #[tokio::test]
+    async fn test_rotate_clears_face_index_state() {
+        let db_pool = create_in_memory_pool().await.expect("db");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (photo_hash, _temp_image) = setup_test_photo(&db_pool, &temp_dir).await;
+        let before_rotate = Photo::find_by_hash(&db_pool, &photo_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO face_index_state
+             (photo_hash, model_version, file_size, file_modified)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&photo_hash)
+        .bind(crate::face_recognition::model::MODEL_VERSION)
+        .bind(before_rotate.file_size)
+        .bind(before_rotate.date_modified.to_rfc3339())
+        .execute(&db_pool)
+        .await
+        .unwrap();
+        let routes = build_test_routes(db_pool.clone(), PathBuf::from("/tmp/turbo-pix-test-cache"));
+
+        let response = warp::test::request()
+            .method("POST")
+            .path(&format!("/api/photos/{}/rotate", photo_hash))
+            .json(&serde_json::json!({ "angle": 90 }))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_index_state")
+            .fetch_one(&db_pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "the rotated photo must be pending for the next face phase"
+        );
     }
 
     #[tokio::test]

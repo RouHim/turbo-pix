@@ -50,10 +50,18 @@ function parseUrl(url) {
 function normalizeState(state) {
   const view = validViews.includes(state.view) ? state.view : defaultState.view;
   const sort = validSorts.includes(state.sort) ? state.sort : defaultState.sort;
-  const dateFilter = normalizeDateFilter(state);
+  // The People surface never renders a date control, so it must not inherit
+  // an invisible ?year=/?month= scope from a deep link.
+  const dateFilter =
+    view === 'people'
+      ? { year: null, month: null, to_year: null, to_month: null }
+      : normalizeDateFilter(state);
   // A person filter only exists on the People surface; a stray ?person= on
   // another view cannot silently scope that view's grid.
   const person = view === 'people' ? parsePositiveInteger(state.person) : null;
+  // The People surface has no album control, so it must not inherit an
+  // invisible ?album= scope from a deep link either.
+  const album = view === 'people' ? null : parsePositiveInteger(state.album);
 
   return {
     view,
@@ -64,7 +72,7 @@ function normalizeState(state) {
     month: dateFilter.month,
     to_year: dateFilter.to_year,
     to_month: dateFilter.to_month,
-    album: parsePositiveInteger(state.album),
+    album,
     person,
   };
 }

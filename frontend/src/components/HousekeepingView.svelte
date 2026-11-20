@@ -13,6 +13,7 @@
     pruneSelection,
   } from '../lib/state.svelte.js';
   import { handleError } from '../lib/utils.js';
+  import { withRange } from '../lib/selectionRange.js';
   import HousekeepingCard from './HousekeepingCard.svelte';
 
   let candidates = $state([]);
@@ -173,10 +174,28 @@
     }
   }
 
+  let rangeAnchor = null;
+  let rangeBase = null;
+
   function handleLongPress(photo) {
     if (selectionState.active) return;
+    rangeBase = { ...selectionState.selected };
+    rangeAnchor = photo.hash_sha256;
     enterSelectionMode();
     toggleSelected(photo.hash_sha256);
+  }
+
+  function handleRangeMove(key) {
+    if (!rangeAnchor) return;
+    const ordered = selectionState.orderedKeys;
+    if (!ordered.includes(key)) return;
+    selectionState.selected = withRange(rangeBase, ordered, rangeAnchor, key);
+    selectionState.anchorKey = key;
+  }
+
+  function handleRangeEnd() {
+    rangeAnchor = null;
+    rangeBase = null;
   }
 
   // Surface keys in display order for range selection and select-all-visible.
@@ -228,6 +247,8 @@
           selected={!!selectionState.selected[photo.hash_sha256]}
           onSelect={handleSelect}
           onLongPress={handleLongPress}
+          onRangeMove={handleRangeMove}
+          onRangeEnd={handleRangeEnd}
         />
       {/each}
     </div>

@@ -18,6 +18,7 @@
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { isPrefixQuery } from '../lib/query.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
+  import { withRange } from '../lib/selectionRange.js';
   import PhotoCard from './PhotoCard.svelte';
   import DateScrubber from './DateScrubber.svelte';
 
@@ -387,10 +388,28 @@
     }
   }
 
+  let rangeAnchor = null;
+  let rangeBase = null;
+
   function handleLongPress(photo) {
     if (selectionState.active) return;
+    rangeBase = { ...selectionState.selected };
+    rangeAnchor = photo.hash_sha256;
     enterSelectionMode();
     toggleSelected(photo.hash_sha256);
+  }
+
+  function handleRangeMove(key) {
+    if (!rangeAnchor) return;
+    const ordered = selectionState.orderedKeys;
+    if (!ordered.includes(key)) return;
+    selectionState.selected = withRange(rangeBase, ordered, rangeAnchor, key);
+    selectionState.anchorKey = key;
+  }
+
+  function handleRangeEnd() {
+    rangeAnchor = null;
+    rangeBase = null;
   }
 
   // Keep the surface's visible keys in display order for range selection and
@@ -638,6 +657,8 @@
         selected={!!selectionState.selected[photo.hash_sha256]}
         onSelect={handleSelect}
         onLongPress={handleLongPress}
+        onRangeMove={handleRangeMove}
+        onRangeEnd={handleRangeEnd}
       />
     {/each}
   {/if}

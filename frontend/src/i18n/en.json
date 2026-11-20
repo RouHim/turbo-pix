@@ -94,6 +94,8 @@
     "fit_to_screen": "Fit to Screen",
     "fullscreen": "Fullscreen",
     "view_details": "View Details",
+    "seek_back_10": "−10 s",
+    "seek_forward_10": "+10 s",
     "viewer_label": "Photo viewer",
     "add_to_favorites": "Add to Favorites",
     "remove_from_favorites": "Remove from Favorites",

@@ -277,6 +277,30 @@ export class SwipeableViewer {
       return true;
     }
 
+    this.beginHorizontalSlide(direction);
+    return true;
+  }
+
+  /**
+   * Starts a horizontal slide from rest. The sheet header uses this when the
+   * finger is on the details panel: the media still gets the same slide and
+   * the same parked-navigation guard as a photo-area swipe.
+   */
+  async slideTo(direction) {
+    if (!this.viewer.isOpen || this.isNavigating || this.isDragging || this.isAnimating) {
+      return false;
+    }
+    if (!this.canNavigate(direction)) return false;
+    if (!this.elements?.main || this.getViewportWidth() <= 0) return false;
+
+    this.isDragging = true;
+    this.toggleSwipeClass(true);
+    this.updateAdjacentSources();
+    this.beginHorizontalSlide(direction);
+    return true;
+  }
+
+  beginHorizontalSlide(direction) {
     const targetX = direction === 'next' ? -this.getViewportWidth() : this.getViewportWidth();
     // The decision is taken here, but the photo swap waits for the slide. Two
     // things can swallow that window: a teardown cancels the frame (see
@@ -296,8 +320,6 @@ export class SwipeableViewer {
       },
       SLIDE_MS
     );
-
-    return true;
   }
 
   handleTouchCancel() {

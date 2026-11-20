@@ -22,10 +22,16 @@
     rotationDisabled = false,
     rotationDisabledTitle = '',
     sidebarOpen = false,
+    chromeHidden = false,
   } = $props();
 </script>
 
-<div class="viewer-controls">
+<div
+  class="viewer-controls"
+  class:chrome-hidden={chromeHidden}
+  inert={chromeHidden}
+  aria-hidden={chromeHidden}
+>
   <div class="viewer-controls-inner">
     <button
       type="button"
@@ -172,6 +178,18 @@
     padding: var(--space-1) var(--space-2);
     z-index: 10;
     max-width: 88%;
+    transition: opacity var(--transition-medium);
+  }
+
+  .viewer-controls.chrome-hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .viewer-controls {
+      transition: none;
+    }
   }
 
   .viewer-controls :global(.accept-collage-btn) {

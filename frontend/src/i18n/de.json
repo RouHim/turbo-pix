@@ -94,6 +94,8 @@
     "fit_to_screen": "An Bildschirm anpassen",
     "fullscreen": "Vollbild",
     "view_details": "Details anzeigen",
+    "seek_back_10": "−10 s",
+    "seek_forward_10": "+10 s",
     "viewer_label": "Fotobetrachter",
     "add_to_favorites": "Zu Favoriten hinzufügen",
     "remove_from_favorites": "Von Favoriten entfernen",

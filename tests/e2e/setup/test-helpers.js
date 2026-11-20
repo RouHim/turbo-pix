@@ -394,6 +394,63 @@ export class TestHelpers {
   }
 
   /**
+   * Dispatch two time-stamped taps at the same point. `DoubleTapRecognizer`
+   * reads the event clock, not wall time, so this helper is deterministic
+   * instead of depending on a sleep between real taps.
+   */
+  static async performDoubleTapOn(page, selector, x, y) {
+    await page.waitForFunction(
+      (sel) => Boolean(document.querySelector(sel)?.__gestureManager),
+      selector,
+      {
+        timeout: 10000,
+      }
+    );
+    await page.evaluate(
+      ({ sel, x, y }) => {
+        const target = document.querySelector(sel);
+        if (!target) throw new Error(`Double-tap target not found: ${sel}`);
+
+        const createTouch = (id, at) =>
+          new Touch({
+            identifier: id,
+            target,
+            clientX: x,
+            clientY: y,
+            pageX: x,
+            pageY: y,
+            radiusX: 2,
+            radiusY: 2,
+            rotationAngle: 0,
+            force: 0.5,
+          });
+
+        const dispatch = (type, touches, changed, at) => {
+          const event = new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches,
+            changedTouches: changed,
+          });
+          Object.defineProperty(event, 'timeStamp', { value: at });
+          target.dispatchEvent(event);
+        };
+
+        const tap = (startAt) => {
+          const startTouch = createTouch(1, startAt);
+          dispatch('touchstart', [startTouch], [startTouch], startAt);
+          const endTouch = createTouch(1, startAt + 40);
+          dispatch('touchend', [], [endTouch], startAt + 40);
+        };
+
+        tap(1000);
+        tap(1120);
+      },
+      { sel: selector, x, y }
+    );
+  }
+
+  /**
    * Make the ORIGINAL attempt fail, so the planned rung is what runs. The
    * predicate is disjoint from the decision, stream and whole-file conversion
    * URLs on purpose: those keep reaching their own route mocks. The `decision`

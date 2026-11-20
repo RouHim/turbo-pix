@@ -15,6 +15,8 @@
     selectionMode = false,
     onSelect = null,
     onLongPress = null,
+    onRangeMove = null,
+    onRangeEnd = null,
   } = $props();
 
   let imageLoaded = $state(false);
@@ -52,10 +54,11 @@
 <div
   class="photo-card"
   data-photo-id={photo.hash_sha256}
+  data-select-key={photo.hash_sha256}
   role="button"
   tabindex="0"
   class:selected
-  use:longpress={{ onLongPress: () => onLongPress?.(photo) }}
+  use:longpress={{ onLongPress: () => onLongPress?.(photo), onRangeMove, onRangeEnd }}
   onclick={handleCardClick}
   onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {

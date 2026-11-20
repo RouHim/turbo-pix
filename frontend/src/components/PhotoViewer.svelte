@@ -36,6 +36,7 @@
   } from '../lib/gestures/panelSettle.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import { DetailsSheetGesture } from '../lib/viewer/DetailsSheetGesture.js';
+  import { seekDirectionForX, seekTarget } from '../lib/viewer/videoSeek.js';
   import Icon from './Icon.svelte';
   import AlbumPicker from './AlbumPicker.svelte';
   import ViewerControls from './ViewerControls.svelte';
@@ -59,6 +60,16 @@
   let isLoading = $state(false);
   let transcodeMessage = $state('');
   let transcodeError = $state(false);
+
+  // Mobile chrome and transient video-seek feedback. Plain timer fields:
+  // nothing renders from them, and they must never be proxied.
+  let chromeHidden = $state(false);
+  let seekFeedback = $state(null);
+  let chromeTapTimer = null;
+  let seekFeedbackTimer = null;
+  let lastDoubleTapAt = 0;
+  const CHROME_TAP_DELAY_MS = 260;
+  const VIDEO_CONTROLS_GUARD_PX = 48;
   // The encoder serving the current playback, when the server video-encodes it.
   // `null` means "not video-encoded" (direct play, remux, or a copied video
   // track), which shows no hint at all.
@@ -290,6 +301,45 @@
     animateZoomTo(targetZoom, x, y);
   }
 
+  function clearSeekFeedback() {
+    if (seekFeedbackTimer !== null) {
+      clearTimeout(seekFeedbackTimer);
+      seekFeedbackTimer = null;
+    }
+    seekFeedback = null;
+  }
+
+  function showSeekFeedback(direction) {
+    clearTimeout(seekFeedbackTimer);
+    seekFeedback = { direction, nonce: (seekFeedback?.nonce ?? 0) + 1 };
+    seekFeedbackTimer = setTimeout(() => {
+      seekFeedbackTimer = null;
+      seekFeedback = null;
+    }, 700);
+  }
+
+  function seekVideo(x, y) {
+    const video = videoEl;
+    if (!video || video.dataset.photoHash !== currentPhoto?.hash_sha256) return;
+    if (video.style.display === 'none') return;
+
+    const rect = video.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    // The native control strip owns the bottom edge; never seek from a tap there.
+    if (y > rect.bottom - VIDEO_CONTROLS_GUARD_PX) return;
+
+    const direction = seekDirectionForX(x, rect.left, rect.width);
+    if (!direction) return;
+
+    const target = seekTarget(video.currentTime, video.duration, direction);
+    try {
+      video.currentTime = target;
+    } catch {
+      return;
+    }
+    showSeekFeedback(direction);
+  }
+
   function animateZoomTo(targetZoom, centerX = null, centerY = null) {
     if (isZoomAnimating && zoomAnimFrame) {
       cancelAnimationFrame(zoomAnimFrame);
@@ -382,6 +432,7 @@
 
   // ── Gesture handlers ───────────────────────────────────────────────────────
   function onPinch(data) {
+    cancelChromeTap();
     const { scale } = data;
     if (!pinchStarted) {
       startPinchZoom();
@@ -400,8 +451,13 @@
   }
 
   function onDoubleTap(data) {
-    const { x, y } = data;
-    doubleTapZoom(x, y);
+    cancelChromeTap();
+    lastDoubleTapAt = performance.now();
+    if (isVideo) {
+      seekVideo(data.x, data.y);
+      return;
+    }
+    doubleTapZoom(data.x, data.y);
   }
 
   /**
@@ -430,6 +486,7 @@
   }
 
   function onPan(data) {
+    cancelChromeTap();
     if (isZoomed()) {
       handleZoomedPan(data);
       return;
@@ -507,6 +564,9 @@
 
     resetSheetDrag();
     showSidebar = false;
+    setChromeHidden(false);
+    clearSeekFeedback();
+    cancelChromeTap();
 
     if (updateUrlEnabled) {
       viewerPushedEntry = pushEntry;
@@ -570,6 +630,9 @@
 
     resetSheetDrag();
     showSidebar = false;
+    setChromeHidden(false);
+    clearSeekFeedback();
+    cancelChromeTap();
     swipeableViewer?.reset();
 
     if (videoEl) videoEl.pause();
@@ -608,6 +671,8 @@
     currentPhoto = photos[index];
     isPendingCollage = isCollagePhoto(currentPhoto) && isPendingCollagePhoto(currentPhoto);
     isAcceptingCollage = false;
+    clearSeekFeedback();
+    cancelChromeTap();
 
     if (updateUrl && updateUrlEnabled) {
       replaceState({ photo: currentPhoto.hash_sha256 });
@@ -2095,15 +2160,61 @@
     if (photo) open(photo, allPhotos || []);
   }
 
+  function setChromeHidden(hidden) {
+    if (chromeHidden === hidden) return;
+    if (hidden) {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active.closest('.viewer-controls, .viewer-close, .viewer-prev, .viewer-next')
+      ) {
+        viewerEl?.focus({ preventScroll: true });
+      }
+    }
+    chromeHidden = hidden;
+  }
+
+  function cancelChromeTap() {
+    if (chromeTapTimer === null) return;
+    clearTimeout(chromeTapTimer);
+    chromeTapTimer = null;
+  }
+
+  function scheduleChromeToggle() {
+    cancelChromeTap();
+    chromeTapTimer = setTimeout(() => {
+      chromeTapTimer = null;
+      setChromeHidden(!chromeHidden);
+    }, CHROME_TAP_DELAY_MS);
+  }
+
   function onMainClick(e) {
     // A completed drag emits a click on some platforms; it must not toggle
     // the sheet or dismiss the viewer a second time.
     if (performance.now() - gestureEndedAt < GESTURE_CLICK_SUPPRESS_MS) return;
+    if (chromeHidden) {
+      setChromeHidden(false);
+      return;
+    }
     if (showSidebar && isMobileLayout()) {
       setDetailsOpen(false);
       return;
     }
-    if (e.target === mainEl) close();
+    if (e.target === mainEl) {
+      close();
+      return;
+    }
+    // A single tap on the photo toggles chrome, but only after the double-tap
+    // zoom window has passed. The click that closes a double-tap must not
+    // schedule a second, competing toggle.
+    if (
+      e.target === imageEl &&
+      isMobileLayout() &&
+      !isVideo &&
+      performance.now() - lastDoubleTapAt >= 320
+    ) {
+      scheduleChromeToggle();
+    }
   }
 
   function stopPropagation(e) {
@@ -2267,6 +2378,7 @@
     },
     showNext,
     showPrevious,
+    slideTo: (direction) => swipeableViewer?.slideTo(direction) ?? false,
     close,
     beginSheetDrag,
     updateSheetDrag,
@@ -2308,6 +2420,9 @@
     <button
       type="button"
       class="viewer-close close-viewer"
+      class:chrome-hidden={chromeHidden}
+      inert={chromeHidden}
+      aria-hidden={chromeHidden}
       title={$t('ui.close', { default: 'Close' })}
       aria-label={$t('ui.close', { default: 'Close' })}
       onclick={() => close()}
@@ -2319,6 +2434,9 @@
       type="button"
       class="viewer-prev"
       class:hidden={!hasPrev}
+      class:chrome-hidden={chromeHidden}
+      inert={chromeHidden}
+      aria-hidden={chromeHidden}
       title={$t('ui.previous', { default: 'Previous' })}
       aria-label={$t('ui.previous', { default: 'Previous' })}
       onclick={showPrevious}
@@ -2330,6 +2448,9 @@
       type="button"
       class="viewer-next"
       class:hidden={!hasNext}
+      class:chrome-hidden={chromeHidden}
+      inert={chromeHidden}
+      aria-hidden={chromeHidden}
       title={$t('ui.next', { default: 'Next' })}
       aria-label={$t('ui.next', { default: 'Next' })}
       onclick={showNext}
@@ -2340,6 +2461,7 @@
     <ViewerControls
       {isVideo}
       {isFavorite}
+      {chromeHidden}
       {rotationDisabled}
       {rotationDisabledTitle}
       sidebarOpen={showSidebar}
@@ -2385,6 +2507,22 @@
       >
         <track kind="captions" srclang="en" label="Captions" />
       </video>
+      {#if seekFeedback}
+        {#key seekFeedback.nonce}
+          <div
+            class="viewer-seek-feedback"
+            class:back={seekFeedback.direction === 'back'}
+            class:forward={seekFeedback.direction === 'forward'}
+            role="status"
+            aria-live="polite"
+            data-testid="viewer-seek-feedback"
+          >
+            {seekFeedback.direction === 'back'
+              ? $t('ui.seek_back_10', { default: '−10 s' })
+              : $t('ui.seek_forward_10', { default: '+10 s' })}
+          </div>
+        {/key}
+      {/if}
       <div class="viewer-loading-indicator" class:show={isLoading}>
         <div class="spinner"></div>
       </div>
@@ -2579,6 +2717,21 @@
     background: var(--viewer-btn-hover-bg);
   }
 
+  .viewer-close,
+  .viewer-prev,
+  .viewer-next {
+    transition:
+      var(--transition-fast),
+      opacity var(--transition-medium);
+  }
+
+  .viewer-close.chrome-hidden,
+  .viewer-prev.chrome-hidden,
+  .viewer-next.chrome-hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
   .viewer-main {
     grid-area: main;
     display: flex;
@@ -2657,6 +2810,62 @@
 
   :global(.viewer-image.zoomed:active) {
     cursor: grabbing;
+  }
+
+  .viewer-seek-feedback {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 30;
+    padding: var(--space-3) var(--space-5);
+    border: 1px solid var(--glass-border, var(--divider-color));
+    border-radius: var(--radius-full);
+    background: var(--viewer-btn-bg);
+    backdrop-filter: blur(12px) saturate(1.5);
+    -webkit-backdrop-filter: blur(12px) saturate(1.5);
+    color: var(--viewer-btn-color);
+    font-size: var(--font-2xl);
+    font-weight: var(--font-bold);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    animation: seek-feedback-pop 650ms ease-out both;
+  }
+
+  .viewer-seek-feedback.back {
+    left: 25%;
+  }
+
+  .viewer-seek-feedback.forward {
+    left: 75%;
+  }
+
+  @keyframes seek-feedback-pop {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.85);
+    }
+    20% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+    .viewer-seek-feedback {
+      background: var(--surface-color);
+      color: var(--text-primary);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .viewer-seek-feedback {
+      animation: none;
+      opacity: 1;
+    }
   }
 
   .viewer-loading-indicator {

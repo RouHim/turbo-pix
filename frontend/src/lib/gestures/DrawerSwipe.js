@@ -125,6 +125,13 @@ export class DrawerSwipe {
 
   handleMove(event) {
     if (!this.mode) return;
+    // A long-press can enter selection mode while this touch is still down.
+    // From that point the drag belongs to the range selector, not the drawer.
+    if (!this.isEnabled()) {
+      if (this.dragging) this.handleCancel();
+      else this.reset();
+      return;
+    }
     if (event.touches.length !== 1) {
       if (this.dragging) this.handleCancel();
       else this.reset();

@@ -14,6 +14,7 @@
   } from '../lib/state.svelte.js';
   import { formatCollageDate, handleError } from '../lib/utils.js';
   import { longpress } from '../lib/longpress.js';
+  import { withRange } from '../lib/selectionRange.js';
 
   let collages = $state([]);
   let loading = $state(true);
@@ -166,10 +167,28 @@
     openViewer(collage);
   }
 
+  let rangeAnchor = null;
+  let rangeBase = null;
+
   function handleLongPress(collage) {
     if (selectionState.active) return;
+    rangeBase = { ...selectionState.selected };
+    rangeAnchor = String(collage.id);
     enterSelectionMode();
-    toggleSelected(String(collage.id));
+    toggleSelected(rangeAnchor);
+  }
+
+  function handleRangeMove(key) {
+    if (!rangeAnchor) return;
+    const ordered = selectionState.orderedKeys;
+    if (!ordered.includes(key)) return;
+    selectionState.selected = withRange(rangeBase, ordered, rangeAnchor, key);
+    selectionState.anchorKey = key;
+  }
+
+  function handleRangeEnd() {
+    rangeAnchor = null;
+    rangeBase = null;
   }
 
   // Surface keys in display order for range selection and select-all-visible.
@@ -252,8 +271,13 @@
         <div
           class="photo-card collage-card"
           data-photo-id={collage.id}
+          data-select-key={String(collage.id)}
           class:selected
-          use:longpress={{ onLongPress: () => handleLongPress(collage) }}
+          use:longpress={{
+            onLongPress: () => handleLongPress(collage),
+            onRangeMove: handleRangeMove,
+            onRangeEnd: handleRangeEnd,
+          }}
         >
           {#if selectionState.active}
             <div class="photo-card-selection-badge" aria-hidden="true">

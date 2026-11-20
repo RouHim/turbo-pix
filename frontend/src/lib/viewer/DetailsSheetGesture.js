@@ -1,4 +1,5 @@
 import { GESTURE_CLICK_SUPPRESS_MS } from '../gestures/panelSettle.js';
+import { sheetHeaderSwipeDirection } from './sheetSwipe.js';
 
 const AXIS_THRESHOLD = 10;
 const HANDLE_ZONE_PX = 56;
@@ -18,6 +19,7 @@ export class DetailsSheetGesture {
     this.axis = null;
     this.dragging = false;
     this.handleZone = false;
+    this.horizontalTriggered = false;
     this.start = null;
     this.last = null;
     this.velocityFrames = [];
@@ -68,7 +70,10 @@ export class DetailsSheetGesture {
 
     const [touch] = event.touches;
     const rect = this.element.getBoundingClientRect();
-    this.handleZone = touch.clientY - rect.top <= HANDLE_ZONE_PX;
+    // The visible title/header sits below the 56 px grab strip, but it is the
+    // natural horizontal handle. A press that starts on it owns both axes.
+    const headerTarget = Boolean(event.target?.closest?.('.photo-info-header'));
+    this.handleZone = headerTarget || touch.clientY - rect.top <= HANDLE_ZONE_PX;
     if (!this.handleZone && this.element.scrollTop > 0) return;
 
     const time = this.eventTime(event);
@@ -100,20 +105,35 @@ export class DetailsSheetGesture {
     if (!this.axis) {
       this.axis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
       if (this.axis === 'horizontal') {
-        this.start = null;
-        return;
+        // The body scrolls; only the handle/header owns horizontal navigation.
+        if (!this.handleZone) {
+          this.start = null;
+          return;
+        }
+      } else {
+        // Only a downward drag closes the sheet; upward drags scroll content.
+        if (deltaY <= 0) {
+          this.start = null;
+          return;
+        }
+        if (!this.handleZone && this.element.scrollTop > 0) {
+          this.start = null;
+          return;
+        }
+        this.dragging = true;
+        this.viewer.beginSheetDrag(true);
       }
-      // Only a downward drag closes the sheet; upward drags scroll content.
-      if (deltaY <= 0) {
-        this.start = null;
-        return;
-      }
-      if (!this.handleZone && this.element.scrollTop > 0) {
-        this.start = null;
-        return;
-      }
-      this.dragging = true;
-      this.viewer.beginSheetDrag(true);
+    }
+
+    if (this.axis === 'horizontal') {
+      if (!this.handleZone || this.horizontalTriggered) return;
+      const direction = sheetHeaderSwipeDirection(deltaX, deltaY);
+      if (!direction) return;
+      this.horizontalTriggered = true;
+      this.suppressClicksUntil = performance.now() + GESTURE_CLICK_SUPPRESS_MS;
+      event.preventDefault();
+      this.viewer.slideTo(direction);
+      return;
     }
 
     if (!this.dragging) return;
@@ -125,6 +145,9 @@ export class DetailsSheetGesture {
     if (this.dragging) {
       this.suppressClicksUntil = performance.now() + GESTURE_CLICK_SUPPRESS_MS;
       this.viewer.endSheetDrag(this.averageVelocity());
+    } else if (this.horizontalTriggered) {
+      this.suppressClicksUntil = performance.now() + GESTURE_CLICK_SUPPRESS_MS;
+      this.viewer.noteGestureEnd?.();
     }
     this.reset();
   }
@@ -133,6 +156,9 @@ export class DetailsSheetGesture {
     if (this.dragging) {
       this.suppressClicksUntil = performance.now() + GESTURE_CLICK_SUPPRESS_MS;
       this.viewer.cancelSheetDrag();
+    } else if (this.horizontalTriggered) {
+      this.suppressClicksUntil = performance.now() + GESTURE_CLICK_SUPPRESS_MS;
+      this.viewer.noteGestureEnd?.();
     }
     this.reset();
   }
@@ -146,6 +172,7 @@ export class DetailsSheetGesture {
     this.axis = null;
     this.dragging = false;
     this.handleZone = false;
+    this.horizontalTriggered = false;
     this.start = null;
     this.last = null;
     this.velocityFrames = [];

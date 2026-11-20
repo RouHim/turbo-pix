@@ -18,6 +18,28 @@ async function openDetails(page) {
   await expect(sheet(page)).toHaveClass(/show/);
 }
 
+async function dispatchTouchPointer(page, type, x, y) {
+  await page.evaluate(
+    ({ type, x, y }) => {
+      const target = type === 'pointerdown' ? document.elementFromPoint(x, y) : window;
+      if (!target) throw new Error(`No pointer target at ${x},${y}`);
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+          pointerId: 1,
+          isPrimary: true,
+          clientX: x,
+          clientY: y,
+          buttons: type === 'pointerup' ? 0 : 1,
+        })
+      );
+    },
+    { type, x, y }
+  );
+}
+
 test.describe('Mobile gestures', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -278,5 +300,153 @@ test.describe('Mobile gestures', () => {
     await drag(180, 480, 180, 640);
     await expect(sheet(page)).not.toHaveClass(/show/);
     await expect(viewer(page)).toHaveClass(/active/);
+  });
+
+  test('video double-tap seeks in the tapped third and announces the step', async ({ page }) => {
+    test.setTimeout(60000);
+    // The app nav is a drawer on mobile; use the desktop nav to reach Videos,
+    // then switch to the mobile viewport before opening the viewer.
+    await TestHelpers.setDesktopViewport(page);
+    await TestHelpers.navigateToView(page, 'videos');
+    await TestHelpers.waitForPhotosToLoad(page);
+    await TestHelpers.setMobileViewport(page);
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThan(0);
+
+    await cards[0].click();
+    await TestHelpers.verifyViewerOpen(page);
+
+    const video = page.locator('#viewer-video');
+    await expect(video).toBeVisible();
+    await expect
+      .poll(() => video.evaluate((element) => element.readyState), { timeout: 30000 })
+      .toBeGreaterThan(0);
+
+    const box = await video.boundingBox();
+    expect(box).not.toBeNull();
+    const y = box.y + box.height / 2;
+    const duration = await video.evaluate((element) => element.duration);
+    expect(Number.isFinite(duration) && duration > 0).toBe(true);
+    // The fixture set includes sub-second clips; start below half the duration
+    // so both directions have room and the assertion proves the direction.
+    const start = Math.max(0.01, Math.min(0.2, duration / 2));
+
+    await video.evaluate((element, position) => {
+      element.pause();
+      element.currentTime = position;
+    }, start);
+    await TestHelpers.performDoubleTapOn(page, '.viewer-main', box.x + box.width * 0.1, y);
+    await expect(page.getByTestId('viewer-seek-feedback')).toHaveText('−10 s');
+    await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(start);
+
+    await video.evaluate((element, position) => {
+      element.pause();
+      element.currentTime = position;
+    }, start);
+    await TestHelpers.performDoubleTapOn(page, '.viewer-main', box.x + box.width * 0.9, y);
+    await expect(page.getByTestId('viewer-seek-feedback')).toHaveText('+10 s');
+    await expect
+      .poll(() => video.evaluate((element) => element.currentTime))
+      .toBeGreaterThan(start);
+  });
+
+  test('tap on the photo toggles chrome, with the details sheet closing first', async ({
+    page,
+  }) => {
+    await openViewer(page);
+    const image = page.locator('#viewer-image');
+    await expect(image).toHaveClass(/loaded/);
+    const controls = page.locator('.viewer-controls');
+    const close = page.locator('.viewer-close');
+
+    await image.click();
+    await expect(controls).toHaveClass(/chrome-hidden/);
+    await expect(close).toHaveClass(/chrome-hidden/);
+    await expect(controls).toHaveAttribute('inert', '');
+
+    await image.click();
+    await expect(controls).not.toHaveClass(/chrome-hidden/);
+    await expect(close).not.toHaveClass(/chrome-hidden/);
+
+    await openDetails(page);
+    await image.click();
+    await expect(sheet(page)).not.toHaveClass(/show/);
+    await expect(controls).not.toHaveClass(/chrome-hidden/);
+
+    await image.click();
+    await expect(controls).toHaveClass(/chrome-hidden/);
+    await page.locator('.viewer-main').click({ position: { x: 5, y: 5 } });
+    await expect(controls).not.toHaveClass(/chrome-hidden/);
+    await expect(viewer(page)).toHaveClass(/active/);
+  });
+
+  test('long-press then drag selects a range and shrinks on the way back', async ({ page }) => {
+    const cards = page.locator('.photo-card');
+    await cards.nth(0).scrollIntoViewIfNeeded();
+    const first = await cards.nth(0).boundingBox();
+    const second = await cards.nth(1).boundingBox();
+    const third = await cards.nth(2).boundingBox();
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(third).not.toBeNull();
+
+    const center = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    const anchor = center(first);
+    const middle = center(second);
+    const target = center(third);
+
+    await dispatchTouchPointer(page, 'pointerdown', anchor.x, anchor.y);
+    await expect(page.locator('#selection-bar')).toBeVisible();
+
+    await dispatchTouchPointer(page, 'pointermove', target.x, target.y);
+    await expect(page.locator('#selection-bar')).toContainText('3 selected');
+    await expect(drawer(page)).toBeHidden();
+
+    await dispatchTouchPointer(page, 'pointermove', middle.x, middle.y);
+    await expect(page.locator('#selection-bar')).toContainText('2 selected');
+
+    await dispatchTouchPointer(page, 'pointerup', middle.x, middle.y);
+    await expect(page.locator('#selection-bar')).toContainText('2 selected');
+  });
+
+  test('horizontal swipe on the details header navigates and keeps the sheet open', async ({
+    page,
+  }) => {
+    await openViewer(page);
+    await openDetails(page);
+
+    const firstHash = await TestHelpers.getCurrentPhotoHash(page);
+    const firstTitle = await page.locator('#photo-title').textContent();
+    const header = page.locator('.photo-info-header');
+    let box = await header.boundingBox();
+    expect(box).not.toBeNull();
+
+    await TestHelpers.performSwipeOn(
+      page,
+      '.photo-info-header',
+      box.x + box.width - 20,
+      box.y + box.height / 2,
+      box.x + 20,
+      box.y + box.height / 2
+    );
+
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
+    await expect(sheet(page)).toHaveClass(/show/);
+    await expect.poll(() => page.locator('#photo-title').textContent()).not.toBe(firstTitle);
+
+    box = await header.boundingBox();
+    expect(box).not.toBeNull();
+    await TestHelpers.performSwipeOn(
+      page,
+      '.photo-info-header',
+      box.x + 20,
+      box.y + box.height / 2,
+      box.x + box.width - 20,
+      box.y + box.height / 2
+    );
+
+    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
+    await expect(sheet(page)).toHaveClass(/show/);
+    await expect.poll(() => page.locator('#photo-title').textContent()).toBe(firstTitle);
   });
 });

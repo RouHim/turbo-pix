@@ -31,12 +31,37 @@ every action keeps its visible control.
   open closes the sheet, not the viewer.
 - **Horizontal navigation:** swiping left/right while the sheet is open keeps
   the sheet open and updates its content.
+- **Video seek:** a double-tap in the left/right third seeks −10 s/+10 s and
+  preserves the play/pause state; the middle third is inert because the native
+  controls own it. A transient `−10 s`/`+10 s` status appears for 0.7 s. The
+  control strip's bottom 48 px never seeks.
+- **Chrome toggle:** a single tap on the photo (mobile, non-video) toggles the
+  close/prev/next buttons and the bottom control bar. Hidden chrome is
+  `inert`; any tap while hidden restores it and does not close the sheet or
+  viewer. With chrome visible, the existing order applies: sheet first, then
+  viewer. The details sheet remains visible and independently closable.
+- **Range selection:** after a long-press enters selection, dragging over
+  cards extends a linear, display-order range from the pressed card to the
+  card under the finger; moving back shrinks it. It works on the photo grid,
+  collages and housekeeping cards; the nearest scroll container auto-scrolls
+  at its 48 px edges. The release keeps the selection; the gesture suppresses
+  clicks and the drawer.
+- **Sheet header navigation:** a horizontal swipe on the visible
+  `.photo-info-header` (not the scrolling body) navigates to the
+  previous/next photo with the same slide as the media gesture, keeps the
+  sheet open, and updates its metadata. The 24 px axis lock prevents vertical
+  sheet drags from triggering it.
+- **Search panel:** the mobile search surface is a fixed header bar, not a
+  sheet; it deliberately has no swipe-down dismissal. The header search button
+  remains the toggle.
 - **A11y:** the closed sheet is `inert` + `aria-hidden`; closing it returns
-  focus to the metadata button when focus was inside it. Reduced motion
-  replaces spatial animation with an immediate state change; direct
-  manipulation still tracks the finger.
+  focus to the metadata button when focus was inside it. Hidden viewer chrome
+  is also `inert`; focus moves to the viewer if it was inside the chrome. The
+  seek feedback is a polite status. Reduced motion replaces spatial animation
+  with an immediate state change; direct manipulation still tracks the finger.
 - **Motion:** only transform/opacity; drawer 0.3 s, sheet 0.3 s, both on the
-  design-system easing. No new i18n strings, no new dependencies.
+  design-system easing. Only the two seek labels are new i18n keys; no new
+  dependencies.
 
 ## Swipe animation repair
 
@@ -76,3 +101,13 @@ The horizontal viewer slide must have exactly one transform owner:
 8. `npm run lint`, `npm run format:check`, `npm run test:unit`,
    `npm run test:i18n`, `cargo fmt --check`, `cargo clippy --all-targets -- -D
 warnings`, the new E2E specs and the existing viewer/sidebar E2E specs pass.
+9. A video double-tap in the left/right third seeks and announces the matching
+   step; a middle-third double-tap does not seek.
+10. Tapping the photo hides chrome; tapping again restores it. While chrome is
+    hidden, any tap restores it before the sheet or viewer can close.
+11. Long-press+drag selects a shrinking range on the photo, collage and
+    housekeeping surfaces; the drawer and the post-release click are
+    suppressed.
+12. A horizontal swipe on the details header navigates and keeps the sheet
+    open.
+13. The mobile search bar does not claim a vertical dismiss gesture.

@@ -1,3 +1,15 @@
+# [2.55.0](https://github.com/RouHim/turbo-pix/compare/2.54.0...2.55.0) (2026-11-20)
+
+### Bug Fixes
+
+* **gestures:** harden mobile gesture review findings ([b87077a](https://github.com/RouHim/turbo-pix/commit/b87077ad877a7f2e328b614cb70701492af0ab6c))
+* **ui:** harden mobile gestures after design review ([b55fd49](https://github.com/RouHim/turbo-pix/commit/b55fd493d1ec678f084f9e0a5917d749cd3dd76d))
+
+### Features
+
+* **gestures:** add finger-tracked mobile drawer and details sheet ([7d4f225](https://github.com/RouHim/turbo-pix/commit/7d4f225b6f1255db2ea44a2c459d6071678e1b4e))
+* **gestures:** add mobile seek, chrome, range, and header gestures ([6bd2f9a](https://github.com/RouHim/turbo-pix/commit/6bd2f9abbfd203b94b08152a467875eb22f696fa))
+
 # [2.54.0](https://github.com/RouHim/turbo-pix/compare/2.53.0...2.54.0) (2026-11-19)
 
 ### Bug Fixes

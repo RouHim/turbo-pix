@@ -102,16 +102,6 @@
     </button>
     <button
       type="button"
-      class="zoom-btn metadata-btn"
-      title={$t('ui.view_details', { default: 'View Details' })}
-      aria-expanded={sidebarOpen}
-      aria-controls="viewer-sidebar"
-      onclick={onMetadata}
-    >
-      <Icon name="info" width={18} height={18} />
-    </button>
-    <button
-      type="button"
       class="zoom-btn rotate-left-btn"
       class:btn-disabled={rotationDisabled}
       title={rotationDisabled
@@ -155,6 +145,22 @@
       <Icon name="trash-2" width={18} height={18} />
     </button>
   </div>
+  <!-- Details is the entry point for the new sheet gesture and must not be
+       hidden in the strip's horizontal overflow at 390 px. -->
+  <div class="viewer-controls-pinned">
+    <button
+      type="button"
+      class="zoom-btn metadata-btn"
+      class:active={sidebarOpen}
+      title={$t('ui.view_details', { default: 'View Details' })}
+      aria-label={$t('ui.view_details', { default: 'View Details' })}
+      aria-expanded={sidebarOpen}
+      aria-controls="viewer-sidebar"
+      onclick={onMetadata}
+    >
+      <Icon name="info" width={18} height={18} />
+    </button>
+  </div>
 </div>
 
 <style>
@@ -178,12 +184,26 @@
     padding: var(--space-1) var(--space-2);
     z-index: 10;
     max-width: 88%;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     transition: opacity var(--transition-medium);
   }
 
   .viewer-controls.chrome-hidden {
     opacity: 0;
     pointer-events: none;
+    transition-duration: 0.15s;
+  }
+
+  .viewer-controls-pinned {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    padding-left: var(--space-2);
+    border-left: 1px solid var(--glass-border, var(--divider-color));
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -199,23 +219,10 @@
     background: var(--color-success-hover, oklch(58% 0.18 155deg));
   }
 
-  @media (width <= 768px) {
-    .viewer-controls-inner {
-      gap: var(--space-3);
-    }
-
-    .zoom-btn {
-      width: var(--button-size);
-      height: var(--button-size);
-    }
-
-    .fullscreen-btn {
-      display: none;
-    }
-  }
-
   .viewer-controls-inner {
     display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: var(--space-2);
     /* Vertical padding is the hover-scale headroom (see .viewer-controls). */
     padding: var(--space-1) 0;
@@ -293,6 +300,21 @@
   .zoom-btn.btn-disabled:hover {
     transform: none;
     background: var(--viewer-btn-bg);
+  }
+
+  @media (width <= 768px) {
+    .viewer-controls-inner {
+      gap: var(--space-3);
+    }
+
+    .zoom-btn {
+      width: var(--button-size);
+      height: var(--button-size);
+    }
+
+    .fullscreen-btn {
+      display: none;
+    }
   }
 
   /* Solid-surface fallbacks: scoped so they outrank the base rules when

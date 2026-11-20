@@ -37,7 +37,7 @@
   } from '../lib/gestures/panelSettle.js';
   import { SwipeableViewer } from '../lib/viewer/SwipeableViewer.js';
   import { DetailsSheetGesture } from '../lib/viewer/DetailsSheetGesture.js';
-  import { seekDirectionForX, seekTarget } from '../lib/viewer/videoSeek.js';
+  import { isSecondTap, seekDirectionForX, seekTarget } from '../lib/viewer/videoSeek.js';
   import Icon from './Icon.svelte';
   import AlbumPicker from './AlbumPicker.svelte';
   import ViewerControls from './ViewerControls.svelte';
@@ -2275,6 +2275,41 @@
     };
   });
 
+  // A native <video controls> implements its own edge double-tap seek. The
+  // app's ±10 s gesture would then run on top of the browser's seek (and the
+  // middle third, which must stay inert, would still seek). Cancel only the
+  // second touchstart: the first tap keeps the native single-tap behavior,
+  // while the UA never receives the double-tap sequence. The bottom strip is
+  // left alone so the native controls keep working.
+  $effect(() => {
+    const video = videoEl;
+    if (!video) return;
+    let lastTap = null;
+
+    function onTouchStart(event) {
+      if (event.touches.length !== 1) {
+        lastTap = null;
+        return;
+      }
+      const touch = event.touches[0];
+      const rect = video.getBoundingClientRect();
+      if (touch.clientY > rect.bottom - VIDEO_CONTROLS_GUARD_PX) {
+        lastTap = null;
+        return;
+      }
+      const time = event.timeStamp > 0 ? event.timeStamp : Date.now();
+      if (isSecondTap(lastTap, touch.clientX, touch.clientY, time)) {
+        if (event.cancelable) event.preventDefault();
+        lastTap = null;
+        return;
+      }
+      lastTap = { x: touch.clientX, y: touch.clientY, time };
+    }
+
+    video.addEventListener('touchstart', onTouchStart, { passive: false, capture: true });
+    return () => video.removeEventListener('touchstart', onTouchStart, { capture: true });
+  });
+
   // Document-level mouse events for drag (matches original ViewerControls)
   $effect(() => {
     function _onDrag(e) {
@@ -2493,6 +2528,7 @@
     <div
       class="viewer-main"
       class:video-mode={isVideo}
+      class:sheet-open={showSidebar}
       role="presentation"
       bind:this={mainEl}
       onclick={onMainClick}
@@ -2559,6 +2595,7 @@
       inert={!showSidebar}
       aria-hidden={!showSidebar}
     >
+      <div class="sheet-handle" aria-hidden="true"></div>
       <ViewerMetadata
         photo={currentPhoto}
         onEditMetadata={openMetadataEdit}
@@ -2766,6 +2803,24 @@
     );
   }
 
+  /* With the 65vh mobile sheet open, keep the media in the visible band above
+     it. The header swipe then has a visible result instead of sliding a photo
+     that is entirely behind the panel. */
+  @media (max-width: 768px) {
+    .viewer-main.sheet-open {
+      padding-bottom: calc(65vh + var(--space-6));
+    }
+
+    .viewer-main.sheet-open :global(.viewer-adjacent) {
+      bottom: calc(65vh + var(--space-6));
+      height: auto;
+    }
+  }
+
+  .sheet-handle {
+    display: none;
+  }
+
   :global(.viewer-adjacent) {
     position: absolute;
     inset: var(--space-6);
@@ -2829,7 +2884,7 @@
     padding: var(--space-3) var(--space-5);
     border: 1px solid var(--glass-border, var(--divider-color));
     border-radius: var(--radius-full);
-    background: var(--viewer-btn-bg);
+    background: var(--viewer-btn-hover-bg);
     backdrop-filter: blur(12px) saturate(1.5);
     -webkit-backdrop-filter: blur(12px) saturate(1.5);
     color: var(--viewer-btn-color);
@@ -2996,6 +3051,20 @@
       padding: var(--space-6) var(--space-5) var(--space-8) var(--space-5);
       box-shadow: 0 -4px 24px oklch(0% 0 0deg / 20%);
       touch-action: pan-y;
+    }
+
+    .sheet-handle {
+      display: block;
+      position: sticky;
+      top: var(--space-3);
+      z-index: 2;
+      flex: 0 0 auto;
+      width: 40px;
+      height: 4px;
+      margin: calc(var(--space-3) * -1) auto var(--space-2);
+      border-radius: var(--radius-full);
+      background: var(--text-muted);
+      pointer-events: none;
     }
 
     /* The finger owns the transform while dragging; the closed sheet's base

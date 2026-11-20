@@ -1053,7 +1053,7 @@
   font-weight: var(--font-bold);
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  color: var(--primary-color);
+  color: var(--primary-ink);
   margin: 0 0 var(--space-4);
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--divider-color);
@@ -1524,6 +1524,7 @@
     /* The mobile bar sits one step higher (was a nested override on
        .viewer-controls); the media box reserve follows this token. */
     --viewer-controls-offset: var(--space-8);
+    --viewer-controls-height: calc(var(--button-size) + (var(--space-2) * 2) + 2px);
   }
 
   .viewer-sidebar {
@@ -1545,19 +1546,6 @@
     border-top: 1px solid var(--glass-border, var(--divider-color));
     backdrop-filter: blur(16px) saturate(1.5);
     -webkit-backdrop-filter: blur(16px) saturate(1.5);
-
-    &::before {
-      content: '';
-      position: absolute;
-      top: var(--space-3);
-      left: 50%;
-      transform: translateX(-50%);
-      width: 40px;
-      height: 4px;
-      background: var(--divider-color);
-      border-radius: 2px;
-      opacity: 0.6;
-    }
 
     &.show {
       transform: translateY(0);

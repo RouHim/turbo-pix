@@ -209,6 +209,7 @@
     class="main-content"
     data-testid="main-content"
     class:map-mode={route.view === 'map'}
+    class:selection-mode={selectionState.active || selectionState.busy}
     class:sidebar-collapsed={appState.sidebarCollapsed}
   >
     <div class="content-header">
@@ -343,6 +344,14 @@
     /* Only the header reserves the rail's edge; the grid floats beneath the
        glass. Set by DateScrubber while the rail shows. */
     padding-right: var(--date-rail-inset, 0px);
+  }
+
+  @media (max-width: 640px) {
+    /* The wrapped selection panel is ~216 px tall at 390 px; reserve its band
+       so the last row can still scroll clear of it. */
+    .main-content.selection-mode {
+      padding-bottom: calc(232px + var(--space-4));
+    }
   }
 
   /* The Map view fills the shell instead of scrolling: the map owns the

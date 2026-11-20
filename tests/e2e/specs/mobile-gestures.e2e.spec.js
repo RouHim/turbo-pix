@@ -14,6 +14,9 @@ async function openViewer(page) {
 }
 
 async function openDetails(page) {
+  // The details button is the only visible entry point on a 390 px phone;
+  // it must sit outside the control strip's horizontal overflow.
+  await expect(page.locator('.metadata-btn')).toBeInViewport();
   await page.locator('.metadata-btn').click();
   await expect(sheet(page)).toHaveClass(/show/);
   // CDP hit-testing uses the animated position; wait for the 0.3 s sheet
@@ -243,6 +246,15 @@ test.describe('Mobile gestures', () => {
 
     const firstHash = await TestHelpers.getCurrentPhotoHash(page);
     const titleBefore = await page.locator('#photo-title').textContent();
+    const image = page.locator('#viewer-image');
+    await expect(image).toHaveClass(/loaded/, { timeout: 20000 });
+    const imageBox = await image.boundingBox();
+    const sheetBox = await sheet(page).boundingBox();
+    expect(imageBox).not.toBeNull();
+    expect(sheetBox).not.toBeNull();
+    // The sheet may not hide the media it describes: otherwise the header
+    // swipe would move a photo that is entirely behind the panel.
+    expect(imageBox.y + imageBox.height).toBeLessThanOrEqual(sheetBox.y + 1);
 
     // Start above the 65vh sheet so the swipe really is on the photo surface.
     await TestHelpers.swipeLeft(page, { startY: 120 });
@@ -345,10 +357,30 @@ test.describe('Mobile gestures', () => {
     expect(box).not.toBeNull();
     const y = box.y + box.height / 2;
     const duration = await video.evaluate((element) => element.duration);
-    expect(Number.isFinite(duration) && duration > 0).toBe(true);
-    // The fixture set includes sub-second clips; start below half the duration
-    // so both directions have room and the assertion proves the direction.
-    const start = Math.max(0.01, Math.min(0.2, duration / 2));
+    expect(Number.isFinite(duration) && duration > 15).toBe(true);
+    // One native + one app seek would land at 0 s / 20 s. The bounds below
+    // fail on that double application while allowing decoder seek jitter.
+    const forwardStart = 5;
+    const backStart = 15;
+
+    const setVideoTime = async (position) => {
+      await video.evaluate((element, value) => {
+        element.pause();
+        element.currentTime = value;
+      }, position);
+      await expect
+        .poll(() => video.evaluate((element) => element.currentTime))
+        .toBeGreaterThan(position - 0.5);
+      await expect
+        .poll(() => video.evaluate((element) => element.currentTime))
+        .toBeLessThan(position + 0.5);
+      // The property updates before the decoder has settled the seek; a tap
+      // dispatched in that window can still hit the UA's own double-tap state.
+      await page.waitForTimeout(200);
+      await page.evaluate(() => {
+        window.__seekFeedback = [];
+      });
+    };
 
     // The feedback is deliberately transient; record it as it enters the DOM
     // instead of racing the removal timer with a locator.
@@ -366,23 +398,32 @@ test.describe('Mobile gestures', () => {
 
     const driver = await createTouchDriver(page);
     try {
-      await video.evaluate((element, position) => {
-        element.pause();
-        element.currentTime = position;
-      }, start);
+      await setVideoTime(backStart);
       await driver.doubleTap(box.x + box.width * 0.1, y);
       await expect.poll(() => page.evaluate(() => window.__seekFeedback)).toContain('−10 s');
-      await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(start);
+      await expect
+        .poll(() => video.evaluate((element) => element.currentTime))
+        .toBeGreaterThan(3.5);
+      await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(6.5);
 
-      await video.evaluate((element, position) => {
-        element.pause();
-        element.currentTime = position;
-      }, start);
+      await setVideoTime(forwardStart);
       await driver.doubleTap(box.x + box.width * 0.9, y);
       await expect.poll(() => page.evaluate(() => window.__seekFeedback)).toContain('+10 s');
       await expect
         .poll(() => video.evaluate((element) => element.currentTime))
-        .toBeGreaterThan(start);
+        .toBeGreaterThan(13.5);
+      await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(16.5);
+
+      // The middle third must be inert for the app AND the UA: a native
+      // double-tap seek there would move the clip without app feedback.
+      await setVideoTime(forwardStart);
+      await driver.doubleTap(box.x + box.width * 0.5, y);
+      await page.waitForTimeout(450);
+      await expect
+        .poll(() => video.evaluate((element) => element.currentTime))
+        .toBeGreaterThan(4.5);
+      await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(5.5);
+      expect(await page.evaluate(() => window.__seekFeedback)).toEqual([]);
     } finally {
       await driver.dispose();
     }

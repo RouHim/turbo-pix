@@ -44,16 +44,16 @@
         : route.view === 'housekeeping'
           ? [
               { id: 'keep', labelKey: 'ui.keep_photo', icon: 'check' },
-              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
               { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
               { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
               { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
             ]
           : [
-              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
               { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
               { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
               { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
             ]
   );
 
@@ -609,9 +609,18 @@
       left: var(--space-2);
       right: var(--space-2);
       transform: none;
+      max-width: none;
       flex-wrap: wrap;
       justify-content: center;
       overflow-x: visible;
+      /* A long-press range drag must continue over the panel's glass; only
+         its controls capture the finger. The background stays hit-testable
+         for the cards underneath. */
+      pointer-events: none;
+    }
+
+    #selection-bar > * {
+      pointer-events: auto;
     }
 
     #selection-bar .btn {

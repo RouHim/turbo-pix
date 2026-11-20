@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  DOUBLE_TAP_DISTANCE_PX,
   VIDEO_SEEK_CENTER_RATIO,
   VIDEO_SEEK_STEP_SECONDS,
+  isSecondTap,
   seekDirectionForX,
   seekTarget,
 } from '../frontend/src/lib/viewer/videoSeek.js';
@@ -48,4 +50,23 @@ test('GIVEN the middle third of the video WHEN seeking THEN the gesture is a no-
 
 test('GIVEN a zero-width surface WHEN seeking THEN no direction is claimed', () => {
   assert.equal(seekDirectionForX(10, 0, 0), null);
+});
+
+test('GIVEN a nearby tap inside the delay WHEN classifying THEN it is the second tap', () => {
+  assert.equal(isSecondTap({ x: 100, y: 100, time: 1000 }, 108, 104, 1200), true);
+});
+
+test('GIVEN a tap outside the delay WHEN classifying THEN it is not the second tap', () => {
+  assert.equal(isSecondTap({ x: 100, y: 100, time: 1000 }, 100, 100, 1300), false);
+});
+
+test('GIVEN a tap beyond the distance WHEN classifying THEN it is not the second tap', () => {
+  assert.equal(
+    isSecondTap({ x: 100, y: 100, time: 1000 }, 100 + DOUBLE_TAP_DISTANCE_PX, 100, 1100),
+    false
+  );
+});
+
+test('GIVEN no previous tap WHEN classifying THEN there is no second tap', () => {
+  assert.equal(isSecondTap(null, 100, 100, 1100), false);
 });

@@ -186,7 +186,7 @@
       <h4 class="meta-section-title">
         {$t('ui.metadata.file_information', { default: 'File Information' })}
       </h4>
-      <div class="meta-item">
+      <div class="meta-item meta-item-path">
         <span class="meta-label">{$t('ui.metadata.file_path', { default: 'File path:' })}</span
         ><span
           id="meta-filename"
@@ -212,12 +212,6 @@
         <span class="meta-label">{$t('ui.metadata.type', { default: 'Type:' })}</span><span
           id="meta-type"
           style="opacity: {fieldOpacity(photo?.mime_type)}">{setField(photo?.mime_type)}</span
-        >
-      </div>
-      <div class="meta-item">
-        <span class="meta-label">{$t('ui.metadata.date_taken', { default: 'Date Taken:' })}</span
-        ><span id="meta-date-taken" style="opacity: {fieldOpacity(photo?.taken_at)}"
-          >{setField(photo?.taken_at ? formatDate(photo.taken_at) : null)}</span
         >
       </div>
       <div class="meta-item">
@@ -441,9 +435,17 @@
     overflow-wrap: anywhere;
   }
 
+  @media (width <= 768px) {
+    /* The visible sticky handle replaces the old invisible 89 px top band;
+       the header stays inside the 56 px grab zone without floating. */
+    .photo-info > :global(div:first-child) {
+      margin-top: 0;
+    }
+  }
+
   @media (width <= 480px) {
     .photo-info h3 {
-      font-size: var(--font-xl);
+      font-size: var(--font-2xl);
       margin-bottom: var(--space-4);
     }
   }
@@ -487,7 +489,7 @@
     font-weight: var(--font-bold);
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    color: var(--primary-color);
+    color: var(--primary-ink);
     margin: 0 0 var(--space-4);
     padding-bottom: var(--space-3);
     border-bottom: 1px solid var(--divider-color);
@@ -566,6 +568,8 @@
     border: none;
     cursor: pointer;
     padding: 8px;
+    min-width: var(--button-size);
+    min-height: var(--button-size);
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     transition: var(--transition-fast);
@@ -587,6 +591,25 @@
   .btn-icon:disabled:hover {
     background: none;
     color: var(--text-muted);
+  }
+
+  @media (width <= 480px) {
+    .photo-meta-full .meta-item-path {
+      display: block;
+    }
+
+    .photo-meta-full .meta-item-path :global(.meta-label) {
+      display: block;
+      min-width: 0;
+      margin-bottom: var(--space-1);
+    }
+
+    .photo-meta-full .meta-item-path :global(span) {
+      display: block;
+      min-width: 0;
+      text-align: left;
+      overflow-wrap: anywhere;
+    }
   }
 
   /* The hover surface for a disabled control. `inline-flex` keeps the wrapper's

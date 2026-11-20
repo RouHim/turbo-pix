@@ -21,6 +21,29 @@ export function seekDirectionForX(x, left, width) {
   return null;
 }
 
+/** Distance within which two taps count as the same double tap. */
+export const DOUBLE_TAP_DISTANCE_PX = 20;
+
+/**
+ * Native media controls implement their own edge double-tap seek. The app
+ * cancels that UA gesture on the second touchstart so its own ±10 s seek is
+ * the only one that runs; this predicate is the shared, tested definition of
+ * "second tap".
+ */
+export function isSecondTap(
+  lastTap,
+  x,
+  y,
+  time,
+  maxDelay = 300,
+  maxDistance = DOUBLE_TAP_DISTANCE_PX
+) {
+  if (!lastTap) return false;
+  const elapsed = time - lastTap.time;
+  if (elapsed <= 0 || elapsed >= maxDelay) return false;
+  return Math.hypot(x - lastTap.x, y - lastTap.y) < maxDistance;
+}
+
 /**
  * Clamps a relative seek to the playable range. An unknown or non-positive
  * duration has no upper bound, but zero is always the floor.

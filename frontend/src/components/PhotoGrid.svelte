@@ -5,7 +5,6 @@
     indexingState,
     addToast,
     selectionState,
-    enterSelectionMode,
     toggleSelected,
     selectRange,
     pruneSelection,
@@ -18,7 +17,7 @@
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { isPrefixQuery } from '../lib/query.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
-  import { withRange } from '../lib/selectionRange.js';
+  import { createCardRangeSelection } from '../lib/selectionRangeController.js';
   import PhotoCard from './PhotoCard.svelte';
   import DateScrubber from './DateScrubber.svelte';
 
@@ -388,28 +387,18 @@
     }
   }
 
-  let rangeAnchor = null;
-  let rangeBase = null;
+  const rangeSelection = createCardRangeSelection();
 
   function handleLongPress(photo) {
-    if (selectionState.active) return;
-    rangeBase = { ...selectionState.selected };
-    rangeAnchor = photo.hash_sha256;
-    enterSelectionMode();
-    toggleSelected(photo.hash_sha256);
+    return rangeSelection.begin(photo.hash_sha256);
   }
 
   function handleRangeMove(key) {
-    if (!rangeAnchor) return;
-    const ordered = selectionState.orderedKeys;
-    if (!ordered.includes(key)) return;
-    selectionState.selected = withRange(rangeBase, ordered, rangeAnchor, key);
-    selectionState.anchorKey = key;
+    rangeSelection.move(key);
   }
 
   function handleRangeEnd() {
-    rangeAnchor = null;
-    rangeBase = null;
+    rangeSelection.end();
   }
 
   // Keep the surface's visible keys in display order for range selection and

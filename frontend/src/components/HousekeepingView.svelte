@@ -7,13 +7,12 @@
     addToast,
     indexingState,
     selectionState,
-    enterSelectionMode,
     toggleSelected,
     selectRange,
     pruneSelection,
   } from '../lib/state.svelte.js';
   import { handleError } from '../lib/utils.js';
-  import { withRange } from '../lib/selectionRange.js';
+  import { createCardRangeSelection } from '../lib/selectionRangeController.js';
   import HousekeepingCard from './HousekeepingCard.svelte';
 
   let candidates = $state([]);
@@ -174,28 +173,18 @@
     }
   }
 
-  let rangeAnchor = null;
-  let rangeBase = null;
+  const rangeSelection = createCardRangeSelection();
 
   function handleLongPress(photo) {
-    if (selectionState.active) return;
-    rangeBase = { ...selectionState.selected };
-    rangeAnchor = photo.hash_sha256;
-    enterSelectionMode();
-    toggleSelected(photo.hash_sha256);
+    return rangeSelection.begin(photo.hash_sha256);
   }
 
   function handleRangeMove(key) {
-    if (!rangeAnchor) return;
-    const ordered = selectionState.orderedKeys;
-    if (!ordered.includes(key)) return;
-    selectionState.selected = withRange(rangeBase, ordered, rangeAnchor, key);
-    selectionState.anchorKey = key;
+    rangeSelection.move(key);
   }
 
   function handleRangeEnd() {
-    rangeAnchor = null;
-    rangeBase = null;
+    rangeSelection.end();
   }
 
   // Surface keys in display order for range selection and select-all-visible.

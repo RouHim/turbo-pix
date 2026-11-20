@@ -237,8 +237,10 @@ export function longpress(node, options) {
       suppressClick = true;
       node.addEventListener('contextmenu', suppressContextMenu);
       node.__longpressContextMenuBound = true;
-      onLongPress?.();
-      if (onRangeMove) startRangeDrag();
+      const started = onLongPress?.();
+      // A press while selection is already active starts no range; leaving the
+      // document listeners off keeps the grid scrollable under the finger.
+      if (started !== false && onRangeMove) startRangeDrag();
     }, delay);
   }
 

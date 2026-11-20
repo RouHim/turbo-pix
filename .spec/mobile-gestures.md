@@ -45,12 +45,13 @@ every action keeps its visible control.
   card under the finger; moving back shrinks it. It works on the photo grid,
   collages and housekeeping cards; the nearest scroll container auto-scrolls
   at its 48 px edges. The release keeps the selection; the gesture suppresses
-  clicks and the drawer.
+  clicks and the drawer. A long-press while selection is already active is a
+  no-op and must leave native scrolling untouched.
 - **Sheet header navigation:** a horizontal swipe on the visible
-  `.photo-info-header` (not the scrolling body) navigates to the
-  previous/next photo with the same slide as the media gesture, keeps the
-  sheet open, and updates its metadata. The 24 px axis lock prevents vertical
-  sheet drags from triggering it.
+  `.photo-info-header` or the 56 px grab strip (not the scrolling body)
+  navigates to the previous/next photo with the same slide as the media
+  gesture, keeps the sheet open, and updates its metadata. The 24 px axis lock
+  prevents vertical sheet drags from triggering it.
 - **Search panel:** the mobile search surface is a fixed header bar, not a
   sheet; it deliberately has no swipe-down dismissal. The header search button
   remains the toggle.

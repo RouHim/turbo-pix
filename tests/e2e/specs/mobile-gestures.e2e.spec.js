@@ -16,28 +16,48 @@ async function openViewer(page) {
 async function openDetails(page) {
   await page.locator('.metadata-btn').click();
   await expect(sheet(page)).toHaveClass(/show/);
+  // CDP hit-testing uses the animated position; wait for the 0.3 s sheet
+  // transition before measuring a header box.
+  await expect(sheet(page)).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+  await expect(sheet(page)).toHaveCSS('opacity', '1');
 }
 
-async function dispatchTouchPointer(page, type, x, y) {
-  await page.evaluate(
-    ({ type, x, y }) => {
-      const target = type === 'pointerdown' ? document.elementFromPoint(x, y) : window;
-      if (!target) throw new Error(`No pointer target at ${x},${y}`);
-      target.dispatchEvent(
-        new PointerEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          pointerType: 'touch',
-          pointerId: 1,
-          isPrimary: true,
-          clientX: x,
-          clientY: y,
-          buttons: type === 'pointerup' ? 0 : 1,
-        })
-      );
+async function createTouchDriver(page) {
+  const client = await page.context().newCDPSession(page);
+  await client.send('Emulation.setTouchEmulationEnabled', {
+    enabled: true,
+    maxTouchPoints: 1,
+  });
+
+  let clock = Date.now();
+  const point = (x, y) => ({ x, y, radiusX: 5, radiusY: 5, force: 1 });
+  const dispatch = async (type, touches, stepMs) => {
+    clock += stepMs;
+    await client.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: touches,
+      timestamp: clock / 1000,
+    });
+  };
+
+  return {
+    start: (x, y) => dispatch('touchStart', [point(x, y)], 0),
+    move: (x, y, stepMs = 16) => dispatch('touchMove', [point(x, y)], stepMs),
+    end: (stepMs = 16) => dispatch('touchEnd', [], stepMs),
+    async tap(x, y) {
+      await this.start(x, y);
+      await this.end(40);
     },
-    { type, x, y }
-  );
+    async doubleTap(x, y) {
+      await this.tap(x, y);
+      clock += 100;
+      await this.tap(x, y);
+    },
+    async dispose() {
+      await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+      await client.detach();
+    },
+  };
 }
 
 test.describe('Mobile gestures', () => {
@@ -310,10 +330,9 @@ test.describe('Mobile gestures', () => {
     await TestHelpers.navigateToView(page, 'videos');
     await TestHelpers.waitForPhotosToLoad(page);
     await TestHelpers.setMobileViewport(page);
-    const cards = await TestHelpers.getPhotoCards(page);
-    expect(cards.length).toBeGreaterThan(0);
-
-    await cards[0].click();
+    // Use the known 2 s fixture. `test_video.mp4` can be a zero-duration
+    // placeholder after the streaming specs, which makes seeking untestable.
+    await page.getByRole('button', { name: 'test_video_moov_end.mp4', exact: true }).click();
     await TestHelpers.verifyViewerOpen(page);
 
     const video = page.locator('#viewer-video');
@@ -331,23 +350,42 @@ test.describe('Mobile gestures', () => {
     // so both directions have room and the assertion proves the direction.
     const start = Math.max(0.01, Math.min(0.2, duration / 2));
 
-    await video.evaluate((element, position) => {
-      element.pause();
-      element.currentTime = position;
-    }, start);
-    await TestHelpers.performDoubleTapOn(page, '.viewer-main', box.x + box.width * 0.1, y);
-    await expect(page.getByTestId('viewer-seek-feedback')).toHaveText('−10 s');
-    await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(start);
+    // The feedback is deliberately transient; record it as it enters the DOM
+    // instead of racing the removal timer with a locator.
+    await page.evaluate(() => {
+      window.__seekFeedback = [];
+      const main = document.querySelector('.viewer-main');
+      const observer = new MutationObserver(() => {
+        const text = document
+          .querySelector('[data-testid="viewer-seek-feedback"]')
+          ?.textContent?.trim();
+        if (text && !window.__seekFeedback.includes(text)) window.__seekFeedback.push(text);
+      });
+      observer.observe(main, { childList: true, subtree: true });
+    });
 
-    await video.evaluate((element, position) => {
-      element.pause();
-      element.currentTime = position;
-    }, start);
-    await TestHelpers.performDoubleTapOn(page, '.viewer-main', box.x + box.width * 0.9, y);
-    await expect(page.getByTestId('viewer-seek-feedback')).toHaveText('+10 s');
-    await expect
-      .poll(() => video.evaluate((element) => element.currentTime))
-      .toBeGreaterThan(start);
+    const driver = await createTouchDriver(page);
+    try {
+      await video.evaluate((element, position) => {
+        element.pause();
+        element.currentTime = position;
+      }, start);
+      await driver.doubleTap(box.x + box.width * 0.1, y);
+      await expect.poll(() => page.evaluate(() => window.__seekFeedback)).toContain('−10 s');
+      await expect.poll(() => video.evaluate((element) => element.currentTime)).toBeLessThan(start);
+
+      await video.evaluate((element, position) => {
+        element.pause();
+        element.currentTime = position;
+      }, start);
+      await driver.doubleTap(box.x + box.width * 0.9, y);
+      await expect.poll(() => page.evaluate(() => window.__seekFeedback)).toContain('+10 s');
+      await expect
+        .poll(() => video.evaluate((element) => element.currentTime))
+        .toBeGreaterThan(start);
+    } finally {
+      await driver.dispose();
+    }
   });
 
   test('tap on the photo toggles chrome, with the details sheet closing first', async ({
@@ -355,33 +393,52 @@ test.describe('Mobile gestures', () => {
   }) => {
     await openViewer(page);
     const image = page.locator('#viewer-image');
-    await expect(image).toHaveClass(/loaded/);
+    await expect(image).toHaveClass(/loaded/, { timeout: 20000 });
+    await expect(viewer(page)).toHaveCSS('opacity', '1');
     const controls = page.locator('.viewer-controls');
     const close = page.locator('.viewer-close');
+    const imageBox = await image.boundingBox();
+    const mainBox = await page.locator('.viewer-main').boundingBox();
+    expect(imageBox).not.toBeNull();
+    expect(mainBox).not.toBeNull();
 
-    await image.click();
-    await expect(controls).toHaveClass(/chrome-hidden/);
-    await expect(close).toHaveClass(/chrome-hidden/);
-    await expect(controls).toHaveAttribute('inert', '');
+    const driver = await createTouchDriver(page);
+    const tapImage = () =>
+      driver.tap(imageBox.x + imageBox.width / 2, imageBox.y + imageBox.height / 2);
 
-    await image.click();
-    await expect(controls).not.toHaveClass(/chrome-hidden/);
-    await expect(close).not.toHaveClass(/chrome-hidden/);
+    try {
+      await tapImage();
+      await expect(controls).toHaveClass(/chrome-hidden/);
+      await expect(close).toHaveClass(/chrome-hidden/);
+      await expect(controls).toHaveAttribute('inert', '');
 
-    await openDetails(page);
-    await image.click();
-    await expect(sheet(page)).not.toHaveClass(/show/);
-    await expect(controls).not.toHaveClass(/chrome-hidden/);
+      await tapImage();
+      await expect(controls).not.toHaveClass(/chrome-hidden/);
+      await expect(close).not.toHaveClass(/chrome-hidden/);
 
-    await image.click();
-    await expect(controls).toHaveClass(/chrome-hidden/);
-    await page.locator('.viewer-main').click({ position: { x: 5, y: 5 } });
-    await expect(controls).not.toHaveClass(/chrome-hidden/);
-    await expect(viewer(page)).toHaveClass(/active/);
+      await openDetails(page);
+      const sheetBox = await sheet(page).boundingBox();
+      expect(sheetBox).not.toBeNull();
+      const visibleImageY = imageBox.y + (sheetBox.y - imageBox.y) / 2;
+      await driver.tap(imageBox.x + imageBox.width / 2, visibleImageY);
+      await expect(sheet(page)).not.toHaveClass(/show/);
+      await expect(controls).not.toHaveClass(/chrome-hidden/);
+
+      await tapImage();
+      await expect(controls).toHaveClass(/chrome-hidden/);
+      await driver.tap(mainBox.x + 5, mainBox.y + 5);
+      await expect(controls).not.toHaveClass(/chrome-hidden/);
+      await expect(viewer(page)).toHaveClass(/active/);
+    } finally {
+      await driver.dispose();
+    }
   });
 
   test('long-press then drag selects a range and shrinks on the way back', async ({ page }) => {
     const cards = page.locator('.photo-card');
+    await page.locator('.main-content').evaluate((element) => {
+      element.scrollTop = 0;
+    });
     await cards.nth(0).scrollIntoViewIfNeeded();
     const first = await cards.nth(0).boundingBox();
     const second = await cards.nth(1).boundingBox();
@@ -395,18 +452,77 @@ test.describe('Mobile gestures', () => {
     const middle = center(second);
     const target = center(third);
 
-    await dispatchTouchPointer(page, 'pointerdown', anchor.x, anchor.y);
-    await expect(page.locator('#selection-bar')).toBeVisible();
+    const main = await page.locator('.main-content').boundingBox();
+    expect(main).not.toBeNull();
+    const driver = await createTouchDriver(page);
 
-    await dispatchTouchPointer(page, 'pointermove', target.x, target.y);
-    await expect(page.locator('#selection-bar')).toContainText('3 selected');
-    await expect(drawer(page)).toBeHidden();
+    try {
+      await driver.start(anchor.x, anchor.y);
+      await expect(page.locator('#selection-bar')).toBeVisible();
 
-    await dispatchTouchPointer(page, 'pointermove', middle.x, middle.y);
-    await expect(page.locator('#selection-bar')).toContainText('2 selected');
+      await driver.move(target.x, target.y);
+      await expect(page.locator('#selection-bar')).toContainText('3 selected');
+      await expect(drawer(page)).toBeHidden();
 
-    await dispatchTouchPointer(page, 'pointerup', middle.x, middle.y);
-    await expect(page.locator('#selection-bar')).toContainText('2 selected');
+      await driver.move(middle.x, middle.y);
+      await expect(page.locator('#selection-bar')).toContainText('2 selected');
+
+      // Hold at the bottom edge: the range selector itself must keep scrolling
+      // while the finger is still, not merely hand the move to native scroll.
+      const scrollTop = () =>
+        page.locator('.main-content').evaluate((element) => element.scrollTop);
+      await driver.move(middle.x, main.y + main.height - 10);
+      await page.waitForTimeout(120);
+      const firstScroll = await scrollTop();
+      await page.waitForTimeout(300);
+      const secondScroll = await scrollTop();
+      expect(secondScroll).toBeGreaterThan(firstScroll);
+
+      await driver.end();
+      await expect(page.locator('#selection-bar')).toBeVisible();
+    } finally {
+      await driver.dispose();
+    }
+  });
+
+  test('long-press while selection is active leaves touch scrolling alone', async ({ page }) => {
+    await page.locator('[data-action="select-mode"]').click();
+    await expect(page.locator('#selection-bar')).toContainText('0 selected');
+    await page.locator('.main-content').evaluate((element) => {
+      element.scrollTop = 0;
+    });
+
+    const first = await page.locator('.photo-card').nth(0).boundingBox();
+    expect(first).not.toBeNull();
+    const driver = await createTouchDriver(page);
+
+    try {
+      await driver.start(first.x + first.width / 2, first.y + first.height / 2);
+      await page.waitForTimeout(650);
+
+      // Register AFTER the long-press fired. A buggy range drag adds its
+      // non-passive touchmove listener first, so this probe sees its
+      // preventDefault; a no-op press leaves the event untouched.
+      await page.evaluate(() => {
+        window.__rangeTouchMoves = [];
+        window.addEventListener(
+          'touchmove',
+          (event) => window.__rangeTouchMoves.push(event.defaultPrevented),
+          { passive: true }
+        );
+      });
+
+      await driver.move(first.x + first.width / 2, first.y + first.height + 120);
+      await page.waitForTimeout(100);
+      const prevented = await page.evaluate(() => window.__rangeTouchMoves);
+      expect(prevented.length).toBeGreaterThan(0);
+      expect(prevented).not.toContain(true);
+
+      await driver.end();
+      await expect(page.locator('#selection-bar')).toContainText('0 selected');
+    } finally {
+      await driver.dispose();
+    }
   });
 
   test('horizontal swipe on the details header navigates and keeps the sheet open', async ({
@@ -418,35 +534,39 @@ test.describe('Mobile gestures', () => {
     const firstHash = await TestHelpers.getCurrentPhotoHash(page);
     const firstTitle = await page.locator('#photo-title').textContent();
     const header = page.locator('.photo-info-header');
-    let box = await header.boundingBox();
-    expect(box).not.toBeNull();
+    const driver = await createTouchDriver(page);
 
-    await TestHelpers.performSwipeOn(
-      page,
-      '.photo-info-header',
-      box.x + box.width - 20,
-      box.y + box.height / 2,
-      box.x + 20,
-      box.y + box.height / 2
-    );
+    const swipeHeader = async (fromX, toX) => {
+      const box = await header.boundingBox();
+      expect(box).not.toBeNull();
+      const y = box.y + box.height / 2;
+      await driver.start(fromX(box), y);
+      for (let step = 1; step <= 10; step += 1) {
+        await driver.move(fromX(box) + ((toX(box) - fromX(box)) * step) / 10, y);
+      }
+      await driver.end();
+    };
 
-    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
-    await expect(sheet(page)).toHaveClass(/show/);
-    await expect.poll(() => page.locator('#photo-title').textContent()).not.toBe(firstTitle);
+    try {
+      await swipeHeader(
+        (box) => box.x + box.width * 0.5,
+        (box) => box.x + 20
+      );
 
-    box = await header.boundingBox();
-    expect(box).not.toBeNull();
-    await TestHelpers.performSwipeOn(
-      page,
-      '.photo-info-header',
-      box.x + 20,
-      box.y + box.height / 2,
-      box.x + box.width - 20,
-      box.y + box.height / 2
-    );
+      await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).not.toBe(firstHash);
+      await expect(sheet(page)).toHaveClass(/show/);
+      await expect.poll(() => page.locator('#photo-title').textContent()).not.toBe(firstTitle);
 
-    await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
-    await expect(sheet(page)).toHaveClass(/show/);
-    await expect.poll(() => page.locator('#photo-title').textContent()).toBe(firstTitle);
+      await swipeHeader(
+        (box) => box.x + 20,
+        (box) => box.x + box.width * 0.5
+      );
+
+      await expect.poll(() => TestHelpers.getCurrentPhotoHash(page)).toBe(firstHash);
+      await expect(sheet(page)).toHaveClass(/show/);
+      await expect.poll(() => page.locator('#photo-title').textContent()).toBe(firstTitle);
+    } finally {
+      await driver.dispose();
+    }
   });
 });

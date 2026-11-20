@@ -26,22 +26,21 @@ test('GIVEN an empty surface WHEN computing the range THEN no range is claimed',
   assert.equal(rangeKeys([], 'a', 'b'), null);
 });
 
-test('GIVEN a base selection WHEN applying a range THEN the base is preserved and not mutated', () => {
-  const base = { a: true };
-  const next = withRange(base, KEYS, 'b', 'd');
-  assert.deepEqual(next, { a: true, b: true, c: true, d: true });
-  assert.deepEqual(base, { a: true });
+test('GIVEN a range WHEN applying it THEN exactly the range keys are selected', () => {
+  assert.deepEqual(withRange(KEYS, 'b', 'd'), { b: true, c: true, d: true });
+});
+
+test('GIVEN a reverse range WHEN applying it THEN the same keys are selected', () => {
+  assert.deepEqual(withRange(KEYS, 'd', 'b'), { b: true, c: true, d: true });
 });
 
 test('GIVEN a range that moves back WHEN applying it THEN the earlier tail is removed', () => {
-  const base = {};
-  const forward = withRange(base, KEYS, 'b', 'd');
-  const back = withRange(base, KEYS, 'b', 'c');
+  const forward = withRange(KEYS, 'b', 'd');
+  const back = withRange(KEYS, 'b', 'c');
   assert.deepEqual(forward, { b: true, c: true, d: true });
   assert.deepEqual(back, { b: true, c: true });
 });
 
-test('GIVEN an unknown target WHEN applying a range THEN the base is returned unchanged', () => {
-  const base = { a: true };
-  assert.deepEqual(withRange(base, KEYS, 'b', 'missing'), base);
+test('GIVEN an unknown target WHEN applying a range THEN no selection is produced', () => {
+  assert.equal(withRange(KEYS, 'b', 'missing'), null);
 });

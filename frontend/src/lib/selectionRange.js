@@ -14,15 +14,17 @@ export function rangeKeys(orderedKeys, anchorKey, targetKey) {
 }
 
 /**
- * Replaces the live selection with `base` plus the current range. Recomputing
- * from the base on every move is what lets a backwards drag shrink the range
- * instead of leaving a trail of previously hovered cards selected.
+ * Replaces the live selection with the current range. Recomputing from the
+ * anchor on every move is what lets a backwards drag shrink the range instead
+ * of leaving a trail of previously hovered cards selected. The range gesture
+ * only starts while selection is inactive, so there is no earlier selection to
+ * preserve.
  */
-export function withRange(base, orderedKeys, anchorKey, targetKey) {
+export function withRange(orderedKeys, anchorKey, targetKey) {
   const keys = rangeKeys(orderedKeys, anchorKey, targetKey);
-  if (!keys) return base;
+  if (!keys) return null;
 
-  const next = { ...(base || {}) };
+  const next = {};
   for (const key of keys) next[key] = true;
   return next;
 }

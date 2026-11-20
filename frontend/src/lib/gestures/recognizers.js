@@ -91,9 +91,11 @@ export class SwipeRecognizer {
   }
 }
 
+export const DOUBLE_TAP_MAX_DELAY_MS = 300;
+
 export class DoubleTapRecognizer {
   constructor() {
-    this.maxDoubleTapDelay = 300; // ms
+    this.maxDoubleTapDelay = DOUBLE_TAP_MAX_DELAY_MS; // ms
     this.maxTapDistance = 10; // px
     this.maxTapDuration = 300; // ms
     this.lastTapTime = 0;

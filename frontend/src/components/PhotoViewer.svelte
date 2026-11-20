@@ -29,6 +29,7 @@
   import { createStreamSession, nextStreamMode } from '../lib/video/streamSession.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { gestures } from '../lib/gestures/action.js';
+  import { DOUBLE_TAP_MAX_DELAY_MS } from '../lib/gestures/recognizers.js';
   import {
     GESTURE_CLICK_SUPPRESS_MS,
     sheetOpenProgress,
@@ -68,7 +69,10 @@
   let chromeTapTimer = null;
   let seekFeedbackTimer = null;
   let lastDoubleTapAt = 0;
-  const CHROME_TAP_DELAY_MS = 260;
+  // The single tap must outlive the recognizer's window plus one event turn,
+  // otherwise a slow double tap hides chrome before the second tap lands.
+  const CHROME_TAP_DELAY_MS = DOUBLE_TAP_MAX_DELAY_MS + 20;
+  const SEEK_FEEDBACK_MS = 600;
   const VIDEO_CONTROLS_GUARD_PX = 48;
   // The encoder serving the current playback, when the server video-encodes it.
   // `null` means "not video-encoded" (direct play, remux, or a copied video
@@ -315,7 +319,7 @@
     seekFeedbackTimer = setTimeout(() => {
       seekFeedbackTimer = null;
       seekFeedback = null;
-    }, 700);
+    }, SEEK_FEEDBACK_MS);
   }
 
   function seekVideo(x, y) {
@@ -325,7 +329,9 @@
 
     const rect = video.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    // The native control strip owns the bottom edge; never seek from a tap there.
+    // Only the video itself owns the seek gesture: letterbox taps are not a
+    // third of the clip, and the native control strip owns the bottom edge.
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return;
     if (y > rect.bottom - VIDEO_CONTROLS_GUARD_PX) return;
 
     const direction = seekDirectionForX(x, rect.left, rect.width);
@@ -2198,6 +2204,9 @@
     }
     if (showSidebar && isMobileLayout()) {
       setDetailsOpen(false);
+      // The tap belongs to the sheet, not to a double-tap-zoom pair that
+      // happens to start immediately afterwards.
+      mainEl?.__gestureManager?.resetRecognizers?.();
       return;
     }
     if (e.target === mainEl) {
@@ -2211,7 +2220,7 @@
       e.target === imageEl &&
       isMobileLayout() &&
       !isVideo &&
-      performance.now() - lastDoubleTapAt >= 320
+      performance.now() - lastDoubleTapAt >= CHROME_TAP_DELAY_MS
     ) {
       scheduleChromeToggle();
     }
@@ -2828,7 +2837,7 @@
     font-weight: var(--font-bold);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
-    animation: seek-feedback-pop 650ms ease-out both;
+    animation: seek-feedback-pop var(--transition-slow) both;
   }
 
   .viewer-seek-feedback.back {
@@ -2856,6 +2865,15 @@
 
   @supports not (backdrop-filter: blur(1px)) {
     .viewer-seek-feedback {
+      background: var(--surface-color);
+      color: var(--text-primary);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .viewer-seek-feedback {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
       background: var(--surface-color);
       color: var(--text-primary);
     }

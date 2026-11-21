@@ -246,7 +246,7 @@ impl SemanticSearchEngine {
             }
             Err(e) => {
                 log::warn!(
-                    "CLIP model files unavailable ({e}); semantic search stays disabled until a later attempt succeeds"
+                    "CLIP model files unavailable ({e:#}); semantic search stays disabled until a later attempt succeeds"
                 );
                 state.retry_at = Some(retry_deadline());
             }
@@ -346,7 +346,7 @@ impl SemanticSearchEngine {
         error: anyhow::Error,
     ) -> anyhow::Error {
         state.retry_at = Some(retry_deadline());
-        log::warn!("CLIP model unavailable: {error}");
+        log::warn!("CLIP model unavailable: {error:#}");
         error
     }
 
@@ -388,7 +388,7 @@ impl SemanticSearchEngine {
             Ok(_) => {}
             Err(e) => {
                 state.retry_at = Some(retry_deadline());
-                log::warn!("CLIP model files still unavailable: {e}");
+                log::warn!("CLIP model files still unavailable: {e:#}");
             }
         }
     }

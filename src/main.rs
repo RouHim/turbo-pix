@@ -42,6 +42,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::Config::from_env()?;
 
+    // hf-hub 1.0 downloads model files through hf-xet, whose chunk cache
+    // defaults to `$HOME/.cache/huggingface/xet` and is created before the
+    // transfer starts. The container runs as uid 1000 in a scratch rootfs
+    // without `/root`, while Docker injects `HOME=/root`, so that directory
+    // cannot be created and every model download fails — both the CLIP phase
+    // and the face phase stay empty. Pin the cache under the writable data
+    // volume instead; HF_XET_CACHE takes precedence over HOME in hf-xet.
+    if std::env::var_os("HF_XET_CACHE").is_none() {
+        std::env::set_var("HF_XET_CACHE", format!("{}/cache/xet", config.data_path));
+    }
+
     // Handle --download-models flag
     if std::env::args().any(|arg| arg == "--download-models") {
         info!("Downloading AI models...");

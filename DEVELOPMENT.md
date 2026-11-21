@@ -111,6 +111,7 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 - **Transcode cache**: `{DATA_PATH}/cache/transcoded/`
 - **AI Models**: `{DATA_PATH}/models/` (CLIP) and `{DATA_PATH}/models/face/` (SCRFD + ArcFace)
 - **Face crops**: `{DATA_PATH}/cache/faces/{file_hash}/{face_id}.jpg` (one directory per photo)
+- **Xet cache**: `{DATA_PATH}/cache/xet/` (hf-xet chunk cache for model downloads; `HF_XET_CACHE` overrides it)
 
 ### AI models
 

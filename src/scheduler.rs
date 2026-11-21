@@ -493,7 +493,7 @@ impl PhotoScheduler {
                     success, errors
                 )
             }
-            Err(e) => error!("Phase 2 failed: {}", e),
+            Err(e) => error!("Phase 2 failed: {:#}", e),
         }
 
         // Phase 2b: Face detection/recognition. Disabled by the operator or
@@ -502,7 +502,7 @@ impl PhotoScheduler {
             info!("Phase 2b: Detecting and recognising faces");
             self.status.set_phase("faces").await;
             if let Err(e) = self.face_recognition.index_pending(&self.status).await {
-                error!("Phase 2b (face recognition) failed: {}", e);
+                error!("Phase 2b (face recognition) failed: {:#}", e);
             }
         }
 

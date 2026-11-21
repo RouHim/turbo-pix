@@ -1,3 +1,9 @@
+## [2.55.2](https://github.com/RouHim/turbo-pix/compare/2.55.1...2.55.2) (2026-11-21)
+
+### Bug Fixes
+
+* **models:** keep the hf-xet cache inside the data directory ([dcc2fb3](https://github.com/RouHim/turbo-pix/commit/dcc2fb373821eea44e21d5b4c4ccaf6e883b420a))
+
 ## [2.55.1](https://github.com/RouHim/turbo-pix/compare/2.55.0...2.55.1) (2026-11-21)
 
 # [2.55.0](https://github.com/RouHim/turbo-pix/compare/2.54.0...2.55.0) (2026-11-20)

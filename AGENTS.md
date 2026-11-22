@@ -10,7 +10,8 @@ Development/personal project - breaking changes acceptable, database and cache c
 
 **Backend:** `cargo run` | `cargo test` | `cargo clippy` | `cargo fmt`  
 **Frontend:** `npm run build` (required before cargo build — embeds dist/) | `npm run lint` | `npm run format`  
-**Preview:** `./scripts/preview.sh` — builds `dist/` then the binary, in that order
+**Preview:** `./scripts/preview.sh` — builds `dist/`, fetches ONNX Runtime, then builds the binary  
+**Build prerequisite:** local Rust builds and E2E need `eval "$(./scripts/fetch-ort.sh --export)"`; see `DEVELOPMENT.md` → Build from source.
 
 ## Code Style
 
@@ -38,7 +39,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 
 # Commit Gatekeeping
 
-- Lint and format before commiting
+- Lint and format before committing
 - Tests must pass
 - Meaningful commit messages
 
@@ -47,11 +48,10 @@ Development/personal project - breaking changes acceptable, database and cache c
 - TDD: Test Driven Development, write tests first, then implement the feature
 - BDD: Behavior Driven Development, focus on the behavior of the application, use GIVEN, WHEN, THEN style
 - E2E: End to End testing, test the application as a whole, use Playwright or Puppeteer
-- when changing frontend files: run `npm run build` first, then `cargo build --bin turbo-pix` (build.rs embeds dist/ and panics if it is missing)
 - **Avoid:** Hardcoded paths and fallback logic mask bugs
 - When troubleshooting bugs, try to reproduce the bug first writing a test
 - After finishing a Task (feature, bug fix, etc) extract relevant learnings from the session/task (if there are ones),
-  and merge them with the Learnings section in the Agents.md file. Also verify all entry in the learnings section are still valid.
+  and fold them into `docs/learnings.md`. Also verify all entries in the learnings section are still valid.
 
 ## Testing
 
@@ -74,11 +74,15 @@ TurboPix uses Playwright for end-to-end testing with real backend integration.
 
 ```bash
 npm run test:e2e          # Run all tests
+npm run test:e2e:reuse    # Target a prepared server on 18473; skips setup/teardown
 npm run test:e2e:ui       # Interactive UI mode
 npm run test:e2e:headed   # See browser
 npm run test:e2e:debug    # Debug mode
 npm run test:e2e:report   # View test report
 ```
+
+`test:e2e:reuse` expects a seeded, healthy server on `TURBO_PIX_E2E_PORT` (default
+18473); it does not build, reseed, or stop it.
 
 **Test Structure:**
 
@@ -107,7 +111,7 @@ npm run test:e2e:report   # View test report
 
 **Manual E2E Testing:**
 
-- Start: `nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
+- Start: `eval "$(./scripts/fetch-ort.sh --export)" && nohup cargo run &` + wait for `curl --retry 5 --retry-delay 2 http://localhost:18473/health`
 - Test at `http://localhost:18473`
 - Kill process after testing
 
@@ -115,3 +119,4 @@ npm run test:e2e:report   # View test report
 
 Durable traps live in `docs/learnings.md` — read it before touching a matching area: i18n keys, state/routing, scoped CSS, viewer async staleness, icons/map config, rotation & photo identity, video serving/transcode, migrations, SQLite queries & the derived date/coordinate copy, E2E harness. New trap? Fold it into an existing entry there (capped at 10).
 
+Mobile gestures: behavior and acceptance live in `.spec/mobile-gestures.md`; tests in `tests/e2e/specs/mobile-gestures.e2e.spec.js`.

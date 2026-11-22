@@ -12,6 +12,10 @@ const TEST_DATA_DIR = 'test-e2e-data';
 // Sibling worktrees run this same suite; TURBO_PIX_E2E_PORT keeps their servers
 // (and Playwright's baseURL) on distinct ports instead of racing one port.
 const SERVER_PORT = process.env.TURBO_PIX_E2E_PORT ?? '18473';
+// Targeted debugging runs against a prepared, already-running server should
+// not rebuild, reseed and reindex the world. Opt in explicitly; the caller owns
+// the server and its fixture state.
+const REUSE_SERVER = process.env.TURBO_PIX_E2E_REUSE === '1';
 const MAX_HEALTH_RETRIES = 30;
 const MAX_INDEXING_RETRIES = 600;
 const MAX_DB_RETRIES = 30;
@@ -822,7 +826,9 @@ async function startServer() {
     // transcoded HEVC file would short-circuit the transcode flow and the
     // HEVC spec would never see the transcode toast (its whole point).
     TRANSCODE_CACHE_DIR: path.join(TEST_DATA_DIR, 'transcode-cache'),
-    RUST_LOG: 'info',
+    // The request log dominated the Playwright output; warnings/errors still
+    // reach a failing run. Set RUST_LOG=info to opt back in while debugging.
+    RUST_LOG: process.env.RUST_LOG ?? 'warn',
   };
 
   const serverProcess = spawn('cargo', ['run', '--bin', 'turbo-pix'], {
@@ -850,6 +856,15 @@ async function startServer() {
 
 export default async function globalSetup() {
   console.log('\n=== TurboPix E2E Test Setup ===\n');
+
+  if (REUSE_SERVER) {
+    const baseURL = `http://localhost:${SERVER_PORT}`;
+    console.log(`Reusing the prepared server at ${baseURL} (setup skipped)`);
+    await waitForHealthCheck(baseURL);
+    await waitForPhotosTable();
+    console.log('\n=== Setup Complete (reused server) ===\n');
+    return;
+  }
 
   // Kill THIS checkout's stale dev server so the health check / port binding
   // can't race a leftover process (AGENTS.md 'E2E port collision' learning).

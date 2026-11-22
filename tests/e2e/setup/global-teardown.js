@@ -7,6 +7,7 @@ import path from 'path';
 const PID_FILE = 'test-server.pid';
 const GRACEFUL_SHUTDOWN_DELAY_MS = 2000;
 const SERVER_PORT = process.env.TURBO_PIX_E2E_PORT ?? '18473';
+const REUSE_SERVER = process.env.TURBO_PIX_E2E_REUSE === '1';
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 // The PID file tracks the `cargo run` wrapper (global-setup writes
@@ -60,6 +61,12 @@ function killServerBinary() {
 
 async function killServer() {
   console.log(`\n=== TurboPix E2E Test Teardown (port ${SERVER_PORT}) ===\n`);
+
+  if (REUSE_SERVER) {
+    console.log('TURBO_PIX_E2E_REUSE=1: leaving the external server running');
+    console.log('\n=== Teardown Complete (reused server) ===\n');
+    return;
+  }
 
   if (!existsSync(PID_FILE)) {
     console.log('No PID file found, server may have already stopped');

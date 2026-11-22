@@ -4,5 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 npm run build
+# The face pipeline links a static ONNX Runtime; the build fails without it.
+eval "$(./scripts/fetch-ort.sh --export)"
 cargo build --bin turbo-pix
 printf '\nBuilt binary: %s\n' "$(pwd)/target/debug/turbo-pix"

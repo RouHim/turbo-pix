@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { TestHelpers } from '../setup/test-helpers.js';
+
+const AXE_RULES = [
+  'color-contrast',
+  'target-size',
+  'aria-valid-attr-value',
+  'aria-prohibited-attr',
+];
 
 test.describe('Mobile Viewer Sidebar', () => {
   test.beforeEach(async ({ page }) => {
@@ -86,5 +94,30 @@ test.describe('Mobile Viewer Sidebar', () => {
 
     // THEN: backdrop-filter contains blur
     expect(backdropFilter).toContain('blur');
+  });
+
+  test('viewer and details sheet should have no axe violations on mobile', async ({ page }) => {
+    test.setTimeout(60000);
+    await TestHelpers.setMobileViewport(page);
+    await openViewerOnFirstPhoto(page);
+    await expect(page.locator('#viewer-image')).toHaveClass(/loaded/, { timeout: 20000 });
+
+    // The viewer chrome itself, including the pinned details button and the
+    // 44 px mobile controls.
+    const viewer = await new AxeBuilder({ page })
+      .include('#photo-viewer')
+      .withRules(AXE_RULES)
+      .analyze();
+    expect(viewer.violations).toEqual([]);
+
+    // The sheet is a separate rendered surface; contrast and target-size
+    // regressions there were invisible to the map/timeline axe specs.
+    await page.locator('.metadata-btn').click();
+    await expect(page.getByTestId('viewer-sidebar')).toHaveClass(/show/);
+    const sheet = await new AxeBuilder({ page })
+      .include('[data-testid="viewer-sidebar"]')
+      .withRules(AXE_RULES)
+      .analyze();
+    expect(sheet.violations).toEqual([]);
   });
 });

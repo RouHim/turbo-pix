@@ -260,10 +260,6 @@
     white-space: nowrap;
   }
 
-  .album-tile {
-    overflow: hidden;
-  }
-
   .album-cover {
     width: 100%;
     height: 100%;
@@ -367,6 +363,7 @@
     justify-content: center;
     width: 44px;
     height: 44px;
+    overflow: hidden;
     border-radius: var(--radius-md);
     background: var(--background-secondary);
     color: var(--primary-color);

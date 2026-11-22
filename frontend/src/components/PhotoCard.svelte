@@ -139,6 +139,10 @@
   }
 </script>
 
+<!-- `content-visibility: auto` makes the open layer unreliable as a click
+     target right after scrollIntoViewIfNeeded; the card root owns the pointer
+     path, while the open layer keeps the keyboard/ARIA path. -->
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
 <div
   class="photo-card"
   data-photo-id={photo?.hash_sha256}

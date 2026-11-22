@@ -1,3 +1,14 @@
+# [2.56.0](https://github.com/RouHim/turbo-pix/compare/2.55.4...2.56.0) (2026-11-22)
+
+### Bug Fixes
+
+* **scan:** keep the manual trigger recoverable on spawn failure ([0979002](https://github.com/RouHim/turbo-pix/commit/09790022a614566756cdd445e8c0da83ae0e567b))
+* **semantic:** replace vec0 rows left by interrupted scans ([766b927](https://github.com/RouHim/turbo-pix/commit/766b927c311545643d0cb9fb6a976b69fde23716))
+
+### Features
+
+* **scan:** trigger the full indexing cycle from Housekeeping ([37fcf9b](https://github.com/RouHim/turbo-pix/commit/37fcf9b8eeb1205ed1cd794ee59e4f020353ee9c))
+
 ## [2.55.4](https://github.com/RouHim/turbo-pix/compare/2.55.3...2.55.4) (2026-11-22)
 
 ## [2.55.3](https://github.com/RouHim/turbo-pix/compare/2.55.2...2.55.3) (2026-11-22)

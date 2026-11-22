@@ -265,6 +265,11 @@ class TurboPixAPI {
     });
   }
 
+  // Start the full scan now; a running scan is attached to, not restarted.
+  async triggerScan() {
+    return this.request('/api/indexing/scan', { method: 'POST' });
+  }
+
   // Collections and cameras features removed
 
   // Favorites (using backend API)

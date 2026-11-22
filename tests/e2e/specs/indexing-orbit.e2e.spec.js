@@ -691,6 +691,63 @@ test.describe('Indexing orbit', () => {
       .toBe('none,none');
   });
 
+  test('polls immediately when a manual scan announces itself', async ({ page }) => {
+    // GIVEN the app is idle and the next regular poll is 30 s away
+    await page.addInitScript(() => {
+      window.localStorage.setItem('turbopix_has_indexed', 'true');
+    });
+    await mockIndexingStatusSequence(page, [
+      { body: buildStatus({ is_indexing: false, is_complete: true, photos_indexed: 100 }) },
+      {
+        body: buildStatus({
+          is_indexing: true,
+          is_complete: false,
+          photos_indexed: 100,
+          active_phase_id: 'metadata',
+        }),
+      },
+    ]);
+    await TestHelpers.goto(page);
+    await expect(page.locator('[data-phase-ring]')).toHaveAttribute('data-ring-mode', 'hidden');
+
+    // WHEN the manual trigger publishes its accepted status
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent('indexingScanStarted', { detail: { is_indexing: true } })
+      );
+    });
+
+    // THEN the orbit checks again immediately instead of waiting for the idle poll
+    await expect(page.locator('[data-phase-ring]')).toHaveAttribute('data-ring-mode', 'compact', {
+      timeout: 3000,
+    });
+  });
+
+  test('warns instead of showing the completion pulse for an incomplete run', async ({ page }) => {
+    // GIVEN a run starts, then ends with is_complete=false (missing root or
+    // phase-1 failure)
+    await mockIndexingStatusSequence(page, [
+      {
+        body: buildStatus({
+          is_indexing: true,
+          is_complete: false,
+          active_phase_id: 'metadata',
+        }),
+      },
+      { body: buildStatus({ is_indexing: false, is_complete: false }) },
+    ]);
+
+    // WHEN the falling edge is observed
+    await TestHelpers.goto(page);
+
+    // THEN the user gets a warning and no "all done" pulse
+    await expect(page.locator('.toast-warning .toast-title')).toHaveText(
+      /(Scan incomplete|Scan unvollständig)/,
+      { timeout: 5000 }
+    );
+    await expect(page.locator('[data-phase-ring]')).toHaveAttribute('data-ring-mode', 'hidden');
+  });
+
   test('hides the orbit once indexing is complete', async ({ page }) => {
     // GIVEN indexing has completed successfully
     await mockIndexingStatus(

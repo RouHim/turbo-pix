@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::cache_manager::CacheManager;
 use crate::collage_generator;
@@ -148,6 +148,10 @@ impl IndexingPhases {
 pub struct IndexingStatus {
     pub is_indexing: Arc<AtomicBool>,
     pub is_complete: Arc<AtomicBool>,
+    /// Whether phase 1 could read every configured root. A partial scan still
+    /// runs the later phases over what it found, but it must not mark the
+    /// index complete (the next scan may heal the missing rows).
+    pub scan_complete: Arc<AtomicBool>,
     pub current_phase: Arc<Mutex<String>>,
     pub phases: Arc<IndexingPhases>,
     pub started_at: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -164,6 +168,7 @@ impl IndexingStatus {
         Self {
             is_indexing: Arc::new(AtomicBool::new(false)),
             is_complete: Arc::new(AtomicBool::new(false)),
+            scan_complete: Arc::new(AtomicBool::new(true)),
             current_phase: Arc::new(Mutex::new(String::from("idle"))),
             phases: Arc::new(IndexingPhases::new()),
             started_at: Arc::new(Mutex::new(None)),
@@ -172,6 +177,7 @@ impl IndexingStatus {
 
     pub async fn start_indexing(&self) {
         self.is_indexing.store(true, Ordering::SeqCst);
+        self.scan_complete.store(true, Ordering::SeqCst);
         *self.started_at.lock().await = Some(chrono::Utc::now());
         self.phases.reset_all();
         *self.current_phase.lock().await = String::from("discovering");
@@ -196,6 +202,14 @@ impl IndexingStatus {
     }
 }
 
+/// Outcome of a manual scan request. `AlreadyRunning` means the request
+/// attached to the in-flight cycle instead of spawning a second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanTrigger {
+    Started,
+    AlreadyRunning,
+}
+
 /// The two indexing pipelines the scheduler calls. Grouping them keeps the
 /// constructor's wiring arguments below clippy's limit without hiding a
 /// dependency behind a generic bag.
@@ -214,13 +228,13 @@ pub struct PhotoScheduler {
     data_path: PathBuf,
     locale: String,
     nominatim_url: String,
-    rescan_lock: Arc<Mutex<()>>,
+    rescan_lock: Arc<Semaphore>,
     pub status: IndexingStatus,
 }
 
 impl PhotoScheduler {
-    /// Every dependency the five-phase rescan needs. The constructor is the
-    /// single wiring point for the call graph.
+    /// Every dependency the full rescan needs. The constructor is the single
+    /// wiring point for the call graph.
     pub fn new(
         photo_paths: Vec<PathBuf>,
         db_pool: DbPool,
@@ -257,7 +271,7 @@ impl PhotoScheduler {
             data_path,
             locale,
             nominatim_url,
-            rescan_lock: Arc::new(Mutex::new(())),
+            rescan_lock: Arc::new(Semaphore::new(1)),
             status: IndexingStatus::new(),
         }
     }
@@ -425,35 +439,100 @@ impl PhotoScheduler {
         self.run_cycle().await
     }
 
-    /// The one five-phase indexing cycle. Both entry points — the startup
-    /// rescan and the nightly schedule — call it; they differ only in how the
-    /// result is reported.
+    /// The one full indexing cycle (the seven status phases). Startup,
+    /// nightly and manual triggers all reach it; they differ only in how the
+    /// run is started and reported.
     ///
     /// The lock and the status transitions live here too, so a phase-1 failure
     /// has exactly one meaning: mark the index incomplete, stop indexing and
-    /// return the error. Phases 2–5 run only after phase 1 succeeded.
+    /// return the error. Later phases run only after phase 1 succeeded.
     async fn run_cycle(&self) -> Result<(), anyhow::Error> {
-        let lock = match self.rescan_lock.try_lock() {
-            Ok(lock) => lock,
+        let permit = match self.rescan_lock.clone().try_acquire_owned() {
+            Ok(permit) => permit,
             Err(_) => {
                 warn!("Skipping rescan - another rescan is already in progress");
                 return Ok(());
             }
         };
 
-        info!("Starting photo rescan and cleanup (two-phase indexing)");
+        self.begin_run().await;
+        self.finish_cycle(permit).await
+    }
+
+    /// Starts the same full cycle on a dedicated indexing thread so an HTTP
+    /// request never carries the scan. The status is switched to indexing
+    /// before this returns — the `POST /api/indexing/scan` contract depends
+    /// on it. When a run is already in progress, the caller attaches to it.
+    pub async fn trigger_scan(&self) -> std::io::Result<ScanTrigger> {
+        let Some(permit) = self.acquire_manual_scan_permit().await else {
+            return Ok(ScanTrigger::AlreadyRunning);
+        };
+
+        self.begin_run().await;
+
+        let scheduler = self.clone();
+        let spawned = thread::Builder::new()
+            .name("indexing-manual".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create indexing runtime");
+                rt.block_on(async move {
+                    if let Err(e) = scheduler.finish_cycle(permit).await {
+                        error!("Manual rescan failed: {}", e);
+                    }
+                });
+            });
+
+        if let Err(e) = spawned {
+            // No thread owns the permit or will clear the status; restore the
+            // idle state and report the failure to the caller.
+            self.status.stop_indexing().await;
+            return Err(e);
+        }
+
+        Ok(ScanTrigger::Started)
+    }
+
+    /// Acquires the scan permit for a manual trigger. A mere `try_lock` miss
+    /// is ambiguous: the holder may be starting (status not flipped yet) or
+    /// finishing (status already stopped, permit not released yet). Waiting
+    /// out that transition keeps the response honest — either it attaches to
+    /// a run with `is_indexing=true`, or it starts a fresh run.
+    async fn acquire_manual_scan_permit(&self) -> Option<OwnedSemaphorePermit> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            match self.rescan_lock.clone().try_acquire_owned() {
+                Ok(permit) => return Some(permit),
+                Err(_) if self.status.is_indexing.load(Ordering::SeqCst) => return None,
+                Err(_) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
+    }
+
+    async fn begin_run(&self) {
+        info!("Starting full photo rescan and cleanup");
         self.status.start_indexing().await;
         self.status.mark_incomplete();
+    }
 
+    /// Runs the phases after `begin_run` and owns the scan permit until the
+    /// run has fully stopped.
+    async fn finish_cycle(&self, permit: OwnedSemaphorePermit) -> Result<(), anyhow::Error> {
         let result = self.run_phases().await;
 
         match &result {
-            Ok(()) => self.status.mark_complete(),
-            Err(_) => self.status.mark_incomplete(),
+            Ok(()) if self.status.scan_complete.load(Ordering::SeqCst) => {
+                self.status.mark_complete()
+            }
+            _ => self.status.mark_incomplete(),
         }
         // Always mark indexing as stopped, even on error.
         self.status.stop_indexing().await;
-        drop(lock);
+        drop(permit);
         result
     }
 
@@ -535,7 +614,7 @@ impl PhotoScheduler {
         }
 
         info!(
-            "Rescan completed (six-phase): {} photos indexed, {} errors",
+            "Rescan completed (seven-phase): {} photos indexed, {} errors",
             indexed_count, error_count
         );
         Ok(())
@@ -569,8 +648,27 @@ mod tests {
 
     impl TestEnvironment {
         async fn new_without_semantics() -> Self {
+            Self::new_without_semantics_pool(false).await
+        }
+
+        /// The manual trigger runs on its own runtime, which an in-memory
+        /// SQLite pool does not survive (its single connection is dropped with
+        /// the runtime that created it). Production uses a file-backed DB, so
+        /// the cross-runtime test must too.
+        async fn new_without_semantics_file_backed() -> Self {
+            Self::new_without_semantics_pool(true).await
+        }
+
+        async fn new_without_semantics_pool(file_backed: bool) -> Self {
             let temp_dir = TempDir::new().unwrap();
-            let db_pool = create_test_db_pool().await.unwrap();
+            let db_pool = if file_backed {
+                let db_path = temp_dir.path().join("database").join("turbo-pix.db");
+                crate::db_pool::create_db_pool(&db_path.to_string_lossy())
+                    .await
+                    .unwrap()
+            } else {
+                create_test_db_pool().await.unwrap()
+            };
             let cache_manager = CacheManager::new(temp_dir.path().join("cache").to_path_buf());
             let semantic_search: Arc<dyn crate::semantic_search::SemanticSearch> =
                 Arc::new(NoopSemanticSearch);
@@ -889,6 +987,74 @@ mod tests {
         // Should handle errors gracefully
         let result = scheduler.run_startup_rescan().await;
         assert!(result.is_ok()); // Should not panic, just log errors
+        assert!(
+            !scheduler.status.is_complete.load(Ordering::SeqCst),
+            "a missing photo root makes the scan partial, never complete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trigger_scan_is_single_flight_and_reports_started() {
+        let env = TestEnvironment::new_without_semantics_file_backed().await;
+        env.create_test_image("manual-scan.jpg", b"manual scan content");
+
+        // Hold the scan permit and a running status to prove a second trigger
+        // attaches instead of spawning a second run.
+        let held_permit = env
+            .scheduler
+            .rescan_lock
+            .clone()
+            .try_acquire_owned()
+            .expect("test must own the only permit");
+        env.scheduler.status.start_indexing().await;
+        assert_eq!(
+            env.scheduler.trigger_scan().await.unwrap(),
+            ScanTrigger::AlreadyRunning
+        );
+        assert!(
+            env.scheduler.status.is_indexing.load(Ordering::SeqCst),
+            "an attached response must report the run it attached to"
+        );
+
+        // A runner that has stopped indexing but not yet released the permit
+        // must not produce a phantom attach; the trigger waits for the
+        // release and starts a fresh run.
+        env.scheduler.status.stop_indexing().await;
+        let release_delay = tokio::spawn(async move {
+            sleep(TokioDuration::from_millis(20)).await;
+            drop(held_permit);
+        });
+        assert_eq!(
+            env.scheduler.trigger_scan().await.unwrap(),
+            ScanTrigger::Started
+        );
+        release_delay.await.unwrap();
+        assert!(
+            env.scheduler.status.is_indexing.load(Ordering::SeqCst),
+            "the 202 response depends on is_indexing being true immediately"
+        );
+
+        for _ in 0..400 {
+            if !env.scheduler.status.is_indexing.load(Ordering::SeqCst) {
+                break;
+            }
+            sleep(TokioDuration::from_millis(25)).await;
+        }
+        assert!(!env.scheduler.status.is_indexing.load(Ordering::SeqCst));
+        assert!(env.scheduler.status.is_complete.load(Ordering::SeqCst));
+        assert_eq!(env.get_all_photo_paths().await.unwrap().len(), 1);
+
+        assert_eq!(
+            env.scheduler.trigger_scan().await.unwrap(),
+            ScanTrigger::Started,
+            "the permit must be released after the manual run"
+        );
+        for _ in 0..400 {
+            if !env.scheduler.status.is_indexing.load(Ordering::SeqCst) {
+                break;
+            }
+            sleep(TokioDuration::from_millis(25)).await;
+        }
     }
 
     #[tokio::test]

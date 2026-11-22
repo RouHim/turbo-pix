@@ -57,9 +57,9 @@ TURBO_PIX_DATA_PATH=data \
 
 Open <http://localhost:18473>, or `http://<host>:18473` from another device. The first start scans your library and
 downloads the search model (~580 MB) and the face models (~264 MB). Later starts only process new or changed files, and a
-nightly rescan keeps the index current. The UI shows indexing progress. Face recognition groups detected faces into
-people; rename or hide clusters there, or click a person to filter the grid. Set
-`TURBO_PIX_FACE_RECOGNITION=false` to skip face indexing and hide the People view.
+nightly rescan keeps the index current; start one from Housekeeping if you do not want to wait. The UI shows indexing
+progress. Face recognition groups detected faces into people; rename or hide clusters there, or click a person to
+filter the grid. Set `TURBO_PIX_FACE_RECOGNITION=false` to skip face indexing and hide the People view.
 
 Configuration, supported formats and build instructions are in [DEVELOPMENT.md](DEVELOPMENT.md).
 

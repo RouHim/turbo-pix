@@ -14,7 +14,9 @@ Build, configuration, format and architecture details for TurboPix. The
 TurboPix scans your photo directories at startup, reads metadata and generates CLIP embeddings for semantic search from
 your photos, and stores everything in a local database. You can then browse photos by date, search for specific cameras
 or filenames, and view detailed information about each photo. Thumbnails are generated on-the-fly and cached for faster
-loading. Each night, TurboPix checks for new photos and updates the database accordingly.
+loading. Each night, TurboPix checks for new photos and updates the database accordingly; the same full cycle can be
+started on demand from the Housekeeping view (or `POST /api/indexing/scan`). Run one instance per data directory: the
+scan lock coordinates triggers inside a process, not across processes.
 
 ## Capabilities
 

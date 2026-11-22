@@ -652,6 +652,15 @@ Progress of the background scan, polled by the UI.
   "active_phase_id": "metadata",
   "phases": [
     {
+      "id": "discovering",
+      "state": "done",
+      "kind": "indeterminate",
+      "processed": 4000,
+      "total": null,
+      "errors": 0,
+      "current_item": null
+    },
+    {
       "id": "metadata",
       "state": "active",
       "kind": "determinate",
@@ -659,14 +668,60 @@ Progress of the background scan, polled by the UI.
       "total": 4000,
       "errors": 0,
       "current_item": "/photos/2024/IMG_9999.jpg"
+    },
+    {
+      "id": "semantic_vectors",
+      "state": "pending",
+      "kind": "determinate",
+      "processed": 0,
+      "total": null,
+      "errors": 0,
+      "current_item": null
+    },
+    {
+      "id": "faces",
+      "state": "pending",
+      "kind": "determinate",
+      "processed": 0,
+      "total": null,
+      "errors": 0,
+      "current_item": null
+    },
+    {
+      "id": "geo_resolution",
+      "state": "pending",
+      "kind": "determinate",
+      "processed": 0,
+      "total": null,
+      "errors": 0,
+      "current_item": null
+    },
+    {
+      "id": "collages",
+      "state": "pending",
+      "kind": "indeterminate",
+      "processed": 0,
+      "total": null,
+      "errors": 0,
+      "current_item": null
+    },
+    {
+      "id": "housekeeping",
+      "state": "pending",
+      "kind": "indeterminate",
+      "processed": 0,
+      "total": null,
+      "errors": 0,
+      "current_item": null
     }
   ],
   "photos_indexed": 4000
 }
 ```
 
-  - `phases` always carries the six canonical phases in order: `discovering`,
-    `metadata`, `semantic_vectors`, `geo_resolution`, `collages`, `housekeeping`.
+  - `phases` always carries the seven canonical phases in order: `discovering`,
+    `metadata`, `semantic_vectors`, `faces`, `geo_resolution`, `collages`,
+    `housekeeping`.
   - `state` is `pending` | `active` | `done` | `error`; `kind` is `determinate` |
     `indeterminate`; `total` is `null` for indeterminate phases; `current_item` is
     a raw path/basename, not user-facing text.
@@ -676,6 +731,27 @@ Progress of the background scan, polled by the UI.
   `pragma: no-cache`.
 - **Statuses**: `200` (this handler is infallible).
 - Source: `src/handlers_indexing.rs` (`get_indexing_status`)
+
+### `POST /api/indexing/scan`
+
+Starts the same full cycle as the startup and nightly scans (all seven phases)
+on a dedicated indexing thread. The response is the accepted status snapshot
+with `is_indexing: true`, so callers can show progress without waiting for the
+next poll. While a cycle is running, another request attaches to it — there is
+no queue, no job id and no conflict status. If a tiny cycle finishes while the
+response is being built, the snapshot still reports the accepted run and the
+client's immediate poll reconciles the final state.
+
+```shell
+curl -X POST http://localhost:18473/api/indexing/scan
+```
+
+- **Response `202`**: the same JSON shape as `GET /api/indexing/status`.
+- **Errors**: `500` only when the indexing thread cannot be spawned.
+- **Single instance**: the scan lock is in-process. Do not point two processes
+  at the same data directory.
+- **Source**: `src/handlers_indexing.rs` (`trigger_scan`),
+  `src/scheduler.rs` (`PhotoScheduler::trigger_scan`)
 
 ## Albums
 
@@ -920,6 +996,7 @@ the binary (`src/handlers_static.rs`):
 | POST | `/api/photos/{hash}/rotate` | `src/handlers_photo.rs` |
 | GET | `/api/search/semantic` | `src/handlers_search.rs` |
 | GET | `/api/indexing/status` | `src/handlers_indexing.rs` |
+| POST | `/api/indexing/scan` | `src/handlers_indexing.rs` |
 | GET | `/api/albums` | `src/handlers_albums.rs` |
 | POST | `/api/albums` | `src/handlers_albums.rs` |
 | PATCH | `/api/albums/{id}` | `src/handlers_albums.rs` |

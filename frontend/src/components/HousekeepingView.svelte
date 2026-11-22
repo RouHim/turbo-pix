@@ -14,6 +14,7 @@
   import { handleError } from '../lib/utils.js';
   import { createCardRangeSelection } from '../lib/selectionRangeController.js';
   import HousekeepingCard from './HousekeepingCard.svelte';
+  import Icon from './Icon.svelte';
 
   let candidates = $state([]);
   let loading = $state(true);
@@ -21,6 +22,7 @@
   let loaded = $state(false);
   let scanning = $state(false);
   let busy = $state(false);
+  let scanRequestPending = $state(false);
   let lastHkState = null;
   let abortController = null;
 
@@ -72,6 +74,22 @@
       lastHkState = hk?.state ?? null;
     }
   }
+
+  const triggerScan = async () => {
+    if (scanRequestPending || indexingState.isIndexing) return;
+    scanRequestPending = true;
+    try {
+      const status = await api.triggerScan();
+      // Seed the shared state so the button disables before the orbit's
+      // confirming poll; the orbit remains the authoritative writer.
+      if (status?.is_indexing) indexingState.isIndexing = true;
+      window.dispatchEvent(new CustomEvent('indexingScanStarted', { detail: status }));
+    } catch (e) {
+      handleError(e, 'Scan library');
+    } finally {
+      scanRequestPending = false;
+    }
+  };
 
   async function loadAndRender() {
     loading = true;
@@ -194,6 +212,21 @@
 </script>
 
 <div class="housekeeping-view">
+  <div class="view-toolbar">
+    <button
+      type="button"
+      class="btn-primary scan-btn"
+      data-action="scan-library"
+      onclick={triggerScan}
+      disabled={indexingState.isIndexing || scanRequestPending}
+      aria-busy={indexingState.isIndexing}
+    >
+      <Icon name="rotate-cw" width={16} height={16} />
+      {indexingState.isIndexing
+        ? $t('ui.scan_running', { default: 'Scanning…' })
+        : $t('ui.scan_library_now', { default: 'Scan library now' })}
+    </button>
+  </div>
   {#if loading && !loaded}
     <div class="loading-skeleton">
       <div class="skeleton-item"></div>
@@ -247,6 +280,19 @@
 <style>
   .housekeeping-view {
     padding: var(--space-4);
+  }
+
+  .view-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--space-4);
+  }
+
+  .scan-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
   }
 
   .error-message {

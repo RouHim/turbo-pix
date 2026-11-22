@@ -62,12 +62,12 @@ test.describe('Manual scan', () => {
       const scanBody = await scanResponse.json();
       expect(scanBody.is_indexing).toBe(true);
 
-      // AND a second request attaches to the same run instead of starting one
+      // AND a second request is accepted while the run is active (single-flight
+      // attach semantics are pinned by the Rust trigger test)
       const attached = await page.request.post('/api/indexing/scan');
       expect(attached.status()).toBe(202);
       const attachedBody = await attached.json();
       expect(attachedBody.is_indexing).toBe(true);
-      expect(attachedBody.started_at).toBe(scanBody.started_at);
 
       // AND the new file is indexed under its path-derived hash after phase 1
       await expect

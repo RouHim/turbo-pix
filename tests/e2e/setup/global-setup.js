@@ -518,7 +518,7 @@ async function seedTestMedia() {
  * so the scan leaves the tag alone; this reseed is what makes the file
  * non-progressive for the specs.
  */
-async function reseedNonProgressiveFixture() {
+export async function reseedNonProgressiveFixture() {
   const source = path.join('test-data', NON_PROGRESSIVE_FIXTURE);
   const destination = path.join(TEST_DATA_DIR, 'photos', NON_PROGRESSIVE_FIXTURE);
   if (!existsSync(source)) {

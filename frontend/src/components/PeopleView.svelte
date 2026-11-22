@@ -289,14 +289,14 @@
     brokenCovers = { ...brokenCovers, [person.id]: true };
   }
 
-  function personLabel(person) {
+  function personLabelById(id, name) {
     return (
-      person.name ||
-      $t('ui.people_person_number', {
-        values: { number: person.id },
-        default: 'Person {number}',
-      })
+      name || $t('ui.people_person_number', { values: { number: id }, default: 'Person {number}' })
     );
+  }
+
+  function personLabel(person) {
+    return personLabelById(person.id, person.name);
   }
 
   function faceCountLabel(person) {
@@ -314,12 +314,6 @@
 
   function personInitial(person) {
     return person.name?.trim()?.charAt(0)?.toUpperCase() || null;
-  }
-
-  function personLabelById(id, name) {
-    return (
-      name || $t('ui.people_person_number', { values: { number: id }, default: 'Person {number}' })
-    );
   }
 
   // --- Selection mode -------------------------------------------------------
@@ -449,8 +443,24 @@
         mergeError = $t('ui.people_merge_missing', {
           default: 'Someone in this selection is gone. The list was refreshed.',
         });
-        exitSelectionMode();
+        // Rebuild the dialog from server truth: keeping the stale snapshot
+        // would let the Merge button resend the same dead ids forever.
         await refresh();
+        const present = mergeSelection.filter((person) =>
+          people.some((item) => item.id === person.id)
+        );
+        mergeSelection = present;
+        if (!present.some((person) => person.id === mergeKeeperId)) {
+          mergeKeeperId = present[0]?.id ?? null;
+          mergeName = mergeNamePrefill(present, mergeKeeperId);
+        }
+        if (!canMergeSelection(present.length)) {
+          // Not enough persons left to retry: the dialog closes, so the inline
+          // error would disappear with it.
+          mergeDialogEl?.close();
+          addToast($t('notifications.error', { default: 'Error' }), mergeError, 'error', 6000);
+          exitSelectionMode();
+        }
       } else {
         mergeError = $t('ui.people_merge_failed', {
           default: 'Could not merge these persons',
@@ -1151,7 +1161,7 @@
   .merge-person-text {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 0;
     min-width: 0;
   }
 
@@ -1548,6 +1558,10 @@
     }
 
     .people-hidden-toggle {
+      min-height: 44px;
+    }
+
+    .people-undo-chip {
       min-height: 44px;
     }
 

@@ -1192,13 +1192,19 @@ async fn store_semantic_vector_tx(
     .fetch_one(&mut **tx)
     .await?;
 
-    sqlx::query(
-        "INSERT OR REPLACE INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)",
-    )
-    .bind(id)
-    .bind(vector_floats.as_slice().as_bytes())
-    .execute(&mut **tx)
-    .await?;
+    // vec0 virtual tables do not honor INSERT OR REPLACE conflict handling:
+    // a row left by an interrupted run (vector stored, indexed flag not yet
+    // committed) makes the insert fail with a UNIQUE constraint and the retry
+    // never converges. Delete the old row explicitly first.
+    sqlx::query("DELETE FROM media_semantic_vectors WHERE rowid = ?")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)")
+        .bind(id)
+        .bind(vector_floats.as_slice().as_bytes())
+        .execute(&mut **tx)
+        .await?;
 
     Ok(())
 }
@@ -1388,6 +1394,50 @@ mod tests {
         assert_eq!(indexed_count, 3);
 
         assert_eq!(result, (3, 0));
+    }
+
+    #[tokio::test]
+    async fn test_batch_store_replaces_vector_left_by_interrupted_scan() {
+        // GIVEN a previous run stored the vector but was killed before the
+        // photo's indexed flag was committed
+        let db_pool = create_test_db_pool().await.unwrap();
+        let path = "test-data/interrupted.jpg";
+        create_test_photo(path).create(&db_pool).await.unwrap();
+        let first = vec![SemanticBatchItem::Image {
+            path: path.to_string(),
+            vector: create_dummy_tensor(0.1),
+        }];
+        assert_eq!(
+            batch_store_semantic_vectors(&db_pool, first).await.unwrap(),
+            (1, 0)
+        );
+        sqlx::query("UPDATE photos SET semantic_vector_indexed = 0 WHERE file_path = ?")
+            .bind(path)
+            .execute(&db_pool)
+            .await
+            .unwrap();
+
+        // WHEN the retry computes and stores the same path again
+        let retry = vec![SemanticBatchItem::Image {
+            path: path.to_string(),
+            vector: create_dummy_tensor(0.2),
+        }];
+        let result = batch_store_semantic_vectors(&db_pool, retry).await.unwrap();
+
+        // THEN the vec0 row is replaced instead of failing on its primary key
+        assert_eq!(result, (1, 0), "a stored vector must be replaceable");
+        let vector_count: i64 = sqlx::query_scalar("SELECT count(*) FROM media_semantic_vectors")
+            .fetch_one(&db_pool)
+            .await
+            .unwrap();
+        assert_eq!(vector_count, 1);
+        let indexed: i64 =
+            sqlx::query_scalar("SELECT semantic_vector_indexed FROM photos WHERE file_path = ?")
+                .bind(path)
+                .fetch_one(&db_pool)
+                .await
+                .unwrap();
+        assert_eq!(indexed, 1);
     }
 
     #[tokio::test]

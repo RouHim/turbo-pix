@@ -1,3 +1,5 @@
+## [2.56.1](https://github.com/RouHim/turbo-pix/compare/2.56.0...2.56.1) (2026-11-22)
+
 # [2.56.0](https://github.com/RouHim/turbo-pix/compare/2.55.4...2.56.0) (2026-11-22)
 
 ### Bug Fixes

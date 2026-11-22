@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { TestHelpers } from '../setup/test-helpers.js';
+import { reseedNonProgressiveFixture } from '../setup/global-setup.js';
 
 const PHOTO_ROOT = path.resolve('test-e2e-data', 'photos');
 
@@ -117,6 +118,10 @@ test.describe('Manual scan', () => {
       await page.request.put(`/api/photos/${favoriteHash}/favorite`, {
         data: { is_favorite: originalFavorite },
       });
+      // Phase 1 faststarts `test_video_moov_end.mp4` in place. The setup
+      // reseeds it after indexing because video-streaming's decision matrix
+      // needs the non-progressive form; this scan undoes that, so restore it.
+      await reseedNonProgressiveFixture();
     }
   });
 });

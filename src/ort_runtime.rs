@@ -3,12 +3,18 @@
 //! ORT permits exactly one environment per process, so CLIP and the face
 //! pipeline must build their sessions from the same one.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use ort::environment::Environment;
 
 static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
+
+/// Serializes the first construction: ORT records one process-global
+/// environment when `build()` runs, so two concurrent first callers would
+/// otherwise race and the loser would be rejected without anything published
+/// to fall back to.
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Returns the single process-wide ORT environment, building it on first use.
 /// Session creation may fail and be retried; the environment itself is never
@@ -18,11 +24,19 @@ pub(crate) fn shared_environment() -> Result<Environment> {
         return Ok(environment.clone());
     }
 
+    // CLIP and the face loaders run on independent blocking threads, so this
+    // lock is what keeps their first calls from building two environments.
+    let _guard = INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A concurrent caller may have published while we waited for the lock.
+    if let Some(environment) = ENVIRONMENT.get() {
+        return Ok(environment.clone());
+    }
+
     let built = ort::init()
         .with_name("turbo-pix")
         .build()
-        // A concurrent caller may have won the race; reuse its environment.
-        .or_else(|error| ENVIRONMENT.get().cloned().ok_or(error))
         .context("Failed to initialize ONNX Runtime")?;
 
     Ok(ENVIRONMENT.get_or_init(|| built).clone())

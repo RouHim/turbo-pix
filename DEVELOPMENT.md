@@ -136,11 +136,11 @@ downloaded from the pinned `Xenova/clip-vit-base-patch32` HuggingFace revision a
 without one, so a server that sits idle does not keep them resident. The first semantic search (or the first indexing run
 that needs embeddings) after that pays a short reload; the rest of the application is unaffected.
 
-To seed an offline/air-gapped installation, place `vision.onnx`, `text.onnx` and `tokenizer.json` in
-`{DATA_PATH}/models/clip/`; they are verified when loaded. The path is resolved as
-`<DATA_PATH>/../data/models/clip`, so the default `./data` and the container's `/data` both use `{DATA_PATH}/models/clip`;
-a custom data path shares the sibling `data/models` cache. After a runtime or model change that alters embeddings, the
-shipped migration resets the vector tables and photo flags so the next scan re-embeds the library.
+To seed an offline/air-gapped installation, place `vision.onnx`, `text.onnx` and `tokenizer.json` in the resolved cache
+directory, `<DATA_PATH>/../data/models/clip` (with the default `./data` and the container's `/data` that is
+`{DATA_PATH}/models/clip`); they are verified when loaded. A custom data path shares the sibling `data/models` cache.
+After a runtime or model change that alters embeddings, the shipped migration resets the vector tables and photo flags
+so the next scan re-embeds the library.
 
 An upgrade from the Candle build leaves the old `models--openai--clip-vit-base-patch32` safetensors/tokenizer snapshot
 under `{DATA_PATH}/models`. It is no longer used and can be deleted manually to reclaim ~580 MB.

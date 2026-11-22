@@ -218,6 +218,44 @@ pub struct Pipelines {
     pub face_recognition: Arc<dyn FaceRecognition>,
 }
 
+/// Holds the manual-scan runtime until the indexing thread takes it.
+///
+/// The handler builds the guard in an async context and only moves it into the
+/// spawned thread. When `thread::Builder::spawn` fails, std drops the closure —
+/// and with it this guard — on the calling thread, i.e. inside the HTTP
+/// handler. Dropping a `Runtime` there panics ("Cannot drop a runtime in a
+/// context where blocking is not allowed"), so the guard shuts the runtime down
+/// non-blockingly instead.
+struct ManualScanRuntime {
+    runtime: Option<tokio::runtime::Runtime>,
+}
+
+impl ManualScanRuntime {
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            runtime: Some(tokio::runtime::Runtime::new()?),
+        })
+    }
+
+    /// Hands the runtime to the spawned thread; the guard becomes inert and
+    /// its `Drop` does nothing.
+    fn take(&mut self) -> tokio::runtime::Runtime {
+        self.runtime
+            .take()
+            .expect("manual scan runtime is taken exactly once")
+    }
+}
+
+impl Drop for ManualScanRuntime {
+    fn drop(&mut self) {
+        // Only reaches this on a failed spawn: the runtime was never moved to
+        // a thread, so no thread will ever drive it.
+        if let Some(rt) = self.runtime.take() {
+            rt.shutdown_background();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PhotoScheduler {
     photo_paths: Vec<PathBuf>,
@@ -468,14 +506,19 @@ impl PhotoScheduler {
             return Ok(ScanTrigger::AlreadyRunning);
         };
 
+        // Build the runtime before flipping the status: a failure here must
+        // leave the scheduler idle instead of wedging `is_indexing` with no
+        // thread that could ever clear it.
+        let mut rt = ManualScanRuntime::new()?;
+
         self.begin_run().await;
 
         let scheduler = self.clone();
         let spawned = thread::Builder::new()
             .name("indexing-manual".into())
             .spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create indexing runtime");
-                rt.block_on(async move {
+                let runtime = rt.take();
+                runtime.block_on(async move {
                     if let Err(e) = scheduler.finish_cycle(permit).await {
                         error!("Manual rescan failed: {}", e);
                     }
@@ -484,7 +527,9 @@ impl PhotoScheduler {
 
         if let Err(e) = spawned {
             // No thread owns the permit or will clear the status; restore the
-            // idle state and report the failure to the caller.
+            // idle state and report the failure to the caller. The guard was
+            // dropped with the failed closure and already shut its runtime
+            // down without blocking.
             self.status.stop_indexing().await;
             return Err(e);
         }
@@ -991,6 +1036,21 @@ mod tests {
             !scheduler.status.is_complete.load(Ordering::SeqCst),
             "a missing photo root makes the scan partial, never complete"
         );
+    }
+
+    /// A failed `thread::Builder::spawn` drops the indexing closure — and the
+    /// runtime guard it carries — on the calling thread, i.e. inside the HTTP
+    /// handler's async context. Dropping a `Runtime` there panics, so the
+    /// guard must shut it down without blocking.
+    #[tokio::test]
+    async fn test_manual_scan_runtime_guard_drops_in_async_context() {
+        let guard = ManualScanRuntime::new().expect("runtime must build");
+        let mut taken = ManualScanRuntime::new().expect("runtime must build");
+        // A taken runtime is owned by the thread that took it, so the guard's
+        // `Drop` stays inert.
+        taken.take().shutdown_background();
+
+        drop(guard);
     }
 
     #[tokio::test]

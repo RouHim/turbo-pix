@@ -330,9 +330,9 @@ async fn initialize_services(
     let thumbnail_generator = ThumbnailGenerator::new(config, db_pool.clone())?;
     info!("Cache and thumbnail system initialized");
 
-    // Initialize semantic search engine. The CLIP weights (~577 MiB of heap)
-    // are materialized on first use — on a typical library that is the startup
-    // indexing pass — and dropped again once nothing has used them for
+    // Initialize semantic search engine. The CLIP ONNX sessions (~600 MiB of
+    // weights) are materialized on first use — on a typical library that is the
+    // startup indexing pass — and dropped again once nothing has used them for
     // CLIP_IDLE_TIMEOUT, so an idle server does not keep them resident.
     let semantic_search = Arc::new(SemanticSearchEngine::new(
         db_pool.clone(),

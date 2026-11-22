@@ -4,19 +4,14 @@
 //! fetched at runtime (never committed or bundled) from pinned HuggingFace
 //! revisions; the SHA-256 checks below are the local integrity gate.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use ort::environment::Environment;
 use ort::session::Session;
-use sha2::{Digest, Sha256};
 
-/// ONNX Runtime permits exactly one environment per process, so it is built
-/// once and reused: a failed session load must stay retryable without a
-/// process restart.
-static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
+use crate::model_files::verify_sha256;
+use crate::ort_runtime::shared_environment;
 
 pub const MODEL_VERSION: &str = "scrfd-2.5g_antelopev2-r100-v2";
 
@@ -124,52 +119,6 @@ pub fn load_models(paths: &FaceModelPaths, threads: usize) -> Result<FaceModels>
         recognizer,
         _environment: environment,
     })
-}
-
-/// Returns the single process-wide ORT environment, building it on first use.
-/// Session creation may fail and be retried; the environment itself is never
-/// rebuilt, because ORT rejects a second one.
-fn shared_environment() -> Result<Environment> {
-    if let Some(environment) = ENVIRONMENT.get() {
-        return Ok(environment.clone());
-    }
-
-    let built = ort::init()
-        .with_name("turbo-pix-face")
-        .build()
-        // A concurrent caller may have won the race; reuse its environment.
-        .or_else(|error| ENVIRONMENT.get().cloned().ok_or(error))
-        .context("Failed to initialize ONNX Runtime")?;
-
-    Ok(ENVIRONMENT.get_or_init(|| built).clone())
-}
-
-fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open model {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    let actual: String = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if actual != expected {
-        anyhow::bail!(
-            "Model checksum mismatch for {}: expected {}, got {}",
-            path.display(),
-            expected,
-            actual
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

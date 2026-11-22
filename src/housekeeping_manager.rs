@@ -113,7 +113,6 @@ mod tests {
     use crate::db_pool::create_in_memory_pool;
     use anyhow::anyhow;
     use async_trait::async_trait;
-    use candle_core::Tensor;
     use std::collections::HashMap;
 
     /// Mock semantic search returning per-term (file_path, score) results.
@@ -136,7 +135,10 @@ mod tests {
             Ok(self.results.get(query).cloned().unwrap_or_default())
         }
 
-        async fn encode_image_vector(&self, _image_path: &str) -> anyhow::Result<(String, Tensor)> {
+        async fn encode_image_vector(
+            &self,
+            _image_path: &str,
+        ) -> anyhow::Result<(String, Vec<f32>)> {
             Err(anyhow!("not used by housekeeping scan"))
         }
 
@@ -144,7 +146,7 @@ mod tests {
             &self,
             _video_path: &str,
             _frame_count: Option<usize>,
-        ) -> anyhow::Result<(String, Tensor, crate::semantic_search::VideoSemanticMeta)> {
+        ) -> anyhow::Result<(String, Vec<f32>, crate::semantic_search::VideoSemanticMeta)> {
             Err(anyhow!("not used by housekeeping scan"))
         }
     }

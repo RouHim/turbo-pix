@@ -557,6 +557,81 @@ mod tests {
     }
 
     #[test]
+    fn preprocesses_to_normalized_chw_planes() {
+        let mut img = image::RgbImage::from_pixel(IMAGE_SIZE, IMAGE_SIZE, image::Rgb([0, 0, 0]));
+        img.put_pixel(10, 5, image::Rgb([255, 128, 32]));
+        let file = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .expect("create temp png");
+        img.save(file.path()).expect("write temp png");
+
+        let data = preprocess_image(file.path()).expect("preprocess image");
+
+        let plane = IMAGE_SIZE as usize * IMAGE_SIZE as usize;
+        assert_eq!(data.len(), 3 * plane);
+
+        // HWC `(10, 5)` lands in every CHW channel plane at `5 * 224 + 10`.
+        let index = 5 * IMAGE_SIZE as usize + 10;
+        for (channel, &byte) in [255_u8, 128, 32].iter().enumerate() {
+            let value = f32::from(byte) / 255.0;
+            let expected = (value - IMAGE_MEAN[channel]) / IMAGE_STD[channel];
+            assert_eq!(data[channel * plane + index], expected);
+
+            // Pixel (0, 0) stays black, i.e. normalized zero.
+            let black = -IMAGE_MEAN[channel] / IMAGE_STD[channel];
+            assert_eq!(data[channel * plane], black);
+        }
+    }
+
+    #[test]
+    fn accepts_dynamic_and_matching_input_shapes() {
+        let path = Path::new("vision.onnx");
+        for dims in [vec![-1_i64, 3, 224, 224], vec![-1, -1, -1, -1]] {
+            assert!(assert_shape(path, &Shape::from(dims), &[3, 224, 224]).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_input_shapes() {
+        let path = Path::new("vision.onnx");
+        for dims in [
+            vec![1, 3, 224, 224],  // batch axis must be dynamic
+            vec![-1, 3, 224, 223], // height mismatch
+            vec![-1_i64, 3, 224],  // too few axes
+            vec![],                // empty shape
+        ] {
+            assert!(assert_shape(path, &Shape::from(dims), &[3, 224, 224]).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_matching_output_shapes() {
+        let path = Path::new("vision.onnx");
+        for dims in [
+            vec![-1, EMBEDDING_DIM as i64],
+            vec![1, EMBEDDING_DIM as i64],
+            vec![-1, -1],
+            vec![1, -1],
+        ] {
+            assert!(assert_output_shape(path, &Shape::from(dims)).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_output_shapes() {
+        let path = Path::new("vision.onnx");
+        for dims in [
+            vec![EMBEDDING_DIM as i64],        // missing projection axis
+            vec![2, EMBEDDING_DIM as i64],     // batch must be dynamic or 1
+            vec![1, EMBEDDING_DIM as i64 - 1], // wrong projection width
+            vec![1, EMBEDDING_DIM as i64, 1],  // too many axes
+        ] {
+            assert!(assert_output_shape(path, &Shape::from(dims)).is_err());
+        }
+    }
+
+    #[test]
     fn averages_per_frame_embeddings() {
         let mut first = vec![0.0_f32; EMBEDDING_DIM];
         first[0] = 2.0;

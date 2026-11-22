@@ -38,6 +38,39 @@ pub struct PersonRow {
     pub hidden: bool,
 }
 
+/// The merge that can still be undone. Exactly one exists while a merge is
+/// recorded; the next merge replaces it.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MergeSlot {
+    pub undo_id: i64,
+    pub target_id: i64,
+    pub target_name: Option<String>,
+    pub source_count: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeOutcome {
+    pub moved_faces: u64,
+    pub removed_people: u64,
+    pub undo_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndoOutcome {
+    pub restored_faces: u64,
+    pub total_faces: u64,
+    pub restored_people: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoResult {
+    Done(UndoOutcome),
+    /// No merge is recorded.
+    Missing,
+    /// The recorded merge is newer than the requested one.
+    Stale,
+}
+
 #[derive(Debug, Clone)]
 pub struct OldFace {
     pub id: i64,
@@ -370,6 +403,227 @@ pub async fn update_person(
     Ok(Some(updated))
 }
 
+/// Merges every selected source person into the keeper in one transaction.
+///
+/// The faces are reassigned before the person rows are deleted: `faces.person_id`
+/// is `ON DELETE SET NULL`, so a delete first would orphan the faces instead of
+/// moving them. The undo slot is snapshotted before the update and replaces any
+/// previous slot, keeping exactly one merge undoable.
+pub async fn merge_people(
+    pool: &DbPool,
+    target_id: i64,
+    source_ids: &[i64],
+    name: Option<Option<String>>,
+    hidden: Option<bool>,
+) -> Result<Option<MergeOutcome>> {
+    let mut tx = pool.begin().await?;
+
+    for id in std::iter::once(target_id).chain(source_ids.iter().copied()) {
+        let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM people WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if exists.is_none() {
+            return Ok(None);
+        }
+    }
+
+    sqlx::query("DELETE FROM person_merge_undo")
+        .execute(&mut *tx)
+        .await?;
+    let undo_id: i64 =
+        sqlx::query_scalar("INSERT INTO person_merge_undo (target_id) VALUES (?) RETURNING id")
+            .bind(target_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    for source in source_ids {
+        sqlx::query(
+            "INSERT INTO person_merge_undo_source (undo_id, person_id, name, hidden)
+             SELECT ?, id, name, hidden FROM people WHERE id = ?",
+        )
+        .bind(undo_id)
+        .bind(source)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO person_merge_undo_face (undo_id, person_id, photo_hash, face_index)
+             SELECT ?, ?, photo_hash, face_index FROM faces WHERE person_id = ?",
+        )
+        .bind(undo_id)
+        .bind(source)
+        .bind(source)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let mut moved_faces = 0;
+    let mut removed_people = 0;
+    for source in source_ids {
+        let moved = sqlx::query("UPDATE faces SET person_id = ? WHERE person_id = ?")
+            .bind(target_id)
+            .bind(source)
+            .execute(&mut *tx)
+            .await?;
+        moved_faces += moved.rows_affected();
+        let removed = sqlx::query("DELETE FROM people WHERE id = ?")
+            .bind(source)
+            .execute(&mut *tx)
+            .await?;
+        removed_people += removed.rows_affected();
+    }
+
+    let set_name = name.is_some();
+    let name = name.flatten();
+    let set_hidden = hidden.is_some();
+    let hidden = hidden.unwrap_or(false);
+    sqlx::query(
+        "UPDATE people SET
+            name = CASE WHEN ? THEN ? ELSE name END,
+            hidden = CASE WHEN ? THEN ? ELSE hidden END,
+            updated_at = datetime('now')
+         WHERE id = ?",
+    )
+    .bind(set_name)
+    .bind(&name)
+    .bind(set_hidden)
+    .bind(hidden)
+    .bind(target_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(MergeOutcome {
+        moved_faces,
+        removed_people,
+        undo_id,
+    }))
+}
+
+/// Restores the snapshot of the recorded merge, best effort.
+///
+/// Only faces that still belong to the keeper and whose `(photo_hash,
+/// face_index)` survived a re-index return to their source person; the counts
+/// say how many did. A source person is re-created only when at least one face
+/// returned, and the slot is consumed either way.
+pub async fn undo_merge(pool: &DbPool, undo_id: i64) -> Result<UndoResult> {
+    let mut tx = pool.begin().await?;
+
+    let Some(current) = sqlx::query_scalar::<_, i64>("SELECT id FROM person_merge_undo")
+        .fetch_optional(&mut *tx)
+        .await?
+    else {
+        return Ok(UndoResult::Missing);
+    };
+    if current != undo_id {
+        return Ok(UndoResult::Stale);
+    }
+
+    let target_id: i64 = sqlx::query_scalar("SELECT target_id FROM person_merge_undo WHERE id = ?")
+        .bind(current)
+        .fetch_one(&mut *tx)
+        .await?;
+    let total_faces: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM person_merge_undo_face WHERE undo_id = ?")
+            .bind(current)
+            .fetch_one(&mut *tx)
+            .await?;
+    let sources: Vec<(i64, Option<String>, bool)> = sqlx::query_as(
+        "SELECT person_id, name, hidden FROM person_merge_undo_source
+         WHERE undo_id = ? ORDER BY person_id",
+    )
+    .bind(current)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut restored_faces = 0;
+    let mut restored_people = 0;
+    for (person_id, name, hidden) in sources {
+        // The person row must exist before faces can point at it again; when
+        // no face returns, the freshly created row is removed below.
+        let inserted = sqlx::query(
+            "INSERT INTO people (id, name, hidden) VALUES (?, ?, ?)
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(person_id)
+        .bind(&name)
+        .bind(hidden)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        let moved = sqlx::query(
+            "UPDATE faces SET person_id = ?
+             WHERE person_id = ? AND EXISTS (
+                SELECT 1 FROM person_merge_undo_face uf
+                WHERE uf.undo_id = ? AND uf.person_id = ?
+                  AND uf.photo_hash = faces.photo_hash
+                  AND uf.face_index = faces.face_index)",
+        )
+        .bind(person_id)
+        .bind(target_id)
+        .bind(current)
+        .bind(person_id)
+        .execute(&mut *tx)
+        .await?;
+        let restored = moved.rows_affected();
+        if restored == 0 {
+            if inserted > 0 {
+                sqlx::query("DELETE FROM people WHERE id = ?")
+                    .bind(person_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            continue;
+        }
+        restored_people += 1;
+        restored_faces += restored;
+    }
+
+    sqlx::query("DELETE FROM person_merge_undo WHERE id = ?")
+        .bind(current)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(UndoResult::Done(UndoOutcome {
+        restored_faces,
+        total_faces: total_faces as u64,
+        restored_people,
+    }))
+}
+
+/// The merge that can still be undone, if any.
+pub async fn last_merge(pool: &DbPool) -> Result<Option<MergeSlot>> {
+    Ok(sqlx::query_as::<_, MergeSlot>(
+        "SELECT u.id AS undo_id, u.target_id, p.name AS target_name,
+                (SELECT COUNT(*) FROM person_merge_undo_source s WHERE s.undo_id = u.id)
+                    AS source_count
+         FROM person_merge_undo u
+         LEFT JOIN people p ON p.id = u.target_id
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Hides or unhides every known person; unknown ids are skipped.
+pub async fn set_people_hidden(pool: &DbPool, ids: &[i64], hidden: bool) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+    let mut updated = 0;
+    for id in ids {
+        let result =
+            sqlx::query("UPDATE people SET hidden = ?, updated_at = datetime('now') WHERE id = ?")
+                .bind(hidden)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        updated += result.rows_affected();
+    }
+    tx.commit().await?;
+    Ok(updated)
+}
+
 pub async fn face_crop_info(pool: &DbPool, face_id: i64) -> Result<Option<String>> {
     Ok(
         sqlx::query_scalar("SELECT photo_hash FROM faces WHERE id = ?")
@@ -674,5 +928,264 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    async fn seed_person(pool: &DbPool, name: Option<&str>, hidden: bool) -> i64 {
+        let id: i64 = sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        if let Some(name) = name {
+            sqlx::query("UPDATE people SET name = ? WHERE id = ?")
+                .bind(name)
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        if hidden {
+            sqlx::query("UPDATE people SET hidden = 1 WHERE id = ?")
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        id
+    }
+
+    async fn seed_faces(pool: &DbPool, hash: &str, person_id: i64, first: i64, count: i64) {
+        for index in first..first + count {
+            sqlx::query(
+                "INSERT INTO faces
+                 (photo_hash, face_index, person_id, bbox_x, bbox_y, bbox_w, bbox_h, quality)
+                 VALUES (?, ?, ?, 0.0, 0.0, 1.0, 1.0, 1.0)",
+            )
+            .bind(hash)
+            .bind(index)
+            .bind(person_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn faces_with_person(pool: &DbPool, person_id: i64) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE person_id = ?")
+            .bind(person_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn person_snapshot(pool: &DbPool, id: i64) -> Option<(Option<String>, bool)> {
+        sqlx::query_as("SELECT name, hidden FROM people WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn merge_moves_faces_records_the_undo_slot_and_renames_the_keeper() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photo = seed_photo(&pool, "merge").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        let source = seed_person(&pool, None, true).await;
+        seed_faces(&pool, &photo.hash_sha256, keeper, 0, 3).await;
+        seed_faces(&pool, &photo.hash_sha256, source, 3, 2).await;
+
+        let outcome = merge_people(
+            &pool,
+            keeper,
+            &[source],
+            Some(Some("Anna".to_string())),
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("both persons exist");
+
+        assert_eq!(outcome.moved_faces, 2);
+        assert_eq!(outcome.removed_people, 1);
+        assert_eq!(faces_with_person(&pool, keeper).await, 5);
+        assert_eq!(person_snapshot(&pool, source).await, None);
+        assert_eq!(
+            person_snapshot(&pool, keeper).await,
+            Some((Some("Anna".into()), false))
+        );
+
+        let slot = last_merge(&pool).await.unwrap().expect("slot recorded");
+        assert_eq!(slot.undo_id, outcome.undo_id);
+        assert_eq!(slot.target_id, keeper);
+        assert_eq!(slot.target_name.as_deref(), Some("Anna"));
+        assert_eq!(slot.source_count, 1);
+    }
+
+    #[tokio::test]
+    async fn merge_applies_the_supplied_hidden_state_to_the_keeper() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photo = seed_photo(&pool, "merge-hidden").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        let source = seed_person(&pool, None, false).await;
+        seed_faces(&pool, &photo.hash_sha256, keeper, 0, 1).await;
+        seed_faces(&pool, &photo.hash_sha256, source, 1, 1).await;
+
+        merge_people(&pool, keeper, &[source], None, Some(true))
+            .await
+            .unwrap()
+            .expect("both persons exist");
+
+        assert_eq!(
+            person_snapshot(&pool, keeper).await,
+            Some((Some("Anna".into()), true))
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_with_an_unknown_person_writes_nothing() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photo = seed_photo(&pool, "merge-unknown").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        seed_faces(&pool, &photo.hash_sha256, keeper, 0, 2).await;
+
+        let outcome = merge_people(&pool, keeper, &[9999], None, None)
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert_eq!(faces_with_person(&pool, keeper).await, 2);
+        assert!(last_merge(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn undo_restores_the_source_person_with_its_snapshot_fields() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photo = seed_photo(&pool, "undo").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        let source = seed_person(&pool, Some("Oma"), true).await;
+        seed_faces(&pool, &photo.hash_sha256, keeper, 0, 3).await;
+        seed_faces(&pool, &photo.hash_sha256, source, 3, 2).await;
+
+        let merge = merge_people(
+            &pool,
+            keeper,
+            &[source],
+            Some(Some("Anna".to_string())),
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("both persons exist");
+
+        let UndoResult::Done(outcome) = undo_merge(&pool, merge.undo_id).await.unwrap() else {
+            panic!("the current slot must undo");
+        };
+        assert_eq!(outcome.restored_faces, 2);
+        assert_eq!(outcome.total_faces, 2);
+        assert_eq!(outcome.restored_people, 1);
+        assert_eq!(faces_with_person(&pool, source).await, 2);
+        assert_eq!(faces_with_person(&pool, keeper).await, 3);
+        assert_eq!(
+            person_snapshot(&pool, source).await,
+            Some((Some("Oma".into()), true))
+        );
+        assert!(
+            last_merge(&pool).await.unwrap().is_none(),
+            "slot is consumed"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_restores_only_the_face_positions_that_survive_a_reindex() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let first_photo = seed_photo(&pool, "undo-a").await;
+        let second_photo = seed_photo(&pool, "undo-b").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        let source = seed_person(&pool, None, false).await;
+        seed_faces(&pool, &first_photo.hash_sha256, source, 0, 2).await;
+        seed_faces(&pool, &second_photo.hash_sha256, source, 0, 1).await;
+
+        let merge = merge_people(&pool, keeper, &[source], None, None)
+            .await
+            .unwrap()
+            .expect("both persons exist");
+
+        // A re-index replaces the photo's faces; the person association
+        // survives, the face indexes do not have to.
+        sqlx::query("DELETE FROM faces WHERE photo_hash = ?")
+            .bind(&second_photo.hash_sha256)
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_faces(&pool, &second_photo.hash_sha256, keeper, 7, 1).await;
+
+        let UndoResult::Done(outcome) = undo_merge(&pool, merge.undo_id).await.unwrap() else {
+            panic!("the current slot must undo");
+        };
+        assert_eq!(outcome.restored_faces, 2, "only surviving positions return");
+        assert_eq!(
+            outcome.total_faces, 3,
+            "the re-indexed face is still counted"
+        );
+        assert_eq!(outcome.restored_people, 1);
+        assert_eq!(faces_with_person(&pool, source).await, 2);
+        assert_eq!(faces_with_person(&pool, keeper).await, 1);
+    }
+
+    #[tokio::test]
+    async fn undo_rejects_a_slot_replaced_by_a_newer_merge() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let photo = seed_photo(&pool, "undo-stale").await;
+        let keeper = seed_person(&pool, Some("Anna"), false).await;
+        let first = seed_person(&pool, None, false).await;
+        let second = seed_person(&pool, None, false).await;
+        seed_faces(&pool, &photo.hash_sha256, keeper, 0, 1).await;
+        seed_faces(&pool, &photo.hash_sha256, first, 1, 1).await;
+        seed_faces(&pool, &photo.hash_sha256, second, 2, 1).await;
+
+        let first_merge = merge_people(&pool, keeper, &[first], None, None)
+            .await
+            .unwrap()
+            .expect("first merge");
+        let second_merge = merge_people(&pool, keeper, &[second], None, None)
+            .await
+            .unwrap()
+            .expect("second merge");
+
+        assert!(matches!(
+            undo_merge(&pool, first_merge.undo_id).await.unwrap(),
+            UndoResult::Stale
+        ));
+        assert!(matches!(
+            undo_merge(&pool, second_merge.undo_id).await.unwrap(),
+            UndoResult::Done(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn undo_without_a_slot_reports_missing() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        assert!(matches!(
+            undo_merge(&pool, 1).await.unwrap(),
+            UndoResult::Missing
+        ));
+    }
+
+    #[tokio::test]
+    async fn bulk_hide_updates_known_people_and_skips_missing_ids() {
+        let pool = crate::db::create_test_db_pool().await.unwrap();
+        let first = seed_person(&pool, None, false).await;
+        let second = seed_person(&pool, None, false).await;
+
+        assert_eq!(
+            set_people_hidden(&pool, &[first, second, 9999], true)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(person_snapshot(&pool, first).await, Some((None, true)));
+        assert_eq!(person_snapshot(&pool, second).await, Some((None, true)));
+
+        assert_eq!(set_people_hidden(&pool, &[first], false).await.unwrap(), 1);
+        assert_eq!(person_snapshot(&pool, first).await, Some((None, false)));
     }
 }

@@ -15,7 +15,7 @@
     albums,
     loadAlbums,
   } from '../lib/state.svelte.js';
-  import { MAX_MERGE_PERSONS } from '../lib/peopleMerge.js';
+  import { MAX_MERGE_PERSONS, canMergeSelection } from '../lib/peopleMerge.js';
 
   const keys = $derived(Object.keys(selectionState.selected));
   const count = $derived(keys.length);
@@ -53,7 +53,7 @@
                 id: 'mergePeople',
                 labelKey: 'ui.people_merge',
                 icon: 'git-merge',
-                disabled: count < 2 || count > MAX_MERGE_PERSONS,
+                disabled: !canMergeSelection(count),
               },
               { id: 'hidePeople', labelKey: 'ui.people_hide_selected', icon: 'eye-off' },
               { id: 'unhidePeople', labelKey: 'ui.people_unhide_selected', icon: 'eye' },
@@ -165,7 +165,7 @@
   async function runAction(actionId, sourceEvent = null) {
     if (!canAct) return;
     if (actionId === 'mergePeople') {
-      if (!isPeopleList || count > MAX_MERGE_PERSONS) return;
+      if (!isPeopleList || !canMergeSelection(count)) return;
       window.dispatchEvent(
         new CustomEvent('openPeopleMerge', {
           detail: {
@@ -198,6 +198,9 @@
         // The People view owns the list subscription; ask it to reload so it
         // can prune a filter-dependent selection and reset cover markers.
         window.dispatchEvent(new CustomEvent('peopleChanged'));
+        // Only a confirmed action ends the mode: a failed request must leave
+        // the selection intact so the user can retry.
+        exitSelectionMode();
       } catch (error) {
         logger.error('Bulk people visibility failed', { component: 'SelectionBar' }, error);
         addToast(
@@ -208,7 +211,6 @@
         );
       } finally {
         selectionState.busy = null;
-        exitSelectionMode();
       }
       return;
     }
@@ -466,11 +468,11 @@
   }
 
   function onKeydown(e) {
-    // Escape exits selection mode — but never steal it from an open viewer
-    // or the album picker: dismissing the modal with Escape must not also
-    // wipe the multi-selection underneath.
+    // Escape exits selection mode — but never steal it from an open viewer or
+    // any modal `<dialog>` (album picker, merge dialog, rename dialog): the
+    // modal's own cancel must not also wipe the selection underneath.
     if (e.key === 'Escape' && selectionState.active && !selectionState.busy && !route.photo) {
-      if (pickerOpen) return;
+      if (pickerOpen || document.querySelector('dialog[open]')) return;
       exitSelectionMode();
     }
   }

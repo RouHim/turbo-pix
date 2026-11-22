@@ -29,7 +29,11 @@ async function mockConfig(page, config) {
   });
 }
 
-async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}) {
+async function mockPeople(
+  page,
+  initial,
+  { delayMs = 0, failPatch = false, failHide = false, dropOnMerge = null } = {}
+) {
   let people = initial;
   let lastMerge = null;
   let mergeSnapshot = null;
@@ -73,6 +77,15 @@ async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}
 
     if (request.method() === 'POST' && url.endsWith('/api/people/merge')) {
       const body = request.postDataJSON();
+      if (dropOnMerge != null && body.source_ids.includes(dropOnMerge)) {
+        people = people.filter((item) => item.id !== dropOnMerge);
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Not Found' }),
+        });
+        return;
+      }
       const keeper = people.find((item) => item.id === body.target_id);
       const sources = people.filter((item) => body.source_ids.includes(item.id));
       const moved = sources.reduce((sum, item) => sum + (item.face_count || 0), 0);
@@ -104,6 +117,14 @@ async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}
     }
 
     if (request.method() === 'POST' && url.endsWith('/api/people/batch/hide')) {
+      if (failHide) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'hide failed' }),
+        });
+        return;
+      }
       const body = request.postDataJSON();
       people = people.map((item) =>
         body.ids.includes(item.id) ? { ...item, hidden: body.hidden } : item
@@ -326,7 +347,7 @@ test.describe('People view', () => {
     const dialog = page.getByTestId('people-merge-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('merge-keeper').nth(0)).toBeChecked();
-    await expect(dialog.locator('#merge-name-input')).toHaveValue('Anna');
+    await expect(dialog.getByTestId('merge-name-input')).toHaveValue('Anna');
     await expect(dialog).toContainText('46 faces from 2 persons');
     await dialog.getByTestId('merge-confirm').click();
 
@@ -407,5 +428,71 @@ test.describe('People view', () => {
 
     await expect(page.locator('.toast')).toContainText('2 persons hidden');
     await expect(cards).toHaveCount(0);
+  });
+
+  test('Escape cancels the merge dialog without dropping the selection', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna', 10), person(8, 'Ben', 6)]);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await cards.nth(0).locator('[data-testid="person-open"]').click();
+    await cards.nth(1).locator('[data-testid="person-open"]').click();
+    await page.locator('[data-action="batch-merge-people"]').click();
+    const dialog = page.getByTestId('people-merge-dialog');
+    await expect(dialog).toBeVisible();
+
+    // WHEN the user dismisses the dialog with Escape
+    await page.keyboard.press('Escape');
+
+    // THEN only the dialog closes; the two-person selection survives and can
+    // still be merged
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId('selection-count')).toContainText('2 selected');
+    await expect(page.locator('[data-action="batch-merge-people"]')).toBeEnabled();
+  });
+
+  test('keeps the selection when bulk hide fails so the user can retry', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna', 3), person(8, 'Ben', 3)], { failHide: true });
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+    await page.locator('[data-action="batch-hide-people"]').click();
+
+    await expect(page.locator('.toast')).toContainText('Batch action failed');
+    await expect(page.getByTestId('selection-count')).toContainText('2 selected');
+    await expect(cards).toHaveCount(2);
+  });
+
+  test('prunes a vanished person from the merge dialog and retries successfully', async ({
+    page,
+  }) => {
+    // GIVEN three clusters, one of which disappears before the merge request
+    await mockPeople(page, [person(3, 'Anna', 10), person(8, 'Ben', 6), person(9, 'Cleo', 5)], {
+      dropOnMerge: 9,
+    });
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+    await page.locator('[data-action="batch-merge-people"]').click();
+    const dialog = page.getByTestId('people-merge-dialog');
+    await dialog.getByTestId('merge-confirm').click();
+
+    // THEN the 404 is reported inline and the dead person is gone from the
+    // dialog, so the same button can retry
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('alert')).toContainText('gone');
+    await expect(dialog.getByTestId('merge-keeper')).toHaveCount(2);
+    await dialog.getByTestId('merge-confirm').click();
+
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toContainText('Anna');
   });
 });

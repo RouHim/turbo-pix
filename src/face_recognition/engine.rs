@@ -64,7 +64,7 @@ impl FaceEngine {
             .map_err(|_| anyhow::anyhow!("face model lock poisoned"))?;
         if guard.is_none() {
             let paths = resolve_model_paths(&self.data_path)?;
-            let threads = num_cpus::get().clamp(1, 4);
+            let threads = crate::ort_runtime::model_threads();
             *guard = Some(load_models(&paths, threads)?);
             log::info!("Face models loaded (ORT threads: {threads})");
         }

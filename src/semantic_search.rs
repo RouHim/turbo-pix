@@ -5,9 +5,12 @@
 //!
 //! ## Architecture
 //!
-//! 1. **Model**: CLIP ViT-B/32 from HuggingFace (512-dim semantic vectors)
+//! 1. **Model**: CLIP ViT-B/32 ONNX encoders from HuggingFace (512-dim semantic vectors)
 //! 2. **Cache**: SQLite with sqlite-vec extension for vector storage
 //! 3. **Pipeline**: Text query → encode → compare with cached image semantic vectors → rank
+//!
+//! The encoders live in [`crate::clip`]; this module owns the engine lifecycle,
+//! the sqlite-vec queries and the video frame averaging.
 //!
 //! ## Score Interpretation (0-100 scale)
 //!
@@ -20,30 +23,25 @@
 //! Note: CLIP baseline behavior produces scores around 50-60 for unrelated images.
 //! Relevant matches typically score 60-70+, with strong matches reaching 70+.
 
-use anyhow::{Context, Error as E, Result};
-use async_trait::async_trait;
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::clip;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokenizers::Tokenizer;
+
+use anyhow::Result;
+use async_trait::async_trait;
 use tokio::sync::{Mutex, RwLock};
 use zerocopy::IntoBytes;
 
+use crate::clip::{self, LoadedModel, ModelPaths, MODEL_VERSION};
 use crate::db::DbPool;
-use crate::raw_processor;
+use crate::ort_runtime::{rss_label, rss_mib};
 
 // Model configuration
-const CLIP_MODEL: &str = "openai/clip-vit-base-patch32";
-const MODEL_REVISION: &str = "d15b5f29721ca72dac15f8526b284be910de18be";
-
-/// How long the CLIP weights may sit unused before they are dropped. The model
-/// is ~577 MiB of anonymous heap (candle copies every tensor out of the
-/// safetensors mapping), so a server nobody searches on should not hold it.
-/// Deliberately a constant — there is no configuration for it.
+/// How long the CLIP sessions may sit unused before they are dropped. The two
+/// ONNX graphs materialize ~600 MiB of weights, so a server nobody searches on
+/// should not hold them. Deliberately a constant — there is no configuration
+/// for it.
 const CLIP_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// How often the idle monitor compares the last-use clock against the timeout.
 const IDLE_MONITOR_TICK: Duration = Duration::from_secs(60);
@@ -55,14 +53,7 @@ fn retry_deadline() -> Instant {
     Instant::now() + LOAD_RETRY_BACKOFF
 }
 
-// Text encoding parameters
-const CONTEXT_LENGTH: usize = 77;
-const EOT_TOKEN: u32 = 49407;
-
-// Image preprocessing constants
-const CLIP_IMAGE_SIZE: u32 = 224;
-const CLIP_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
-const CLIP_STD: [f32; 3] = [0.26862954, 0.261_302_6, 0.275_777_1];
+// Text encoding parameters live in `clip` with the tokenizer/model pins.
 
 // Minimum similarity score threshold for search results (0.0-1.0 range)
 // Normalized to 0-100 scale for user display (multiply by 100)
@@ -70,7 +61,6 @@ const MIN_SIMILARITY_SCORE: f32 = 0.615;
 
 // Video frame sampling configuration
 const VIDEO_FRAME_COUNT: usize = 3;
-const MODEL_VERSION: &str = "clip-vit-base-patch32-v1";
 
 /// Monotonic counter shared by BOTH video-pipeline paths
 /// (`compute_video_semantic_vector` and `encode_video_vector`) so their temp
@@ -122,76 +112,13 @@ pub struct VideoSemanticMeta {
 pub enum SemanticBatchItem {
     Image {
         path: String,
-        vector: Tensor,
+        vector: Vec<f32>,
     },
     Video {
         path: String,
-        vector: Tensor,
+        vector: Vec<f32>,
         meta: VideoSemanticMeta,
     },
-}
-
-/// The two files the model is built from, resolved once (downloading when the
-/// cache is cold) so that a reload never touches the network.
-#[derive(Clone, Debug)]
-pub(crate) struct ModelPaths {
-    pub(crate) weights: PathBuf,
-    pub(crate) tokenizer: PathBuf,
-}
-
-/// One materialized CLIP model. Cloning is cheap (`Arc`), which is what lets an
-/// in-flight encode keep the weights alive after the engine dropped its copy.
-#[derive(Clone)]
-pub(crate) struct LoadedModel {
-    pub(crate) model: Arc<clip::ClipModel>,
-    pub(crate) tokenizer: Arc<Tokenizer>,
-    // Drop guard, never read: MUST stay the last field, because struct fields
-    // drop in declaration order, so the tensors above are freed before it walks
-    // the arenas. It is shared by every clone, so the trim runs exactly once —
-    // when the last clone (the logical unload point) drops — instead of on
-    // every clone drop.
-    _trim: Arc<HeapTrim>,
-}
-
-/// Returns the freed heap to the OS when the model it belongs to is gone.
-struct HeapTrim;
-
-impl Drop for HeapTrim {
-    fn drop(&mut self) {
-        release_freed_memory();
-    }
-}
-
-// `mi_collect` has to come from the crate that builds mimalloc's C library: its
-// build script emits the link line, so every binary that links this crate also
-// gets the archive. A hand-written `extern "C"` only resolved for binaries that
-// already referenced the `mimalloc` crate — the container build's second binary
-// did not, and the release build failed to link.
-#[cfg(target_env = "musl")]
-use libmimalloc_sys::mi_collect;
-
-/// Hands freed heap back to the OS.
-///
-/// Neither allocator does this on its own: glibc raises its `mmap` threshold
-/// after the first large free, so a second load/unload cycle leaves the whole
-/// model in the arena (measured: 538 MiB retained), and mimalloc keeps its
-/// heap (measured: 569 MiB retained). Without this the idle unload only looks
-/// like it works on the first cycle.
-///
-/// mimalloc collects the calling thread's heap plus any abandoned one, so on
-/// musl the reclaim relies on the thread that allocated the weights being
-/// gone: tokio's blocking pool retires idle workers after ~10 s, two orders of
-/// magnitude below the idle window, so its heap is abandoned long before the
-/// unload runs.
-fn release_freed_memory() {
-    #[cfg(target_env = "musl")]
-    unsafe {
-        mi_collect(true);
-    }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    unsafe {
-        libc::malloc_trim(0);
-    }
 }
 
 /// Materialization state behind the single-flight lock: the resolved paths and
@@ -210,10 +137,9 @@ struct LoadState {
 pub struct SemanticSearchEngine {
     loaded: RwLock<Option<LoadedModel>>,
     /// Held across the whole resolve+load section, so concurrent callers share
-    /// one load instead of racing several 577 MiB allocations.
+    /// one load instead of racing several ~600 MiB allocations.
     load_state: Mutex<LoadState>,
     data_path: String,
-    device: Arc<Device>,
     pool: DbPool,
     /// Milliseconds since `started` at the beginning of the last model use.
     last_use_ms: AtomicU64,
@@ -223,12 +149,19 @@ pub struct SemanticSearchEngine {
 #[async_trait]
 pub trait SemanticSearch: Send + Sync {
     async fn search(&self, query: &str, limit: usize, offset: usize) -> Result<Vec<(String, f32)>>;
-    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)>;
+    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Vec<f32>)>;
     async fn encode_video_vector(
         &self,
         video_path: &str,
         frame_count: Option<usize>,
-    ) -> Result<(String, Tensor, VideoSemanticMeta)>;
+    ) -> Result<(String, Vec<f32>, VideoSemanticMeta)>;
+}
+
+/// Encodes sampled video frames into one normalized embedding.
+fn encode_video_embedding(loaded: &LoadedModel, frames: &[PathBuf]) -> Result<Vec<f32>> {
+    let batch = clip::encode_image_batch(loaded, frames)?;
+    let mean = clip::average_vectors(&batch)?;
+    clip::normalize_vector(mean)
 }
 
 impl SemanticSearchEngine {
@@ -239,9 +172,9 @@ impl SemanticSearchEngine {
     /// search reports the failure per request, and a later attempt may succeed.
     pub fn new(db_pool: DbPool, data_path: &str) -> Self {
         let mut state = LoadState::default();
-        match resolve_model_paths(data_path) {
+        match clip::resolve_model_paths(data_path) {
             Ok(paths) => {
-                log::info!("CLIP model files ready: {}", paths.weights.display());
+                log::info!("CLIP model files ready: {}", paths.vision.display());
                 state.paths = Some(paths);
             }
             Err(e) => {
@@ -256,7 +189,6 @@ impl SemanticSearchEngine {
             loaded: RwLock::new(None),
             load_state: Mutex::new(state),
             data_path: data_path.to_string(),
-            device: Arc::new(Device::Cpu),
             pool: db_pool,
             last_use_ms: AtomicU64::new(0),
             started: Instant::now(),
@@ -264,22 +196,11 @@ impl SemanticSearchEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_with_model(
-        model: Arc<clip::ClipModel>,
-        tokenizer: Arc<Tokenizer>,
-        device: Arc<Device>,
-        pool: DbPool,
-        data_path: &str,
-    ) -> Self {
+    pub(crate) fn new_with_model(loaded: LoadedModel, pool: DbPool, data_path: &str) -> Self {
         Self {
-            loaded: RwLock::new(Some(LoadedModel {
-                model,
-                tokenizer,
-                _trim: Arc::new(HeapTrim),
-            })),
+            loaded: RwLock::new(Some(loaded)),
             load_state: Mutex::new(LoadState::default()),
             data_path: data_path.to_string(),
-            device,
             pool,
             last_use_ms: AtomicU64::new(0),
             started: Instant::now(),
@@ -326,8 +247,7 @@ impl SemanticSearchEngine {
                 "CLIP model files are unavailable; retrying in the background"
             ));
         };
-        let device = self.device.clone();
-        match tokio::task::spawn_blocking(move || load_from_paths(&paths, &device)).await {
+        match tokio::task::spawn_blocking(move || clip::load_from_paths(&paths)).await {
             Ok(Ok(loaded)) => {
                 state.retry_at = None;
                 let returned = loaded.clone();
@@ -372,16 +292,19 @@ impl SemanticSearchEngine {
         }
 
         let data_path = self.data_path.clone();
-        let resolved =
-            match tokio::task::spawn_blocking(move || resolve_model_paths(&data_path)).await {
-                Ok(result) => result,
-                Err(e) => Err(anyhow::anyhow!("resolve task failed: {e}")),
-            };
+        let resolved = match tokio::task::spawn_blocking(move || {
+            clip::resolve_model_paths(&data_path)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => Err(anyhow::anyhow!("resolve task failed: {e}")),
+        };
 
         let mut state = self.load_state.lock().await;
         match resolved {
             Ok(paths) if state.paths.is_none() => {
-                log::info!("CLIP model files ready: {}", paths.weights.display());
+                log::info!("CLIP model files ready: {}", paths.vision.display());
                 state.paths = Some(paths);
                 state.retry_at = None;
             }
@@ -436,7 +359,7 @@ impl SemanticSearchEngine {
 
         let rss_before = rss_mib();
         // Take the model out and release the lock BEFORE it is dropped: the
-        // last clone frees 577 MiB and then trims the allocator (see
+        // last clone frees ~600 MiB and then trims the allocator (see
         // `LoadedModel::_trim`), and that work must not block a search that is
         // waiting to reload. The reading below still happens after the trim.
         let unloaded = loaded.take();
@@ -469,13 +392,12 @@ impl SemanticSearchEngine {
         let encode_start = std::time::Instant::now();
         let text_semantic_vector = {
             let loaded = self.ensure_loaded().await?;
-            encode_text(&loaded.model, &loaded.tokenizer, query, &self.device)?
+            clip::encode_text(&loaded, query)?
         };
         log::debug!("Text encoding took: {:?}", encode_start.elapsed());
 
         // Convert semantic vector to bytes for sqlite-vec
-        let vector_floats: Vec<f32> = text_semantic_vector.flatten_all()?.to_vec1()?;
-        let vector_bytes = vector_floats.as_slice().as_bytes().to_vec();
+        let vector_bytes = text_semantic_vector.as_slice().as_bytes().to_vec();
 
         // NOTE: the pinned sqlite-vec (v0.2.4-alpha) only uses its KNN index
         // when the query has a `MATCH` constraint on the vector column plus
@@ -544,7 +466,7 @@ impl SemanticSearchEngine {
         // OPTIMIZATION: Compute expensive vector BEFORE opening the write transaction
         let semantic_vector = {
             let loaded = self.ensure_loaded().await?;
-            encode_image(&loaded.model, image_path, &self.device)?
+            clip::encode_image(&loaded, Path::new(image_path))?
         };
 
         // Use transaction to prevent race condition where multiple tasks compute same vector
@@ -579,10 +501,10 @@ impl SemanticSearchEngine {
         Ok(())
     }
 
-    pub async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)> {
+    pub async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Vec<f32>)> {
         let semantic_vector = {
             let loaded = self.ensure_loaded().await?;
-            encode_image(&loaded.model, image_path, &self.device)?
+            clip::encode_image(&loaded, Path::new(image_path))?
         };
 
         Ok((image_path.to_string(), semantic_vector))
@@ -642,16 +564,12 @@ impl SemanticSearchEngine {
         );
 
         // Step 2: Encode frames to embeddings (batch inference)
-        let batch_embeddings = {
+        let normalized_embedding = {
             let loaded = self.ensure_loaded().await?;
-            encode_image_batch(&loaded.model, &extracted_frames, &self.device)?
+            encode_video_embedding(&loaded, &extracted_frames)?
         };
 
         // Step 3: temp frames are cleaned up by TempFrameDir on drop.
-
-        // Average pool all frame embeddings: [N, 512] -> [512]
-        let video_embedding = batch_embeddings.mean(0)?;
-        let normalized_embedding = normalize_vector(&video_embedding)?;
 
         // Store embedding and metadata in a transaction (after all async work is done)
         let mut tx = self.pool.begin().await?;
@@ -704,7 +622,7 @@ impl SemanticSearchEngine {
         &self,
         video_path: &str,
         frame_count: Option<usize>,
-    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+    ) -> Result<(String, Vec<f32>, VideoSemanticMeta)> {
         use crate::video_processor::{extract_frames_batch, extract_video_metadata};
 
         log::info!("Computing semantic vector for video: {}", video_path);
@@ -735,15 +653,12 @@ impl SemanticSearchEngine {
             extraction_start.elapsed()
         );
 
-        let batch_embeddings = {
+        let normalized_embedding = {
             let loaded = self.ensure_loaded().await?;
-            encode_image_batch(&loaded.model, &extracted_frames, &self.device)?
+            encode_video_embedding(&loaded, &extracted_frames)?
         };
 
         // Temp frames are cleaned up by TempFrameDir on drop.
-
-        let video_embedding = batch_embeddings.mean(0)?;
-        let normalized_embedding = normalize_vector(&video_embedding)?;
 
         log::info!(
             "Video semantic vector computed in {:?}: {}",
@@ -769,7 +684,7 @@ impl SemanticSearch for SemanticSearchEngine {
         self.search(query, limit, offset).await
     }
 
-    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Tensor)> {
+    async fn encode_image_vector(&self, image_path: &str) -> Result<(String, Vec<f32>)> {
         self.encode_image_vector(image_path).await
     }
 
@@ -777,7 +692,7 @@ impl SemanticSearch for SemanticSearchEngine {
         &self,
         video_path: &str,
         frame_count: Option<usize>,
-    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+    ) -> Result<(String, Vec<f32>, VideoSemanticMeta)> {
         self.encode_video_vector(video_path, frame_count).await
     }
 }
@@ -797,7 +712,7 @@ impl SemanticSearch for NoopSemanticSearch {
         Ok(vec![])
     }
 
-    async fn encode_image_vector(&self, _image_path: &str) -> Result<(String, Tensor)> {
+    async fn encode_image_vector(&self, _image_path: &str) -> Result<(String, Vec<f32>)> {
         Err(anyhow::anyhow!(
             "NoopSemanticSearch: semantic search not available"
         ))
@@ -807,7 +722,7 @@ impl SemanticSearch for NoopSemanticSearch {
         &self,
         _video_path: &str,
         _frame_count: Option<usize>,
-    ) -> Result<(String, Tensor, VideoSemanticMeta)> {
+    ) -> Result<(String, Vec<f32>, VideoSemanticMeta)> {
         Err(anyhow::anyhow!(
             "NoopSemanticSearch: semantic search not available"
         ))
@@ -888,71 +803,11 @@ pub async fn batch_store_semantic_vectors(
 /// Downloads CLIP model files to the cache directory
 pub fn download_models(data_path: &str) -> Result<()> {
     log::info!("Downloading CLIP model to cache...");
-    let paths = resolve_model_paths(data_path)?;
-    log::info!("Model weights downloaded: {}", paths.weights.display());
+    let paths = clip::resolve_model_paths(data_path)?;
+    log::info!("Vision encoder downloaded: {}", paths.vision.display());
+    log::info!("Text encoder downloaded: {}", paths.text.display());
     log::info!("Tokenizer downloaded: {}", paths.tokenizer.display());
     Ok(())
-}
-
-/// Resolves the model files, downloading them when the cache is cold. This is
-/// the only step that touches the network, so the reload path can use the
-/// returned paths and an offline box keeps working once seeded.
-pub(crate) fn resolve_model_paths(data_path: &str) -> Result<ModelPaths> {
-    // NOTE: the `..` is intentional — `data_path/../data/models` keeps the
-    // model cache in the repo-root ./data/models even when the app runs with a
-    // sandboxed data dir (the E2E suite sets TURBO_PIX_DATA_PATH=test-e2e-data
-    // while sharing the model cache; without the `..` the E2E server would
-    // hang trying to download the model into the sandbox). Do not "simplify"
-    // this path expression.
-    let cache_dir = std::path::PathBuf::from(data_path).join("../data/models");
-
-    let (model_owner, model_name) = hf_hub::split_id(CLIP_MODEL);
-    let model_repo = hf_hub::HFClient::builder()
-        .cache_dir(cache_dir)
-        .build_sync()
-        .context("Failed to build HuggingFace API")?
-        .model(model_owner, model_name);
-
-    let weights = model_repo
-        .download_file()
-        .filename("model.safetensors")
-        .revision(MODEL_REVISION)
-        .send()
-        .context("Failed to download model weights")?;
-    let tokenizer = model_repo
-        .download_file()
-        .filename("tokenizer.json")
-        .revision(MODEL_REVISION)
-        .send()
-        .context("Failed to download tokenizer")?;
-
-    Ok(ModelPaths { weights, tokenizer })
-}
-
-/// Builds the model from already-resolved files: disk and parse only, never the
-/// network, so a reload after an idle unload cannot stall on the hub.
-pub(crate) fn load_from_paths(paths: &ModelPaths, device: &Device) -> Result<LoadedModel> {
-    let started = Instant::now();
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[&paths.weights], DType::F32, device)
-            .context("Failed to load safetensors")?
-    };
-
-    let model = clip::ClipModel::new(vb, &clip::ClipConfig::vit_base_patch32())?;
-    let tokenizer = Tokenizer::from_file(&paths.tokenizer)
-        .map_err(E::msg)
-        .context("Failed to load tokenizer")?;
-
-    log::info!(
-        "CLIP model loaded in {:?} (RSS {} MiB)",
-        started.elapsed(),
-        rss_label(rss_mib())
-    );
-    Ok(LoadedModel {
-        model: Arc::new(model),
-        tokenizer: Arc::new(tokenizer),
-        _trim: Arc::new(HeapTrim),
-    })
 }
 
 /// Whether the model has been unused for at least `idle`. A clock that reads
@@ -961,227 +816,20 @@ fn should_unload(now_ms: u64, last_use_ms: u64, idle: Duration) -> bool {
     now_ms.saturating_sub(last_use_ms) >= idle.as_millis() as u64
 }
 
-/// Resident set size in MiB, for the load/unload log lines.
-fn rss_mib() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let kb: u64 = status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmRSS:"))?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()?;
-    Some(kb / 1024)
-}
-
-fn rss_label(rss: Option<u64>) -> String {
-    rss.map_or_else(|| "?".to_string(), |mib| mib.to_string())
-}
-
-/// Loads the model once per test binary for the modules that need one.
-///
-/// `OnceLock`, not `LazyLock`: the initializer downloads the weights when the
-/// cache is cold, so a failed attempt must be retried by the next test instead
-/// of poisoning every test that touches the cell.
-#[cfg(test)]
-pub(crate) fn cached_test_model() -> (LoadedModel, Arc<Device>) {
-    use std::sync::OnceLock;
-
-    static MODEL_CACHE: OnceLock<(LoadedModel, Arc<Device>)> = OnceLock::new();
-    MODEL_CACHE
-        .get_or_init(|| {
-            let device = Arc::new(Device::Cpu);
-            // Relative to the project root, where `cargo test` runs.
-            let paths = resolve_model_paths("./data").expect("Failed to resolve model files");
-            let loaded = load_from_paths(&paths, &device).expect("Failed to load model");
-            (loaded, device)
-        })
-        .clone()
-}
-
-/// Ensures exactly `CONTEXT_LENGTH` tokens: pads short inputs with EOT and
-/// truncates long inputs to `CONTEXT_LENGTH - 1` tokens plus a re-appended
-/// EOT (the tokenizer's own trailing EOT would otherwise be dropped by a
-/// plain truncate).
-fn pad_or_truncate_tokens(mut tokens: Vec<u32>) -> Vec<u32> {
-    if tokens.len() < CONTEXT_LENGTH {
-        tokens.resize(CONTEXT_LENGTH, EOT_TOKEN);
-    } else {
-        // The tokenizer already appended EOT, so truncating to
-        // CONTEXT_LENGTH would drop it; keep CONTEXT_LENGTH - 1 tokens and
-        // re-append EOT as the final token.
-        tokens.truncate(CONTEXT_LENGTH - 1);
-        tokens.push(EOT_TOKEN);
-    }
-    tokens
-}
-
-/// Encodes text into a normalized 512-dimensional semantic vector
-fn encode_text(
-    model: &clip::ClipModel,
-    tokenizer: &Tokenizer,
-    text: &str,
-    device: &Device,
-) -> Result<Tensor> {
-    let mut tokens = tokenizer
-        .encode(text, true)
-        .map_err(E::msg)?
-        .get_ids()
-        .to_vec();
-
-    tokens = pad_or_truncate_tokens(tokens);
-
-    let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
-    let features = model.get_text_features(&token_ids)?;
-    normalize_vector(&features)
-}
-
-/// Encodes an image into a normalized 512-dimensional semantic vector
-fn encode_image(model: &clip::ClipModel, image_path: &str, device: &Device) -> Result<Tensor> {
-    let path = Path::new(image_path);
-
-    let img = if raw_processor::is_raw_file(path) {
-        raw_processor::decode_raw_to_dynamic_image(path)
-            .context("Failed to decode RAW file for CLIP encoding")?
-    } else {
-        image::open(path)?
-    };
-
-    let img = if img.width() == CLIP_IMAGE_SIZE && img.height() == CLIP_IMAGE_SIZE {
-        img
-    } else {
-        img.resize_exact(
-            CLIP_IMAGE_SIZE,
-            CLIP_IMAGE_SIZE,
-            image::imageops::FilterType::Triangle,
-        )
-    };
-
-    let img_rgb = img.to_rgb8();
-
-    let data: Vec<f32> = img_rgb
-        .pixels()
-        .flat_map(|p| {
-            [
-                (p[0] as f32) / 255.0,
-                (p[1] as f32) / 255.0,
-                (p[2] as f32) / 255.0,
-            ]
-        })
-        .collect();
-
-    let img_tensor = Tensor::from_vec(
-        data,
-        (CLIP_IMAGE_SIZE as usize, CLIP_IMAGE_SIZE as usize, 3),
-        device,
-    )?
-    .permute((2, 0, 1))?
-    .unsqueeze(0)?;
-
-    let mean = Tensor::new(&CLIP_MEAN, device)?.reshape((1, 3, 1, 1))?;
-    let std = Tensor::new(&CLIP_STD, device)?.reshape((1, 3, 1, 1))?;
-    let img_normalized = img_tensor.broadcast_sub(&mean)?.broadcast_div(&std)?;
-
-    let features = model.get_image_features(&img_normalized)?;
-    normalize_vector(&features)
-}
-
-/// Encodes a batch of images into normalized 512-dimensional semantic vectors
-fn encode_image_batch(
-    model: &clip::ClipModel,
-    image_paths: &[std::path::PathBuf],
-    device: &Device,
-) -> Result<Tensor> {
-    use rayon::prelude::*;
-
-    let tensors: Vec<Tensor> = image_paths
-        .par_iter()
-        .map(|path| {
-            let img = if raw_processor::is_raw_file(path) {
-                raw_processor::decode_raw_to_dynamic_image(path)
-                    .context("Failed to decode RAW file for CLIP encoding")?
-            } else {
-                image::open(path)?
-            };
-
-            let img = if img.width() == CLIP_IMAGE_SIZE && img.height() == CLIP_IMAGE_SIZE {
-                img
-            } else {
-                img.resize_exact(
-                    CLIP_IMAGE_SIZE,
-                    CLIP_IMAGE_SIZE,
-                    image::imageops::FilterType::Triangle,
-                )
-            };
-
-            let img_rgb = img.to_rgb8();
-
-            let data: Vec<f32> = img_rgb
-                .pixels()
-                .flat_map(|p| {
-                    [
-                        (p[0] as f32) / 255.0,
-                        (p[1] as f32) / 255.0,
-                        (p[2] as f32) / 255.0,
-                    ]
-                })
-                .collect();
-
-            let img_tensor = Tensor::from_vec(
-                data,
-                (CLIP_IMAGE_SIZE as usize, CLIP_IMAGE_SIZE as usize, 3),
-                &Device::Cpu, // Always decode on CPU
-            )?
-            .permute((2, 0, 1))?;
-
-            Ok(img_tensor)
-        })
-        .collect::<Result<Vec<Tensor>>>()?;
-
-    if tensors.is_empty() {
-        return Err(anyhow::anyhow!("Cannot encode empty batch"));
-    }
-
-    // Move tensors to the target device if necessary
-    let tensors: Vec<Tensor> = tensors
-        .into_iter()
-        .map(|t| t.to_device(device))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    // Stack: [B, 3, 224, 224]
-    let batch = Tensor::stack(&tensors, 0)?;
-
-    let mean = Tensor::new(&CLIP_MEAN, device)?.reshape((1, 3, 1, 1))?;
-    let std = Tensor::new(&CLIP_STD, device)?.reshape((1, 3, 1, 1))?;
-    let batch_normalized = batch.broadcast_sub(&mean)?.broadcast_div(&std)?;
-
-    let features = model.get_image_features(&batch_normalized)?;
-    normalize_vector(&features)
-}
-
-/// Computes L2 normalization of a semantic vector
-fn normalize_vector(vector: &Tensor) -> Result<Tensor> {
-    let dim = match vector.rank() {
-        1 => 0,
-        2 => 1,
-        r => {
-            return Err(anyhow::anyhow!(
-                "Unexpected tensor rank for normalization: {}",
-                r
-            ))
-        }
-    };
-    let norm = vector.sqr()?.sum_keepdim(dim)?.sqrt()?;
-    Ok(vector.broadcast_div(&norm)?)
-}
-
 /// Stores a computed image semantic vector in the database cache within a transaction
 async fn store_semantic_vector_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     path: &str,
-    semantic_vector: &Tensor,
+    semantic_vector: &[f32],
 ) -> Result<()> {
-    let vector_floats: Vec<f32> = semantic_vector.flatten_all()?.to_vec1()?;
+    if semantic_vector.len() != clip::EMBEDDING_DIM {
+        anyhow::bail!(
+            "Unexpected embedding length for {}: expected {}, got {}",
+            path,
+            clip::EMBEDDING_DIM,
+            semantic_vector.len()
+        );
+    }
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO semantic_vector_path_mapping (path) VALUES (?)
@@ -1202,7 +850,7 @@ async fn store_semantic_vector_tx(
         .await?;
     sqlx::query("INSERT INTO media_semantic_vectors (rowid, semantic_vector) VALUES (?, ?)")
         .bind(id)
-        .bind(vector_floats.as_slice().as_bytes())
+        .bind(semantic_vector.as_bytes())
         .execute(&mut **tx)
         .await?;
 
@@ -1250,39 +898,8 @@ mod tests {
     use serde_json::json;
 
     fn create_test_engine_cached(pool: crate::db::DbPool) -> SemanticSearchEngine {
-        let (loaded, device) = cached_test_model();
-        SemanticSearchEngine::new_with_model(loaded.model, loaded.tokenizer, device, pool, "./data")
-    }
-
-    #[test]
-    fn pads_short_token_sequences_with_eot() {
-        let tokens = pad_or_truncate_tokens(vec![1, 2, 3]);
-        assert_eq!(tokens.len(), CONTEXT_LENGTH);
-        assert_eq!(tokens[..3], [1, 2, 3]);
-        assert_eq!(tokens[3], EOT_TOKEN);
-        assert_eq!(tokens.last(), Some(&EOT_TOKEN));
-    }
-
-    #[test]
-    fn truncates_long_token_sequences_and_reappends_eot() {
-        let long: Vec<u32> = (0..200).map(|i| i as u32).collect();
-        let tokens = pad_or_truncate_tokens(long);
-        assert_eq!(tokens.len(), CONTEXT_LENGTH);
-        assert_eq!(
-            tokens[..CONTEXT_LENGTH - 1],
-            (0..76).map(|i| i as u32).collect::<Vec<u32>>()
-        );
-        assert_eq!(tokens[CONTEXT_LENGTH - 1], EOT_TOKEN);
-    }
-
-    #[test]
-    fn leaves_exact_length_sequences_alone() {
-        let exact: Vec<u32> = (0..CONTEXT_LENGTH).map(|i| i as u32).collect();
-        let tokens = pad_or_truncate_tokens(exact.clone());
-        // CONTEXT_LENGTH input: keep first CONTEXT_LENGTH - 1, re-append EOT.
-        assert_eq!(tokens.len(), CONTEXT_LENGTH);
-        assert_eq!(tokens[..CONTEXT_LENGTH - 1], exact[..CONTEXT_LENGTH - 1]);
-        assert_eq!(tokens[CONTEXT_LENGTH - 1], EOT_TOKEN);
+        let loaded = crate::clip::cached_test_model();
+        SemanticSearchEngine::new_with_model(loaded, pool, "./data")
     }
 
     #[test]
@@ -1338,8 +955,8 @@ mod tests {
         }
     }
 
-    fn create_dummy_tensor(value: f32) -> Tensor {
-        Tensor::from_vec(vec![value; 512], (512,), &Device::Cpu).unwrap()
+    fn create_dummy_vector(value: f32) -> Vec<f32> {
+        vec![value; clip::EMBEDDING_DIM]
     }
 
     #[tokio::test]
@@ -1357,15 +974,15 @@ mod tests {
         let items = vec![
             SemanticBatchItem::Image {
                 path: "test-data/batch-one.jpg".to_string(),
-                vector: create_dummy_tensor(0.1),
+                vector: create_dummy_vector(0.1),
             },
             SemanticBatchItem::Image {
                 path: "test-data/batch-two.jpg".to_string(),
-                vector: create_dummy_tensor(0.2),
+                vector: create_dummy_vector(0.2),
             },
             SemanticBatchItem::Image {
                 path: "test-data/batch-three.jpg".to_string(),
-                vector: create_dummy_tensor(0.3),
+                vector: create_dummy_vector(0.3),
             },
         ];
 
@@ -1405,7 +1022,7 @@ mod tests {
         create_test_photo(path).create(&db_pool).await.unwrap();
         let first = vec![SemanticBatchItem::Image {
             path: path.to_string(),
-            vector: create_dummy_tensor(0.1),
+            vector: create_dummy_vector(0.1),
         }];
         assert_eq!(
             batch_store_semantic_vectors(&db_pool, first).await.unwrap(),
@@ -1420,7 +1037,7 @@ mod tests {
         // WHEN the retry computes and stores the same path again
         let retry = vec![SemanticBatchItem::Image {
             path: path.to_string(),
-            vector: create_dummy_tensor(0.2),
+            vector: create_dummy_vector(0.2),
         }];
         let result = batch_store_semantic_vectors(&db_pool, retry).await.unwrap();
 

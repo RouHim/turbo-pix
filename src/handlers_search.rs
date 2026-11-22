@@ -150,7 +150,6 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use candle_core::Tensor;
     use warp::http::StatusCode;
 
     use super::*;
@@ -208,7 +207,10 @@ mod tests {
             Ok(self.hits.iter().skip(offset).take(limit).cloned().collect())
         }
 
-        async fn encode_image_vector(&self, _image_path: &str) -> anyhow::Result<(String, Tensor)> {
+        async fn encode_image_vector(
+            &self,
+            _image_path: &str,
+        ) -> anyhow::Result<(String, Vec<f32>)> {
             Err(anyhow::anyhow!("encoding is not available in these tests"))
         }
 
@@ -216,7 +218,7 @@ mod tests {
             &self,
             _video_path: &str,
             _frame_count: Option<usize>,
-        ) -> anyhow::Result<(String, Tensor, VideoSemanticMeta)> {
+        ) -> anyhow::Result<(String, Vec<f32>, VideoSemanticMeta)> {
             Err(anyhow::anyhow!("encoding is not available in these tests"))
         }
     }

@@ -111,7 +111,7 @@ The following paths are automatically derived from `TURBO_PIX_DATA_PATH`:
 - **Database**: `{DATA_PATH}/database/turbo-pix.db`
 - **Thumbnails**: `{DATA_PATH}/cache/thumbnails/`
 - **Transcode cache**: `{DATA_PATH}/cache/transcoded/`
-- **AI Models**: `{DATA_PATH}/models/` (CLIP) and `{DATA_PATH}/models/face/` (SCRFD + ArcFace)
+- **AI Models**: `{DATA_PATH}/models/clip/` (CLIP ONNX) and `{DATA_PATH}/models/face/` (SCRFD + ArcFace)
 - **Face crops**: `{DATA_PATH}/cache/faces/{file_hash}/{face_id}.jpg` (one directory per photo)
 - **Xet cache**: `{DATA_PATH}/cache/xet/` (hf-xet chunk cache for model downloads; `HF_XET_CACHE` overrides it)
 
@@ -130,9 +130,20 @@ Or with Docker:
 docker run --rm -v ./data:/data rouhim/turbo-pix --download-models
 ```
 
-The CLIP weights (~580MB of RAM) are loaded on first use - typically the startup indexing run - and released again
-after ten minutes without one, so a server that sits idle does not keep them resident. The first semantic search (or the
-first indexing run that needs embeddings) after that pays a short reload; the rest of the application is unaffected.
+CLIP runs on the same ONNX Runtime as face recognition: a vision encoder (~351.7 MB) and a text encoder (~254.1 MB),
+downloaded from the pinned `Xenova/clip-vit-base-patch32` HuggingFace revision and verified by SHA-256. Both sessions
+(~600 MiB of RAM) are loaded on first use - typically the startup indexing run - and released again after ten minutes
+without one, so a server that sits idle does not keep them resident. The first semantic search (or the first indexing run
+that needs embeddings) after that pays a short reload; the rest of the application is unaffected.
+
+To seed an offline/air-gapped installation, place `vision.onnx`, `text.onnx` and `tokenizer.json` in
+`{DATA_PATH}/models/clip/`; they are verified when loaded. The path is resolved as
+`<DATA_PATH>/../data/models/clip`, so the default `./data` and the container's `/data` both use `{DATA_PATH}/models/clip`;
+a custom data path shares the sibling `data/models` cache. After a runtime or model change that alters embeddings, the
+shipped migration resets the vector tables and photo flags so the next scan re-embeds the library.
+
+An upgrade from the Candle build leaves the old `models--openai--clip-vit-base-patch32` safetensors/tokenizer snapshot
+under `{DATA_PATH}/models`. It is no longer used and can be deleted manually to reclaim ~580 MB.
 
 Face recognition uses SCRFD-2.5G (detector, ~3.3 MB) and antelopev2 R100 (recognition, ~260.7 MB), downloaded from the
 pinned `immich-app` HuggingFace revisions and verified by SHA-256. The weights are licensed for non-commercial use only;

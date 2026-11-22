@@ -25,10 +25,7 @@ img-parts = "0.4" # For JPEG/PNG segment manipulation when writing EXIF
 fast-blurhash = "1.0"
 rawloader = "0.37"
 
-# ML model for semantic search
-candle-core = "0.11.0"
-candle-nn = "0.11.0"
-candle-transformers = "0.11.0"
+# ML model for semantic search (ONNX Runtime, see `clip.rs`)
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
 tokenizers = "0.23.0"
 sqlite-vec = { git = "https://github.com/vlasky/sqlite-vec", rev = "606e0002934632b6cf39d06b1f9c7c3b188fa77d" } # v0.2.4-alpha, pinned: a movable tag could swap the code a build links

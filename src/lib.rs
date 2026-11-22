@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 pub mod albums;
 pub mod cache_manager;
+pub mod clip;
 pub mod collage_generator;
 pub mod config;
 pub mod db;
@@ -30,7 +31,9 @@ pub mod media_facts;
 pub mod metadata_extractor;
 pub mod metadata_writer;
 pub mod mimetype_detector;
+pub mod model_files;
 pub mod mp4_metadata;
+pub mod ort_runtime;
 pub mod photo_listing;
 pub mod photo_processor;
 pub mod photo_reply;

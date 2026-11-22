@@ -680,8 +680,8 @@ mod tests {
     use crate::semantic_search::NoopSemanticSearch;
 
     fn get_cached_scheduler_model(pool: crate::db::DbPool) -> SemanticSearchEngine {
-        let (loaded, device) = crate::semantic_search::cached_test_model();
-        SemanticSearchEngine::new_with_model(loaded.model, loaded.tokenizer, device, pool, "./data")
+        let loaded = crate::clip::cached_test_model();
+        SemanticSearchEngine::new_with_model(loaded, pool, "./data")
     }
 
     struct TestEnvironment {

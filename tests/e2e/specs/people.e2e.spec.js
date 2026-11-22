@@ -31,8 +31,91 @@ async function mockConfig(page, config) {
 
 async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}) {
   let people = initial;
+  let lastMerge = null;
+  let mergeSnapshot = null;
+  let nextUndoId = 1;
   await page.route('**/api/people**', async (route) => {
     const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'POST' && url.endsWith('/api/people/merge/undo')) {
+      const body = request.postDataJSON();
+      if (!lastMerge || lastMerge.undo_id !== body.undo_id) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'merge_slot_stale' }),
+        });
+        return;
+      }
+      const moved = mergeSnapshot.sources.reduce((sum, item) => sum + (item.face_count || 0), 0);
+      const restoredPeople = mergeSnapshot.sources.length;
+      people = people
+        .map((item) =>
+          item.id === mergeSnapshot.keeperId
+            ? { ...item, face_count: item.face_count - moved }
+            : item
+        )
+        .concat(mergeSnapshot.sources);
+      lastMerge = null;
+      mergeSnapshot = null;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          restored_faces: moved,
+          total_faces: moved,
+          restored_people: restoredPeople,
+        }),
+      });
+      return;
+    }
+
+    if (request.method() === 'POST' && url.endsWith('/api/people/merge')) {
+      const body = request.postDataJSON();
+      const keeper = people.find((item) => item.id === body.target_id);
+      const sources = people.filter((item) => body.source_ids.includes(item.id));
+      const moved = sources.reduce((sum, item) => sum + (item.face_count || 0), 0);
+      const keeperName = body.name ?? keeper?.name ?? null;
+      people = people
+        .filter((item) => !body.source_ids.includes(item.id))
+        .map((item) =>
+          item.id === body.target_id
+            ? { ...item, name: keeperName, face_count: (item.face_count || 0) + moved }
+            : item
+        );
+      mergeSnapshot = { keeperId: body.target_id, sources };
+      lastMerge = {
+        undo_id: nextUndoId++,
+        target_id: body.target_id,
+        target_name: keeperName,
+        source_count: sources.length,
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          moved_faces: moved,
+          removed_people: sources.length,
+          undo_id: lastMerge.undo_id,
+        }),
+      });
+      return;
+    }
+
+    if (request.method() === 'POST' && url.endsWith('/api/people/batch/hide')) {
+      const body = request.postDataJSON();
+      people = people.map((item) =>
+        body.ids.includes(item.id) ? { ...item, hidden: body.hidden } : item
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ updated: body.ids.length }),
+      });
+      return;
+    }
+
     if (request.method() === 'PATCH') {
       if (failPatch) {
         await route.fulfill({
@@ -42,7 +125,7 @@ async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}
         });
         return;
       }
-      const id = Number(request.url().match(/\/api\/people\/(\d+)/)?.[1]);
+      const id = Number(url.match(/\/api\/people\/(\d+)/)?.[1]);
       const body = request.postDataJSON();
       people = people.map((item) => (item.id === id ? { ...item, ...body } : item));
       const updated = people.find((item) => item.id === id);
@@ -55,12 +138,13 @@ async function mockPeople(page, initial, { delayMs = 0, failPatch = false } = {}
     }
 
     if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-    const includeHidden = request.url().includes('include_hidden=true');
+    const includeHidden = url.includes('include_hidden=true');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         people: includeHidden ? people : people.filter((item) => !item.hidden),
+        last_merge: lastMerge,
       }),
     });
   });
@@ -129,7 +213,7 @@ test.describe('People view', () => {
     await TestHelpers.navigateToView(page, 'people');
 
     await page.getByRole('button', { name: 'Rename' }).click();
-    const dialog = page.locator('dialog.person-dialog');
+    const dialog = page.getByTestId('people-rename-dialog');
     const input = page.locator('#person-name-input');
     await input.fill('Anna Schmidt');
     await page.getByRole('button', { name: 'Save' }).click();
@@ -209,5 +293,119 @@ test.describe('People view', () => {
     // THEN the app lands on All Photos and the nav item is absent
     await expect(page).toHaveURL(/\/$/);
     await expect(page.locator('[data-view="people"]')).toHaveCount(0);
+  });
+
+  test('selects two persons and merges them into the keeper with the summed faces', async ({
+    page,
+  }) => {
+    // GIVEN two clusters of the same person
+    await mockPeople(page, [person(3, 'Anna', 40), person(8, 'Ben', 6)]);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+    const selectMode = page.locator('[data-action="select-mode"]');
+    await expect(cards).toHaveCount(2);
+
+    // WHEN the user enters selection mode and picks both cards
+    await selectMode.click();
+    await expect(selectMode).toHaveAttribute('aria-pressed', 'true');
+    await cards.nth(0).locator('[data-testid="person-open"]').click();
+    // Merge needs a keeper and at least one source.
+    await expect(page.locator('[data-action="batch-merge-people"]')).toBeDisabled();
+    await cards.nth(1).locator('[data-testid="person-open"]').click();
+
+    // THEN the cards toggle instead of opening the grid
+    await expect(cards.nth(0).locator('[data-testid="person-open"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expect(page).toHaveURL(/\/people$/);
+
+    // WHEN the user merges
+    await page.locator('[data-action="batch-merge-people"]').click();
+    const dialog = page.getByTestId('people-merge-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('merge-keeper').nth(0)).toBeChecked();
+    await expect(dialog.locator('#merge-name-input')).toHaveValue('Anna');
+    await expect(dialog).toContainText('46 faces from 2 persons');
+    await dialog.getByTestId('merge-confirm').click();
+
+    // THEN one keeper remains, the toast offers undo and the chip persists it
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toContainText('Anna');
+    await expect(cards.first()).toContainText('46 faces');
+    await expect(page.locator('.toast-action')).toHaveText('Undo merge');
+    await expect(page.getByTestId('people-undo-chip')).toBeVisible();
+  });
+
+  test('undoes the last merge from the toolbar chip', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna', 40), person(8, 'Ben', 6)]);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+    await page.locator('[data-action="batch-merge-people"]').click();
+    await page.getByTestId('merge-confirm').click();
+    await expect(cards).toHaveCount(1);
+
+    // WHEN the user undoes the merge from the chip
+    await page.getByTestId('people-undo-chip').click();
+
+    // THEN both persons return and the slot is gone
+    await expect(cards).toHaveCount(2);
+    await expect(page.getByTestId('people-undo-chip')).toHaveCount(0);
+  });
+
+  test('warns before merging visible persons into a hidden keeper', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna', 10, true), person(8, 'Ben', 6)]);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.getByTestId('people-hidden-toggle').click();
+    await expect(cards).toHaveCount(2);
+
+    await page.locator('[data-action="select-mode"]').click();
+    await cards.nth(0).locator('[data-testid="person-open"]').click();
+    await cards.nth(1).locator('[data-testid="person-open"]').click();
+    await page.locator('[data-action="batch-merge-people"]').click();
+
+    // THEN the hidden keeper is the default and the consequence is announced
+    const dialog = page.getByTestId('people-merge-dialog');
+    await expect(dialog.getByTestId('merge-keeper').nth(0)).toBeChecked();
+    await expect(dialog.getByTestId('merge-hidden-warning')).toContainText(
+      'leaves the default list'
+    );
+  });
+
+  test('disables merge above the person limit and explains why', async ({ page }) => {
+    const many = Array.from({ length: 22 }, (_, index) =>
+      person(index + 1, `Person ${index + 1}`, 3)
+    );
+    await mockPeople(page, many);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+
+    await expect(page.getByTestId('people-merge-limit-hint')).toContainText('at most 21 persons');
+    await expect(page.locator('[data-action="batch-merge-people"]')).toBeDisabled();
+  });
+
+  test('bulk-hides the selected persons in one step', async ({ page }) => {
+    await mockPeople(page, [person(3, 'Anna', 3), person(8, 'Ben', 3)]);
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+    await page.locator('[data-action="batch-hide-people"]').click();
+
+    await expect(page.locator('.toast')).toContainText('2 persons hidden');
+    await expect(cards).toHaveCount(0);
   });
 });

@@ -1,9 +1,22 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
-  import { addToast, loadPeople, people } from '../lib/state.svelte.js';
+  import {
+    addToast,
+    exitSelectionMode,
+    loadPeople,
+    people,
+    peopleMerge,
+    pruneSelection,
+    selectRange,
+    selectionState,
+    toggleSelected,
+  } from '../lib/state.svelte.js';
   import { pushState, route } from '../lib/router.svelte.js';
   import { t } from '../lib/i18n.js';
+  import { longpress } from '../lib/longpress.js';
+  import { createCardRangeSelection } from '../lib/selectionRangeController.js';
+  import { canMergeSelection, mergeNamePrefill } from '../lib/peopleMerge.js';
   import Icon from './Icon.svelte';
 
   const NOTICE_KEY = 'turbopix_face_notice_dismissed';
@@ -29,6 +42,30 @@
   let renameError = $state('');
   let saving = $state(false);
   let renameTrigger = null;
+
+  // Merge dialog: a snapshot of the selected persons, so a background refresh
+  // cannot swap the cards under an open confirmation. `peopleMerge.slot` is the
+  // one persisted undo slot, rendered as a toolbar chip.
+  let mergeDialogEl = $state(null);
+  let mergeSelection = $state([]);
+  let mergeKeeperId = $state(null);
+  let mergeName = $state('');
+  let mergeInput = $state(null);
+  let mergeError = $state('');
+  let mergeSaving = $state(false);
+  let mergeTrigger = null;
+  let undoBusy = $state(false);
+
+  const mergeKeeper = $derived(
+    mergeSelection.find((person) => person.id === mergeKeeperId) ?? null
+  );
+  const mergeFaceTotal = $derived(
+    mergeSelection.reduce((total, person) => total + (Number(person.face_count) || 0), 0)
+  );
+  const mergeHiddenWarning = $derived(
+    Boolean(mergeKeeper?.hidden) &&
+      mergeSelection.some((person) => person.id !== mergeKeeperId && !person.hidden)
+  );
 
   function readNotice() {
     try {
@@ -63,6 +100,11 @@
       // A fresh list carries fresh cover ids, so markers recorded for the
       // previous one must not keep a crop from being requested again.
       if (ok) brokenCovers = {};
+      // Toggling the hidden filter or a background refresh can remove cards:
+      // a selection must never act on a person the user cannot see.
+      if (ok && selectionState.active) {
+        pruneSelection(people.map((person) => String(person.id)));
+      }
     } finally {
       if (token === refreshToken) {
         loading = false;
@@ -75,13 +117,21 @@
     readNotice();
     refresh();
     window.addEventListener('indexingCompleted', onIndexingCompleted);
+    window.addEventListener('peopleChanged', onPeopleChanged);
+    window.addEventListener('openPeopleMerge', onMergeRequest);
   });
 
   onDestroy(() => {
     window.removeEventListener('indexingCompleted', onIndexingCompleted);
+    window.removeEventListener('peopleChanged', onPeopleChanged);
+    window.removeEventListener('openPeopleMerge', onMergeRequest);
   });
 
   function onIndexingCompleted() {
+    refresh();
+  }
+
+  function onPeopleChanged() {
     refresh();
   }
 
@@ -265,10 +315,222 @@
   function personInitial(person) {
     return person.name?.trim()?.charAt(0)?.toUpperCase() || null;
   }
+
+  function personLabelById(id, name) {
+    return (
+      name || $t('ui.people_person_number', { values: { number: id }, default: 'Person {number}' })
+    );
+  }
+
+  // --- Selection mode -------------------------------------------------------
+  // Same mechanics as the photo surfaces: the header button or a touch
+  // long-press enters, a click toggles, Shift+click extends the range.
+
+  const rangeSelection = createCardRangeSelection();
+  const personKey = (person) => String(person.id);
+
+  $effect(() => {
+    selectionState.orderedKeys = people.map(personKey);
+  });
+
+  function onPersonClick(person, event) {
+    if (!selectionState.active) {
+      openPerson(person);
+      return;
+    }
+    if (event.shiftKey && selectionState.anchorKey != null) {
+      selectRange(selectionState.anchorKey, personKey(person), selectionState.orderedKeys);
+      return;
+    }
+    toggleSelected(personKey(person));
+  }
+
+  function handleLongPress(person) {
+    return rangeSelection.begin(personKey(person));
+  }
+
+  function handleRangeMove(key) {
+    rangeSelection.move(key);
+  }
+
+  function handleRangeEnd() {
+    rangeSelection.end();
+  }
+
+  // --- Merge dialog ---------------------------------------------------------
+
+  function onMergeRequest(event) {
+    const ids = new Set(event.detail?.ids ?? []);
+    const selected = people.filter((person) => ids.has(person.id));
+    if (!canMergeSelection(selected.length)) return;
+    mergeTrigger = event.detail?.trigger ?? null;
+    mergeSelection = selected;
+    // The list is ordered face_count DESC, so the first selected person is the
+    // largest: the keeper default matches the card the user saw first.
+    mergeKeeperId = selected[0].id;
+    mergeName = mergeNamePrefill(selected, mergeKeeperId);
+    mergeError = '';
+    mergeSaving = false;
+  }
+
+  $effect(() => {
+    if (!mergeSelection.length || !mergeDialogEl) return;
+    if (!mergeDialogEl.open) mergeDialogEl.showModal();
+    requestAnimationFrame(() => mergeInput?.focus());
+  });
+
+  function selectKeeper(id) {
+    mergeKeeperId = id;
+    mergeName = mergeNamePrefill(mergeSelection, id);
+  }
+
+  function closeMerge() {
+    if (mergeSaving) return;
+    mergeDialogEl?.close();
+  }
+
+  function handleMergeClose() {
+    const trigger = mergeTrigger;
+    mergeSelection = [];
+    mergeKeeperId = null;
+    mergeName = '';
+    mergeError = '';
+    mergeSaving = false;
+    requestAnimationFrame(() => {
+      // A successful merge ends selection mode and unmounts the action bar;
+      // focus then belongs to the header's select toggle, not to a detached
+      // button. Cancel keeps the bar, so the invoking action takes it back.
+      if (trigger?.isConnected) trigger.focus();
+      else document.querySelector('[data-action="select-mode"]')?.focus();
+    });
+  }
+
+  function onMergeCancel(event) {
+    if (mergeSaving) event.preventDefault();
+  }
+
+  async function confirmMerge() {
+    if (!mergeKeeper || mergeSaving || !canMergeSelection(mergeSelection.length)) return;
+    const keeperId = mergeKeeperId;
+    const persons = mergeSelection;
+    const sourceIds = persons.filter((person) => person.id !== keeperId).map((person) => person.id);
+    if (!sourceIds.length) return;
+    const name = mergeName.trim();
+    mergeSaving = true;
+    mergeError = '';
+
+    try {
+      const result = await api.mergePeople({
+        targetId: keeperId,
+        sourceIds,
+        // An emptied field means "no name", not "keep the old one": the API
+        // maps "" to clearing, exactly like the rename PATCH.
+        name,
+      });
+      const keeperLabel = personLabelById(keeperId, name);
+      mergeDialogEl?.close();
+      exitSelectionMode();
+      await refresh();
+      addToast(
+        $t('ui.people_merge_done', {
+          values: { count: persons.length, name: keeperLabel },
+          default: '{count} persons merged into {name}',
+        }),
+        '',
+        'success',
+        8000,
+        {
+          label: $t('ui.people_undo_merge', { default: 'Undo merge' }),
+          onClick: () => undoMerge(result?.undo_id),
+        }
+      );
+    } catch (error) {
+      if (error?.status === 404) {
+        mergeError = $t('ui.people_merge_missing', {
+          default: 'Someone in this selection is gone. The list was refreshed.',
+        });
+        exitSelectionMode();
+        await refresh();
+      } else {
+        mergeError = $t('ui.people_merge_failed', {
+          default: 'Could not merge these persons',
+        });
+      }
+    } finally {
+      mergeSaving = false;
+    }
+  }
+
+  async function undoMerge(undoId = peopleMerge.slot?.undo_id) {
+    if (undoId == null || undoBusy) return;
+    undoBusy = true;
+    try {
+      const result = await api.undoPeopleMerge(undoId);
+      await refresh();
+      const restored = Number(result?.restored_faces) || 0;
+      const total = Number(result?.total_faces) || 0;
+      const partial = restored < total;
+      addToast(
+        partial
+          ? $t('ui.people_undo_partial', {
+              values: { restored, total },
+              default: '{restored} of {total} faces restored',
+            })
+          : $t('ui.people_undo_done', {
+              values: { count: restored },
+              default: '{count} faces restored',
+            }),
+        partial
+          ? $t('ui.people_undo_partial_note', {
+              default: 'Re-indexed photos could not be attributed again.',
+            })
+          : '',
+        partial ? 'warning' : 'success',
+        6000
+      );
+    } catch (error) {
+      const unavailable = error?.status === 404 || error?.status === 409;
+      addToast(
+        $t('notifications.error', { default: 'Error' }),
+        unavailable
+          ? $t('ui.people_undo_unavailable', {
+              default: 'This merge can no longer be undone',
+            })
+          : $t('ui.people_undo_failed', { default: 'Could not undo the merge' }),
+        'error',
+        5000
+      );
+      // A stale slot belongs to a newer merge or was already consumed: the
+      // chip must reflect server truth immediately.
+      await refresh();
+    } finally {
+      undoBusy = false;
+    }
+  }
 </script>
 
 <div class="people-view">
   <div class="people-toolbar">
+    {#if peopleMerge.slot}
+      <button
+        type="button"
+        class="people-undo-chip"
+        data-testid="people-undo-chip"
+        disabled={undoBusy}
+        onclick={() => undoMerge()}
+      >
+        <Icon name="rotate-ccw" width={14} height={14} />
+        <span>
+          {$t('ui.people_undo_chip', {
+            values: {
+              name: personLabelById(peopleMerge.slot.target_id, peopleMerge.slot.target_name),
+              count: peopleMerge.slot.source_count,
+            },
+            default: 'Undo merge ({name} ← {count})',
+          })}
+        </span>
+      </button>
+    {/if}
     <button
       type="button"
       class="people-hidden-toggle"
@@ -319,14 +581,32 @@
   {:else}
     <div class="people-grid" class:loading aria-busy={loading} data-testid="people-grid">
       {#each people as person (person.id)}
-        <div class="person-card" data-testid="person-card" data-person-id={person.id}>
+        {@const selected = Boolean(selectionState.selected[personKey(person)])}
+        <div
+          class="person-card"
+          class:selected
+          data-testid="person-card"
+          data-person-id={person.id}
+          data-select-key={personKey(person)}
+          use:longpress={{
+            onLongPress: () => handleLongPress(person),
+            onRangeMove: handleRangeMove,
+            onRangeEnd: handleRangeEnd,
+          }}
+        >
           <button
             type="button"
             class="person-open"
             aria-label={personAriaLabel(person)}
+            aria-pressed={selectionState.active ? selected : undefined}
             data-testid="person-open"
-            onclick={() => openPerson(person)}
+            onclick={(event) => onPersonClick(person, event)}
           >
+            {#if selectionState.active}
+              <span class="person-select-badge" aria-hidden="true">
+                <Icon name={selected ? 'check-square' : 'square'} width={18} height={18} />
+              </span>
+            {/if}
             <span class="person-cover">
               {#if coverUrl(person)}
                 <img
@@ -351,30 +631,32 @@
               <span class="person-meta">{faceCountLabel(person)}</span>
             </span>
           </button>
-          <span class="person-actions">
-            <button
-              type="button"
-              class="person-action"
-              title={$t('ui.people_rename', { default: 'Rename' })}
-              aria-label={$t('ui.people_rename', { default: 'Rename' })}
-              onclick={(event) => startRename(person, event)}
-            >
-              <Icon name="edit-2" width={16} height={16} />
-            </button>
-            <button
-              type="button"
-              class="person-action"
-              title={person.hidden
-                ? $t('ui.people_unhide', { default: 'Unhide' })
-                : $t('ui.people_hide', { default: 'Hide' })}
-              aria-label={person.hidden
-                ? $t('ui.people_unhide', { default: 'Unhide' })
-                : $t('ui.people_hide', { default: 'Hide' })}
-              onclick={() => toggleHidden(person)}
-            >
-              <Icon name={person.hidden ? 'eye' : 'eye-off'} width={16} height={16} />
-            </button>
-          </span>
+          {#if !selectionState.active}
+            <span class="person-actions">
+              <button
+                type="button"
+                class="person-action"
+                title={$t('ui.people_rename', { default: 'Rename' })}
+                aria-label={$t('ui.people_rename', { default: 'Rename' })}
+                onclick={(event) => startRename(person, event)}
+              >
+                <Icon name="edit-2" width={16} height={16} />
+              </button>
+              <button
+                type="button"
+                class="person-action"
+                title={person.hidden
+                  ? $t('ui.people_unhide', { default: 'Unhide' })
+                  : $t('ui.people_hide', { default: 'Hide' })}
+                aria-label={person.hidden
+                  ? $t('ui.people_unhide', { default: 'Unhide' })
+                  : $t('ui.people_hide', { default: 'Hide' })}
+                onclick={() => toggleHidden(person)}
+              >
+                <Icon name={person.hidden ? 'eye' : 'eye-off'} width={16} height={16} />
+              </button>
+            </span>
+          {/if}
         </div>
       {/each}
     </div>
@@ -406,6 +688,7 @@
 <dialog
   bind:this={dialogEl}
   class="person-dialog"
+  data-testid="people-rename-dialog"
   aria-labelledby="person-dialog-title"
   onclose={handleDialogClose}
   oncancel={onDialogCancel}
@@ -480,6 +763,136 @@
   {/if}
 </dialog>
 
+<dialog
+  bind:this={mergeDialogEl}
+  class="person-dialog merge-dialog"
+  aria-labelledby="people-merge-title"
+  data-testid="people-merge-dialog"
+  onclose={handleMergeClose}
+  oncancel={onMergeCancel}
+  onclick={(event) => {
+    if (event.target !== mergeDialogEl) return;
+    const bounds = mergeDialogEl.getBoundingClientRect();
+    const outside =
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom;
+    if (outside) closeMerge();
+  }}
+>
+  {#if mergeSelection.length}
+    <form
+      onsubmit={(event) => {
+        event.preventDefault();
+        confirmMerge();
+      }}
+    >
+      <header class="person-dialog-header">
+        <span class="person-dialog-avatar">
+          <Icon name="git-merge" width={20} height={20} />
+        </span>
+        <div class="person-dialog-heading">
+          <h2 id="people-merge-title">
+            {$t('ui.people_merge_title', { default: 'Merge persons' })}
+          </h2>
+          <p>
+            {$t('ui.people_merge_summary', {
+              values: { faces: mergeFaceTotal, persons: mergeSelection.length },
+              default: '{faces} faces from {persons} persons',
+            })}
+          </p>
+        </div>
+      </header>
+
+      <fieldset class="merge-keepers">
+        <legend class="person-dialog-label">
+          {$t('ui.people_merge_keep', { default: 'Keep this person' })}
+        </legend>
+        {#each mergeSelection as person (person.id)}
+          {@const isKeeper = person.id === mergeKeeperId}
+          <label class="merge-person" class:active={isKeeper}>
+            <input
+              type="radio"
+              name="merge-keeper"
+              value={person.id}
+              checked={isKeeper}
+              data-testid="merge-keeper"
+              onchange={() => selectKeeper(person.id)}
+            />
+            <span class="merge-person-cover">
+              {#if coverUrl(person)}
+                <img src={coverUrl(person)} alt="" onerror={() => breakCover(person)} />
+              {:else if personInitial(person)}
+                <span aria-hidden="true">{personInitial(person)}</span>
+              {:else}
+                <Icon name="users" width={18} height={18} />
+              {/if}
+            </span>
+            <span class="merge-person-text">
+              <span class="merge-person-name">{personLabel(person)}</span>
+              <span class="person-meta">{faceCountLabel(person)}</span>
+            </span>
+            {#if person.hidden}
+              <span class="merge-person-hidden">
+                {$t('ui.people_hidden_badge', { default: 'Hidden' })}
+              </span>
+            {/if}
+          </label>
+        {/each}
+      </fieldset>
+
+      {#if mergeHiddenWarning}
+        <p class="merge-warning" role="alert" data-testid="merge-hidden-warning">
+          {$t('ui.people_merge_hidden_warning', {
+            default: 'The keeper is hidden, so the merged person leaves the default list.',
+          })}
+        </p>
+      {/if}
+
+      <label class="person-dialog-label" for="merge-name-input">
+        {$t('ui.people_name_label', { default: 'Name' })}
+      </label>
+      <input
+        id="merge-name-input"
+        data-testid="merge-name-input"
+        bind:this={mergeInput}
+        bind:value={mergeName}
+        maxlength="100"
+        autocomplete="off"
+        aria-invalid={mergeError ? 'true' : undefined}
+        aria-describedby={mergeError ? 'merge-name-error' : undefined}
+      />
+      {#if mergeError}
+        <p id="merge-name-error" class="person-dialog-error" role="alert">{mergeError}</p>
+      {/if}
+
+      <div class="person-dialog-actions">
+        <button
+          type="button"
+          class="btn-secondary"
+          data-testid="merge-cancel"
+          disabled={mergeSaving}
+          onclick={closeMerge}
+        >
+          {$t('ui.people_cancel', { default: 'Cancel' })}
+        </button>
+        <button
+          type="submit"
+          class="btn-primary"
+          data-testid="merge-confirm"
+          disabled={mergeSaving}
+          aria-busy={mergeSaving}
+        >
+          {$t(mergeSaving ? 'ui.people_saving' : 'ui.people_merge_confirm', {
+            default: mergeSaving ? 'Saving…' : 'Merge',
+          })}
+        </button>
+      </div>
+    </form>
+  {/if}
+</dialog>
+
 <style>
   .people-view {
     padding-bottom: var(--space-8);
@@ -487,8 +900,47 @@
 
   .people-toolbar {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: flex-end;
+    gap: var(--space-2);
     margin-bottom: var(--space-4);
+  }
+
+  .people-undo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 32px;
+    max-width: 100%;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--primary-color);
+    border-radius: var(--radius-full);
+    background: color-mix(in oklch, var(--primary-color) 10%, transparent);
+    color: var(--primary-ink);
+    font-family: var(--font-body);
+    font-size: var(--font-sm);
+    cursor: pointer;
+  }
+
+  .people-undo-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .people-undo-chip:hover:not(:disabled) {
+    border-color: var(--primary-ink);
+  }
+
+  .people-undo-chip:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+
+  .people-undo-chip:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .people-hidden-toggle {
@@ -609,6 +1061,120 @@
 
   .person-card:focus-within {
     border-color: var(--primary-color);
+  }
+
+  .person-card.selected {
+    border-color: var(--primary-color);
+    background: color-mix(in oklch, var(--primary-color) 8%, var(--surface-color));
+  }
+
+  .person-select-badge {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-full);
+    background: var(--surface-color);
+    color: var(--primary-ink);
+    box-shadow: var(--shadow-light);
+  }
+
+  .merge-dialog {
+    width: min(520px, calc(100vw - var(--space-8)));
+  }
+
+  .merge-keepers {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-height: 40vh;
+    margin: 0;
+    padding: var(--space-1);
+    overflow-y: auto;
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+  }
+
+  .merge-keepers legend {
+    padding: 0 var(--space-1);
+  }
+
+  .merge-person {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 44px;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .merge-person:hover,
+  .merge-person.active {
+    background: var(--background-secondary);
+  }
+
+  .merge-person input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--primary-color);
+  }
+
+  .merge-person-cover {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    font-family: var(--font-heading);
+    font-weight: var(--font-semibold);
+  }
+
+  .merge-person-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .merge-person-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .merge-person-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .merge-person-hidden {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+  }
+
+  .merge-warning {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in oklch, var(--color-danger) 10%, transparent);
+    color: var(--color-danger-ink);
+    font-size: var(--font-sm);
   }
 
   .person-open {

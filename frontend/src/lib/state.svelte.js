@@ -133,6 +133,8 @@ export async function loadSavedSearches() {
 }
 
 export const people = $state([]);
+/** The merge that can still be undone; `null` once consumed or replaced. */
+export const peopleMerge = $state({ slot: null });
 let peopleLoadToken = 0;
 
 export async function loadPeople(includeHidden = false) {
@@ -141,6 +143,7 @@ export async function loadPeople(includeHidden = false) {
     const data = await api.getPeople({ includeHidden });
     if (token !== peopleLoadToken) return true;
     people.splice(0, people.length, ...(data?.people || []));
+    peopleMerge.slot = data?.last_merge ?? null;
     return true;
   } catch (error) {
     // A superseded request that fails must not surface its error over the

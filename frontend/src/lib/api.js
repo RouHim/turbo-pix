@@ -64,6 +64,7 @@ class TurboPixAPI {
           // Not JSON — fall through with the raw text, as before.
         }
         const apiError = new Error(`HTTP ${response.status}: ${message}`);
+        apiError.status = response.status;
         if (errorCode !== undefined) apiError.errorCode = errorCode;
         throw apiError;
       }
@@ -226,6 +227,34 @@ class TurboPixAPI {
       ...options,
       method: 'PATCH',
       body: JSON.stringify(changes),
+    });
+  }
+
+  /**
+   * Merges source persons into one keeper. `name`/`hidden` are applied to the
+   * keeper in the same transaction, so one request is one user decision.
+   */
+  async mergePeople({ targetId, sourceIds, name = null, hidden = null }, options = {}) {
+    return this.request('/api/people/merge', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify({ target_id: targetId, source_ids: sourceIds, name, hidden }),
+    });
+  }
+
+  async undoPeopleMerge(undoId, options = {}) {
+    return this.request('/api/people/merge/undo', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify({ undo_id: undoId }),
+    });
+  }
+
+  async setPeopleHidden(ids, hidden, options = {}) {
+    return this.request('/api/people/batch/hide', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify({ ids, hidden }),
     });
   }
 

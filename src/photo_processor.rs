@@ -124,6 +124,9 @@ impl PhotoProcessor {
         // are merely temporarily unreachable would be deleted from the DB,
         // permanently losing favorites and manual metadata edits.
         let (photo_files, scan_complete) = self.scanner.scan();
+        status
+            .scan_complete
+            .store(scan_complete, std::sync::atomic::Ordering::SeqCst);
         let total_files = photo_files.len() as u64;
         status.phases.discovering.set_total(total_files);
         status.phases.discovering.set_processed(total_files);

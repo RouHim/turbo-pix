@@ -1,11 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
+use warp::reply::Reply;
 use warp::Filter;
 
 use crate::db::DbPool;
-use crate::scheduler::{IndexingPhases, IndexingStatus};
+use crate::scheduler::{IndexingPhases, IndexingStatus, PhotoScheduler};
 use crate::warp_helpers::with_db;
+
+/// Spawning the dedicated indexing thread failed (e.g. resource exhaustion).
+/// Handled by the generic 500 arm.
+#[derive(Debug)]
+struct ScanStartError;
+
+impl warp::reject::Reject for ScanStartError {}
 
 const CANONICAL_PHASES: [(&str, &str); 7] = [
     ("discovering", "indeterminate"),
@@ -118,15 +126,15 @@ fn build_phases(
         .collect()
 }
 
-pub async fn get_indexing_status(
-    status: IndexingStatus,
-    db_pool: DbPool,
-) -> Result<impl warp::Reply, Infallible> {
+async fn build_status_response(
+    status: &IndexingStatus,
+    db_pool: &DbPool,
+) -> IndexingStatusResponse {
     let is_indexing = status.is_indexing.load(Ordering::SeqCst);
     let is_complete = status.is_complete.load(Ordering::SeqCst);
     let current_phase = status.current_phase.lock().await.clone();
     let started_at = status.started_at.lock().await.map(|dt| dt.to_rfc3339());
-    let photos_indexed = get_total_photo_count(&db_pool).await;
+    let photos_indexed = get_total_photo_count(db_pool).await;
 
     let active_phase_id = if is_indexing {
         current_phase.clone()
@@ -136,24 +144,58 @@ pub async fn get_indexing_status(
 
     let phases = build_phases(is_indexing, is_complete, &current_phase, &status.phases);
 
-    let response = IndexingStatusResponse {
+    IndexingStatusResponse {
         is_indexing,
         is_complete,
         started_at,
         active_phase_id,
         phases,
         photos_indexed,
-    };
+    }
+}
 
-    let reply = warp::reply::json(&response);
+fn status_reply(
+    response: &IndexingStatusResponse,
+    status: warp::http::StatusCode,
+) -> warp::reply::Response {
+    let reply = warp::reply::json(response);
+    let reply = warp::reply::with_status(reply, status);
     let reply = warp::reply::with_header(
         reply,
         "cache-control",
         "no-store, no-cache, must-revalidate",
     );
-    let reply = warp::reply::with_header(reply, "pragma", "no-cache");
+    warp::reply::with_header(reply, "pragma", "no-cache").into_response()
+}
 
-    Ok(reply)
+pub async fn get_indexing_status(
+    status: IndexingStatus,
+    db_pool: DbPool,
+) -> Result<warp::reply::Response, warp::Rejection> {
+    let response = build_status_response(&status, &db_pool).await;
+    Ok(status_reply(&response, warp::http::StatusCode::OK))
+}
+
+/// Starts the full indexing cycle in the background. A second request while a
+/// cycle is running attaches to it and returns the same accepted status.
+pub async fn trigger_scan(
+    scheduler: PhotoScheduler,
+    db_pool: DbPool,
+) -> Result<warp::reply::Response, warp::Rejection> {
+    match scheduler.trigger_scan().await {
+        Ok(_) => {
+            let mut response = build_status_response(&scheduler.status, &db_pool).await;
+            // A tiny cycle can finish between the spawn and this snapshot; the
+            // endpoint's contract is the accepted scan, and the client's
+            // immediate poll reconciles the final state.
+            response.is_indexing = true;
+            Ok(status_reply(&response, warp::http::StatusCode::ACCEPTED))
+        }
+        Err(e) => {
+            log::error!("Failed to spawn manual scan: {}", e);
+            Err(warp::reject::custom(ScanStartError))
+        }
+    }
 }
 
 fn with_indexing_status(
@@ -162,15 +204,27 @@ fn with_indexing_status(
     warp::any().map(move || status.clone())
 }
 
+fn with_scheduler(
+    scheduler: PhotoScheduler,
+) -> impl Filter<Extract = (PhotoScheduler,), Error = Infallible> + Clone {
+    warp::any().map(move || scheduler.clone())
+}
+
 pub fn build_indexing_routes(
-    status: IndexingStatus,
+    scheduler: PhotoScheduler,
     db_pool: DbPool,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let status = scheduler.status.clone();
     warp::path!("api" / "indexing" / "status")
         .and(warp::get())
         .and(with_indexing_status(status))
-        .and(with_db(db_pool))
+        .and(with_db(db_pool.clone()))
         .and_then(get_indexing_status)
+        .or(warp::path!("api" / "indexing" / "scan")
+            .and(warp::post())
+            .and(with_scheduler(scheduler))
+            .and(with_db(db_pool))
+            .and_then(trigger_scan))
 }
 
 #[cfg(test)]
@@ -186,6 +240,69 @@ mod tests {
         p.geo_resolution.set_total(geo.1);
         p.geo_resolution.set_processed(geo.0);
         p
+    }
+
+    async fn test_routes() -> (
+        tempfile::TempDir,
+        PhotoScheduler,
+        impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone,
+    ) {
+        use crate::cache_manager::CacheManager;
+        use crate::db_pool::create_db_pool;
+        use crate::face_recognition::NoopFaceRecognition;
+        use crate::scheduler::Pipelines;
+        use crate::semantic_search::NoopSemanticSearch;
+        use crate::warp_helpers::handle_rejection;
+        use std::sync::Arc;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("database").join("turbo-pix.db");
+        let db_pool = create_db_pool(&db_path.to_string_lossy()).await.unwrap();
+        let scheduler = PhotoScheduler::new(
+            vec![temp_dir.path().to_path_buf()],
+            db_pool.clone(),
+            CacheManager::new(temp_dir.path().join("cache")),
+            Pipelines {
+                semantic_search: Arc::new(NoopSemanticSearch),
+                face_recognition: Arc::new(NoopFaceRecognition),
+            },
+            temp_dir.path().to_path_buf(),
+            "en".to_string(),
+            "https://nominatim.openstreetmap.org".to_string(),
+        );
+
+        let routes = build_indexing_routes(scheduler.clone(), db_pool).recover(handle_rejection);
+        // The fixture must outlive the scan started by POST.
+        (temp_dir, scheduler, routes)
+    }
+
+    #[tokio::test]
+    async fn test_post_scan_returns_accepted_status() {
+        let (_temp_dir, scheduler, routes) = test_routes().await;
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/indexing/scan")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), warp::http::StatusCode::ACCEPTED);
+        let body: IndexingStatusResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.phases.len(), 7);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/indexing/status")
+            .reply(&routes)
+            .await;
+        assert_eq!(response.status(), warp::http::StatusCode::OK);
+
+        for _ in 0..400 {
+            if !scheduler.status.is_indexing.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(!scheduler.status.is_indexing.load(Ordering::SeqCst));
     }
 
     #[test]

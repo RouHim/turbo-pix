@@ -3,7 +3,7 @@
   import { t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
   import { api } from '../lib/api.js';
-  import { indexingState } from '../lib/state.svelte.js';
+  import { addToast, indexingState } from '../lib/state.svelte.js';
   import { logger } from '../lib/logger.js';
 
   const POLL_FREQ_INDEXING = 1000;
@@ -164,9 +164,22 @@
     indexingState.photosIndexed = status.photos_indexed ?? 0;
   }
 
+  // The manual trigger's response is the first truthful status; poll now
+  // instead of waiting out the idle interval.
+  const onScanStarted = () => {
+    cancelPendingHide();
+    checkStatus();
+  };
+
+  // Concurrent checks (a scan-started kick while the idle poll is in flight)
+  // may finish out of order; only the newest response may touch the state.
+  let statusSequence = 0;
+
   async function checkStatus() {
+    const sequence = ++statusSequence;
     try {
       const status = await api.getIndexingStatus();
+      if (destroyed || sequence !== statusSequence) return;
       const normalizedStatus = normalizeStatus(status);
       const wasIndexing = indexingState.isIndexing;
 
@@ -180,7 +193,21 @@
       } else if (wasIndexing) {
         markIndexingCompleted();
         indexingState.isIndexing = false;
-        hideRing({ showCompletionPulse: true });
+        if (normalizedStatus.is_complete) {
+          hideRing({ showCompletionPulse: true });
+        } else {
+          // An incomplete run (missing root or phase-1 failure) must not
+          // present the "all done" pulse; the user triggered work that did
+          // not fully happen.
+          hideRing();
+          addToast(
+            $t('ui.scan_incomplete', {
+              default: 'Scan incomplete — some folders could not be read.',
+            }),
+            '',
+            'warning'
+          );
+        }
         window.dispatchEvent(new CustomEvent('indexingCompleted'));
       } else {
         indexingState.isIndexing = false;
@@ -206,7 +233,7 @@
         component: 'IndexingOrbit',
       });
     } finally {
-      scheduleNextPoll();
+      if (sequence === statusSequence) scheduleNextPoll();
     }
   }
 
@@ -286,6 +313,7 @@
     };
 
     document.addEventListener('keydown', onKeydown);
+    window.addEventListener('indexingScanStarted', onScanStarted);
     startPolling();
   });
 
@@ -294,6 +322,7 @@
     cancelPendingHide();
     stopPolling();
     document.removeEventListener('keydown', onKeydown);
+    window.removeEventListener('indexingScanStarted', onScanStarted);
     if (window.indexingStatus) {
       // Keep the object for E2E compatibility
       window.indexingStatus.checkStatus = async () => {};

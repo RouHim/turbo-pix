@@ -157,11 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =
         initialize_services(&config).await?;
 
-    // Extract indexing status before moving photo_scheduler
-    let indexing_status = photo_scheduler.status.clone();
-
-    // Start background tasks
-    start_background_tasks(photo_scheduler);
+    // Start background tasks; the scheduler clone shares status and scan permit
+    // with the HTTP trigger.
+    start_background_tasks(photo_scheduler.clone());
 
     let health_routes = build_health_routes(db_pool.clone());
     let photo_routes = build_photo_routes(
@@ -171,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let thumbnail_routes = build_thumbnail_routes(db_pool.clone(), thumbnail_generator);
     let search_routes = build_search_routes(db_pool.clone(), semantic_search.clone());
-    let indexing_routes = build_indexing_routes(indexing_status, db_pool.clone());
+    let indexing_routes = build_indexing_routes(photo_scheduler, db_pool.clone());
     let collage_routes = build_collage_routes(
         db_pool.clone(),
         config.data_path.clone().into(),

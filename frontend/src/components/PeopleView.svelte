@@ -1094,7 +1094,7 @@
     box-shadow: var(--shadow-light);
   }
 
-  .merge-dialog {
+  .person-dialog.merge-dialog {
     width: min(520px, calc(100vw - var(--space-8)));
   }
 
@@ -1454,7 +1454,7 @@
     font-size: var(--font-sm);
   }
 
-  .person-dialog input {
+  .person-dialog input:not([type='radio']) {
     width: 100%;
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--divider-color);

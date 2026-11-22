@@ -416,7 +416,11 @@ pub async fn merge_people(
     name: Option<Option<String>>,
     hidden: Option<bool>,
 ) -> Result<Option<MergeOutcome>> {
-    let mut tx = pool.begin().await?;
+    // IMMEDIATE takes the writer lock before the first SELECT: a deferred
+    // transaction pins a WAL snapshot and a concurrent face-phase commit in
+    // that window makes the later write fail with SQLITE_BUSY_SNAPSHOT, which
+    // the 30 s busy timeout cannot resolve.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     for id in std::iter::once(target_id).chain(source_ids.iter().copied()) {
         let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM people WHERE id = ?")
@@ -507,7 +511,9 @@ pub async fn merge_people(
 /// say how many did. A source person is re-created only when at least one face
 /// returned, and the slot is consumed either way.
 pub async fn undo_merge(pool: &DbPool, undo_id: i64) -> Result<UndoResult> {
-    let mut tx = pool.begin().await?;
+    // Same snapshot rule as `merge_people`: the slot/source reads must not
+    // pin a WAL snapshot before the transaction upgrades to a writer.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let Some(current) = sqlx::query_scalar::<_, i64>("SELECT id FROM person_merge_undo")
         .fetch_optional(&mut *tx)

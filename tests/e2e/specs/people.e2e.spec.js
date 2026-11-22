@@ -346,7 +346,12 @@ test.describe('People view', () => {
     await page.locator('[data-action="batch-merge-people"]').click();
     const dialog = page.getByTestId('people-merge-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId('merge-keeper').nth(0)).toBeChecked();
+    const keeperRadio = dialog.getByTestId('merge-keeper').nth(0);
+    await expect(keeperRadio).toBeChecked();
+    // The dialog's text-input rule must not stretch the keeper radios, and
+    // the merge dialog keeps its own (wider) width.
+    expect((await keeperRadio.boundingBox()).width).toBeLessThan(24);
+    expect((await dialog.boundingBox()).width).toBeGreaterThan(430);
     await expect(dialog.getByTestId('merge-name-input')).toHaveValue('Anna');
     await expect(dialog).toContainText('46 faces from 2 persons');
     await dialog.getByTestId('merge-confirm').click();

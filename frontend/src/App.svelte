@@ -227,7 +227,7 @@
         {#if route.view !== 'collages' && route.view !== 'housekeeping' && !(route.view === 'people' && route.person == null && route.query == null) && (route.view !== 'albums' || route.query != null)}
           <SortControls />
         {/if}
-        {#if route.view !== 'map' && !(route.view === 'people' && route.person == null && route.query == null)}
+        {#if route.view !== 'map'}
           <button
             type="button"
             class="select-mode-btn"

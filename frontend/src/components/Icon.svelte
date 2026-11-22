@@ -17,6 +17,7 @@
   import eye from 'feather-icons/dist/icons/eye.svg?raw';
   import eyeOff from 'feather-icons/dist/icons/eye-off.svg?raw';
   import fileText from 'feather-icons/dist/icons/file-text.svg?raw';
+  import gitMerge from 'feather-icons/dist/icons/git-merge.svg?raw';
   import grid from 'feather-icons/dist/icons/grid.svg?raw';
   import heart from 'feather-icons/dist/icons/heart.svg?raw';
   import image from 'feather-icons/dist/icons/image.svg?raw';
@@ -60,6 +61,7 @@
     eye,
     'eye-off': eyeOff,
     'file-text': fileText,
+    'git-merge': gitMerge,
     grid,
     heart,
     image,

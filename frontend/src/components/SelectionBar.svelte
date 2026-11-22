@@ -15,6 +15,7 @@
     albums,
     loadAlbums,
   } from '../lib/state.svelte.js';
+  import { MAX_MERGE_PERSONS } from '../lib/peopleMerge.js';
 
   const keys = $derived(Object.keys(selectionState.selected));
   const count = $derived(keys.length);
@@ -24,6 +25,11 @@
   // album-delete action applies — photo actions would misinterpret keys.
   const isAlbumOverview = $derived(
     route.view === 'albums' && route.album == null && route.query == null
+  );
+  // The People list selects persons (`String(person.id)`); the person-filtered
+  // grid below it is a photo surface and keeps the photo action set.
+  const isPeopleList = $derived(
+    route.view === 'people' && route.person == null && route.query == null
   );
 
   const allVisibleSelected = $derived(
@@ -41,20 +47,31 @@
             { id: 'accept', labelKey: 'ui.accept_collage', icon: 'check' },
             { id: 'reject', labelKey: 'ui.reject_collage', icon: 'x' },
           ]
-        : route.view === 'housekeeping'
+        : isPeopleList
           ? [
-              { id: 'keep', labelKey: 'ui.keep_photo', icon: 'check' },
-              { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
-              { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-              { id: 'export', labelKey: 'ui.export', icon: 'archive' },
-              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
+              {
+                id: 'mergePeople',
+                labelKey: 'ui.people_merge',
+                icon: 'git-merge',
+                disabled: count < 2 || count > MAX_MERGE_PERSONS,
+              },
+              { id: 'hidePeople', labelKey: 'ui.people_hide_selected', icon: 'eye-off' },
+              { id: 'unhidePeople', labelKey: 'ui.people_unhide_selected', icon: 'eye' },
             ]
-          : [
-              { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
-              { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
-              { id: 'export', labelKey: 'ui.export', icon: 'archive' },
-              { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
-            ]
+          : route.view === 'housekeeping'
+            ? [
+                { id: 'keep', labelKey: 'ui.keep_photo', icon: 'check' },
+                { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
+                { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
+                { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+                { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
+              ]
+            : [
+                { id: 'addFavorite', labelKey: 'ui.add_to_favorites', icon: 'heart' },
+                { id: 'removeFavorite', labelKey: 'ui.remove_from_favorites', icon: 'heart' },
+                { id: 'export', labelKey: 'ui.export', icon: 'archive' },
+                { id: 'delete', labelKey: 'ui.delete_photo', icon: 'trash-2' },
+              ]
   );
 
   // Action button data-action names (E2E contract).
@@ -67,6 +84,9 @@
     removeFavorite: 'batch-remove-favorite',
     export: 'batch-export',
     deleteAlbums: 'batch-delete-albums',
+    mergePeople: 'batch-merge-people',
+    hidePeople: 'batch-hide-people',
+    unhidePeople: 'batch-unhide-people',
   };
 
   let pickerOpen = $state(false);
@@ -142,8 +162,57 @@
     }
   }
 
-  async function runAction(actionId) {
+  async function runAction(actionId, sourceEvent = null) {
     if (!canAct) return;
+    if (actionId === 'mergePeople') {
+      if (!isPeopleList || count > MAX_MERGE_PERSONS) return;
+      window.dispatchEvent(
+        new CustomEvent('openPeopleMerge', {
+          detail: {
+            ids: keys.map(Number).filter((id) => Number.isInteger(id)),
+            trigger: sourceEvent?.currentTarget ?? null,
+          },
+        })
+      );
+      return;
+    }
+
+    if (actionId === 'hidePeople' || actionId === 'unhidePeople') {
+      if (!isPeopleList) return;
+      const hidden = actionId === 'hidePeople';
+      const ids = keys.map(Number).filter((id) => Number.isInteger(id));
+      if (!ids.length) return;
+      selectionState.busy = actionId;
+      try {
+        const res = await api.setPeopleHidden(ids, hidden);
+        const updated = Number(res?.updated) || 0;
+        addToast(
+          $t(hidden ? 'ui.people_hide_selected_done' : 'ui.people_unhide_selected_done', {
+            values: { count: updated },
+            default: hidden ? '{count} persons hidden' : '{count} persons visible again',
+          }),
+          '',
+          'success',
+          4000
+        );
+        // The People view owns the list subscription; ask it to reload so it
+        // can prune a filter-dependent selection and reset cover markers.
+        window.dispatchEvent(new CustomEvent('peopleChanged'));
+      } catch (error) {
+        logger.error('Bulk people visibility failed', { component: 'SelectionBar' }, error);
+        addToast(
+          $t('notifications.error', { default: 'Error' }),
+          $t('errors.batchActionFailed', { default: 'Batch action failed' }),
+          'error',
+          4000
+        );
+      } finally {
+        selectionState.busy = null;
+        exitSelectionMode();
+      }
+      return;
+    }
+
     if (actionId === 'deleteAlbums') {
       if (!isAlbumOverview) return;
       const ids = [...keys].map(Number).filter((id) => Number.isInteger(id));
@@ -442,8 +511,8 @@
       class="btn batch-action-btn"
       class:danger={action.id === 'delete' || action.id === 'deleteAlbums'}
       data-action={actionDataName[action.id]}
-      disabled={!canAct}
-      onclick={() => runAction(action.id)}
+      disabled={!canAct || Boolean(action.disabled)}
+      onclick={(event) => runAction(action.id, event)}
     >
       {#if selectionState.busy === action.id}
         <span class="spin">
@@ -457,7 +526,16 @@
     </button>
   {/each}
 
-  {#if route.view !== 'collages' && !isAlbumOverview}
+  {#if isPeopleList && count > MAX_MERGE_PERSONS}
+    <span class="batch-action-hint" data-testid="people-merge-limit-hint">
+      {$t('ui.people_merge_limit', {
+        values: { count: MAX_MERGE_PERSONS },
+        default: 'Merge supports at most {count} persons',
+      })}
+    </span>
+  {/if}
+
+  {#if route.view !== 'collages' && !isAlbumOverview && !isPeopleList}
     <button
       type="button"
       class="btn batch-action-btn"
@@ -529,6 +607,12 @@
 
   .selection-count {
     font-weight: var(--font-semibold);
+    white-space: nowrap;
+  }
+
+  .batch-action-hint {
+    color: var(--text-muted);
+    font-size: var(--font-sm);
     white-space: nowrap;
   }
 

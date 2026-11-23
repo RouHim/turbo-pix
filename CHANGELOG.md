@@ -1,3 +1,10 @@
+# [2.58.0](https://github.com/RouHim/turbo-pix/compare/2.57.0...2.58.0) (2026-11-23)
+
+### Features
+
+* **gallery:** keep touch cards legible and date the viewer ([e00f95a](https://github.com/RouHim/turbo-pix/commit/e00f95a32830bf0112f38dd79edc05cf5acc6b87))
+* **gallery:** render touch photo cards as bare preview tiles ([aaa9bc4](https://github.com/RouHim/turbo-pix/commit/aaa9bc4ae0c6d3471981b51519b59e22e352de8e))
+
 # [2.57.0](https://github.com/RouHim/turbo-pix/compare/2.56.2...2.57.0) (2026-11-23)
 
 ### Bug Fixes

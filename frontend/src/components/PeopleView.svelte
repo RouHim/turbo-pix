@@ -870,8 +870,6 @@
         bind:value={mergeName}
         maxlength="100"
         autocomplete="off"
-        aria-invalid={mergeError ? 'true' : undefined}
-        aria-describedby={mergeError ? 'merge-name-error' : undefined}
       />
       {#if mergeError}
         <p id="merge-name-error" class="person-dialog-error" role="alert">{mergeError}</p>

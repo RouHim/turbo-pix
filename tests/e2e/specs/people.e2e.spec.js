@@ -32,7 +32,7 @@ async function mockConfig(page, config) {
 async function mockPeople(
   page,
   initial,
-  { delayMs = 0, failPatch = false, failHide = false, dropOnMerge = null } = {}
+  { delayMs = 0, failPatch = false, failHide = false, dropOnMerge = null, staleUndo = false } = {}
 ) {
   let people = initial;
   let lastMerge = null;
@@ -44,7 +44,7 @@ async function mockPeople(
 
     if (request.method() === 'POST' && url.endsWith('/api/people/merge/undo')) {
       const body = request.postDataJSON();
-      if (!lastMerge || lastMerge.undo_id !== body.undo_id) {
+      if (staleUndo || !lastMerge || lastMerge.undo_id !== body.undo_id) {
         await route.fulfill({
           status: 409,
           contentType: 'application/json',
@@ -382,6 +382,31 @@ test.describe('People view', () => {
     // THEN both persons return and the slot is gone
     await expect(cards).toHaveCount(2);
     await expect(page.getByTestId('people-undo-chip')).toHaveCount(0);
+  });
+
+  test('surfaces a stale merge undo without restoring anything', async ({ page }) => {
+    // GIVEN one merge whose slot a newer merge replaced elsewhere
+    await mockPeople(page, [person(3, 'Anna', 10), person(8, 'Ben', 6)], { staleUndo: true });
+    await TestHelpers.goto(page);
+    await TestHelpers.navigateToView(page, 'people');
+    const cards = page.locator('[data-testid="person-card"]');
+
+    await page.locator('[data-action="select-mode"]').click();
+    await page.locator('[data-action="batch-select-all"]').click();
+    await page.locator('[data-action="batch-merge-people"]').click();
+    await page.getByTestId('merge-confirm').click();
+    await expect(cards).toHaveCount(1);
+    const undoAction = page.locator('.toast-action');
+    await expect(undoAction).toHaveText('Undo merge');
+
+    // WHEN the user clicks the stale undo
+    await undoAction.click();
+
+    // THEN the refusal is reported, nothing is restored, and the current slot
+    // still backs the chip
+    await expect(page.locator('.toast-error')).toContainText('can no longer be undone');
+    await expect(cards).toHaveCount(1);
+    await expect(page.getByTestId('people-undo-chip')).toBeVisible();
   });
 
   test('warns before merging visible persons into a hidden keeper', async ({ page }) => {

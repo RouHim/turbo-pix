@@ -11,7 +11,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 **Backend:** `cargo run` | `cargo test` | `cargo clippy` | `cargo fmt`  
 **Frontend:** `npm run build` (required before cargo build — embeds dist/) | `npm run lint` | `npm run format`  
 **Preview:** `./scripts/preview.sh` — builds `dist/`, fetches ONNX Runtime, then builds the binary  
-**Build prerequisite:** local Rust builds and E2E need `eval "$(./scripts/fetch-ort.sh --export)"`; see `DEVELOPMENT.md` → Build from source.
+**Build prerequisite:** local Rust builds and E2E need `eval "$(./scripts/fetch-ort.sh --export)"`; see README → Native execution → Installation.
 
 ## Code Style
 

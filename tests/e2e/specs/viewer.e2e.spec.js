@@ -289,18 +289,22 @@ test.describe('Photo Viewer', () => {
       // WHEN: The thumb is dragged halfway, before any release
       const release = await TestHelpers.slideToConfirm(page, 0.5, { release: false });
 
-      // THEN: The thumb tracks the pointer proportionally
-      await expect
-        .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
-        .toBeGreaterThan(0);
-      await expect
-        .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
-        .toBeLessThan(100);
+      // THEN: The thumb tracks the pointer proportionally: half the travel is
+      // exactly half of the range (a less sensitive mapping would read ~25).
+      await expect.poll(async () => Number(await slider.getAttribute('aria-valuenow'))).toBe(50);
 
       // WHEN: It is released below the end
       await release();
 
       // THEN: It snaps back and nothing is deleted
+      await expect(slider).toHaveAttribute('aria-valuenow', '0');
+      await expect(dialog).toBeVisible();
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+
+      // WHEN: It is dragged to 95 % — close to, but short of, the end
+      await TestHelpers.slideToConfirm(page, 0.95);
+
+      // THEN: The near-end release snaps back as well: only a full slide deletes
       await expect(slider).toHaveAttribute('aria-valuenow', '0');
       await expect(dialog).toBeVisible();
       await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
@@ -316,6 +320,67 @@ test.describe('Photo Viewer', () => {
       await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
     } finally {
       if (deletePerformed) await restoreDeletedPhoto(snapshot);
+    }
+  });
+
+  test('should not delete when the armed drag is cancelled with Escape', async ({ page }) => {
+    // GIVEN: A photo card with a captured restoration snapshot
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThan(0);
+    const card = cards[0];
+    const photoHash = await card.getAttribute('data-photo-id');
+    expect(photoHash).toBeTruthy();
+    const snapshot = await capturePhotoForDelete(photoHash);
+
+    // Count DELETEs for this photo and record whether one actually completed,
+    // so a regression would still be cleaned up.
+    let deleteRequests = 0;
+    let deletionCompleted = false;
+    await page.route(
+      (url) => url.pathname === `/api/photos/${photoHash}`,
+      async (route) => {
+        if (route.request().method() !== 'DELETE') {
+          await route.continue();
+          return;
+        }
+        deleteRequests += 1;
+        const response = await route.fetch();
+        deletionCompleted = response.status() === 200;
+        await route.fulfill({ response });
+      }
+    );
+
+    try {
+      await card.click();
+      await TestHelpers.verifyViewerOpen(page);
+      await page.locator('.delete-photo-btn').click();
+      const dialog = page.locator(DELETE_DIALOG);
+      const slider = page.locator(DELETE_SLIDER);
+      await expect(dialog).toBeVisible();
+
+      // WHEN: The thumb is dragged all the way to the end and the dialog is
+      // cancelled before the pointer is released
+      const release = await TestHelpers.slideToConfirm(page, 1, { release: false });
+      await expect(slider).toHaveAttribute('aria-valuenow', '100');
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+
+      // AND: The pointer is then released. The hidden track still owns the
+      // pointer capture, so this mouseup is delivered to the closed dialog.
+      await release();
+
+      // THEN: The cancellation wins — no DELETE leaves the browser and the
+      // photo stays in the stream
+      await page.waitForTimeout(500);
+      expect(deleteRequests, 'a cancelled drag must not send a DELETE').toBe(0);
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+      const listed = await new TestDataManager().fetchAllPhotos();
+      expect(
+        listed.some((photo) => photo.hash_sha256 === photoHash),
+        'the cancelled photo must still be listed'
+      ).toBe(true);
+    } finally {
+      if (deletionCompleted) await restoreDeletedPhoto(snapshot);
     }
   });
 

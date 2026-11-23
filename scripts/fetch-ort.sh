@@ -94,8 +94,9 @@ ASSET="onnxruntime-${ORT_VERSION}-${TARGET}-static.tar.zst"
 URL="https://github.com/RouHim/onnxruntime-static/releases/download/${ORT_TAG}/${ASSET}"
 LIB_DIR="$DEST/lib"
 STAMP="$DEST/.ort-version"
+STAMP_EXPECTED="$ORT_TAG $ORT_SHA"
 
-if [ -f "$LIB_DIR/libonnxruntime.a" ] && [ "$(cat "$STAMP" 2>/dev/null || true)" = "$ORT_TAG" ]; then
+if [ -f "$LIB_DIR/libonnxruntime.a" ] && [ "$(cat "$STAMP" 2>/dev/null || true)" = "$STAMP_EXPECTED" ]; then
     :
 else
     case "$DEST" in
@@ -128,7 +129,7 @@ else
         echo "libonnxruntime.a not found in $ASSET" >&2
         exit 1
     }
-    printf '%s\n' "$ORT_TAG" > "$STAMP"
+    printf '%s\n' "$STAMP_EXPECTED" > "$STAMP"
 
     rm -rf "$TMP"
     trap - EXIT HUP INT TERM

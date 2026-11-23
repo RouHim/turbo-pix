@@ -18,8 +18,9 @@ RUN npm ci && npm run build
 # # # # # # # # # # # # # # # # # # # #
 FROM alpine:3 AS ort
 ARG TARGETARCH
-RUN apk add --no-cache curl p7zip
+RUN apk add --no-cache curl tar zstd
 COPY scripts/fetch-ort.sh /fetch-ort.sh
+COPY scripts/ort /scripts/ort
 RUN chmod +x /fetch-ort.sh && \
     if [ "$TARGETARCH" = "arm64" ]; then TARGET=aarch64-unknown-linux-musl; \
     else TARGET=x86_64-unknown-linux-musl; fi; \

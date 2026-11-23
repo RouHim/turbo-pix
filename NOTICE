@@ -6,9 +6,10 @@ The TurboPix source code is licensed under the MIT License (see LICENSE).
 Third-party components distributed with, or downloaded by, TurboPix:
 
 - ONNX Runtime (https://github.com/microsoft/onnxruntime), MIT License.
-  The release binary links a static ONNX Runtime build supplied by
-  RapidAI/OnnxruntimeBuilder (https://github.com/RapidAI/OnnxruntimeBuilder),
-  Apache License 2.0.
+  The release binary links static ONNX Runtime builds from
+  https://github.com/RouHim/onnxruntime-static (MIT build scripts); their build
+  recipe is derived from RapidAI/OnnxruntimeBuilder
+  (https://github.com/RapidAI/OnnxruntimeBuilder), Apache License 2.0.
 
 - SCRFD-2.5G and antelopev2 R100 face models
   (https://github.com/deepinsight/insightface), InsightFace model license.

@@ -33,7 +33,7 @@ zerocopy = "0.8"
 
 # Face detection/recognition. The static ONNX Runtime archive is supplied by
 # scripts/fetch-ort.sh; `ORT_LIB_PATH` must point at its lib directory.
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-23"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-31"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

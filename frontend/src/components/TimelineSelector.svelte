@@ -676,11 +676,17 @@
   // The lane is `display: none` at the mobile breakpoint and then reports a
   // width of 0. Keeping the last non-zero width means a hide/show round trip
   // cannot throw the user's zoom away (clampView pins a 0-width view to fit all).
+  // That stale width is why the hidden state is tracked separately: a reset
+  // issued while folded must not frame the view on a width the lane no longer
+  // has (a resize or an expanded sidebar while folded would keep the old
+  // fit-all scale, which `clampScale` cannot lower back to the new one).
+  let laneHidden = $state(false);
   $effect(() => {
     if (!laneEl) return;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[entries.length - 1];
       const measured = entry ? entry.contentRect.width : 0;
+      laneHidden = measured <= 0;
       if (measured > 0) width = measured;
     });
     observer.observe(laneEl);
@@ -723,11 +729,10 @@
     resetHandled = nonce;
     untrack(() => {
       drag = null;
-      // A lane hidden by the timeline fold reports width 0. Resetting on that
-      // width leaves `scale: 1`, which a narrow desktop cannot clamp back up to
-      // fit-all when the lane reappears, so the clear would not reset the view.
-      // Defer until the ResizeObserver has measured the lane again.
-      if (width <= 0) {
+      // A lane hidden by the timeline fold keeps its last non-zero width, so a
+      // reset on that stale width could frame the view for a size the lane no
+      // longer has. Defer until the ResizeObserver has measured a visible lane.
+      if (laneHidden || width <= 0) {
         pendingReset = true;
         return;
       }
@@ -736,7 +741,7 @@
   });
 
   $effect(() => {
-    if (!pendingReset || width <= 0) return;
+    if (!pendingReset || laneHidden || width <= 0) return;
     pendingReset = false;
     view = createView(width, model);
   });

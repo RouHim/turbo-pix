@@ -59,13 +59,13 @@ A user resizes across the mobile breakpoint, or runs an automated accessibility 
 - Storage denied or full: the toggle still works for the session.
 - Collapsing while a selector control has focus must not leave focus on a hidden element.
 - Resizing to mobile and back must not drop the desktop preference.
-- The clear control in the folded header still clears the filter and resets the selector view.
+- The clear control in the folded header still clears the filter and resets the selector view; the reset is deferred until the lane is visible and freshly measured, so it frames the width the lane actually has after expanding.
 - No automatic folding: only the toggle changes the state.
 
 ## Assumptions
 - Separating the fold from the filter means a user can keep a filter and hide its graph; the label keeps the active period visible.
 - The header row is the only part left when folded, so the card remains discoverable without a floating tab or a top-bar control.
-- The selector's existing ResizeObserver ignores zero width and keeps the last width; this is what makes a mounted-but-hidden fold safe.
+- The selector's ResizeObserver keeps the last non-zero lane width across a fold and tracks whether the lane is currently hidden, so zoom and pan survive the round trip while a folded reset knows to wait for a visible measurement.
 - Mobile and the date rail are out of scope for this feature.
 - Exact pixel heights (210px open, 74px folded, 136px reclaimed) are layout contracts and are asserted in E2E.
 

@@ -1,3 +1,9 @@
+## [2.56.2](https://github.com/RouHim/turbo-pix/compare/2.56.1...2.56.2) (2026-11-23)
+
+### Bug Fixes
+
+* **search:** serialize ORT startup and cover CLIP guards ([58fa5d1](https://github.com/RouHim/turbo-pix/commit/58fa5d1e22651519e117d01f7afd7f9b7fc043ab))
+
 ## [2.56.1](https://github.com/RouHim/turbo-pix/compare/2.56.0...2.56.1) (2026-11-22)
 
 # [2.56.0](https://github.com/RouHim/turbo-pix/compare/2.55.4...2.56.0) (2026-11-22)

@@ -3,7 +3,7 @@
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { addToast } from '../lib/state.svelte.js';
+  import { addToast, appState, setTimelineCollapsed } from '../lib/state.svelte.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { buildTimelineModel, formatPeriodName, formatSelectionLabel } from '../lib/timeline.js';
@@ -22,6 +22,9 @@
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
+  // Desktop-only fold; the mobile dropdown row has no toggle of its own.
+  let detailsEl = $state(null);
+  let collapseToggleEl = $state(null);
 
   const model = $derived(buildTimelineModel(data?.density ?? []));
   // The timeline earns its 210px only once the density can say something:
@@ -69,6 +72,22 @@
   let resetNonce = $state(0);
   let liveTimer = null;
   let pendingLive = null;
+
+  const collapseLabel = $derived(
+    appState.timelineCollapsed
+      ? $t('ui.expand_timeline', { default: 'Expand timeline' })
+      : $t('ui.collapse_timeline', { default: 'Collapse timeline' })
+  );
+
+  // The state is purely presentational: it never touches the route filter.
+  // Focus inside the selector is captured before `hidden` removes it from the
+  // tab order, so collapsing from the keyboard cannot strand focus on <body>.
+  const toggleCollapsed = () => {
+    const focusWasInside = detailsEl?.contains(document.activeElement) ?? false;
+    const next = !appState.timelineCollapsed;
+    setTimelineCollapsed(next);
+    if (next && focusWasInside) collapseToggleEl?.focus();
+  };
 
   const LIVE_COMMIT_MS = 100;
 
@@ -176,17 +195,40 @@
       <div class="timeline-rail desktop-only">
         <div class="timeline-header">
           <div class="timeline-label" class:filtered={selection !== null}>{labelText}</div>
-          <button
-            type="button"
-            class="timeline-reset"
-            title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-            aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-            onclick={clearFilter}
-          >
-            <Icon name="x" width={14} height={14} />
-          </button>
+          <div class="timeline-actions">
+            <button
+              type="button"
+              class="timeline-reset"
+              title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+              aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+              onclick={clearFilter}
+            >
+              <Icon name="x" width={14} height={14} />
+            </button>
+            <button
+              type="button"
+              class="timeline-collapse"
+              data-testid="timeline-collapse-toggle"
+              bind:this={collapseToggleEl}
+              title={collapseLabel}
+              aria-label={collapseLabel}
+              aria-expanded={!appState.timelineCollapsed}
+              aria-controls="timeline-details"
+              onclick={toggleCollapsed}
+            >
+              <span
+                class="timeline-chevron"
+                class:expanded={!appState.timelineCollapsed}
+                aria-hidden="true"
+              >
+                <Icon name="chevron-down" width={14} height={14} />
+              </span>
+            </button>
+          </div>
         </div>
-        <TimelineSelector {model} {selection} onchange={handleChange} {resetNonce} />
+        <div id="timeline-details" bind:this={detailsEl} hidden={appState.timelineCollapsed}>
+          <TimelineSelector {model} {selection} onchange={handleChange} {resetNonce} />
+        </div>
       </div>
 
       <!-- Mobile: Dropdowns (unchanged behaviour; a desktop range collapses to
@@ -264,7 +306,14 @@
     color: var(--primary-ink);
   }
 
-  .timeline-reset {
+  .timeline-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .timeline-reset,
+  .timeline-collapse {
     flex-shrink: 0;
     width: var(--space-8);
     height: var(--space-8);
@@ -282,22 +331,34 @@
       background-color var(--transition-fast);
   }
 
-  .timeline-reset:hover {
+  .timeline-reset:hover,
+  .timeline-collapse:hover {
     border-color: var(--primary-color);
     color: var(--primary-color);
     background: color-mix(in oklch, var(--primary-color) 10%, transparent);
   }
 
-  .timeline-reset:active {
+  .timeline-reset:active,
+  .timeline-collapse:active {
     transform: translateY(1px);
   }
 
-  .timeline-reset:focus-visible {
+  .timeline-reset:focus-visible,
+  .timeline-collapse:focus-visible {
     outline: none;
     border-color: var(--primary-color);
     box-shadow:
       0 0 0 2px var(--surface-color),
       0 0 0 4px var(--primary-color);
+  }
+
+  .timeline-chevron {
+    display: flex;
+    transition: transform var(--transition-fast);
+  }
+
+  .timeline-chevron.expanded {
+    transform: rotate(180deg);
   }
 
   /* Single-class selector on purpose: the mobile block's `.desktop-only
@@ -418,7 +479,9 @@
   @media (prefers-reduced-motion: reduce) {
     .timeline-label,
     .timeline-label.filtered,
-    .timeline-reset {
+    .timeline-reset,
+    .timeline-collapse,
+    .timeline-chevron {
       animation: none;
       transition: none;
     }

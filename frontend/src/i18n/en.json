@@ -70,6 +70,8 @@
     "menu": "Menu",
     "collapse_sidebar": "Collapse sidebar",
     "expand_sidebar": "Expand sidebar",
+    "collapse_timeline": "Collapse timeline",
+    "expand_timeline": "Expand timeline",
     "newest_first": "Newest First",
     "oldest_first": "Oldest First",
     "name_a_z": "Name A-Z",

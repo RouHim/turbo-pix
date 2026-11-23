@@ -23,11 +23,12 @@
   const isVideo = $derived(photo?.metadata?.video?.codec != null);
   // The filename is the card's accessible name only — the gallery itself stays
   // free of filesystem text. The viewer shows the filename.
-  const accessibleLabel = $derived.by(
-    () =>
+  const accessibleLabel = $derived.by(() => {
+    const name =
       photo?.filename ||
-      `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`
-  );
+      `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`;
+    return photo?.is_favorite ? `${name}, ${get(t)('ui.favorite', { default: 'Favorite' })}` : name;
+  });
   // A contact sheet carries the date, not the filesystem record. Camera,
   // file size and filename stay in the viewer's metadata panel.
   const dateLabel = $derived.by(() => {
@@ -209,6 +210,12 @@
     {#if isVideo}
       <div class="video-play-icon" aria-hidden="true">
         <Icon name="play" width={20} height={20} class="video-play-svg" />
+      </div>
+    {/if}
+
+    {#if favoriteActive}
+      <div class="photo-card-favorite-mark" data-favorite-mark aria-hidden="true">
+        <Icon name="heart" width={16} height={16} />
       </div>
     {/if}
   </div>
@@ -421,7 +428,9 @@
     z-index: 5;
   }
 
-  .photo-card:hover .photo-card-actions {
+  .photo-card:hover .photo-card-actions,
+  .photo-card:focus-within .photo-card-actions,
+  .photo-card:focus-within .photo-card-overlay {
     opacity: 1;
   }
 
@@ -495,6 +504,23 @@
     stroke: white;
   }
 
+  /* Touch has no hover reveal, so the favorite state keeps one quiet brass
+     mark at rest; desktop shows it in the hover action button instead. */
+  .photo-card-favorite-mark {
+    display: none;
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    z-index: 2;
+    color: var(--accent-color);
+    filter: drop-shadow(0 1px 2px oklch(0% 0 0deg / 60%));
+    pointer-events: none;
+  }
+
+  .photo-card-favorite-mark :global(svg) {
+    fill: currentcolor;
+  }
+
   @media (hover: none) and (pointer: coarse) {
     .photo-card:hover {
       transform: none;
@@ -514,6 +540,10 @@
     .photo-card-overlay,
     .photo-card-actions {
       display: none;
+    }
+
+    .photo-card-favorite-mark {
+      display: flex;
     }
   }
 
@@ -540,6 +570,10 @@
     .photo-card-overlay,
     .photo-card-actions {
       display: none;
+    }
+
+    .photo-card-favorite-mark {
+      display: flex;
     }
 
     .video-play-icon {

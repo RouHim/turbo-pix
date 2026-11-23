@@ -7,6 +7,7 @@
   import { photoGridState } from '../lib/state.svelte.js';
   import { addToast } from '../lib/state.svelte.js';
   import {
+    formatDate,
     getPhotoUrl,
     getThumbnailUrl,
     getVideoUrl,
@@ -184,6 +185,13 @@
   const isVideo = $derived(currentPhoto ? isVideoFile(currentPhoto.filename) : false);
   const isCollage = $derived(currentPhoto ? isCollagePhoto(currentPhoto) : false);
   const isFavorite = $derived(currentPhoto ? api.isFavorite(currentPhoto) : false);
+  // Ambient viewer information: a contact sheet without chronology reads as
+  // texture. The details sheet keeps the full metadata record.
+  const captureDate = $derived.by(() => {
+    const takenAt = currentPhoto?.taken_at;
+    if (!takenAt) return '';
+    return Number.isNaN(new Date(takenAt).getTime()) ? '' : formatDate(takenAt);
+  });
 
   // ── Zoom helpers ───────────────────────────────────────────────────────────
   function applyZoom() {
@@ -2582,6 +2590,9 @@
           <Icon name={encoderIsHardware ? 'zap' : 'cpu'} width={14} height={14} />
         </div>
       {/if}
+      {#if captureDate}
+        <div class="viewer-caption" data-viewer-date>{captureDate}</div>
+      {/if}
     </div>
 
     <div
@@ -2814,6 +2825,51 @@
     .viewer-main.sheet-open :global(.viewer-adjacent) {
       bottom: calc(65vh + var(--space-6));
       height: auto;
+    }
+  }
+
+  /* Ambient viewer information, not a sheet-only fact: a quiet veil chip above
+     the control bar. Hidden while the mobile sheet is open — the sheet already
+     carries the date. */
+  .viewer-caption {
+    position: absolute;
+    left: 50%;
+    bottom: calc(
+      var(--viewer-controls-offset) + var(--viewer-controls-height) + var(--space-3) +
+        env(safe-area-inset-bottom, 0px)
+    );
+    transform: translateX(-50%);
+    max-width: calc(100% - var(--space-12));
+    padding: 2px var(--space-3);
+    border-radius: var(--radius-full);
+    background: oklch(0% 0 0deg / 55%);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    color: rgb(255 255 255 / 92%);
+    font-size: var(--font-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+    .viewer-caption {
+      background: oklch(0% 0 0deg / 70%);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .viewer-caption {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .viewer-main.sheet-open .viewer-caption {
+      display: none;
     }
   }
 

@@ -8,6 +8,7 @@
   import check from 'feather-icons/dist/icons/check.svg?raw';
   import checkCircle from 'feather-icons/dist/icons/check-circle.svg?raw';
   import checkSquare from 'feather-icons/dist/icons/check-square.svg?raw';
+  import chevronDown from 'feather-icons/dist/icons/chevron-down.svg?raw';
   import chevronLeft from 'feather-icons/dist/icons/chevron-left.svg?raw';
   import chevronRight from 'feather-icons/dist/icons/chevron-right.svg?raw';
   import clock from 'feather-icons/dist/icons/clock.svg?raw';
@@ -52,6 +53,7 @@
     check,
     'check-circle': checkCircle,
     'check-square': checkSquare,
+    'chevron-down': chevronDown,
     'chevron-left': chevronLeft,
     'chevron-right': chevronRight,
     clock,

@@ -71,6 +71,8 @@
     "menu": "Menü",
     "collapse_sidebar": "Seitenleiste einklappen",
     "expand_sidebar": "Seitenleiste ausklappen",
+    "collapse_timeline": "Zeitleiste einklappen",
+    "expand_timeline": "Zeitleiste ausklappen",
     "newest_first": "Neueste zuerst",
     "oldest_first": "Älteste zuerst",
     "name_a_z": "Name A-Z",

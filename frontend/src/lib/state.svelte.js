@@ -1,14 +1,14 @@
 import { api } from './api.js';
-import {
-  browserStorage,
-  readSidebarCollapsed,
-  writeSidebarCollapsed,
-} from './sidebarPreference.js';
+import { browserStorage } from './browserStorage.js';
+import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarPreference.js';
+import { readTimelineCollapsed, writeTimelineCollapsed } from './timelinePreference.js';
 
 export const appState = $state({
   sidebarOpen: false,
   // Desktop-only: the mobile drawer keeps its own `sidebarOpen` lifecycle.
   sidebarCollapsed: readSidebarCollapsed(browserStorage()),
+  // Desktop-only fold of the timeline card; presentational, survives remounts.
+  timelineCollapsed: readTimelineCollapsed(browserStorage()),
   mobileSearchOpen: false,
   // Raster tile endpoint served by GET /api/config (TURBO_PIX_TILE_URL).
   // null = not configured → the map renders without a tile layer.
@@ -25,6 +25,15 @@ export const appState = $state({
 export function setSidebarCollapsed(collapsed) {
   appState.sidebarCollapsed = collapsed;
   writeSidebarCollapsed(browserStorage(), collapsed);
+}
+
+/**
+ * Applies the desktop timeline fold and remembers it. A denied write must not
+ * discard the state the user just chose.
+ */
+export function setTimelineCollapsed(collapsed) {
+  appState.timelineCollapsed = collapsed;
+  writeTimelineCollapsed(browserStorage(), collapsed);
 }
 
 export const indexingState = $state({

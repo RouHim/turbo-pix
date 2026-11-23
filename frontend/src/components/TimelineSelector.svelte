@@ -716,14 +716,29 @@
   // (a later `resetNonce` is handled by the effect below), and a bare read
   // would make Svelte warn that the reference captures the initial value.
   let resetHandled = untrack(() => resetNonce);
+  let pendingReset = $state(false);
   $effect(() => {
     const nonce = resetNonce;
     if (nonce === resetHandled) return;
     resetHandled = nonce;
     untrack(() => {
       drag = null;
+      // A lane hidden by the timeline fold reports width 0. Resetting on that
+      // width leaves `scale: 1`, which a narrow desktop cannot clamp back up to
+      // fit-all when the lane reappears, so the clear would not reset the view.
+      // Defer until the ResizeObserver has measured the lane again.
+      if (width <= 0) {
+        pendingReset = true;
+        return;
+      }
       view = createView(width, model);
     });
+  });
+
+  $effect(() => {
+    if (!pendingReset || width <= 0) return;
+    pendingReset = false;
+    view = createView(width, model);
   });
 
   // prev-spec FR-010: keep the selection on screen — never fight a gesture in progress

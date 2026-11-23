@@ -23,11 +23,12 @@
   const isVideo = $derived(photo?.metadata?.video?.codec != null);
   // The filename is the card's accessible name only — the gallery itself stays
   // free of filesystem text. The viewer shows the filename.
-  const accessibleLabel = $derived.by(
-    () =>
+  const accessibleLabel = $derived.by(() => {
+    const name =
       photo?.filename ||
-      `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`
-  );
+      `${get(t)('ui.photo', { default: 'Photo' })} ${photo?.hash_sha256?.substring(0, 8)}`;
+    return photo?.is_favorite ? `${name}, ${get(t)('ui.favorite', { default: 'Favorite' })}` : name;
+  });
   // A contact sheet carries the date, not the filesystem record. Camera,
   // file size and filename stay in the viewer's metadata panel.
   const dateLabel = $derived.by(() => {
@@ -211,14 +212,20 @@
         <Icon name="play" width={20} height={20} class="video-play-svg" />
       </div>
     {/if}
+
+    {#if favoriteActive}
+      <div class="photo-card-favorite-mark" data-favorite-mark aria-hidden="true">
+        <Icon name="heart" width={16} height={16} />
+      </div>
+    {/if}
   </div>
 
-  <div class="photo-card-overlay">
+  <div class="photo-card-overlay" data-card-overlay>
     <div class="photo-card-meta">{dateLabel}</div>
   </div>
 
   {#if !selectionMode}
-    <div class="photo-card-actions">
+    <div class="photo-card-actions" data-card-actions>
       <!-- Default context: favorite + download -->
       <button
         class="card-action-btn favorite-btn"
@@ -421,7 +428,9 @@
     z-index: 5;
   }
 
-  .photo-card:hover .photo-card-actions {
+  .photo-card:hover .photo-card-actions,
+  .photo-card:focus-within .photo-card-actions,
+  .photo-card:focus-within .photo-card-overlay {
     opacity: 1;
   }
 
@@ -495,6 +504,23 @@
     stroke: white;
   }
 
+  /* Touch has no hover reveal, so the favorite state keeps one quiet brass
+     mark at rest; desktop shows it in the hover action button instead. */
+  .photo-card-favorite-mark {
+    display: none;
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    z-index: 2;
+    color: var(--accent-color);
+    filter: drop-shadow(0 1px 2px oklch(0% 0 0deg / 60%));
+    pointer-events: none;
+  }
+
+  .photo-card-favorite-mark :global(svg) {
+    fill: currentcolor;
+  }
+
   @media (hover: none) and (pointer: coarse) {
     .photo-card:hover {
       transform: none;
@@ -509,13 +535,15 @@
       transform: scale(0.98);
     }
 
-    .photo-card-overlay {
-      opacity: 1;
-      background: linear-gradient(to bottom, transparent 0%, oklch(0% 0 0deg / 50%) 100%);
+    /* A coarse pointer cannot hover, so the card stays a bare tile: the
+       viewer owns the date and the per-photo actions there. */
+    .photo-card-overlay,
+    .photo-card-actions {
+      display: none;
     }
 
-    .photo-card-actions {
-      opacity: 1;
+    .photo-card-favorite-mark {
+      display: flex;
     }
   }
 
@@ -531,50 +559,21 @@
      lose the cascade to scoped rules (see AGENTS.md). Triggered by the
      .main-content content container (container-type: inline-size), matching
      the pre-migration @container (width <= 768px) behavior. The mosaic stays
-     frame-less; the caption and the actions move BELOW the tile instead of
-     being deleted, so metadata and per-photo actions exist on phones too. */
+     frame-less and image-only: the date caption and per-photo actions are
+     hover chrome, so a touch tile is just the square preview. */
   @container (width <= 768px) {
     .photo-card {
       border-radius: 0;
       border: none;
-      display: flex;
-      flex-direction: column;
-      aspect-ratio: auto;
     }
 
-    .photo-card-overlay {
-      position: static;
-      opacity: 1;
-      background: none;
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      padding: var(--space-1) var(--space-1) 0;
-    }
-
-    .photo-card-meta {
-      display: block;
-      color: var(--text-secondary);
-      font-size: var(--font-xs);
-      text-shadow: none;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
+    .photo-card-overlay,
     .photo-card-actions {
-      position: static;
-      transform: none;
-      opacity: 1;
-      justify-content: flex-start;
-      gap: var(--space-1);
-      padding: var(--space-1);
+      display: none;
     }
 
-    .card-action-btn {
+    .photo-card-favorite-mark {
       display: flex;
-      width: var(--button-size);
-      height: var(--button-size);
-      box-shadow: none;
     }
 
     .video-play-icon {

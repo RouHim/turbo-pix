@@ -245,9 +245,9 @@ Borders are 1px hairlines at half-opacity ink — never solid lines — with one
 
 - **Corner Style:** 6px (0 on the mobile mosaic).
 - **Background:** Surface; hairline border; `--shadow-light` at rest.
-- **Hover:** shadow steps to heavy, border turns Slate Soft, the image scales 1.08 with a brightness/saturation nudge, and a bottom gradient overlay (70% black, `blur(1px)`) fades in the date caption — the caption band clears the 56px action buttons. The gallery never prints filesystem text (filename, camera, file size); those belong to the viewer.
+- **Hover:** shadow steps to heavy, border turns Slate Soft, the image scales 1.08 with a brightness/saturation nudge, and a bottom gradient overlay (70% black, `blur(1px)`) fades in the date caption — the caption band clears the 56px action buttons. Keyboard focus reveals the same overlay and actions (`:focus-within`), so tabbing never lands on invisible controls. The gallery never prints filesystem text (filename, camera, file size); those belong to the viewer.
 - **Internal Padding:** 20px inside the overlay; actions float 8px above the card edge.
-- **Touch:** pointer-touch sees the overlay and actions permanently; on the phone mosaic (container ≤768px) the frame drops its radius and the date caption plus 44px actions sit **below** the tile, and hover transforms are disabled.
+- **Touch:** cards stay image-only. A coarse pointer has no hover reveal, so the date caption and the 56px actions never render on the card — on the phone mosaic (container ≤768px) the frame drops its radius and the square tile is the whole card, and hover transforms are disabled. A favorited tile keeps one 16px Warm Brass heart at rest (top-right, drop shadow, no plate) and names “Favorite” in its accessible label. The date stays in the details sheet; favorite and download stay in the viewer's control strip, with batch variants in the selection bar.
 
 ### Inputs / Fields
 
@@ -281,7 +281,7 @@ Borders are 1px hairlines at half-opacity ink — never solid lines — with one
 
 ### Viewer Chrome (signature)
 
-Glass control bar (`blur(16px) saturate(1.5)`, 6px radius, 8px padding, 40px fade edges) floating over a blurred scrim, with veil icon buttons inside; on mobile the bar sits one step higher and buttons grow to 44px.
+Glass control bar (`blur(16px) saturate(1.5)`, 6px radius, 8px padding, 40px fade edges) floating over a blurred scrim, with veil icon buttons inside; on mobile the bar sits one step higher and buttons grow to 44px. A 12px veil date chip floats just above the bar; it hides while the mobile details sheet is open.
 
 ### Timeline Lane (signature)
 

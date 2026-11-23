@@ -37,7 +37,11 @@
   });
 
   async function handleSlideConfirm() {
-    if (pending) return;
+    // A closed dialog must never start the destructive call: pressing Escape
+    // with the thumb at the far end resolves the request false, yet the hidden
+    // track still owns the pointer capture, so the following mouseup reaches
+    // `complete()` and would otherwise delete a photo the user cancelled.
+    if (pending || !confirmState.open) return;
     const requestId = confirmState.requestId;
     pending = true;
     try {
@@ -97,10 +101,25 @@
   oncancel={(event) => {
     // The request cannot be aborted once sent: closing mid-flight would fake
     // a cancellation the server does not honour.
-    if (pending) event.preventDefault();
+    if (pending) {
+      event.preventDefault();
+      return;
+    }
+    // Escape is a user cancel and must take effect before the close event
+    // (which only runs after the element is hidden): otherwise a pointerup
+    // still captured by the slider reaches `complete()` while the request is
+    // still open and deletes what the user just cancelled. Resolve here
+    // synchronously; the state change above closes the dialog and `onclose`
+    // stays as the fallback path.
+    event.preventDefault();
+    sliderEl?.reset();
+    resolveConfirm(false);
   }}
   onclose={() => {
     pending = false;
+    // The dialog can close mid-drag (Escape). Drop the captured travel so a
+    // later pointerup cannot arm or confirm anything.
+    sliderEl?.reset();
     resolveConfirm(false);
   }}
 >

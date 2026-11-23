@@ -47,5 +47,8 @@ export function resolveConfirm(answer) {
   const fn = resolveFn;
   resolveFn = null;
   confirmState.open = false;
+  // The destructive callback belongs to this request only; a closed dialog
+  // must not be able to replay it from a stale pointer release.
+  confirmState.onConfirm = null;
   fn?.(answer);
 }

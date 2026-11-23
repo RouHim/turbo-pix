@@ -398,6 +398,12 @@ export class TestHelpers {
    * travel and release. Fraction 1 must arm and delete; below 1 must snap back.
    * With `release: false` the pointer stays down and the release callback is
    * returned, so a test can assert the mid-drag value.
+   *
+   * The travel matches the component's own mapping (`clientWidth - thumbWidth -
+   * 2 * inset`), so a fraction maps to the same percentage the slider reports.
+   * A full fraction overshoots the end by a couple of pixels: the layout box
+   * widths are fractional while `clientWidth` is integer, and a hair below the
+   * end would silently turn the delete into a snap-back.
    */
   static async slideToConfirm(page, fraction = 1, { release = true } = {}) {
     const slider = page.locator('[data-testid="confirm-dialog-slider"]');
@@ -408,10 +414,15 @@ export class TestHelpers {
     if (!sliderBox || !thumbBox) {
       throw new Error('slideToConfirm: slider geometry is unavailable');
     }
+    const inset = await slider.evaluate((el) => {
+      const parsed = Number.parseFloat(getComputedStyle(el).getPropertyValue('--thumb-inset'));
+      return Number.isFinite(parsed) ? parsed : 0;
+    });
 
     const startX = thumbBox.x + thumbBox.width / 2;
     const startY = thumbBox.y + thumbBox.height / 2;
-    const targetX = startX + (sliderBox.width - thumbBox.width) * fraction;
+    const travel = Math.max(1, sliderBox.width - thumbBox.width - inset * 2);
+    const targetX = startX + (fraction >= 1 ? travel + 2 : travel * fraction);
     await page.mouse.move(startX, startY);
     await page.mouse.down();
     for (let step = 1; step <= 10; step += 1) {

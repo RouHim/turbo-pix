@@ -1,3 +1,9 @@
+# [2.60.0](https://github.com/RouHim/turbo-pix/compare/2.59.0...2.60.0) (2026-11-23)
+
+### Features
+
+* **build:** use Alpine GCC 14.2 for musl binaries ([71119d3](https://github.com/RouHim/turbo-pix/commit/71119d3f8d6dfb859130d95c2392781c0a74d8fb))
+
 # [2.59.0](https://github.com/RouHim/turbo-pix/compare/2.58.0...2.59.0) (2026-11-23)
 
 ### Bug Fixes

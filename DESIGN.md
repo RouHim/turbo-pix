@@ -247,7 +247,7 @@ Borders are 1px hairlines at half-opacity ink — never solid lines — with one
 - **Background:** Surface; hairline border; `--shadow-light` at rest.
 - **Hover:** shadow steps to heavy, border turns Slate Soft, the image scales 1.08 with a brightness/saturation nudge, and a bottom gradient overlay (70% black, `blur(1px)`) fades in the date caption — the caption band clears the 56px action buttons. The gallery never prints filesystem text (filename, camera, file size); those belong to the viewer.
 - **Internal Padding:** 20px inside the overlay; actions float 8px above the card edge.
-- **Touch:** pointer-touch sees the overlay and actions permanently; on the phone mosaic (container ≤768px) the frame drops its radius and the date caption plus 44px actions sit **below** the tile, and hover transforms are disabled.
+- **Touch:** cards stay image-only. A coarse pointer has no hover reveal, so the date caption and the 56px actions never render on the card — on the phone mosaic (container ≤768px) the frame drops its radius and the square tile is the whole card, and hover transforms are disabled. The date stays in the details sheet; favorite and download stay in the viewer's control strip, with batch variants in the selection bar.
 
 ### Inputs / Fields
 

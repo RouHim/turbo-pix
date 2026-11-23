@@ -38,10 +38,19 @@ test.describe('Timeline collapse', () => {
     await TestHelpers.setDesktopViewport(page);
     await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
-    test.skip(
-      (await selector(page).count()) === 0,
-      'Timeline needs at least three populated years'
+    // The selector is rendered only when the density has more than two
+    // populated years, and that fetch resolves independently of the grid, so a
+    // plain locator count right after the grid load can race it into a silent
+    // skip. Decide the skip from the same data the component reads.
+    const populatedYears = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) => {
+          const rows = (data.density || []).filter((row) => row.count > 0);
+          return new Set(rows.map((row) => row.year)).size;
+        })
     );
+    test.skip(populatedYears <= 2, 'Timeline needs at least three populated years');
     await expect(selector(page)).toBeVisible();
   });
 
@@ -192,6 +201,33 @@ test.describe('Timeline collapse', () => {
 
     // THEN: The deferred reset lands on fit-all once the lane is measured
     await expect.poll(() => columnStarts(page)).toEqual(fitAll);
+  });
+
+  test('resets to fit-all when the fold outlives a resize', async ({ page }) => {
+    // GIVEN: A measured, zoomed lane on a wide desktop
+    await page.locator('.timeline-zoom-in').click();
+    await page.locator('.timeline-zoom-in').click();
+
+    // WHEN: The card is folded, the window narrows, and reset is used while folded
+    await toggle(page).click();
+    await expect(details(page)).toBeHidden();
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await reset(page).click();
+
+    // AND: The card expands
+    await toggle(page).click();
+    await expect(selector(page)).toBeVisible();
+
+    // THEN: The view is fit-all for the NEW width, not the pre-resize one
+    const newestYear = await page.evaluate(() =>
+      fetch('/api/photos/timeline')
+        .then((response) => response.json())
+        .then((data) =>
+          Math.max(...(data.density || []).filter((row) => row.count > 0).map((row) => row.year))
+        )
+    );
+    const newestDecade = `${Math.floor(newestYear / 10) * 10}s`;
+    await expect(page.locator('.timeline-ruler')).toContainText(newestDecade);
   });
 
   test('keeps the desktop preference out of the mobile dropdowns', async ({ page }) => {

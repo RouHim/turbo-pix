@@ -213,12 +213,12 @@
     {/if}
   </div>
 
-  <div class="photo-card-overlay">
+  <div class="photo-card-overlay" data-card-overlay>
     <div class="photo-card-meta">{dateLabel}</div>
   </div>
 
   {#if !selectionMode}
-    <div class="photo-card-actions">
+    <div class="photo-card-actions" data-card-actions>
       <!-- Default context: favorite + download -->
       <button
         class="card-action-btn favorite-btn"
@@ -509,13 +509,11 @@
       transform: scale(0.98);
     }
 
-    .photo-card-overlay {
-      opacity: 1;
-      background: linear-gradient(to bottom, transparent 0%, oklch(0% 0 0deg / 50%) 100%);
-    }
-
+    /* A coarse pointer cannot hover, so the card stays a bare tile: the
+       viewer owns the date and the per-photo actions there. */
+    .photo-card-overlay,
     .photo-card-actions {
-      opacity: 1;
+      display: none;
     }
   }
 
@@ -531,50 +529,17 @@
      lose the cascade to scoped rules (see AGENTS.md). Triggered by the
      .main-content content container (container-type: inline-size), matching
      the pre-migration @container (width <= 768px) behavior. The mosaic stays
-     frame-less; the caption and the actions move BELOW the tile instead of
-     being deleted, so metadata and per-photo actions exist on phones too. */
+     frame-less and image-only: the date caption and per-photo actions are
+     hover chrome, so a touch tile is just the square preview. */
   @container (width <= 768px) {
     .photo-card {
       border-radius: 0;
       border: none;
-      display: flex;
-      flex-direction: column;
-      aspect-ratio: auto;
     }
 
-    .photo-card-overlay {
-      position: static;
-      opacity: 1;
-      background: none;
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      padding: var(--space-1) var(--space-1) 0;
-    }
-
-    .photo-card-meta {
-      display: block;
-      color: var(--text-secondary);
-      font-size: var(--font-xs);
-      text-shadow: none;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
+    .photo-card-overlay,
     .photo-card-actions {
-      position: static;
-      transform: none;
-      opacity: 1;
-      justify-content: flex-start;
-      gap: var(--space-1);
-      padding: var(--space-1);
-    }
-
-    .card-action-btn {
-      display: flex;
-      width: var(--button-size);
-      height: var(--button-size);
-      box-shadow: none;
+      display: none;
     }
 
     .video-play-icon {

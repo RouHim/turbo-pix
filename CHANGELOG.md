@@ -1,3 +1,17 @@
+# [2.57.0](https://github.com/RouHim/turbo-pix/compare/2.56.2...2.57.0) (2026-11-23)
+
+### Bug Fixes
+
+* **db:** give the person-merge undo migration a unique version ([a55a894](https://github.com/RouHim/turbo-pix/commit/a55a894c4f03ca828046258ddd16e65a12563059))
+* **people:** harden merge cancel and failure paths ([7ae165b](https://github.com/RouHim/turbo-pix/commit/7ae165b9ad6b146b3d89bd7b79c566b7abda44bb))
+* **people:** serialize merge transactions and repair the dialog cascade ([a6cb89d](https://github.com/RouHim/turbo-pix/commit/a6cb89df4badb887ab363a0e0f31c83a2a523152))
+* **people:** stop flagging the merge name field for merge errors ([8006530](https://github.com/RouHim/turbo-pix/commit/800653070c185de42bd2b500dd768253307b8b32))
+
+### Features
+
+* **people:** merge persons with a persisted undo slot ([c4759e8](https://github.com/RouHim/turbo-pix/commit/c4759e8b5e545528c2f2166e5f7295db1c509c67))
+* **people:** multi-select actions and merge dialog on the People list ([cb9e384](https://github.com/RouHim/turbo-pix/commit/cb9e3845632bcaf290e32a446fd9f3a100574cf2))
+
 ## [2.56.2](https://github.com/RouHim/turbo-pix/compare/2.56.1...2.56.2) (2026-11-23)
 
 ### Bug Fixes

@@ -39,6 +39,14 @@
     })
   );
   const selection = $derived(selectionFromFilter(filter, model));
+  // The route filter is the source of truth for the clear control: without one
+  // the button has nothing to do and must not burn a history entry.
+  const hasFilter = $derived(
+    filter.year !== null ||
+      filter.month !== null ||
+      filter.to_year !== null ||
+      filter.to_month !== null
+  );
 
   // A decade filter names a year the library has no bucket in (1960 while the
   // oldest bucket is March 1962); without it the select would fall back to
@@ -122,9 +130,17 @@
     }, LIVE_COMMIT_MS);
   };
 
-  const clearFilter = () => {
+  const clearFilter = (event) => {
+    if (!hasFilter) return;
+    const activated = event?.currentTarget;
+    const hadFocus = activated && document.activeElement === activated;
     resetNonce += 1;
     pushState({ year: null, month: null, to_year: null, to_month: null });
+    if (!hadFocus) return;
+    // The activation disables the control it came from; keep focus in the
+    // header instead of dropping it onto <body>.
+    if (collapseToggleEl?.getClientRects().length) collapseToggleEl.focus();
+    else yearSelectEl?.focus();
   };
 
   // Mobile dropdowns: the plan shape is a single period, so using either
@@ -194,37 +210,41 @@
       <!-- Desktop: zoomable overview -->
       <div class="timeline-rail desktop-only">
         <div class="timeline-header">
-          <div class="timeline-label" class:filtered={selection !== null}>{labelText}</div>
-          <div class="timeline-actions">
-            <button
-              type="button"
-              class="timeline-reset"
-              title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-              aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-              onclick={clearFilter}
+          <button
+            type="button"
+            class="timeline-fold"
+            data-testid="timeline-collapse-toggle"
+            bind:this={collapseToggleEl}
+            title={collapseLabel}
+            aria-label={collapseLabel}
+            aria-describedby="timeline-filter-label"
+            aria-expanded={!appState.timelineCollapsed}
+            aria-controls="timeline-details"
+            onclick={toggleCollapsed}
+          >
+            <span
+              id="timeline-filter-label"
+              class="timeline-label"
+              class:filtered={selection !== null}>{labelText}</span
             >
-              <Icon name="x" width={14} height={14} />
-            </button>
-            <button
-              type="button"
-              class="timeline-collapse"
-              data-testid="timeline-collapse-toggle"
-              bind:this={collapseToggleEl}
-              title={collapseLabel}
-              aria-label={collapseLabel}
-              aria-expanded={!appState.timelineCollapsed}
-              aria-controls="timeline-details"
-              onclick={toggleCollapsed}
+            <span
+              class="timeline-chevron"
+              class:expanded={!appState.timelineCollapsed}
+              aria-hidden="true"
             >
-              <span
-                class="timeline-chevron"
-                class:expanded={!appState.timelineCollapsed}
-                aria-hidden="true"
-              >
-                <Icon name="chevron-down" width={14} height={14} />
-              </span>
-            </button>
-          </div>
+              <Icon name="chevron-down" width={14} height={14} />
+            </span>
+          </button>
+          <button
+            type="button"
+            class="timeline-reset"
+            disabled={!hasFilter}
+            title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+            aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+            onclick={clearFilter}
+          >
+            <Icon name="x" width={14} height={14} />
+          </button>
         </div>
         <div id="timeline-details" bind:this={detailsEl} hidden={appState.timelineCollapsed}>
           <TimelineSelector {model} {selection} onchange={handleChange} {resetNonce} />
@@ -266,6 +286,7 @@
         <button
           type="button"
           class="timeline-reset"
+          disabled={!hasFilter}
           title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
           aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
           onclick={clearFilter}
@@ -306,14 +327,38 @@
     color: var(--primary-ink);
   }
 
-  .timeline-actions {
+  .timeline-fold {
+    flex: 1;
+    min-width: 0;
+    height: var(--space-8);
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
   }
 
-  .timeline-reset,
-  .timeline-collapse {
+  .timeline-fold:hover {
+    background: color-mix(in oklch, var(--primary-color) 6%, transparent);
+    color: var(--primary-color);
+  }
+
+  .timeline-fold:focus-visible {
+    outline: none;
+    color: var(--primary-color);
+    box-shadow:
+      0 0 0 2px var(--surface-color),
+      0 0 0 4px var(--primary-color);
+  }
+
+  .timeline-reset {
     flex-shrink: 0;
     width: var(--space-8);
     height: var(--space-8);
@@ -331,25 +376,27 @@
       background-color var(--transition-fast);
   }
 
-  .timeline-reset:hover,
-  .timeline-collapse:hover {
+  .timeline-reset:hover:not(:disabled) {
     border-color: var(--primary-color);
     color: var(--primary-color);
     background: color-mix(in oklch, var(--primary-color) 10%, transparent);
   }
 
-  .timeline-reset:active,
-  .timeline-collapse:active {
+  .timeline-reset:active:not(:disabled) {
     transform: translateY(1px);
   }
 
-  .timeline-reset:focus-visible,
-  .timeline-collapse:focus-visible {
+  .timeline-reset:focus-visible {
     outline: none;
     border-color: var(--primary-color);
     box-shadow:
       0 0 0 2px var(--surface-color),
       0 0 0 4px var(--primary-color);
+  }
+
+  .timeline-reset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .timeline-chevron {
@@ -374,8 +421,7 @@
   .timeline-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   .timeline-rail :global(svg) {
@@ -479,8 +525,8 @@
   @media (prefers-reduced-motion: reduce) {
     .timeline-label,
     .timeline-label.filtered,
+    .timeline-fold,
     .timeline-reset,
-    .timeline-collapse,
     .timeline-chevron {
       animation: none;
       transition: none;

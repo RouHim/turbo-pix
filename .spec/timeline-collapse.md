@@ -14,7 +14,7 @@ A desktop user with an open timeline card wants more grid rows.
 
 **Acceptance**
 1. Given the open card in a fresh session, when the page has loaded, then the selector is visible, the toggle announces "Collapse timeline" with `aria-expanded="true"`, and the card is 210px tall.
-2. Given that state, when the user activates the toggle, then only the selector is hidden, the filter label and the clear control stay visible, the card is 74px tall, and the photo grid moves up by 136px.
+2. Given that state, when the user activates the header row (outside the clear control), then only the selector is hidden, the filter label and the clear control stay visible, the card is 74px tall, and the photo grid moves up by 136px.
 3. Given the collapsed card, when the user activates the toggle again, then the selector returns in the same zoom/pan/selection state it had before.
 
 ### Scenario 2 - Persistence and keyboard focus (P2)
@@ -36,8 +36,8 @@ A user resizes across the mobile breakpoint, or runs an automated accessibility 
 
 ## Functional Requirements
 - **FR-001**: The desktop timeline card starts expanded on a first visit; the collapsed state is stored under `turbopix_timeline_collapsed` and only the written marker `'true'` counts as collapsed.
-- **FR-002**: The card exposes one native toggle button in its header, labelled by `ui.collapse_timeline` / `ui.expand_timeline`, with `aria-expanded` and `aria-controls="timeline-details"`.
-- **FR-003**: Collapsing hides only the `#timeline-details` region (the selector); the filter label, the clear control and the toggle stay visible and operable.
+- **FR-002**: The card exposes one native toggle button that is its header row — the filter label plus a chevron — labelled by `ui.collapse_timeline` / `ui.expand_timeline`, with `aria-expanded`, `aria-controls="timeline-details"` and `aria-describedby` naming the visible filter label.
+- **FR-003**: Collapsing hides only the `#timeline-details` region (the selector); the filter label, the clear control and the toggle stay visible. The clear control is a separate sibling button and is enabled only while a date filter is active.
 - **FR-004**: The fold never writes the route, never changes the active date filter and never clears it.
 - **FR-005**: Collapsing and expanding snap the card height; no height, margin or padding transition runs. The chevron rotates with `--transition-fast` and does not animate under `prefers-reduced-motion: reduce`.
 - **FR-006**: The selector stays mounted while folded so its zoom, pan and selection survive the round trip.
@@ -50,7 +50,7 @@ A user resizes across the mobile breakpoint, or runs an automated accessibility 
 
 ## Key Entities
 - **Fold state**: a boolean UI preference, default expanded, persisted per browser under `turbopix_timeline_collapsed`; `'true'` means collapsed, anything else means expanded.
-- **Timeline card**: `.timeline-container` in `TimelineSlider.svelte`; the header row (label, clear control, toggle) plus the collapsible `#timeline-details` region containing the desktop selector.
+- **Timeline card**: `.timeline-container` in `TimelineSlider.svelte`; the header row (the label and chevron form the toggle, the clear control is a sibling button) plus the collapsible `#timeline-details` region containing the desktop selector.
 - **Mobile dropdowns / date rail**: separate experiences; neither reads nor writes the fold state.
 
 ## Edge Cases
@@ -59,7 +59,7 @@ A user resizes across the mobile breakpoint, or runs an automated accessibility 
 - Storage denied or full: the toggle still works for the session.
 - Collapsing while a selector control has focus must not leave focus on a hidden element.
 - Resizing to mobile and back must not drop the desktop preference.
-- The clear control in the folded header still clears the filter and resets the selector view; the reset is deferred until the lane is visible and freshly measured, so it frames the width the lane actually has after expanding.
+- The clear control in the folded header clears an active filter and resets the selector view; the reset is deferred until the lane is visible and freshly measured, so it frames the width the lane actually has after expanding. Without an active filter the control is disabled and never pushes a no-op history entry.
 - No automatic folding: only the toggle changes the state.
 
 ## Assumptions

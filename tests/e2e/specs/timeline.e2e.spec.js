@@ -986,7 +986,8 @@ test.describe('Timeline', () => {
   });
 
   test('should announce zoom, fit-all and clear with a visible focus ring', async ({ page }) => {
-    await TestHelpers.goto(page);
+    // A date filter keeps the clear control enabled (it is disabled otherwise).
+    await TestHelpers.goto(page, '/?year=2012&month=3');
     await TestHelpers.waitForPhotosToLoad(page);
 
     for (const selector of [

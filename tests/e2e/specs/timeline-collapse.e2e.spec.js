@@ -62,8 +62,14 @@ test.describe('Timeline collapse', () => {
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
     await expect(toggle(page)).toHaveAttribute('aria-controls', 'timeline-details');
     await expect(toggle(page)).toHaveAttribute('aria-label', 'Collapse timeline');
+    await expect(toggle(page)).toHaveAttribute('aria-describedby', 'timeline-filter-label');
     await expect(reset(page)).toBeVisible();
+    await expect(reset(page)).toBeDisabled();
     expect(await storedCollapsed(page)).toBeNull();
+
+    // AND: The fold target is the header row, not a small icon button
+    const toggleBox = await toggle(page).boundingBox();
+    expect(toggleBox.width).toBeGreaterThan(1000);
 
     // AND: The full 210px card (header 32 + gap 12 + selector 124 + padding/border)
     expect(await containerHeight(page)).toBeCloseTo(210, 0);
@@ -127,7 +133,9 @@ test.describe('Timeline collapse', () => {
     await expect(column).toBeFocused();
 
     // WHEN: The fold is triggered without a pointer focus move
-    await page.evaluate(() => document.querySelector('.timeline-collapse').click());
+    await page.evaluate(() =>
+      document.querySelector('[data-testid="timeline-collapse-toggle"]').click()
+    );
 
     // THEN: Focus is not stranded on the now-hidden selector
     await expect(toggle(page)).toBeFocused();
@@ -187,24 +195,31 @@ test.describe('Timeline collapse', () => {
     await page.locator('.timeline-fit-all').click();
     const fitAll = await columnStarts(page);
 
-    // AND: The next mount starts folded, so the lane is never measured
+    // AND: The next mount starts folded on a filtered route, so the lane is
+    // never measured and the clear control is armed
     await page.evaluate((key) => localStorage.setItem(key, 'true'), TIMELINE_COLLAPSED_STORAGE_KEY);
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.goto('/?year=2012&month=3', { waitUntil: 'domcontentloaded' });
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(details(page)).toBeHidden();
     await expect(selector(page)).toBeHidden();
+    await expect(reset(page)).toBeEnabled();
 
     // WHEN: The folded header's reset is used, then the card is expanded
     await reset(page).click();
     await toggle(page).click();
     await expect(selector(page)).toBeVisible();
+    await expect(page.locator('.timeline-label')).toHaveText('All Dates');
 
     // THEN: The deferred reset lands on fit-all once the lane is measured
     await expect.poll(() => columnStarts(page)).toEqual(fitAll);
   });
 
   test('resets to fit-all when the fold outlives a resize', async ({ page }) => {
-    // GIVEN: A measured, zoomed lane on a wide desktop
+    // GIVEN: A measured, zoomed lane on a wide desktop with an active filter
+    await page.goto('/?year=2012&month=3', { waitUntil: 'domcontentloaded' });
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(selector(page)).toBeVisible();
+    await expect(reset(page)).toBeEnabled();
     await page.locator('.timeline-zoom-in').click();
     await page.locator('.timeline-zoom-in').click();
 
@@ -228,6 +243,38 @@ test.describe('Timeline collapse', () => {
     );
     const newestDecade = `${Math.floor(newestYear / 10) * 10}s`;
     await expect(page.locator('.timeline-ruler')).toContainText(newestDecade);
+  });
+
+  test('disables the clear control without a date filter', async ({ page }) => {
+    // GIVEN: No date filter
+    await expect(reset(page)).toBeDisabled();
+
+    // WHEN: The disabled control is activated programmatically
+    const historyBefore = await page.evaluate(() => history.length);
+    await page.evaluate(() => document.querySelector('.timeline-header .timeline-reset').click());
+
+    // THEN: No history entry and no filter change
+    expect(await page.evaluate(() => history.length)).toBe(historyBefore);
+    expect(await page.evaluate(() => new URL(location.href).searchParams.toString())).toBe('');
+  });
+
+  test('clears an active filter with one history entry', async ({ page }) => {
+    // GIVEN: An active date filter
+    await page.goto('/?year=2012&month=3', { waitUntil: 'domcontentloaded' });
+    await TestHelpers.waitForPhotosToLoad(page);
+    await expect(reset(page)).toBeEnabled();
+    const historyBefore = await page.evaluate(() => history.length);
+
+    // WHEN: The clear control is used
+    await reset(page).click();
+
+    // THEN: The filter is gone and only one entry was added
+    await expect(page.locator('.timeline-label')).toHaveText('All Dates');
+    await expect(toggle(page)).toBeFocused();
+    await expect
+      .poll(() => page.evaluate(() => new URL(location.href).searchParams.has('year')))
+      .toBe(false);
+    expect(await page.evaluate(() => history.length)).toBe(historyBefore + 1);
   });
 
   test('keeps the desktop preference out of the mobile dropdowns', async ({ page }) => {

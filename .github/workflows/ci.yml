@@ -304,19 +304,18 @@ jobs:
       - create-release
       - build-frontend
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl
+            runner: ubuntu-latest
+            platform: linux/amd64
             name: turbo-pix-x86_64-unknown-linux-musl
           - target: aarch64-unknown-linux-musl
-            image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
             name: turbo-pix-aarch64-unknown-linux-musl
-
-    container:
-      image: ${{ matrix.image }}
 
     steps:
       - name: Checkout code
@@ -335,23 +334,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install ORT extraction tools
-        run: apt-get update && apt-get install -y zstd
-
-      - name: Fetch static ONNX Runtime
-        run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target ${{ matrix.target }})" >> "$GITHUB_ENV"
-
-      - name: Find sqlite3.h include path
-        id: sqlite3
-        run: |
-          cargo fetch --target ${{ matrix.target }}
-          SQLITE3_INCLUDE=$(find /root/.cargo -path "*/libsqlite3-sys-*/sqlite3" -type d 2>/dev/null | head -n1)
-          echo "include=${SQLITE3_INCLUDE}" >> $GITHUB_OUTPUT
+      - name: Build Alpine builder image
+        run: podman build --platform ${{ matrix.platform }} -f container/rust-builder.Dockerfile -t turbo-pix-rust .
 
       - name: Build release binary
-        env:
-          CFLAGS: -I${{ steps.sqlite3.outputs.include }}
-        run: cargo build --profile production --target ${{ matrix.target }}
+        run: |
+          mkdir -p "$HOME/.cargo/registry" "$HOME/.cargo/git"
+          podman run --rm \
+            --platform ${{ matrix.platform }} \
+            -v "$PWD:/app:z" -w /app \
+            -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+            -v "$HOME/.cargo/git:/usr/local/cargo/git" \
+            -e CARGO_TARGET_DIR=/app/target \
+            turbo-pix-rust sh -c '
+              set -eu
+              TARGET=$1
+              ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target "$TARGET")
+              export ORT_LIB_PATH
+              cargo fetch --target "$TARGET"
+              SQLITE3_INCLUDE=$(find /usr/local/cargo -path "*/libsqlite3-sys-*/sqlite3" -type d | head -n1)
+              CFLAGS="-I$SQLITE3_INCLUDE" cargo build --profile production --target "$TARGET"
+            ' sh ${{ matrix.target }}
 
       - name: Rename binary with target name
         run: |

@@ -30,12 +30,10 @@ RUN chmod +x /fetch-ort.sh && \
 # Application Builder
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 ARG TARGETARCH
-# Map Docker TARGETARCH to Rust architecture naming
-# TARGETARCH values: amd64, arm64
-# Rust cross image names: x86_64-musl, aarch64-musl
-FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder-amd64
-FROM docker.io/messense/rust-musl-cross:aarch64-musl AS builder-arm64
-FROM builder-${TARGETARCH:-amd64} AS builder
+# The official multi-arch Rust image is musl-native; --platform selects the
+# target architecture, so no cross toolchain is needed.
+FROM rust:alpine3.22 AS builder
+RUN apk add --no-cache build-base cmake perl pkgconf ca-certificates
 
 # Set working directory and create empty directory in one layer
 WORKDIR /app
@@ -65,7 +63,7 @@ RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     cargo fetch --target ${RUST_TARGET}
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
-    SQLITE3_INCLUDE=$(find /root/.cargo -path "*/libsqlite3-sys-*/sqlite3" -type d 2>/dev/null | head -n1) && \
+    SQLITE3_INCLUDE=$(find /usr/local/cargo -path "*/libsqlite3-sys-*/sqlite3" -type d 2>/dev/null | head -n1) && \
     ORT_LIB_PATH=/opt/ort/lib CFLAGS="-I${SQLITE3_INCLUDE}" \
     cargo build --profile production --target ${RUST_TARGET}
 

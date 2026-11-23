@@ -148,28 +148,33 @@
   }
 
   async function deletePhoto(photo) {
+    if (busy) return;
     const msg = $t('notifications.confirmDeleteMessage', {
       default:
         'Are you sure you want to permanently delete this photo? This action cannot be undone.',
     });
-    if (!(await askConfirm(msg))) return;
+    const confirmed = await askConfirm(msg, {
+      slide: {
+        onConfirm: async () => {
+          busy = true;
+          try {
+            await api.deletePhoto(photo.hash_sha256);
+          } catch (e) {
+            handleError(e, 'Delete photo');
+            throw e;
+          } finally {
+            busy = false;
+          }
+        },
+      },
+    });
+    if (!confirmed) return;
 
-    if (busy) return;
-    busy = true;
-    try {
-      await api.deletePhoto(photo.hash_sha256);
-      // Keep the shared deletion contract: other views listen for
-      // photoRemoved to sync their photo lists.
-      window.dispatchEvent(
-        new CustomEvent('photoRemoved', { detail: { hash: photo.hash_sha256 } })
-      );
-      addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), '', 'success');
-      candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
-    } catch (e) {
-      handleError(e, 'Delete photo');
-    } finally {
-      busy = false;
-    }
+    // Keep the shared deletion contract: other views listen for
+    // photoRemoved to sync their photo lists.
+    window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photo.hash_sha256 } }));
+    addToast($t('notifications.photoDeleted', { default: 'Photo deleted' }), '', 'success');
+    candidates = candidates.filter((c) => c.photo.hash_sha256 !== photo.hash_sha256);
   }
 
   // ===========================================================================

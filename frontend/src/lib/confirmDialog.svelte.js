@@ -12,21 +12,31 @@ export const confirmState = $state({
   message: '',
   confirmLabel: '',
   danger: true,
+  slide: false,
+  onConfirm: null,
+  requestId: 0,
 });
 
 let resolveFn = null;
 
 /**
  * @param {string} message
- * @param {{ confirmLabel?: string, danger?: boolean }} [options]
+ * @param {{
+ *   confirmLabel?: string,
+ *   danger?: boolean,
+ *   slide?: { onConfirm?: () => Promise<void> | void },
+ * }} [options]
  * @returns {Promise<boolean>} true when confirmed, false on cancel/Escape
  */
 export function askConfirm(message, options = {}) {
   // A second request supersedes the first: the previous caller resolves false.
   if (resolveFn) resolveFn(false);
+  confirmState.requestId += 1;
   confirmState.message = message;
   confirmState.confirmLabel = options.confirmLabel ?? get(t)('ui.delete', { default: 'Delete' });
   confirmState.danger = options.danger ?? true;
+  confirmState.slide = Boolean(options.slide);
+  confirmState.onConfirm = options.slide?.onConfirm ?? null;
   confirmState.open = true;
   return new Promise((resolve) => {
     resolveFn = resolve;

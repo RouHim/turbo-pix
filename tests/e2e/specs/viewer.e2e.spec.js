@@ -4,6 +4,69 @@ import { DatabaseSync } from 'node:sqlite';
 import { TestHelpers } from '../setup/test-helpers.js';
 import { TestDataManager } from '../setup/test-data-manager.js';
 
+const DELETE_DIALOG = '[data-testid="confirm-dialog"]';
+const DELETE_SLIDER = '[data-testid="confirm-dialog-slider"]';
+const DELETE_CANCEL = '[data-testid="confirm-dialog-cancel"]';
+
+/**
+ * Capture the bytes and the API row of the photo a delete test removes, so the
+ * cleanup can restore shared server state even when an assertion fails.
+ */
+async function capturePhotoForDelete(photoHash) {
+  const dataManager = new TestDataManager();
+  const photos = await dataManager.fetchAllPhotos();
+  const photo = photos.find((candidate) => candidate.hash_sha256 === photoHash);
+  expect(photo, `photo ${photoHash} should be listed by the photos API`).toBeTruthy();
+  return {
+    photo,
+    fileBytes: await readFile(photo.file_path),
+    fileStats: await stat(photo.file_path),
+  };
+}
+
+/**
+ * Restore the file and the DB row a DELETE removed. There is no rescan API to
+ * rebuild the row, so write the file back and re-insert the row directly.
+ */
+async function restoreDeletedPhoto({ photo, fileBytes, fileStats }) {
+  await writeFile(photo.file_path, fileBytes);
+  await utimes(photo.file_path, fileStats.atime, fileStats.mtime);
+
+  const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
+  try {
+    db.prepare(
+      `INSERT OR REPLACE INTO photos (
+        hash_sha256, file_path, filename, file_size, mime_type,
+        width, height, orientation, duration,
+        thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
+        metadata, file_modified, date_indexed
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      photo.hash_sha256,
+      photo.file_path,
+      photo.filename,
+      photo.file_size,
+      photo.mime_type ?? null,
+      photo.width ?? null,
+      photo.height ?? null,
+      photo.orientation ?? null,
+      photo.duration ?? null,
+      photo.thumbnail_path ?? null,
+      photo.has_thumbnail ? 1 : 0,
+      photo.blurhash ?? null,
+      photo.is_favorite ? 1 : 0,
+      // The DELETE also removed the vector mapping; clear the flag so the next
+      // scan re-embeds instead of trusting the stale API record.
+      0,
+      JSON.stringify(photo.metadata ?? {}),
+      photo.file_modified ?? new Date().toISOString(),
+      photo.date_indexed ?? new Date().toISOString()
+    );
+  } finally {
+    db.close();
+  }
+}
+
 test.describe('Photo Viewer', () => {
   test.beforeEach(async ({ page }) => {
     TestHelpers.setupConsoleMonitoring(page);
@@ -161,17 +224,9 @@ test.describe('Photo Viewer', () => {
     const photoHash = await firstCard.getAttribute('data-photo-id');
     expect(photoHash).toBeTruthy();
 
-    // Capture everything needed to restore the photo afterwards: the full API
-    // record (to rebuild the DB row) plus the file bytes and mtime (to restore
-    // the file on disk). Deletion permanently removes both, so the test would
-    // otherwise mutate shared server state for every subsequent test.
-    const dataManager = new TestDataManager();
-    const photos = await dataManager.fetchAllPhotos();
-    const deletedPhoto = photos.find((photo) => photo.hash_sha256 === photoHash);
-    expect(deletedPhoto, `photo ${photoHash} should be listed by the photos API`).toBeTruthy();
-
-    const fileBytes = await readFile(deletedPhoto.file_path);
-    const fileStats = await stat(deletedPhoto.file_path);
+    // Capture everything needed to restore the photo afterwards; deletion
+    // permanently removes the file and the DB row.
+    const snapshot = await capturePhotoForDelete(photoHash);
 
     // WHEN: Open viewer and delete photo
     await firstCard.click();
@@ -180,8 +235,9 @@ test.describe('Photo Viewer', () => {
     let deletePerformed = false;
     try {
       await page.locator('.delete-photo-btn').click();
-      // The confirmation is the app's own dialog, not window.confirm().
-      await page.click('[data-testid="confirm-dialog-accept"]');
+      // The confirmation is the app's own slide-to-delete control.
+      await expect(page.locator(DELETE_DIALOG)).toBeVisible();
+      await TestHelpers.slideToConfirm(page);
       deletePerformed = true;
 
       // THEN: Photo card is removed from stream immediately (no reload)
@@ -189,55 +245,121 @@ test.describe('Photo Viewer', () => {
       await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
     } finally {
       // CLEANUP: restore the deleted photo so shared server state is unchanged,
-      // even if an assertion above fails. Deleting removes the file and the DB
-      // row, and there is no rescan API to rebuild the row, so write the file
-      // back and re-insert the row directly. The restore only runs when the
-      // delete actually happened — if the click failed, the photo is intact.
-      if (deletePerformed) {
-        await writeFile(deletedPhoto.file_path, fileBytes);
-        await utimes(deletedPhoto.file_path, fileStats.atime, fileStats.mtime);
-
-        const db = new DatabaseSync('test-e2e-data/database/turbo-pix.db', { timeout: 5000 });
-        try {
-          db.prepare(
-            `INSERT OR REPLACE INTO photos (
-              hash_sha256, file_path, filename, file_size, mime_type,
-              width, height, orientation, duration,
-              thumbnail_path, has_thumbnail, blurhash, is_favorite, semantic_vector_indexed,
-              metadata, file_modified, date_indexed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).run(
-            deletedPhoto.hash_sha256,
-            deletedPhoto.file_path,
-            deletedPhoto.filename,
-            deletedPhoto.file_size,
-            deletedPhoto.mime_type ?? null,
-            deletedPhoto.width ?? null,
-            deletedPhoto.height ?? null,
-            deletedPhoto.orientation ?? null,
-            deletedPhoto.duration ?? null,
-            deletedPhoto.thumbnail_path ?? null,
-            deletedPhoto.has_thumbnail ? 1 : 0,
-            deletedPhoto.blurhash ?? null,
-            deletedPhoto.is_favorite ? 1 : 0,
-            // The DELETE also removed the semantic_vector_path_mapping row, so
-            // the photo's stored vector is gone. Clear the flag so the next
-            // scan re-embeds, instead of trusting the stale API record.
-            0,
-            JSON.stringify(deletedPhoto.metadata ?? {}),
-            deletedPhoto.file_modified ?? new Date().toISOString(),
-            deletedPhoto.date_indexed ?? new Date().toISOString()
-          );
-        } finally {
-          db.close();
-        }
-      }
+      // even if an assertion above fails. The restore only runs when the delete
+      // actually happened — if the slide failed, the photo is intact.
+      if (deletePerformed) await restoreDeletedPhoto(snapshot);
     }
 
     // THEN: the photo reappears in the stream after a reload
     await TestHelpers.goto(page);
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+  });
+
+  test('should require a full slide or keyboard arming before deleting', async ({ page }) => {
+    // GIVEN: A photo card with a captured restoration snapshot
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThan(0);
+    const card = cards[0];
+    const photoHash = await card.getAttribute('data-photo-id');
+    expect(photoHash).toBeTruthy();
+    const snapshot = await capturePhotoForDelete(photoHash);
+
+    let deletePerformed = false;
+    try {
+      await card.click();
+      await TestHelpers.verifyViewerOpen(page);
+
+      // WHEN: The delete dialog opens
+      await page.locator('.delete-photo-btn').click();
+      const dialog = page.locator(DELETE_DIALOG);
+      const slider = page.locator(DELETE_SLIDER);
+      await expect(dialog).toBeVisible();
+
+      // THEN: The safe choice owns initial focus and Tab reaches the slider
+      await expect(page.locator(DELETE_CANCEL)).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(slider).toBeFocused();
+
+      // AND: Enter before the end does nothing
+      await page.keyboard.press('Enter');
+      await expect(dialog).toBeVisible();
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+
+      // WHEN: The thumb is dragged halfway, before any release
+      const release = await TestHelpers.slideToConfirm(page, 0.5, { release: false });
+
+      // THEN: The thumb tracks the pointer proportionally
+      await expect
+        .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
+        .toBeGreaterThan(0);
+      await expect
+        .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
+        .toBeLessThan(100);
+
+      // WHEN: It is released below the end
+      await release();
+
+      // THEN: It snaps back and nothing is deleted
+      await expect(slider).toHaveAttribute('aria-valuenow', '0');
+      await expect(dialog).toBeVisible();
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+
+      // WHEN: End arms the slider and Enter confirms
+      await page.keyboard.press('End');
+      await expect(slider).toHaveAttribute('aria-valuenow', '100');
+      await page.keyboard.press('Enter');
+      deletePerformed = true;
+
+      // THEN: The dialog closes and the card is removed
+      await expect(dialog).toBeHidden();
+      await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(0);
+    } finally {
+      if (deletePerformed) await restoreDeletedPhoto(snapshot);
+    }
+  });
+
+  test('should keep the dialog open and reset the slider when delete fails', async ({ page }) => {
+    // GIVEN: A photo whose DELETE answers 500
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThan(0);
+    const card = cards[0];
+    const photoHash = await card.getAttribute('data-photo-id');
+    expect(photoHash).toBeTruthy();
+
+    await card.click();
+    await TestHelpers.verifyViewerOpen(page);
+    await page.route(
+      (url) => url.pathname === `/api/photos/${photoHash}`,
+      async (route) => {
+        if (route.request().method() !== 'DELETE') {
+          await route.continue();
+          return;
+        }
+        await route.fulfill({
+          status: 500,
+          contentType: 'text/plain',
+          body: 'Database error',
+        });
+      }
+    );
+
+    // WHEN: The user deletes through the slider
+    await page.locator('.delete-photo-btn').click();
+    const dialog = page.locator(DELETE_DIALOG);
+    const slider = page.locator(DELETE_SLIDER);
+    await expect(dialog).toBeVisible();
+    await TestHelpers.slideToConfirm(page);
+
+    // THEN: The failure keeps the dialog open, resets the slider and toasts
+    await expect(dialog).toBeVisible();
+    await expect(slider).toHaveAttribute('aria-valuenow', '0');
+    await expect(page.locator('.toast-error')).toContainText('Database error occurred');
+    await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+
+    // AND: Cancel still closes the dialog
+    await page.click(DELETE_CANCEL);
+    await expect(dialog).toBeHidden();
   });
 
   test('should replace grid card with new hash after rotation', async ({ page }) => {

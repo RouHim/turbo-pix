@@ -42,4 +42,32 @@ test.describe('Housekeeping', () => {
     // THEN: Viewer opens for review
     await TestHelpers.verifyViewerOpen(page);
   });
+
+  test('should ask for a slide before deleting a candidate', async ({ page }) => {
+    // GIVEN: Housekeeping candidates are loaded
+    await TestHelpers.navigateToView(page, 'housekeeping');
+    await page.waitForFunction(
+      () => document.querySelector('.photo-card') || document.querySelector('.no-photos')
+    );
+    const cards = await TestHelpers.getPhotoCards(page);
+    test.skip(cards.length === 0, 'No deletion candidates in dataset');
+    const card = cards[0];
+    const photoHash = await card.getAttribute('data-photo-id');
+    expect(photoHash).toBeTruthy();
+
+    // WHEN: The user opens the candidate's delete confirmation
+    await card.hover();
+    await card.locator('[data-action="delete-housekeeping"]').click();
+
+    // THEN: The destructive accept is a slide, not a button
+    const dialog = page.locator('[data-testid="confirm-dialog"]');
+    await expect(dialog).toBeVisible();
+    await expect(page.locator('[data-testid="confirm-dialog-slider"]')).toBeVisible();
+    await expect(page.locator('[data-testid="confirm-dialog-accept"]')).toHaveCount(0);
+
+    // AND: Cancel leaves the candidate untouched
+    await page.click('[data-testid="confirm-dialog-cancel"]');
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
+  });
 });

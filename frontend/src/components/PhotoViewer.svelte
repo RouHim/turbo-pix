@@ -1952,60 +1952,70 @@
   async function deletePhoto() {
     if (!currentPhoto || isCollagePhoto(currentPhoto)) return;
 
+    const photoHash = currentPhoto.hash_sha256;
+
     const confirmed = await askConfirm(
       get(t)('notifications.confirmDeleteMessage', {
         default:
           'Are you sure you want to permanently delete this photo? This action cannot be undone.',
       }),
-      { confirmLabel: get(t)('ui.delete_photo', { default: 'Delete Photo' }) }
+      {
+        confirmLabel: get(t)('ui.delete_photo', { default: 'Delete Photo' }),
+        slide: {
+          onConfirm: async () => {
+            try {
+              isLoading = true;
+              await api.deletePhoto(photoHash);
+            } catch (error) {
+              let msg = get(t)('notifications.deletionFailed', {
+                default: 'Failed to delete photo',
+              });
+              const match = error.message?.match(/HTTP \d+: (.+)/);
+              if (match?.[1]) msg = translateError(match[1]);
+              addToast(get(t)('notifications.error', { default: 'Error' }), msg, 'error', 5000);
+              throw error;
+            } finally {
+              isLoading = false;
+            }
+          },
+        },
+      }
     );
     if (!confirmed) return;
 
-    const photoHash = currentPhoto.hash_sha256;
+    // The dialog closed only after the DELETE resolved. The grid-sync event,
+    // toast and list update must still fire even if the viewer was closed
+    // mid-request (the deleted card would otherwise stay in the grid and open
+    // a dead viewer). Only the re-navigation below is guarded by isOpen — a
+    // response landing after close() must not rewrite the URL and reopen the
+    // dismissed viewer via the route effect.
+    window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
+    addToast(
+      get(t)('notifications.deleted', { default: 'Deleted' }),
+      get(t)('notifications.photoDeleted', { default: 'Photo deleted successfully' }),
+      'success',
+      2000
+    );
 
-    try {
-      isLoading = true;
-      await api.deletePhoto(photoHash);
-      // The grid-sync event, toast and list update must fire even if the
-      // viewer was closed mid-request (the deleted card would otherwise stay
-      // in the grid and open a dead viewer). Only the re-navigation below is
-      // guarded by isOpen — a response landing after close() must not
-      // rewrite the URL and reopen the dismissed viewer via the route effect.
-      window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash: photoHash } }));
-      addToast(
-        get(t)('notifications.deleted', { default: 'Deleted' }),
-        get(t)('notifications.photoDeleted', { default: 'Photo deleted successfully' }),
-        'success',
-        2000
-      );
+    photos = photos.filter((p) => p.hash_sha256 !== photoHash);
 
-      photos = photos.filter((p) => p.hash_sha256 !== photoHash);
+    if (!isOpen) return;
 
-      if (!isOpen) return;
-
-      // The user may have navigated to another photo while the delete was in
-      // flight; keep the list update, but only re-navigate when the viewer
-      // still shows the deleted photo. If the viewer moved on, the delete
-      // still shifted every index after the removed slot, so re-sync
-      // currentIndex to keep hasPrev/hasNext and photos[currentIndex] writes
-      // pointing at the photo on screen.
-      if (currentPhoto?.hash_sha256 === photoHash) {
-        if (photos.length > 0) {
-          await showPhotoAtIndex(Math.min(currentIndex, photos.length - 1));
-        } else {
-          close();
-        }
-      } else if (currentPhoto) {
-        const idx = photos.findIndex((p) => p.hash_sha256 === currentPhoto.hash_sha256);
-        currentIndex = idx === -1 ? Math.min(currentIndex, photos.length - 1) : idx;
+    // The user may have navigated to another photo while the delete was in
+    // flight; keep the list update, but only re-navigate when the viewer still
+    // shows the deleted photo. If the viewer moved on, the delete still
+    // shifted every index after the removed slot, so re-sync currentIndex to
+    // keep hasPrev/hasNext and photos[currentIndex] writes pointing at the
+    // photo on screen.
+    if (currentPhoto?.hash_sha256 === photoHash) {
+      if (photos.length > 0) {
+        await showPhotoAtIndex(Math.min(currentIndex, photos.length - 1));
+      } else {
+        close();
       }
-      isLoading = false;
-    } catch (error) {
-      let msg = get(t)('notifications.deletionFailed', { default: 'Failed to delete photo' });
-      const match = error.message?.match(/HTTP \d+: (.+)/);
-      if (match?.[1]) msg = translateError(match[1]);
-      addToast(get(t)('notifications.error', { default: 'Error' }), msg, 'error', 5000);
-      isLoading = false;
+    } else if (currentPhoto) {
+      const idx = photos.findIndex((p) => p.hash_sha256 === currentPhoto.hash_sha256);
+      currentIndex = idx === -1 ? Math.min(currentIndex, photos.length - 1) : idx;
     }
   }
 
@@ -2145,6 +2155,9 @@
 
   function onKeydown(e) {
     if (!isOpen) return;
+    // An open modal <dialog> owns the keyboard: the viewer must not navigate
+    // or close behind it. Escape is the dialog's own cancel.
+    if (document.querySelector('dialog[open]')) return;
     // Events originating inside the metadata edit modal are handled by the
     // modal itself; the global search input must still close the viewer.
     if (e.target instanceof HTMLElement && e.target.closest('#metadata-edit-modal')) return;

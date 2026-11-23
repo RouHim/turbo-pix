@@ -1,3 +1,18 @@
+# [2.59.0](https://github.com/RouHim/turbo-pix/compare/2.58.0...2.59.0) (2026-11-23)
+
+### Bug Fixes
+
+* **delete:** block cancelled slide from sending the delete ([d5f57f1](https://github.com/RouHim/turbo-pix/commit/d5f57f113c163b70eaf8493b7f22d586ffece962))
+* **ort:** key the extracted runtime cache on tag and digest ([ea74518](https://github.com/RouHim/turbo-pix/commit/ea74518a600de39914bfad700bc5d14ea246bca0))
+* **timeline:** defer fold reset until the lane is measured ([3087c4a](https://github.com/RouHim/turbo-pix/commit/3087c4aa5194e593bae8c58d96b402f97215e9fa))
+
+### Features
+
+* **delete:** add slide-to-confirm for permanent deletes ([798e7d1](https://github.com/RouHim/turbo-pix/commit/798e7d1a522856b542bad1d6ce5d6bf8371c8b3b))
+* **ort:** consume the static ONNX Runtime 1.32 release ([7564efe](https://github.com/RouHim/turbo-pix/commit/7564efe6e729831f94f34734de075f911f30a4ba))
+* **timeline:** fold from the header row ([82e2809](https://github.com/RouHim/turbo-pix/commit/82e28099631657c2a7dfc51f98b47cee8b2cf22c))
+* **timeline:** fold the desktop timeline card ([1246a7f](https://github.com/RouHim/turbo-pix/commit/1246a7f43920c3fe0fecc2500728702af67a5fcc))
+
 # [2.58.0](https://github.com/RouHim/turbo-pix/compare/2.57.0...2.58.0) (2026-11-23)
 
 ### Features

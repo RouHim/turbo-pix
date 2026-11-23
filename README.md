@@ -110,7 +110,7 @@ services:
 
 - Node.js 26 and npm — builds the frontend bundle
 - A stable Rust toolchain with `rustfmt` and `clippy` (see `rust-toolchain.toml`) — builds the binary
-- `7z` (p7zip) and `curl` — fetch the pinned static ONNX Runtime
+- `zstd`, `tar` and `curl` — fetch the pinned static ONNX Runtime
 - ffmpeg and ffprobe on `PATH` — tested with 8.x (8.0.1, as CI installs it) and 9.0 in the container image
 
 #### Installation
@@ -151,8 +151,9 @@ eval "$(./scripts/fetch-ort.sh --export)"
 cargo build --release
 ```
 
-The helper downloads the pinned archive (x86_64 glibc for local builds, x86_64/aarch64 musl for releases) and verifies
-its SHA-256. The container build does this in a separate stage.
+The helper downloads the pinned archive from `RouHim/onnxruntime-static` (x86_64 glibc for local builds,
+x86_64/aarch64 musl for releases) and verifies its SHA-256. The container build does this in a separate stage.
+Pins live in `scripts/ort/<target>.env` and are updated by Renovate.
 
 ## Configuration
 

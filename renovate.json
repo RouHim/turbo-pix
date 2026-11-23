@@ -1,5 +1,37 @@
 {
   "minimumReleaseAge": "7 days",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)scripts/ort/x86_64-unknown-linux-gnu\\.env$/"],
+      "matchStrings": [
+        "ORT_TAG=(?<currentValue>v\\d+\\.\\d+\\.\\d+)\\nORT_SHA=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "RouHim/onnxruntime-static",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)scripts/ort/x86_64-unknown-linux-musl\\.env$/"],
+      "matchStrings": [
+        "ORT_TAG=(?<currentValue>v\\d+\\.\\d+\\.\\d+)\\nORT_SHA=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "RouHim/onnxruntime-static",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)scripts/ort/aarch64-unknown-linux-musl\\.env$/"],
+      "matchStrings": [
+        "ORT_TAG=(?<currentValue>v\\d+\\.\\d+\\.\\d+)\\nORT_SHA=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "RouHim/onnxruntime-static",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
+    }
+  ],
   "packageRules": [
     {
       "matchUpdateTypes": [

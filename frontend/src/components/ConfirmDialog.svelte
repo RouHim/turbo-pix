@@ -1,48 +1,148 @@
 <script>
   import { t } from '../lib/i18n.js';
   import { confirmState, resolveConfirm } from '../lib/confirmDialog.svelte.js';
+  import SlideToConfirm from './SlideToConfirm.svelte';
 
   let dialogEl = $state(null);
+  let cancelEl = $state(null);
+  let sliderEl = $state(null);
+  let pending = $state(false);
 
   $effect(() => {
     if (confirmState.open) {
-      dialogEl?.showModal();
+      if (!dialogEl?.open) dialogEl?.showModal();
     } else {
       dialogEl?.close();
     }
   });
+
+  let shownRequest = $state(0);
+
+  // Every request starts at rest with the safe choice focused: the slider is
+  // the destructive accept, so Enter on open must never arm or delete. The
+  // request id also covers a request superseding another while the dialog is
+  // open.
+  $effect(() => {
+    if (!confirmState.open) {
+      pending = false;
+      shownRequest = 0;
+      return;
+    }
+    if (shownRequest !== confirmState.requestId) {
+      shownRequest = confirmState.requestId;
+      pending = false;
+      sliderEl?.reset();
+    }
+    cancelEl?.focus();
+  });
+
+  async function handleSlideConfirm() {
+    if (pending) return;
+    const requestId = confirmState.requestId;
+    pending = true;
+    try {
+      await confirmState.onConfirm?.();
+      if (confirmState.requestId !== requestId || !confirmState.open) return;
+      resolveConfirm(true);
+    } catch {
+      if (confirmState.requestId !== requestId || !confirmState.open) return;
+      pending = false;
+      sliderEl?.reset();
+      sliderEl?.focus();
+    }
+  }
+
+  function handleCancel() {
+    if (pending) return;
+    resolveConfirm(false);
+  }
+
+  function onDialogKeydown(event) {
+    if (event.key !== 'Tab' || !confirmState.slide) return;
+
+    // Cancel is the last tabbable control and Chromium does not wrap Tab back
+    // to the slider; close the loop explicitly. While the request runs Cancel
+    // is disabled, so the slider is the only focusable node.
+    if (pending) {
+      event.preventDefault();
+      sliderEl?.focus();
+      return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+
+    if (event.shiftKey) {
+      if (target.closest('[data-testid="confirm-dialog-slider"]')) {
+        event.preventDefault();
+        cancelEl?.focus();
+      }
+      return;
+    }
+
+    if (cancelEl?.contains(target)) {
+      event.preventDefault();
+      sliderEl?.focus();
+    }
+  }
 </script>
 
 <dialog
   class="confirm-dialog"
   bind:this={dialogEl}
   aria-labelledby="confirm-dialog-message"
+  aria-busy={pending}
   data-testid="confirm-dialog"
-  onclose={() => resolveConfirm(false)}
+  onkeydown={onDialogKeydown}
+  oncancel={(event) => {
+    // The request cannot be aborted once sent: closing mid-flight would fake
+    // a cancellation the server does not honour.
+    if (pending) event.preventDefault();
+  }}
+  onclose={() => {
+    pending = false;
+    resolveConfirm(false);
+  }}
 >
   <p id="confirm-dialog-message" class="confirm-message" data-testid="confirm-dialog-message">
     {confirmState.message}
   </p>
-  <div class="confirm-actions">
-    <!-- Cancel first: native <dialog> focuses the first focusable element, and
-         the safe choice is the right default for a destructive question. -->
+  {#if confirmState.slide}
+    <SlideToConfirm
+      bind:this={sliderEl}
+      label={$t('ui.slide_to_delete', { default: 'Slide to delete' })}
+      armedLabel={$t('ui.release_to_delete', { default: 'Release to delete' })}
+      busyLabel={$t('ui.deleting', { default: 'Deleting…' })}
+      ariaLabel={confirmState.confirmLabel}
+      {pending}
+      onconfirm={handleSlideConfirm}
+    />
+  {/if}
+  <div class="confirm-actions" class:slide-actions={confirmState.slide}>
+    <!-- Cancel stays focused first: native <dialog> focuses the first focusable
+         element, and the safe choice is the right default for a destructive
+         question. In slide mode Tab wraps from here to the slider. -->
     <button
       type="button"
       class="confirm-cancel"
       data-testid="confirm-dialog-cancel"
-      onclick={() => resolveConfirm(false)}
+      bind:this={cancelEl}
+      disabled={pending}
+      onclick={handleCancel}
     >
       {$t('ui.cancel', { default: 'Cancel' })}
     </button>
-    <button
-      type="button"
-      class="confirm-accept"
-      class:danger={confirmState.danger}
-      data-testid="confirm-dialog-accept"
-      onclick={() => resolveConfirm(true)}
-    >
-      {confirmState.confirmLabel}
-    </button>
+    {#if !confirmState.slide}
+      <button
+        type="button"
+        class="confirm-accept"
+        class:danger={confirmState.danger}
+        data-testid="confirm-dialog-accept"
+        onclick={() => resolveConfirm(true)}
+      >
+        {confirmState.confirmLabel}
+      </button>
+    {/if}
   </div>
 </dialog>
 
@@ -74,6 +174,10 @@
     gap: var(--space-2);
   }
 
+  .confirm-actions.slide-actions {
+    margin-top: var(--space-2);
+  }
+
   .confirm-cancel,
   .confirm-accept {
     padding: var(--space-2) var(--space-4);
@@ -87,6 +191,15 @@
 
   .confirm-cancel:hover {
     border-color: var(--primary-color);
+  }
+
+  .confirm-cancel:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .confirm-cancel:disabled:hover {
+    border-color: var(--divider-color);
   }
 
   .confirm-accept.danger {

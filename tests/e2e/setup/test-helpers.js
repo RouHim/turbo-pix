@@ -394,6 +394,38 @@ export class TestHelpers {
   }
 
   /**
+   * Drag the delete slider's thumb from its rest position to `fraction` of the
+   * travel and release. Fraction 1 must arm and delete; below 1 must snap back.
+   * With `release: false` the pointer stays down and the release callback is
+   * returned, so a test can assert the mid-drag value.
+   */
+  static async slideToConfirm(page, fraction = 1, { release = true } = {}) {
+    const slider = page.locator('[data-testid="confirm-dialog-slider"]');
+    const thumb = page.locator('[data-testid="confirm-dialog-slider-thumb"]');
+    await slider.waitFor({ state: 'visible' });
+    const sliderBox = await slider.boundingBox();
+    const thumbBox = await thumb.boundingBox();
+    if (!sliderBox || !thumbBox) {
+      throw new Error('slideToConfirm: slider geometry is unavailable');
+    }
+
+    const startX = thumbBox.x + thumbBox.width / 2;
+    const startY = thumbBox.y + thumbBox.height / 2;
+    const targetX = startX + (sliderBox.width - thumbBox.width) * fraction;
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    for (let step = 1; step <= 10; step += 1) {
+      await page.mouse.move(startX + ((targetX - startX) * step) / 10, startY);
+    }
+    if (!release) {
+      return async () => {
+        await page.mouse.up();
+      };
+    }
+    await page.mouse.up();
+  }
+
+  /**
    * Make the ORIGINAL attempt fail, so the planned rung is what runs. The
    * predicate is disjoint from the decision, stream and whole-file conversion
    * URLs on purpose: those keep reaching their own route mocks. The `decision`

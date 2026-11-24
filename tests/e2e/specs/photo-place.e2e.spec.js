@@ -113,6 +113,28 @@ test.describe('Photo place and mini map', () => {
     );
   });
 
+  test('a ?focus= handoff that also opens a photo keeps the popup closed', async ({ page }) => {
+    // GIVEN: a located photo and a URL that carries both the focus handoff and
+    // the photo (opening a photo from a map popup pushes `photo`, keeping `focus`)
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await TestHelpers.stubMapTiles(page);
+
+    // WHEN: that URL is loaded directly
+    await TestHelpers.goto(page, `/map?focus=${photo.hash_sha256}&photo=${photo.hash_sha256}`);
+
+    // THEN: the viewer opens over the centered map
+    await expect(page.locator('#photo-viewer')).toBeVisible();
+    await expect
+      .poll(async () => page.locator('[data-map-cluster], [data-map-location]').count(), {
+        timeout: 15000,
+      })
+      .toBeGreaterThan(0);
+
+    // AND: the pending focus popup never opens behind the modal viewer
+    await expect(page.locator('.leaflet-popup')).toBeHidden();
+  });
+
   test('a handoff from an already-mounted map reopens the popup on its zoomed-in view', async ({
     page,
   }) => {

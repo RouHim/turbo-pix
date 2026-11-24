@@ -124,14 +124,11 @@
     border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--surface-color);
+    /* Leaflet puts its own font stack on this same element; the scoped class wins. */
+    font-family: inherit;
     /* Vertical gestures stay with the panel's scroll container. */
     touch-action: pan-y;
     cursor: pointer;
-  }
-
-  .mini-map :global(.leaflet-container) {
-    background: var(--surface-color);
-    font-family: inherit;
   }
 
   :global(.mini-map-marker) {

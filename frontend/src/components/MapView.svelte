@@ -193,6 +193,14 @@
    */
   function openPendingFocusPopup() {
     if (!pendingFocusKey || !map) return;
+    // A URL can carry both `focus` and `photo` (a map popup's photo pushes `photo`
+    // while `buildUrl` keeps `focus`). The viewer is modal and already shows that
+    // photo, so the popup would open behind it and steal keyboard focus into a
+    // thumbnail. Centering still happened in `focusOnPhoto`; only the popup is skipped.
+    if (route.photo) {
+      pendingFocusKey = null;
+      return;
+    }
     // The focus effect is created before the cluster effect, so on the flush that
     // delivers the result set it runs while the index still describes the
     // previous (empty) one: a marker lookup would miss and the zoom recursion

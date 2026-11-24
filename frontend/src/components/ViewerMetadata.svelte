@@ -120,7 +120,7 @@
   const hasCoordinates = $derived(location.latitude != null && location.longitude != null);
   const placeFilterLabel = $derived(
     $t('ui.metadata.place_filter', {
-      values: { place: location.place ?? '' },
+      values: { place: placeLabel ?? '' },
       default: 'Show all photos at {place}',
     })
   );

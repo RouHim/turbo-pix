@@ -3,7 +3,7 @@
 # names.
 #
 # The dataset is not committed: it is derived from the upstream GeoNames dumps
-# (`cities500.zip` plus the `allCountries.zip` PPLX rows, ~100 MB compressed)
+# (`cities500.zip` plus the `allCountries.zip` PPLX rows, ~440 MB compressed)
 # and only needed while building. `src/place_resolver.rs` embeds the derived
 # file into the binary, so nothing is fetched at runtime.
 #

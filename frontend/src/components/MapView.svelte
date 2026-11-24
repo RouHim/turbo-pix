@@ -159,9 +159,15 @@
 
   /**
    * Applies a `?focus=<hash>` handoff from the viewer's mini map: centers the
-   * map on that photo's location and opens its popup. Returns false when the
+   * map on that photo's location and queues its popup. Returns false when the
    * photo is not part of the plotted set, so the caller can frame everything
    * instead of leaving the map at its initial world view.
+   *
+   * The popup must not be opened here: an animated `setView` only moves the map
+   * on the next animation frame, so `getZoom()`/`getCenter()` would still report
+   * the pre-handoff view and the retry's `setZoom` would cancel the queued move.
+   * The trailing `moveend` (or, for reduced motion, the synchronous move) lands
+   * in `renderClusters`, which calls `openPendingFocusPopup`.
    */
   function focusOnPhoto(hash) {
     if (!map || !hash) return false;
@@ -174,7 +180,6 @@
     map.setView([location.latitude, location.longitude], FOCUS_ZOOM, {
       animate: !prefersReducedMotion,
     });
-    openPendingFocusPopup();
     return true;
   }
 

@@ -113,6 +113,52 @@ test.describe('Photo place and mini map', () => {
     );
   });
 
+  test('a handoff from an already-mounted map reopens the popup on its zoomed-in view', async ({
+    page,
+  }) => {
+    // GIVEN: the map view, mounted and zoomed in on a single location
+    await TestHelpers.stubMapTiles(page);
+    await TestHelpers.goto(page, '/map');
+    await expect
+      .poll(async () => page.locator('[data-map-cluster], [data-map-location]').count(), {
+        timeout: 15000,
+      })
+      .toBeGreaterThan(0);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if ((await page.locator('[data-map-location]').count()) > 0) break;
+      const cluster = page.locator('[data-map-cluster]').first();
+      if ((await cluster.count()) === 0) break;
+      await cluster.click();
+      await expect(page.locator('.leaflet-zoom-anim')).toHaveCount(0);
+    }
+    const marker = page.locator('[data-map-location]').first();
+    await expect(marker).toBeVisible();
+    await marker.click();
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+
+    // WHEN: the user opens the viewer from a popup thumbnail, so the map stays
+    // mounted at its zoomed-in view behind the modal
+    const thumbnail = popup.locator('[data-map-popup-photo]').first();
+    const hash = await thumbnail.getAttribute('data-map-popup-photo');
+    test.skip(!hash, 'The location popup lists no photo');
+    await thumbnail.click();
+    await expect(page.locator('#photo-viewer')).toBeVisible();
+
+    // AND: asks for the full map from the metadata panel's mini map
+    await page.locator('.metadata-btn').click();
+    await page.locator('.viewer-sidebar.show').waitFor();
+    await page.locator('[data-testid="mini-map-open"]').click();
+
+    // THEN: the handoff addresses that photo…
+    await expect(page).toHaveURL(new RegExp(`/map\\?.*focus=${hash}`));
+    await expect(page.locator('#photo-viewer')).toBeHidden();
+
+    // AND: the popup reopens on the mounted, zoomed-in map rather than being
+    // cancelled by a zoom retry that read the pre-handoff view
+    await expect(page.locator('.leaflet-popup')).toBeVisible();
+  });
+
   test('activating the place name filters the grid by that place', async ({ page }) => {
     // GIVEN: the metadata panel of a located photo
     const photo = await photoWithPlace(page);

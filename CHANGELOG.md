@@ -1,3 +1,9 @@
+# [2.61.0](https://github.com/RouHim/turbo-pix/compare/2.60.1...2.61.0) (2026-11-24)
+
+### Features
+
+* **timeline:** name the fold header and reset its filter ([ed73d02](https://github.com/RouHim/turbo-pix/commit/ed73d024afc688823c63703a11452aa8ff76492b))
+
 ## [2.60.1](https://github.com/RouHim/turbo-pix/compare/2.60.0...2.60.1) (2026-11-24)
 
 # [2.60.0](https://github.com/RouHim/turbo-pix/compare/2.59.0...2.60.0) (2026-11-23)

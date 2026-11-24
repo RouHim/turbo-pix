@@ -304,12 +304,7 @@
             />
           </div>
           <div class="photo-card-overlay">
-            <span class="photo-card-title">
-              {$t('ui.collage_for', {
-                default: `Collage for ${formatCollageDate(collage.date)}`,
-                values: { date: formatCollageDate(collage.date) },
-              })}
-            </span>
+            <span class="photo-card-title">{formatCollageDate(collage.date)}</span>
             <span class="photo-card-meta">
               {$t('ui.collage_photos', {
                 default: `${collage.photo_count} photos`,
@@ -317,32 +312,33 @@
               })}
             </span>
           </div>
-          {#if !selectionState.active}
-            <div class="photo-card-actions collage-actions">
-              <button
-                type="button"
-                class="card-action-btn accept-collage-btn"
-                data-action="accept-collage"
-                title={$t('ui.accept_collage', { default: 'Accept' })}
-                aria-label={$t('ui.accept_collage', { default: 'Accept' })}
-                disabled={actionBusy}
-                onclick={() => acceptCollage(collage)}
-              >
-                <Icon name="check" width={18} height={18} />
-              </button>
-              <button
-                type="button"
-                class="card-action-btn reject-collage-btn"
-                data-action="reject-collage"
-                title={$t('ui.reject_collage', { default: 'Reject' })}
-                aria-label={$t('ui.reject_collage', { default: 'Reject' })}
-                disabled={actionBusy}
-                onclick={() => rejectCollage(collage)}
-              >
-                <Icon name="x" width={18} height={18} />
-              </button>
-            </div>
-          {/if}
+          <div
+            class="photo-card-actions collage-actions"
+            class:actions-hidden={selectionState.active}
+          >
+            <button
+              type="button"
+              class="card-action-btn accept-collage-btn"
+              data-action="accept-collage"
+              title={$t('ui.accept_collage', { default: 'Accept' })}
+              aria-label={$t('ui.accept_collage', { default: 'Accept' })}
+              disabled={actionBusy}
+              onclick={() => acceptCollage(collage)}
+            >
+              <Icon name="check" width={18} height={18} />
+            </button>
+            <button
+              type="button"
+              class="card-action-btn reject-collage-btn"
+              data-action="reject-collage"
+              title={$t('ui.reject_collage', { default: 'Reject' })}
+              aria-label={$t('ui.reject_collage', { default: 'Reject' })}
+              disabled={actionBusy}
+              onclick={() => rejectCollage(collage)}
+            >
+              <Icon name="x" width={18} height={18} />
+            </button>
+          </div>
         </div>
       {/each}
     </div>
@@ -394,6 +390,12 @@
     gap: var(--space-2);
   }
 
+  /* Selection mode hides the controls but keeps their band, so entering
+     selection does not reflow every card (the compact card is static flow). */
+  .collage-actions.actions-hidden {
+    visibility: hidden;
+  }
+
   .photo-card-open-layer {
     position: absolute;
     inset: 0;
@@ -429,22 +431,71 @@
     background: var(--color-danger-hover, oklch(48% 0.2 25deg));
   }
 
-  /* Mobile compact grid: mirror PhotoGrid's scoped @container rules so the
-     collage grid keeps the compact 3-column layout on narrow containers.
-     Scoped rules are required — global @container rules lose the cascade to
-     scoped rules (see AGENTS.md). Triggered by the .main-content content
-     container (container-type: inline-size). */
+  /* Mobile: collage tiles are decision cards, not browsing tiles — the
+     accept/reject controls must stay on the card (the viewer has no reject
+     action), and two 44px touch targets plus a caption cannot fit a
+     3-column photo tile. Two columns keep the controls at the 44px mobile
+     minimum and the caption readable. Scoped rules are required — global
+     container rules lose the cascade to scoped rules (see AGENTS.md).
+     Triggered by the .main-content content container
+     (container-type: inline-size). */
   @container (width <= 768px) {
     .photo-grid {
-      grid-template-columns: repeat(3, 1fr);
-      gap: var(--space-1);
+      grid-template-columns: repeat(2, 1fr);
+      gap: var(--space-2);
+      /* The global grid stretches its rows into min-height: 400px; a decision
+         card must size to its own image + caption + controls. */
+      align-content: start;
     }
-  }
 
-  @container (width <= 480px) {
-    .photo-grid {
-      grid-template-columns: repeat(3, 1fr);
-      gap: 2px;
+    .collage-card {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .photo-card-image-container {
+      flex-shrink: 0;
+    }
+
+    /* The preview is the decision subject: keep it unobstructed and move the
+       caption into a paper band below it instead of a scrim over it. */
+    .photo-card-overlay {
+      position: static;
+      flex-shrink: 0;
+      padding: var(--space-2) var(--space-3) 0;
+      background: none;
+      opacity: 1;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .photo-card-title {
+      display: block;
+      font-size: var(--font-sm);
+      line-height: 1.3;
+      margin-bottom: 2px;
+      color: var(--text-primary);
+      letter-spacing: 0;
+      text-shadow: none;
+    }
+
+    .photo-card-meta {
+      font-size: var(--font-xs);
+      color: var(--text-secondary);
+      text-shadow: none;
+    }
+
+    .collage-actions {
+      position: static;
+      transform: none;
+      opacity: 1;
+      padding: var(--space-2) var(--space-3) var(--space-3);
+      gap: var(--space-2);
+    }
+
+    .collage-actions .card-action-btn {
+      width: 44px;
+      height: 44px;
     }
   }
 

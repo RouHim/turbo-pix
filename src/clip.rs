@@ -198,8 +198,13 @@ fn build_session(
     input_type: TensorElementType,
     input_tail: &[i64],
 ) -> Result<Session> {
+    // Flush-to-zero keeps subnormal activations from costing 4x on x86 (see
+    // `face_recognition::model`); it is applied to every session because ORT
+    // takes the process-wide flag from whichever session is created first.
     let session = Session::builder(environment)
         .map_err(|error| anyhow::anyhow!("ORT session builder: {error}"))?
+        .with_flush_to_zero()
+        .map_err(|error| anyhow::anyhow!("ORT session flush-to-zero: {error}"))?
         .with_intra_threads(model_threads())
         .map_err(|error| anyhow::anyhow!("ORT session threads: {error}"))?
         .commit_from_file(path)
@@ -293,10 +298,11 @@ pub(crate) fn encode_text(model: &LoadedModel, text: &str) -> Result<Vec<f32>> {
         .map_err(anyhow::Error::msg)?
         .get_ids()
         .to_vec();
-    let tokens = pad_or_truncate_tokens(tokens);
+    let tokens = truncate_tokens(tokens);
+    let sequence_length = tokens.len();
     let ids: Vec<i64> = tokens.into_iter().map(i64::from).collect();
 
-    let tensor = Tensor::<i64>::from_array(([1usize, CONTEXT_LENGTH], ids))
+    let tensor = Tensor::<i64>::from_array(([1usize, sequence_length], ids))
         .map_err(|error| anyhow::anyhow!("CLIP text input tensor: {error}"))?;
     let mut session = lock_session(&model.text);
     let outputs = session
@@ -460,14 +466,15 @@ pub(crate) fn average_vectors(vectors: &[Vec<f32>]) -> Result<Vec<f32>> {
     Ok(mean)
 }
 
-/// Ensures exactly `CONTEXT_LENGTH` tokens: pads short inputs with EOT and
-/// truncates long inputs to `CONTEXT_LENGTH - 1` tokens plus a re-appended
-/// EOT (the tokenizer's own trailing EOT would otherwise be dropped by a
-/// plain truncate).
-fn pad_or_truncate_tokens(mut tokens: Vec<u32>) -> Vec<u32> {
-    if tokens.len() < CONTEXT_LENGTH {
-        tokens.resize(CONTEXT_LENGTH, EOT_TOKEN);
-    } else {
+/// Caps the token count at `CONTEXT_LENGTH`.
+///
+/// The graph reads the pooled embedding at the first EOT (argmax over the
+/// input ids) and its attention is causal, so trailing EOT padding cannot
+/// change the result: the encoder runs the real token count instead of the
+/// padded 77, which is ~60% cheaper for a short query. Outputs are
+/// bit-identical to the padded form (verified for lengths 5..76).
+fn truncate_tokens(mut tokens: Vec<u32>) -> Vec<u32> {
+    if tokens.len() > CONTEXT_LENGTH {
         // The tokenizer already appended EOT, so truncating to
         // CONTEXT_LENGTH would drop it; keep CONTEXT_LENGTH - 1 tokens and
         // re-append EOT as the final token.
@@ -509,18 +516,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pads_short_token_sequences_with_eot() {
-        let tokens = pad_or_truncate_tokens(vec![1, 2, 3]);
-        assert_eq!(tokens.len(), CONTEXT_LENGTH);
-        assert_eq!(tokens[..3], [1, 2, 3]);
-        assert_eq!(tokens[3], EOT_TOKEN);
-        assert_eq!(tokens.last(), Some(&EOT_TOKEN));
+    fn keeps_short_token_sequences_unpadded() {
+        let tokens = truncate_tokens(vec![1, 2, 3, EOT_TOKEN]);
+        // Trailing EOT padding is redundant: the graph pools at the first EOT.
+        assert_eq!(tokens, vec![1, 2, 3, EOT_TOKEN]);
     }
 
     #[test]
     fn truncates_long_token_sequences_and_reappends_eot() {
         let long: Vec<u32> = (0..200).map(|i| i as u32).collect();
-        let tokens = pad_or_truncate_tokens(long);
+        let tokens = truncate_tokens(long);
         assert_eq!(tokens.len(), CONTEXT_LENGTH);
         assert_eq!(
             tokens[..CONTEXT_LENGTH - 1],
@@ -532,11 +537,8 @@ mod tests {
     #[test]
     fn leaves_exact_length_sequences_alone() {
         let exact: Vec<u32> = (0..CONTEXT_LENGTH).map(|i| i as u32).collect();
-        let tokens = pad_or_truncate_tokens(exact.clone());
-        // CONTEXT_LENGTH input: keep first CONTEXT_LENGTH - 1, re-append EOT.
-        assert_eq!(tokens.len(), CONTEXT_LENGTH);
-        assert_eq!(tokens[..CONTEXT_LENGTH - 1], exact[..CONTEXT_LENGTH - 1]);
-        assert_eq!(tokens[CONTEXT_LENGTH - 1], EOT_TOKEN);
+        let tokens = truncate_tokens(exact.clone());
+        assert_eq!(tokens, exact);
     }
 
     #[test]

@@ -200,7 +200,6 @@
     <div class="timeline-container">
       <div class="timeline-slider">
         <div class="timeline-skeleton" aria-hidden="true"></div>
-        <div class="timeline-label">{labelText}</div>
       </div>
     </div>
   {:else if !showTimeline}
@@ -217,16 +216,17 @@
             bind:this={collapseToggleEl}
             title={collapseLabel}
             aria-label={collapseLabel}
-            aria-describedby="timeline-filter-label"
+            aria-describedby={selection !== null ? 'timeline-filter-label' : undefined}
             aria-expanded={!appState.timelineCollapsed}
             aria-controls="timeline-details"
             onclick={toggleCollapsed}
           >
-            <span
-              id="timeline-filter-label"
-              class="timeline-label"
-              class:filtered={selection !== null}>{labelText}</span
-            >
+            <span class="timeline-heading">
+              <span class="timeline-title">{$t('ui.timeline_title', { default: 'Timeline' })}</span>
+              {#if selection !== null}
+                <span id="timeline-filter-label" class="timeline-label">{labelText}</span>
+              {/if}
+            </span>
             <span
               class="timeline-chevron"
               class:expanded={!appState.timelineCollapsed}
@@ -239,11 +239,11 @@
             type="button"
             class="timeline-reset"
             disabled={!hasFilter}
-            title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-            aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+            title={$t('ui.timeline_reset', { default: 'Reset timeline' })}
+            aria-label={$t('ui.timeline_reset', { default: 'Reset timeline' })}
             onclick={clearFilter}
           >
-            <Icon name="x" width={14} height={14} />
+            <Icon name="rotate-ccw" width={16} height={16} />
           </button>
         </div>
         <div id="timeline-details" bind:this={detailsEl} hidden={appState.timelineCollapsed}>
@@ -287,11 +287,11 @@
           type="button"
           class="timeline-reset"
           disabled={!hasFilter}
-          title={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
-          aria-label={$t('ui.clear_timeline_filter', { default: 'Clear timeline filter' })}
+          title={$t('ui.timeline_reset', { default: 'Reset timeline' })}
+          aria-label={$t('ui.timeline_reset', { default: 'Reset timeline' })}
           onclick={clearFilter}
         >
-          <Icon name="x" width={14} height={14} />
+          <Icon name="rotate-ccw" width={16} height={16} />
         </button>
       </div>
     </div>
@@ -308,23 +308,33 @@
     box-shadow: var(--shadow-light);
   }
 
+  /* The section name anchors the fold row; it inherits the toggle's color so
+     hover and focus stay one interaction. The active filter sits beside it as
+     a state pill, never in place of the name. */
+  .timeline-heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .timeline-title {
+    flex-shrink: 0;
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+    white-space: nowrap;
+  }
+
   .timeline-label {
     flex-shrink: 0;
-    min-width: 104px;
     text-align: center;
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-full);
-    font-size: var(--font-sm);
-    font-weight: var(--font-medium);
-    color: var(--text-secondary);
-    transition:
-      background-color var(--transition-fast),
-      color var(--transition-fast);
-  }
-
-  .timeline-label.filtered {
     background: color-mix(in oklch, var(--primary-color) 12%, transparent);
     color: var(--primary-ink);
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+    white-space: nowrap;
   }
 
   .timeline-fold {
@@ -342,7 +352,9 @@
     color: var(--text-secondary);
     font: inherit;
     cursor: pointer;
-    transition: background-color var(--transition-fast);
+    transition:
+      background-color var(--transition-fast),
+      color var(--transition-fast);
   }
 
   .timeline-fold:hover {
@@ -401,6 +413,7 @@
 
   .timeline-chevron {
     display: flex;
+    margin-left: auto;
     transition: transform var(--transition-fast);
   }
 
@@ -523,8 +536,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .timeline-label,
-    .timeline-label.filtered,
     .timeline-fold,
     .timeline-reset,
     .timeline-chevron {

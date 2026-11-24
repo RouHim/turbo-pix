@@ -62,7 +62,11 @@ test.describe('Timeline collapse', () => {
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
     await expect(toggle(page)).toHaveAttribute('aria-controls', 'timeline-details');
     await expect(toggle(page)).toHaveAttribute('aria-label', 'Collapse timeline');
-    await expect(toggle(page)).toHaveAttribute('aria-describedby', 'timeline-filter-label');
+    // The header always names the card; without a date filter there is no
+    // filter pill and therefore no filter description on the toggle.
+    await expect(page.locator('.timeline-title')).toHaveText('Timeline');
+    await expect(toggle(page)).not.toHaveAttribute('aria-describedby');
+    await expect(page.locator('.timeline-label')).toHaveCount(0);
     await expect(reset(page)).toBeVisible();
     await expect(reset(page)).toBeDisabled();
     expect(await storedCollapsed(page)).toBeNull();
@@ -82,12 +86,13 @@ test.describe('Timeline collapse', () => {
     // WHEN: The toggle is activated
     await toggle(page).click();
 
-    // THEN: Only the selector is hidden; label and reset stay reachable
+    // THEN: Only the selector is hidden; the header title and reset stay
+    // reachable
     await expect(details(page)).toBeHidden();
     await expect(selector(page)).toBeHidden();
+    await expect(page.locator('.timeline-title')).toBeVisible();
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
     await expect(toggle(page)).toHaveAttribute('aria-label', 'Expand timeline');
-    await expect(page.locator('.timeline-label')).toBeVisible();
     await expect(reset(page)).toBeVisible();
     expect(await storedCollapsed(page)).toBe('true');
 
@@ -196,19 +201,26 @@ test.describe('Timeline collapse', () => {
     const fitAll = await columnStarts(page);
 
     // AND: The next mount starts folded on a filtered route, so the lane is
-    // never measured and the clear control is armed
+    // never measured and the reset control is armed
     await page.evaluate((key) => localStorage.setItem(key, 'true'), TIMELINE_COLLAPSED_STORAGE_KEY);
     await page.goto('/?year=2012&month=3', { waitUntil: 'domcontentloaded' });
     await TestHelpers.waitForPhotosToLoad(page);
     await expect(details(page)).toBeHidden();
     await expect(selector(page)).toBeHidden();
     await expect(reset(page)).toBeEnabled();
+    // The folded header names the card and the active filter…
+    await expect(page.locator('.timeline-title')).toHaveText('Timeline');
+    await expect(page.locator('.timeline-label')).toHaveCount(1);
+    await expect(toggle(page)).toHaveAttribute('aria-describedby', 'timeline-filter-label');
 
     // WHEN: The folded header's reset is used, then the card is expanded
     await reset(page).click();
     await toggle(page).click();
     await expect(selector(page)).toBeVisible();
-    await expect(page.locator('.timeline-label')).toHaveText('All Dates');
+    // …and drops only the filter pill once no filter is left.
+    await expect(page.locator('.timeline-title')).toHaveText('Timeline');
+    await expect(page.locator('.timeline-label')).toHaveCount(0);
+    await expect(toggle(page)).not.toHaveAttribute('aria-describedby');
 
     // THEN: The deferred reset lands on fit-all once the lane is measured
     await expect.poll(() => columnStarts(page)).toEqual(fitAll);
@@ -245,7 +257,7 @@ test.describe('Timeline collapse', () => {
     await expect(page.locator('.timeline-ruler')).toContainText(newestDecade);
   });
 
-  test('disables the clear control without a date filter', async ({ page }) => {
+  test('disables the reset control without a date filter', async ({ page }) => {
     // GIVEN: No date filter
     await expect(reset(page)).toBeDisabled();
 
@@ -265,11 +277,14 @@ test.describe('Timeline collapse', () => {
     await expect(reset(page)).toBeEnabled();
     const historyBefore = await page.evaluate(() => history.length);
 
-    // WHEN: The clear control is used
+    // WHEN: The reset control is used
     await reset(page).click();
 
-    // THEN: The filter is gone and only one entry was added
-    await expect(page.locator('.timeline-label')).toHaveText('All Dates');
+    // THEN: The filter is gone and only one entry was added; the header
+    // keeps its title but drops the filter pill
+    await expect(page.locator('.timeline-title')).toHaveText('Timeline');
+    await expect(page.locator('.timeline-label')).toHaveCount(0);
+    await expect(toggle(page)).not.toHaveAttribute('aria-describedby');
     await expect(toggle(page)).toBeFocused();
     await expect
       .poll(() => page.evaluate(() => new URL(location.href).searchParams.has('year')))

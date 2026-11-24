@@ -985,8 +985,8 @@ test.describe('Timeline', () => {
     expect(TestHelpers.getUrlState(page).toMonth).toBe(6);
   });
 
-  test('should announce zoom, fit-all and clear with a visible focus ring', async ({ page }) => {
-    // A date filter keeps the clear control enabled (it is disabled otherwise).
+  test('should announce zoom, fit-all and reset with a visible focus ring', async ({ page }) => {
+    // A date filter keeps the reset control enabled (it is disabled otherwise).
     await TestHelpers.goto(page, '/?year=2012&month=3');
     await TestHelpers.waitForPhotosToLoad(page);
 

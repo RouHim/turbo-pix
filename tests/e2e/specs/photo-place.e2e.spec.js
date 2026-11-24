@@ -92,6 +92,27 @@ test.describe('Photo place and mini map', () => {
     );
   });
 
+  test('the ?focus= handoff still opens the popup with reduced motion', async ({ page }) => {
+    // GIVEN: the OS reduce-motion preference, which makes every zoom step
+    // synchronous: the popup must open from the render of the result set, not
+    // from a chain of zoom retries climbing to the maximum zoom.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await openMetadataPanel(page, photo.hash_sha256);
+
+    // WHEN: the user asks for the full map from the mini map
+    await page.locator('[data-testid="mini-map-open"]').click();
+
+    // THEN: the handoff lands on the focused map view and its popup opens
+    await expect(page).toHaveURL(new RegExp(`/map\\?.*focus=${photo.hash_sha256}`));
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-testid="map-popup-place"]')).toContainText(
+      photo.metadata.location.place.trim()
+    );
+  });
+
   test('activating the place name filters the grid by that place', async ({ page }) => {
     // GIVEN: the metadata panel of a located photo
     const photo = await photoWithPlace(page);

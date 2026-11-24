@@ -17,6 +17,7 @@
 
   let el = null;
   let map = null;
+  let marker = null;
 
   /**
    * The credit for both data sources the picture stands on: the tiles come from
@@ -72,7 +73,7 @@
       L.tileLayer(appState.tileUrl, { maxZoom: MAP_MAX_ZOOM }).addTo(map);
     }
 
-    L.marker([latitude, longitude], { interactive: false, icon: markerIcon() }).addTo(map);
+    marker = L.marker([latitude, longitude], { interactive: false, icon: markerIcon() }).addTo(map);
 
     el.addEventListener('click', handleMapClick);
 
@@ -85,14 +86,17 @@
       el.removeEventListener('click', handleMapClick);
       map?.remove();
       map = null;
+      marker = null;
     };
   });
 
   $effect(() => {
-    // The viewer keeps one panel instance and swaps the photo underneath it.
-    if (!map) return;
+    // The viewer keeps one panel instance and swaps the photo underneath it, so
+    // both the marker and the view have to follow the current coordinates.
+    if (!map || !marker) return;
     const lat = latitude;
     const lon = longitude;
+    marker.setLatLng([lat, lon]);
     const current = map.getCenter();
     if (current.lat === lat && current.lng === lon && map.getZoom() === MINI_MAP_ZOOM) return;
     map.setView([lat, lon], MINI_MAP_ZOOM, { animate: false });

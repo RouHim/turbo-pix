@@ -45,6 +45,9 @@
   let tileLayer = null;
   let clusterLayer = null;
   let clusterIndex = null;
+  // The `locations` array the current index was built from: until it matches,
+  // the index still describes the previous result set.
+  let indexedLocations = null;
   let resizeObserver = null;
   let abortController = null;
   let loadToken = 0;
@@ -185,6 +188,12 @@
    */
   function openPendingFocusPopup() {
     if (!pendingFocusKey || !map) return;
+    // The focus effect is created before the cluster effect, so on the flush that
+    // delivers the result set it runs while the index still describes the
+    // previous (empty) one: a marker lookup would miss and the zoom recursion
+    // would climb to MAP_MAX_ZOOM before the marker exists. The cluster effect
+    // calls back here once the index is current.
+    if (indexedLocations !== locations) return;
     const marker = locationMarkers.get(pendingFocusKey);
     if (marker) {
       pendingFocusKey = null;
@@ -553,6 +562,7 @@
       tileLayer = null;
       clusterLayer = null;
       clusterIndex = null;
+      indexedLocations = null;
     };
   });
 
@@ -592,6 +602,7 @@
     // location's photo count so the index itself can aggregate photos, and the
     // index is rebuilt whenever the result set changes (markers follow
     // immediately).
+    const builtFrom = locations;
     clusterIndex = new Supercluster({
       radius: CLUSTER_RADIUS,
       maxZoom: CLUSTER_MAX_ZOOM,
@@ -600,12 +611,13 @@
         accumulated.photoCount += properties.photoCount;
       },
     }).load(
-      locations.map((location) => ({
+      builtFrom.map((location) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] },
         properties: { key: location.key, photoCount: location.photos.length },
       }))
     );
+    indexedLocations = builtFrom;
     untrack(() => renderClusters());
   });
 

@@ -96,7 +96,7 @@ The map stays usable when there is nothing to plot, when names are missing, or w
 
 - https://operations.osmfoundation.org/policies/tiles/ — browser-side interactive viewing of `https://tile.openstreetmap.org/{z}/{x}/{y}.png` is permitted with visible attribution and a normal `Referer`, while bulk/prefetch/offline downloading is prohibited and hard-coding the tile URL is explicitly discouraged; the spec therefore requires a configurable tile endpoint, no prefetching, and always-visible attribution.
 - https://wiki.osmfoundation.org/wiki/Licence/Attribution_Guidelines — the required credit is "© OpenStreetMap contributors" with a link to the copyright page, placed on the map itself.
-- Repository evidence (`src/geo_location.rs`, `src/db.rs`) — the app already reverse-geocodes with OpenStreetMap's Nominatim and stores the resolved city, so popups reuse existing data instead of introducing a new external dependency.
+- Repository evidence (`src/place_resolver.rs`, `src/db.rs`) — the app resolves place names offline from the GeoNames dataset embedded at build time and stores them as `metadata.location.place`, so popups reuse existing data instead of introducing a new external dependency (see `.spec/photo-place-and-minimap.md`).
 
 ## Assumptions
 
@@ -105,8 +105,8 @@ The map stays usable when there is nothing to plot, when names are missing, or w
 - Photos without GPS are absent from the map and surfaced only as a count.
 - The tile endpoint is provided by the running server, defaults to the public OpenStreetMap tile service, and can be repointed by configuration alone.
 - The map viewport (center/zoom) is not part of the URL; re-entering the view re-fits the current filtered set.
-- Place names come from location data the library has already resolved; no new reverse-geocoding is introduced.
-- No heatmaps, drawing tools, timeline brush, marker color coding, or city-name grouping are included.
+- Place names come from location data the library has already resolved; no new reverse-geocoding is introduced by this feature.
+- No heatmaps, drawing tools, timeline brush, marker color coding, or place-name grouping are included.
 - Existing grid, viewer, sorting, selection, and metadata-editing behavior is unchanged.
 
 ## Success Criteria

@@ -728,7 +728,7 @@ fn video_save_rejection(err: VideoSaveError) -> Rejection {
 /// before the save — i.e. when the container's coordinates are actually being
 /// moved.
 ///
-/// The row's `location.city` was geocoded from the coordinates the file held,
+/// The row's `location.place` was resolved from the coordinates the file held,
 /// so a save that replaces them invalidates the name and has to re-arm the
 /// resolver, which otherwise skips the row forever (its
 /// `geo_location_resolved` is already 1) and would pair the old name with the
@@ -847,7 +847,8 @@ async fn apply_video_metadata_edit(
             .get_mut("location")
             .and_then(|v| v.as_object_mut())
         {
-            location.remove("city");
+            location.remove("place");
+            location.remove("country_code");
         }
     }
     // Record the patched file's identity only when the row already describes
@@ -1995,13 +1996,13 @@ mod tests {
         let mut older =
             crate::db::tests::create_test_photo("older.jpg".to_string(), "a".repeat(64));
         older.taken_at = Some(Utc.with_ymd_and_hms(2020, 5, 25, 10, 0, 0).unwrap());
-        older.metadata = json!({ "location": { "city": "Berlin" } });
+        older.metadata = json!({ "location": { "place": "Berlin" } });
         older.create(&db_pool).await.unwrap();
 
         let mut newer =
             crate::db::tests::create_test_photo("newer.jpg".to_string(), "b".repeat(64));
         newer.taken_at = Some(Utc.with_ymd_and_hms(2024, 5, 25, 10, 0, 0).unwrap());
-        newer.metadata = json!({ "location": { "city": "Berlin" } });
+        newer.metadata = json!({ "location": { "place": "Berlin" } });
         newer.create(&db_pool).await.unwrap();
 
         let response = warp::test::request()
@@ -2885,7 +2886,7 @@ mod tests {
     /// nothing downstream of the scan would, and the resolver skips the row for
     /// as long as its flag says it is resolved. So the save drops the name it
     /// invalidates, re-queues the row, and reports the same state — a new pin
-    /// next to the old city's name would be a lie.
+    /// next to the old place name would be a lie.
     #[tokio::test]
     async fn patch_metadata_drops_the_resolved_name_when_the_save_moves_the_video() {
         let db_pool = create_in_memory_pool().await.expect("db");
@@ -2914,9 +2915,13 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(located.status(), 200);
-        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
-            .await
-            .expect("resolve");
+        crate::db::update_photo_place(
+            &db_pool,
+            &file_path,
+            Some(&crate::db::tests::resolved_place("Vienna", "AT")),
+        )
+        .await
+        .expect("resolve");
 
         // WHEN: a save moves it to a new position
         let moved = warp::test::request()
@@ -2932,7 +2937,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(moved.body()).unwrap();
         assert_eq!(body["metadata"]["location"]["latitude"], 52.52);
         assert!(
-            body["metadata"]["location"]["city"].is_null(),
+            body["metadata"]["location"]["place"].is_null(),
             "the response must not pair the new position with the old name: {}",
             body["metadata"]
         );
@@ -2943,7 +2948,7 @@ mod tests {
         assert!(row.metadata["location"].get("latitude").is_none());
         assert!(row.metadata["location"].get("longitude").is_none());
         assert!(
-            row.metadata["location"]["city"].is_null(),
+            row.metadata["location"]["place"].is_null(),
             "a name geocoded from the position this save replaced must not survive it: {}",
             row.metadata
         );
@@ -2989,9 +2994,13 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(located.status(), 200);
-        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
-            .await
-            .expect("resolve");
+        crate::db::update_photo_place(
+            &db_pool,
+            &file_path,
+            Some(&crate::db::tests::resolved_place("Vienna", "AT")),
+        )
+        .await
+        .expect("resolve");
 
         // WHEN: a save changes nothing but the date
         let dated = warp::test::request()
@@ -3005,10 +3014,10 @@ mod tests {
         // the row stays out of the resolver's queue
         assert_eq!(dated.status(), 200);
         let body: serde_json::Value = serde_json::from_slice(dated.body()).unwrap();
-        assert_eq!(body["metadata"]["location"]["city"], "Vienna");
+        assert_eq!(body["metadata"]["location"]["place"], "Vienna");
         assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(row.metadata["location"]["city"], "Vienna");
+        assert_eq!(row.metadata["location"]["place"], "Vienna");
         // The stored document keeps no coordinates: the pair lives in the
         // derived columns.
         assert!(row.metadata["location"].get("latitude").is_none());
@@ -3057,9 +3066,13 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(located.status(), 200);
-        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
-            .await
-            .expect("resolve");
+        crate::db::update_photo_place(
+            &db_pool,
+            &file_path,
+            Some(&crate::db::tests::resolved_place("Vienna", "AT")),
+        )
+        .await
+        .expect("resolve");
 
         // WHEN: a save asks for that very pin with more precision than the
         // carrier can hold, so what lands in the file is the stored pin
@@ -3078,12 +3091,12 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(rounded.body()).unwrap();
         assert_eq!(body["metadata"]["location"]["latitude"], 48.2082);
         assert_eq!(
-            body["metadata"]["location"]["city"], "Vienna",
+            body["metadata"]["location"]["place"], "Vienna",
             "a request that rounds back to the stored pin moved nothing: {}",
             body["metadata"]
         );
         let row = Photo::find_by_hash(&db_pool, hash).await.unwrap().unwrap();
-        assert_eq!(row.metadata["location"]["city"], "Vienna");
+        assert_eq!(row.metadata["location"]["place"], "Vienna");
         // The stored document keeps no coordinates (the pair lives in the
         // derived columns), and the response above already carries the pin.
         assert!(row.metadata["location"].get("latitude").is_none());
@@ -3131,9 +3144,13 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(located.status(), 200);
-        crate::db::update_photo_city(&db_pool, &file_path, Some("Vienna"))
-            .await
-            .expect("resolve");
+        crate::db::update_photo_place(
+            &db_pool,
+            &file_path,
+            Some(&crate::db::tests::resolved_place("Vienna", "AT")),
+        )
+        .await
+        .expect("resolve");
 
         // WHEN: a save moves it, which is the path that drops the name
         let moved = warp::test::request()
@@ -3152,19 +3169,21 @@ mod tests {
         assert_eq!(body["metadata"]["location"]["longitude"], 13.405);
         assert!(row.metadata["location"].get("latitude").is_none());
         assert!(row.metadata["location"].get("longitude").is_none());
-        // The name is ABSENT on both sides, not a JSON null the client has to
-        // filter: RFC 7396's explicit null removes the member from the row, and
-        // the response mirrors the row's document for it. A future "keep the
-        // key, set it null" on either side alone would show up here as one of
-        // them carrying `"city": null`.
+        // The name and its country are ABSENT on both sides, not a JSON null
+        // the client has to filter: RFC 7396's explicit null removes the member
+        // from the row, and the response mirrors the row's document for it. A
+        // future "keep the key, set it null" on either side alone would show up
+        // here as one of them carrying `"place": null`.
         for (side, location) in [
             ("response", &body["metadata"]["location"]),
             ("row", &row.metadata["location"]),
         ] {
-            assert!(
-                location.get("city").is_none(),
-                "the {side} must carry no `city` member at all: {location}"
-            );
+            for key in ["place", "country_code"] {
+                assert!(
+                    location.get(key).is_none(),
+                    "the {side} must carry no `{key}` member at all: {location}"
+                );
+            }
         }
     }
 

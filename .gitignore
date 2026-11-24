@@ -2,6 +2,9 @@
 /target/
 # Fetched ONNX Runtime archives/headers (scripts/fetch-ort.sh)
 /vendor/ort/
+# Derived place dataset (scripts/fetch-geodata.sh)
+assets/geodata.txt
+assets/geodata.txt.tmp
 data/
 photos/
 collages/

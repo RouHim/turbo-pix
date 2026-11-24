@@ -197,6 +197,9 @@
       "color_space": "Farbraum:",
       "location_section": "Standort",
       "gps": "GPS:",
+      "place": "Ort:",
+      "place_filter": "Alle Fotos bei {place} anzeigen",
+      "show_on_map": "Auf Karte anzeigen",
       "video_section": "Videoinformationen",
       "duration": "Dauer:",
       "video_codec": "Video-Codec:",
@@ -283,7 +286,8 @@
     "markerLabel": "{count} Fotos bei {place}",
     "clusterLabel": "{count} Fotos, zum Vergrößern aktivieren",
     "openPhoto": "Foto vom {date} öffnen",
-    "attributionLabel": "OpenStreetMap-Mitwirkende"
+    "attributionLabel": "OpenStreetMap-Mitwirkende",
+    "placeAttributionLabel": "Ortsdaten © GeoNames"
   },
   "errors": {
     "error_loading_photos": "Fehler beim Laden der Fotos",

@@ -1,5 +1,5 @@
 <script>
-  import { t } from '../lib/i18n.js';
+  import { t, getLocale } from '../lib/i18n.js';
   import {
     formatDate,
     formatFileSize,
@@ -8,9 +8,17 @@
     isMetadataEditable,
     isVideoFile,
   } from '../lib/utils.js';
+  import { formatPlaceLabel } from '../lib/map.js';
   import Icon from './Icon.svelte';
+  import MiniMap from './MiniMap.svelte';
 
-  const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
+  const {
+    photo = null,
+    onEditMetadata = () => {},
+    onCloseSidebar = () => {},
+    onFilterByPlace = () => {},
+    onOpenMap = () => {},
+  } = $props();
 
   const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isMetadataEditable(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
@@ -105,7 +113,17 @@
       photo?.orientation ||
       settings.color_space
   );
-  const hasLocation = $derived(location.latitude != null || location.longitude != null);
+  const hasLocation = $derived(
+    location.latitude != null || location.longitude != null || Boolean(placeLabel)
+  );
+  const placeLabel = $derived(formatPlaceLabel(photo, getLocale()));
+  const hasCoordinates = $derived(location.latitude != null && location.longitude != null);
+  const placeFilterLabel = $derived(
+    $t('ui.metadata.place_filter', {
+      values: { place: location.place ?? '' },
+      default: 'Show all photos at {place}',
+    })
+  );
   // ONE message for the tooltip and the accessible name. A screen reader on a
   // disabled button announces the `aria-label`, not the `title`, so a
   // format-specific `title` beside a generic `aria-label` would hide the
@@ -345,6 +363,22 @@
         <h4 class="meta-section-title">
           {$t('ui.metadata.location_section', { default: 'Location' })}
         </h4>
+        {#if placeLabel}
+          <div class="meta-item">
+            <span class="meta-label">{$t('ui.metadata.place', { default: 'Place:' })}</span>
+            <button
+              type="button"
+              class="meta-place"
+              id="meta-place"
+              data-testid="meta-place"
+              title={placeFilterLabel}
+              aria-label={placeFilterLabel}
+              onclick={() => onFilterByPlace(location.place)}
+            >
+              {placeLabel}
+            </button>
+          </div>
+        {/if}
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.gps', { default: 'GPS:' })}</span><span
             id="meta-gps"
@@ -356,6 +390,9 @@
             )}</span
           >
         </div>
+        {#if hasCoordinates}
+          <MiniMap latitude={location.latitude} longitude={location.longitude} {onOpenMap} />
+        {/if}
       </div>
     {/if}
 
@@ -561,6 +598,39 @@
     min-width: 0;
     text-align: right;
     flex: 1;
+  }
+
+  /* The place name is a filter, not a label: it reads like the values around
+     it and underlines on hover/focus, so the affordance stays discoverable
+     without a second button. */
+  .meta-place {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary-ink);
+    font: inherit;
+    font-size: var(--font-base);
+    font-weight: var(--font-medium);
+    text-align: right;
+    overflow-wrap: break-word;
+    min-width: 0;
+    flex: 1;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 2px;
+    transition: var(--transition-fast);
+  }
+
+  .meta-place:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .meta-place:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+    text-decoration-color: currentColor;
   }
 
   .btn-icon {

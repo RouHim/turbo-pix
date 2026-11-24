@@ -143,14 +143,16 @@ test.describe('Map filters', () => {
   test('location: search plots exactly the matching geo-located subset', async ({ page }) => {
     await TestHelpers.goto(page, '/map');
 
-    const city = await page.evaluate(async () => {
+    const place = await page.evaluate(async () => {
       const response = await fetch('/api/photos?limit=100');
       const { photos } = await response.json();
-      return photos.find((photo) => photo.metadata?.location?.city)?.metadata.location.city ?? null;
+      return (
+        photos.find((photo) => photo.metadata?.location?.place)?.metadata.location.place ?? null
+      );
     });
-    test.skip(!city, 'No resolved city in the seeded photos');
+    test.skip(!place, 'No resolved place in the seeded photos');
 
-    const query = `location:${city}`;
+    const query = `location:${place}`;
     const endpoint = `/api/photos/map?q=${encodeURIComponent(query)}`;
     const expected = await expectedPhotos(page, endpoint);
     const densest = await densestLocation(page, endpoint);
@@ -168,7 +170,7 @@ test.describe('Map filters', () => {
     // errored, so a failed filtered load would leave it hidden and the check
     // below passing. Assert the load itself first.
     await expect(page.locator('[data-testid="map-error"]')).toHaveCount(0);
-    // Teeth: every photo the city matches carries coordinates, while the
+    // Teeth: every photo the place matches carries coordinates, while the
     // unfiltered render shows this notice for the unlocated videos and receipt.
     // The counts are derived from the API at runtime, and `sample_with_exif.jpg`
     // carries no *seeded* GPS only until `metadata-edit.e2e.spec.js` (later in

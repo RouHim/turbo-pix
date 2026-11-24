@@ -2347,6 +2347,23 @@
     };
   });
 
+  /** Leaves the viewer for the library map, centered on the current photo. */
+  function openCurrentPhotoOnMap() {
+    const hash = currentPhoto?.hash_sha256;
+    if (!hash) return;
+    // The route push below carries the navigation; closing first keeps the
+    // viewer from flashing its own URL update on the way out.
+    close(false);
+    pushState({ view: 'map', focus: hash, photo: null });
+  }
+
+  /** Leaves the viewer for the grid filtered by the photo's resolved place. */
+  function filterByPlace(place) {
+    if (!place) return;
+    close(false);
+    pushState({ view: 'all', query: `location:${place}`, album: null, photo: null, focus: null });
+  }
+
   // Watch route.photo for deep-link
   $effect(() => {
     if (route.photo && !isOpen) {
@@ -2624,6 +2641,8 @@
         photo={currentPhoto}
         onEditMetadata={openMetadataEdit}
         onCloseSidebar={() => setDetailsOpen(false)}
+        onFilterByPlace={filterByPlace}
+        onOpenMap={openCurrentPhotoOnMap}
       />
     </div>
   </div>

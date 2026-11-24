@@ -19,15 +19,18 @@
     isSemanticQuery,
     wrapLongitudeForView,
   } from '../lib/map.js';
+  import { MAP_MAX_ZOOM, mapAttributionHtml } from '../lib/mapAttribution.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import MapPopup from './MapPopup.svelte';
 
-  const MAX_ZOOM = 19;
   const CLUSTER_RADIUS = 60;
   const CLUSTER_MAX_ZOOM = 18;
   const INITIAL_CENTER = [20, 0];
   const INITIAL_ZOOM = 2;
   const FIT_MAX_ZOOM = 14;
+  // A focused photo gets street-level context: close enough to see where it was
+  // taken, wide enough to keep the neighbourhood readable.
+  const FOCUS_ZOOM = 15;
 
   // FR-018: the OS "reduce motion" preference disables every map transition.
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -47,6 +50,9 @@
   let loadToken = 0;
   let anyTileLoaded = false;
   let hasFittedOnce = false;
+  // Location key whose popup a `?focus=` handoff asked for, until its marker
+  // exists at the current zoom (a cluster can hide it for a few zoom steps).
+  let pendingFocusKey = null;
   // Location key of the open popup, and whether a marker re-render was asked
   // for while it was open (see renderClusters).
   let openPopupKey = null;
@@ -106,7 +112,10 @@
       const loaded = await fetchPhotoSet(route, signal);
       if (token !== loadToken) return;
       photos = loaded;
-      fitToLocationsOnce();
+      // A `?focus=` handoff owns the viewport; framing everything first would
+      // make the map sweep across the world before it reaches the photo. The
+      // focus effect applies it once the data is in.
+      if (!route.focus) fitToLocationsOnce();
     } catch (error) {
       if (error?.name === 'AbortError') return;
       if (token !== loadToken) return;
@@ -127,7 +136,8 @@
 
   function attributionHtml() {
     const label = get(t)('map.attributionLabel', { default: 'OpenStreetMap contributors' });
-    return `&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">${label}</a>`;
+    const places = get(t)('map.placeAttributionLabel', { default: 'Place data © GeoNames' });
+    return mapAttributionHtml(label, places);
   }
 
   /** Frames the current result set exactly once per mount (FR-016). */
@@ -142,6 +152,50 @@
       maxZoom: FIT_MAX_ZOOM,
       animate: !prefersReducedMotion,
     });
+  }
+
+  /**
+   * Applies a `?focus=<hash>` handoff from the viewer's mini map: centers the
+   * map on that photo's location and opens its popup. Returns false when the
+   * photo is not part of the plotted set, so the caller can frame everything
+   * instead of leaving the map at its initial world view.
+   */
+  function focusOnPhoto(hash) {
+    if (!map || !hash) return false;
+    const location = locations.find((entry) =>
+      entry.photos.some((photo) => photo.hash_sha256 === hash)
+    );
+    if (!location) return false;
+    hasFittedOnce = true;
+    pendingFocusKey = location.key;
+    map.setView([location.latitude, location.longitude], FOCUS_ZOOM, {
+      animate: !prefersReducedMotion,
+    });
+    openPendingFocusPopup();
+    return true;
+  }
+
+  /**
+   * Opens the popup the handoff asked for, once its marker exists.
+   *
+   * A location inside a cluster has no marker of its own; zooming in splits the
+   * cluster, and the next render (on `moveend`) calls back here. `MAP_MAX_ZOOM` is
+   * above the clustering ceiling, where every location is its own marker, so
+   * the retry always terminates.
+   */
+  function openPendingFocusPopup() {
+    if (!pendingFocusKey || !map) return;
+    const marker = locationMarkers.get(pendingFocusKey);
+    if (marker) {
+      pendingFocusKey = null;
+      marker.openPopup();
+      return;
+    }
+    if (map.getZoom() >= MAP_MAX_ZOOM) {
+      pendingFocusKey = null;
+      return;
+    }
+    map.setZoom(map.getZoom() + 1, { animate: !prefersReducedMotion });
   }
 
   // ── Marker rendering ──────────────────────────────────────────────────────
@@ -294,7 +348,7 @@
   function expandCluster(clusterId, latlng) {
     if (!map || !clusterIndex) return;
     const zoom = clusterIndex.getClusterExpansionZoom(clusterId);
-    map.setView(latlng, Math.min(zoom, MAX_ZOOM), { animate: !prefersReducedMotion });
+    map.setView(latlng, Math.min(zoom, MAP_MAX_ZOOM), { animate: !prefersReducedMotion });
   }
 
   /** Pan/zoom redraws are the ones that must wait for an open popup to close. */
@@ -419,6 +473,8 @@
     } else if (focusedCluster) {
       map.getContainer().focus();
     }
+
+    openPendingFocusPopup();
   }
 
   function openViewer(photo) {
@@ -436,7 +492,7 @@
       zoom: INITIAL_ZOOM,
       zoomControl: true,
       attributionControl: true,
-      maxZoom: MAX_ZOOM,
+      maxZoom: MAP_MAX_ZOOM,
       // FR-018: reduced motion preference suppresses animated pan/zoom/fade.
       zoomAnimation: !prefersReducedMotion,
       fadeAnimation: !prefersReducedMotion,
@@ -448,7 +504,7 @@
     map.attributionControl.addAttribution(attributionHtml());
 
     if (appState.tileUrl) {
-      tileLayer = L.tileLayer(appState.tileUrl, { maxZoom: MAX_ZOOM });
+      tileLayer = L.tileLayer(appState.tileUrl, { maxZoom: MAP_MAX_ZOOM });
       tileLayer.on('tileerror', () => {
         if (!anyTileLoaded) tilesFailed = true;
       });
@@ -511,6 +567,24 @@
     route.to_month;
     route.album;
     untrack(() => loadPhotos());
+  });
+
+  // `?focus=` applies once per hash, when the data for it is in: a later filter
+  // change must not yank the viewport back from wherever the user panned to.
+  let lastAppliedFocusHash = null;
+  $effect(() => {
+    const focusHash = route.focus;
+    const located = locations.length;
+    untrack(() => {
+      if (!focusHash || located === 0 || focusHash === lastAppliedFocusHash) return;
+      if (focusOnPhoto(focusHash)) {
+        lastAppliedFocusHash = focusHash;
+      } else {
+        // The focused photo is not part of the plotted set (filtered out or
+        // deleted): frame what is left instead of the initial world view.
+        fitToLocationsOnce();
+      }
+    });
   });
 
   $effect(() => {

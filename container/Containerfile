@@ -14,6 +14,14 @@ COPY frontend ./frontend
 RUN npm ci && npm run build
 
 # # # # # # # # # # # # # # # # # # # #
+# Offline place dataset (embedded by build.rs)
+# # # # # # # # # # # # # # # # # # # #
+FROM alpine:3 AS geodata
+RUN apk add --no-cache curl unzip
+COPY scripts/fetch-geodata.sh /fetch-geodata.sh
+RUN chmod +x /fetch-geodata.sh && GEODATA_OUT=/geodata.txt /fetch-geodata.sh
+
+# # # # # # # # # # # # # # # # # # # #
 # Static ONNX Runtime (face pipeline)
 # # # # # # # # # # # # # # # # # # # #
 FROM alpine:3 AS ort
@@ -47,6 +55,7 @@ COPY build.rs ./
 COPY src ./src
 COPY migrations ./migrations
 COPY assets ./assets
+COPY --from=geodata /geodata.txt ./assets/geodata.txt
 COPY --from=frontend-build /app/dist ./dist
 COPY --from=ort /opt/ort /opt/ort
 

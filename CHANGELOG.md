@@ -1,3 +1,10 @@
+## [2.61.2](https://github.com/RouHim/turbo-pix/compare/2.61.1...2.61.2) (2026-11-24)
+
+### Bug Fixes
+
+* **collages:** give mobile cards room for accept/reject controls ([44ad6bd](https://github.com/RouHim/turbo-pix/commit/44ad6bdc83c02a9ac6f6e50168ea01a68ef36777))
+* **collages:** hide selection-mode actions immediately ([744bc52](https://github.com/RouHim/turbo-pix/commit/744bc5250c6ab69340e66a45a438b399455cb4f6))
+
 ## [2.61.1](https://github.com/RouHim/turbo-pix/compare/2.61.0...2.61.1) (2026-11-24)
 
 ### Performance Improvements

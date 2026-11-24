@@ -1,3 +1,9 @@
+## [2.61.1](https://github.com/RouHim/turbo-pix/compare/2.61.0...2.61.1) (2026-11-24)
+
+### Performance Improvements
+
+* **ort:** cut face and text inference latency ([#110](https://github.com/RouHim/turbo-pix/issues/110)) ([76f89d3](https://github.com/RouHim/turbo-pix/commit/76f89d3bedc238f70432c3ea16ef86c8c898b048))
+
 # [2.61.0](https://github.com/RouHim/turbo-pix/compare/2.60.1...2.61.0) (2026-11-24)
 
 ### Features

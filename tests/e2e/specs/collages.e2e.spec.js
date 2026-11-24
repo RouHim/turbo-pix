@@ -193,4 +193,58 @@ test.describe('Collages', () => {
       await page.unroute('**/api/collages/*/accept', acceptRouteHandler);
     }
   });
+
+  test('should keep accept/reject controls usable on a phone viewport', async ({ page }) => {
+    await TestHelpers.setMobileViewport(page);
+    // The nav lives in the off-canvas drawer at this width, so deep-link
+    // instead of clicking the sidebar entry.
+    await TestHelpers.goto(page, '/collages');
+    await waitForCollagesOrEmpty(page);
+
+    const collageCards = page.locator(TestHelpers.selectors.photoCardAny);
+    if ((await collageCards.count()) === 0) {
+      test.skip('No pending collages available for mobile layout check');
+    }
+
+    const card = collageCards.first();
+    const acceptBtn = page.locator(TestHelpers.selectors.action('accept-collage')).first();
+    const rejectBtn = page.locator(TestHelpers.selectors.action('reject-collage')).first();
+    const meta = card.locator('.photo-card-meta');
+    const actions = card.locator('.collage-actions');
+
+    const cardBox = await card.boundingBox();
+    const acceptBox = await acceptBtn.boundingBox();
+    const rejectBox = await rejectBtn.boundingBox();
+    const metaBox = await meta.boundingBox();
+    const actionsBox = await actions.boundingBox();
+
+    expect(cardBox).not.toBeNull();
+    expect(acceptBox).not.toBeNull();
+    expect(rejectBox).not.toBeNull();
+    expect(metaBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+
+    // 44px touch targets, both inside the tile: a 3-column photo tile is too
+    // narrow for desktop-sized (56px) controls.
+    expect(acceptBox.width).toBeGreaterThanOrEqual(44);
+    expect(acceptBox.height).toBeGreaterThanOrEqual(44);
+    expect(rejectBox.width).toBeGreaterThanOrEqual(44);
+    expect(rejectBox.height).toBeGreaterThanOrEqual(44);
+    expect(acceptBox.x).toBeGreaterThanOrEqual(cardBox.x);
+    expect(rejectBox.x + rejectBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+
+    // The controls must win the hit test against the full-card open layer.
+    for (const action of ['accept-collage', 'reject-collage']) {
+      const box = action === 'accept-collage' ? acceptBox : rejectBox;
+      const hit = await page.evaluate(
+        ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-action]')?.dataset.action,
+        { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+      );
+      expect(hit).toBe(action);
+    }
+
+    // The caption keeps its own band: the photo count is never painted under
+    // the buttons.
+    expect(actionsBox.y).toBeGreaterThanOrEqual(metaBox.y + metaBox.height);
+  });
 });

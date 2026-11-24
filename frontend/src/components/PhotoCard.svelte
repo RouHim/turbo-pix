@@ -391,9 +391,9 @@
     flex-direction: column;
     justify-content: flex-end;
     padding: var(--space-5);
-    /* Keep the caption text out of the action-button band (56px + 8px) so the
-       title/meta are never painted underneath the buttons. */
-    padding-bottom: calc(var(--button-size) + var(--space-4));
+    /* Keep the caption text out of the action-button band (56px + 8px + air)
+       so the title/meta are never painted underneath the buttons. */
+    padding-bottom: calc(56px + var(--space-4));
     backdrop-filter: blur(1px);
     -webkit-backdrop-filter: blur(1px);
     z-index: 2;

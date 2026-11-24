@@ -2,7 +2,12 @@
   import { onDestroy, onMount } from 'svelte';
 
   import { firstVisibleCardIndex } from '../lib/dateScrubber.js';
-  import { formatHintDate, isDateSort, nextHintVisibility } from '../lib/dateHint.js';
+  import {
+    formatHintDate,
+    isDateSort,
+    isPhotoGridRoute,
+    nextHintVisibility,
+  } from '../lib/dateHint.js';
   import { getLocale, t } from '../lib/i18n.js';
   import { route } from '../lib/router.svelte.js';
   import { appState, photoGridState } from '../lib/state.svelte.js';
@@ -25,10 +30,12 @@
   let lastTakenAt;
   let lastLocale;
 
-  const dateSorted = $derived(isDateSort(route.sort) && !photoGridState.semanticSearchMode);
+  const chronological = $derived(
+    isPhotoGridRoute(route) && isDateSort(route.sort) && !photoGridState.semanticSearchMode
+  );
   const visible = $derived(
     minimized &&
-      dateSorted &&
+      chronological &&
       gridPresent &&
       label !== '' &&
       !appState.dateRailBubbleVisible &&
@@ -41,6 +48,7 @@
       route.view,
       route.query ?? '',
       route.album ?? 0,
+      route.person ?? 0,
       route.sort,
       route.year ?? '',
       route.month ?? '',
@@ -127,7 +135,7 @@
   });
 
   onMount(() => {
-    scrollEl = document.querySelector('[data-testid="main-content"]');
+    scrollEl = document.querySelector('.main-content');
     scrollEl?.addEventListener('scroll', scheduleMeasure, { passive: true });
     window.addEventListener('resize', scheduleMeasure);
     scheduleMeasure();

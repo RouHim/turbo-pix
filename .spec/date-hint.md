@@ -33,7 +33,7 @@ A user scrolls through All Photos on desktop or mobile.
 
 **Acceptance**
 
-1. Given the hint is visible and the date rail is present, then the rail's month caption is paused (hidden, not focusable); it returns when the hint hides.
+1. Given the hint is visible and the date rail is present, then the rail's month caption is paused (hidden, not focusable) until the hint's 0.3s exit completes; it returns on rail hover or after the hint hides.
 2. Given the rail bubble is visible (hover, drag, keyboard focus, pending jump, or failure), then the hint hides. It returns when the bubble closes.
 3. Given the top earlier-loading dot-wave is showing, then the hint hides for that transient state.
 4. Given the mobile drawer or the mobile search panel is open, then the hint hides; it returns when they close.

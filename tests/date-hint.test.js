@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { firstVisibleCardIndex } from '../frontend/src/lib/dateScrubber.js';
-import { formatHintDate, isDateSort, nextHintVisibility } from '../frontend/src/lib/dateHint.js';
+import {
+  formatHintDate,
+  isDateSort,
+  isPhotoGridRoute,
+  nextHintVisibility,
+} from '../frontend/src/lib/dateHint.js';
 
 const card = (bottom, top = 0) => ({ getBoundingClientRect: () => ({ top, bottom }) });
 
@@ -21,6 +26,22 @@ test('isDateSort accepts only the chronological taken_at sorts', () => {
   assert.equal(isDateSort('name_asc'), false);
   assert.equal(isDateSort('size_desc'), false);
   assert.equal(isDateSort(null), false);
+});
+
+test('isPhotoGridRoute matches the routes that render PhotoGrid', () => {
+  for (const view of ['all', 'favorites', 'videos']) {
+    assert.equal(isPhotoGridRoute({ view }), true);
+  }
+  for (const view of ['collages', 'housekeeping', 'map']) {
+    assert.equal(isPhotoGridRoute({ view }), false);
+  }
+  assert.equal(isPhotoGridRoute({ view: 'collages', album: 5 }), false);
+  assert.equal(isPhotoGridRoute({ view: 'albums' }), false);
+  assert.equal(isPhotoGridRoute({ view: 'albums', album: 5 }), true);
+  assert.equal(isPhotoGridRoute({ view: 'albums', query: 'legacy' }), true);
+  assert.equal(isPhotoGridRoute({ view: 'people' }), false);
+  assert.equal(isPhotoGridRoute({ view: 'people', person: 3 }), true);
+  assert.equal(isPhotoGridRoute({ view: 'people', query: 'legacy' }), true);
 });
 
 test('formatHintDate renders a long localized date and rejects missing values', () => {

@@ -418,13 +418,16 @@
     line-height: 1.1;
     text-align: center;
     pointer-events: auto;
-    transition: opacity var(--transition-fast);
+    transition:
+      opacity var(--transition-fast) 0.3s,
+      visibility 0s 0.3s;
   }
 
   .date-caption.caption-paused {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
+    transition: none;
   }
 
   .date-caption:focus-visible {

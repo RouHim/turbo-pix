@@ -111,7 +111,6 @@
 
   onDestroy(() => {
     appState.dateRailLoading = false;
-    appState.dateRailBubbleVisible = false;
   });
 
   function setRailBubbleVisible(visible) {

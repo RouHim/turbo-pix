@@ -233,6 +233,16 @@ test.describe('Collages', () => {
     expect(acceptBox.x).toBeGreaterThanOrEqual(cardBox.x);
     expect(rejectBox.x + rejectBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
 
+    // The controls must win the hit test against the full-card open layer.
+    for (const action of ['accept-collage', 'reject-collage']) {
+      const box = action === 'accept-collage' ? acceptBox : rejectBox;
+      const hit = await page.evaluate(
+        ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-action]')?.dataset.action,
+        { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+      );
+      expect(hit).toBe(action);
+    }
+
     // The caption keeps its own band: the photo count is never painted under
     // the buttons.
     expect(actionsBox.y).toBeGreaterThanOrEqual(metaBox.y + metaBox.height);

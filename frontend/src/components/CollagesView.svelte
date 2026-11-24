@@ -392,7 +392,9 @@
 
   /* Selection mode hides the controls but keeps their band, so entering
      selection does not reflow every card (the compact card is static flow). */
-  .collage-actions.actions-hidden {
+  .collage-actions.actions-hidden,
+  .collage-actions.actions-hidden .card-action-btn {
+    transition: none;
     visibility: hidden;
   }
 

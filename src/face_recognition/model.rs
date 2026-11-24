@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ort::environment::Environment;
+use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 
 use crate::model_files::verify_sha256;
@@ -102,13 +103,28 @@ pub fn load_models(paths: &FaceModelPaths, threads: usize) -> Result<FaceModels>
 
     let detector = Session::builder(&environment)
         .map_err(|error| anyhow::anyhow!("ORT detector builder: {error}"))?
+        .with_flush_to_zero()
+        .map_err(|error| anyhow::anyhow!("ORT detector flush-to-zero: {error}"))?
         .with_intra_threads(threads)
         .map_err(|error| anyhow::anyhow!("ORT detector threads: {error}"))?
         .commit_from_file(&paths.detector)
         .map_err(|error| anyhow::anyhow!("ORT detector load: {error}"))?;
 
+    // Level 3's NCHWc layout transform costs 25% on this model (712 ms vs
+    // 533 ms for one 112x112 inference); level 2 keeps the Conv+BN fusions.
+    // The detector is the opposite case and must stay on the default level.
+    //
+    // Flush-to-zero is the bigger lever here: ArcFace's activations reach the
+    // subnormal range and cost 4x on x86 without it (528 ms -> 131 ms).
+    // Every session sets it, not just this one: ORT applies the flag to the
+    // process-wide MXCSR from the first session created, and each session's
+    // own thread pool applies it from its own options.
     let recognizer = Session::builder(&environment)
         .map_err(|error| anyhow::anyhow!("ORT recognizer builder: {error}"))?
+        .with_optimization_level(GraphOptimizationLevel::Level2)
+        .map_err(|error| anyhow::anyhow!("ORT recognizer optimization level: {error}"))?
+        .with_flush_to_zero()
+        .map_err(|error| anyhow::anyhow!("ORT recognizer flush-to-zero: {error}"))?
         .with_intra_threads(threads)
         .map_err(|error| anyhow::anyhow!("ORT recognizer threads: {error}"))?
         .commit_from_file(&paths.recognizer)

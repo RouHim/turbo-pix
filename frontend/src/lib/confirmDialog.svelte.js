@@ -9,6 +9,7 @@ import { t } from './i18n.js';
  */
 export const confirmState = $state({
   open: false,
+  title: '',
   message: '',
   confirmLabel: '',
   danger: true,
@@ -22,6 +23,7 @@ let resolveFn = null;
 /**
  * @param {string} message
  * @param {{
+ *   title?: string,
  *   confirmLabel?: string,
  *   danger?: boolean,
  *   slide?: { onConfirm?: () => Promise<void> | void },
@@ -32,6 +34,7 @@ export function askConfirm(message, options = {}) {
   // A second request supersedes the first: the previous caller resolves false.
   if (resolveFn) resolveFn(false);
   confirmState.requestId += 1;
+  confirmState.title = options.title ?? '';
   confirmState.message = message;
   confirmState.confirmLabel = options.confirmLabel ?? get(t)('ui.delete', { default: 'Delete' });
   confirmState.danger = options.danger ?? true;
@@ -50,5 +53,6 @@ export function resolveConfirm(answer) {
   // The destructive callback belongs to this request only; a closed dialog
   // must not be able to replay it from a stale pointer release.
   confirmState.onConfirm = null;
+  confirmState.title = '';
   fn?.(answer);
 }

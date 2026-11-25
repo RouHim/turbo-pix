@@ -1968,6 +1968,7 @@
           'Are you sure you want to permanently delete this photo? This action cannot be undone.',
       }),
       {
+        title: get(t)('ui.delete_photo', { default: 'Delete Photo' }),
         confirmLabel: get(t)('ui.delete_photo', { default: 'Delete Photo' }),
         slide: {
           onConfirm: async () => {
@@ -1980,8 +1981,10 @@
               });
               const match = error.message?.match(/HTTP \d+: (.+)/);
               if (match?.[1]) msg = translateError(match[1]);
-              addToast(get(t)('notifications.error', { default: 'Error' }), msg, 'error', 5000);
-              throw error;
+              logger?.error('Delete photo failed', error, { context: 'PhotoViewer' });
+              // The dialog stays open on failure and owns the feedback; a toast
+              // would be painted behind its top layer.
+              throw new Error(msg, { cause: error });
             } finally {
               isLoading = false;
             }

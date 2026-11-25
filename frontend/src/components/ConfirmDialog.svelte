@@ -7,6 +7,7 @@
   let cancelEl = $state(null);
   let sliderEl = $state(null);
   let pending = $state(false);
+  let errorMessage = $state('');
 
   $effect(() => {
     if (confirmState.open) {
@@ -25,12 +26,14 @@
   $effect(() => {
     if (!confirmState.open) {
       pending = false;
+      errorMessage = '';
       shownRequest = 0;
       return;
     }
     if (shownRequest !== confirmState.requestId) {
       shownRequest = confirmState.requestId;
       pending = false;
+      errorMessage = '';
       sliderEl?.reset();
     }
     cancelEl?.focus();
@@ -44,13 +47,20 @@
     if (pending || !confirmState.open) return;
     const requestId = confirmState.requestId;
     pending = true;
+    errorMessage = '';
     try {
       await confirmState.onConfirm?.();
       if (confirmState.requestId !== requestId || !confirmState.open) return;
       resolveConfirm(true);
-    } catch {
+    } catch (error) {
       if (confirmState.requestId !== requestId || !confirmState.open) return;
       pending = false;
+      // The dialog stays open, so the failure belongs here: a toast would be
+      // painted behind the modal's top layer.
+      errorMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : $t('ui.action_failed', { default: 'Action failed' });
       sliderEl?.reset();
       sliderEl?.focus();
     }
@@ -94,7 +104,8 @@
 <dialog
   class="confirm-dialog"
   bind:this={dialogEl}
-  aria-labelledby="confirm-dialog-message"
+  aria-labelledby={confirmState.title ? 'confirm-dialog-title' : 'confirm-dialog-message'}
+  aria-describedby={confirmState.title ? 'confirm-dialog-message' : undefined}
   aria-busy={pending}
   data-testid="confirm-dialog"
   onkeydown={onDialogKeydown}
@@ -117,27 +128,35 @@
   }}
   onclose={() => {
     pending = false;
+    errorMessage = '';
     // The dialog can close mid-drag (Escape). Drop the captured travel so a
     // later pointerup cannot arm or confirm anything.
     sliderEl?.reset();
     resolveConfirm(false);
   }}
 >
+  {#if confirmState.title}
+    <h2 id="confirm-dialog-title" class="confirm-title">{confirmState.title}</h2>
+  {/if}
   <p id="confirm-dialog-message" class="confirm-message" data-testid="confirm-dialog-message">
     {confirmState.message}
   </p>
+  {#if errorMessage}
+    <p class="confirm-error" role="alert" data-testid="confirm-dialog-error">{errorMessage}</p>
+  {/if}
   {#if confirmState.slide}
     <SlideToConfirm
       bind:this={sliderEl}
       label={$t('ui.slide_to_delete', { default: 'Slide to delete' })}
       armedLabel={$t('ui.release_to_delete', { default: 'Release to delete' })}
+      keyboardArmedLabel={$t('ui.press_enter_to_delete', { default: 'Press Enter to delete' })}
       busyLabel={$t('ui.deleting', { default: 'Deleting…' })}
       ariaLabel={confirmState.confirmLabel}
       {pending}
       onconfirm={handleSlideConfirm}
     />
   {/if}
-  <div class="confirm-actions" class:slide-actions={confirmState.slide}>
+  <div class="confirm-actions">
     <!-- Cancel stays focused first: native <dialog> focuses the first focusable
          element, and the safe choice is the right default for a destructive
          question. In slide mode Tab wraps from here to the slider. -->
@@ -181,20 +200,37 @@
     background: oklch(0% 0 0deg / 40%);
   }
 
+  .confirm-title {
+    margin: 0 0 var(--space-2);
+    font-size: var(--font-2xl);
+    font-weight: var(--font-semibold);
+    line-height: var(--leading-tight);
+  }
+
   .confirm-message {
     margin: 0 0 var(--space-4);
     font-size: var(--font-md);
     line-height: var(--leading-normal);
   }
 
+  .confirm-error {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in oklch, var(--color-danger) 10%, transparent);
+    color: var(--color-danger-ink);
+    font-size: var(--font-sm);
+    line-height: var(--leading-normal);
+  }
+
   .confirm-actions {
     display: flex;
     justify-content: flex-end;
-    gap: var(--space-2);
-  }
-
-  .confirm-actions.slide-actions {
-    margin-top: var(--space-2);
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--divider-color);
   }
 
   .confirm-cancel,
@@ -205,6 +241,8 @@
     background: var(--surface-elevated);
     color: var(--text-primary);
     font-family: var(--font-body);
+    font-size: var(--font-base);
+    min-height: var(--button-size);
     cursor: pointer;
   }
 
@@ -236,12 +274,5 @@
   .confirm-accept:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 2px;
-  }
-
-  @media (max-width: 640px) {
-    .confirm-cancel,
-    .confirm-accept {
-      min-height: var(--button-size);
-    }
   }
 </style>

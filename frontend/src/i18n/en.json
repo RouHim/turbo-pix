@@ -90,6 +90,7 @@
     "date_scrubber_jump_to": "Jump to {period}…",
     "date_scrubber_retry": "Retry",
     "date_scrubber_newest": "Back to newest",
+    "no_date": "No date",
     "timeline_reset": "Reset timeline",
     "timeline_no_photos_month": "No photos",
     "timeline_overview_label": "Timeline overview",

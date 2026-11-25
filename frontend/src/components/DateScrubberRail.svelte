@@ -2,7 +2,7 @@
   // The quiet date rail: a paper margin carrying decade ticks, a
   // count-proportional month track, a fixed pill thumb and a stage bubble.
   // Navigation only — it never writes the route filter.
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
@@ -17,7 +17,9 @@
   /** @type {{ model: any, descending: boolean, activeMonth: number|null,
    *   pending: boolean, failedMonth: number|null,
    *   onScrub: (index: number) => void, onScrubEnd: () => void,
-   *   onCancel: () => void, onJump: (index: number) => void }} */
+   *   onCancel: () => void, onJump: (index: number) => void,
+   *   captionPaused?: boolean,
+   *   onBubbleChange?: ((visible: boolean) => void)|null }} */
   const {
     model,
     descending,
@@ -28,6 +30,8 @@
     onScrubEnd,
     onCancel,
     onJump,
+    captionPaused = false,
+    onBubbleChange = null,
   } = $props();
 
   const activeLocale = $derived($locale || 'en');
@@ -93,6 +97,16 @@
   const bubbleMonth = $derived(
     failedMonth ?? (pending || dragging ? activeMonth : (hoveredMonth ?? activeMonth))
   );
+  const bubbleVisible = $derived(
+    (hovered || dragging || focused || pending || failedMonth !== null) && bubbleMonth !== null
+  );
+
+  // The date hint yields to the bubble; the callback lets its parent pause it.
+  $effect(() => {
+    onBubbleChange?.(bubbleVisible);
+  });
+
+  onDestroy(() => onBubbleChange?.(false));
   const jumpLabel = $derived(
     activeMonth === null
       ? ''
@@ -264,6 +278,7 @@
   <button
     type="button"
     class="date-caption"
+    class:caption-paused={captionPaused}
     data-testid="date-caption"
     aria-label={captionLabel}
     title={newestLabel}
@@ -344,7 +359,7 @@
     </div>
   </div>
 
-  {#if (hovered || dragging || focused || pending || failedMonth !== null) && bubbleMonth !== null}
+  {#if bubbleVisible}
     <div class="date-bubble" style:top={`${bubbleTop}px`} data-testid="date-bubble">
       {#if failedMonth !== null}
         <span class="date-bubble-month">{periodLabel(failedMonth)}</span>
@@ -403,6 +418,16 @@
     line-height: 1.1;
     text-align: center;
     pointer-events: auto;
+    transition:
+      opacity var(--transition-fast) 0.3s,
+      visibility 0s 0.3s;
+  }
+
+  .date-caption.caption-paused {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: none;
   }
 
   .date-caption:focus-visible {

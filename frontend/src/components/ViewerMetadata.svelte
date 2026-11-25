@@ -584,6 +584,7 @@
     color: var(--text-primary);
     font-size: var(--font-base);
     font-weight: var(--font-medium);
+    font-variant-numeric: tabular-nums;
     overflow-wrap: break-word;
     /* A flex item may not shrink below its min-content width, and a file path
        has no break opportunity to lower it — so the value box grew past the

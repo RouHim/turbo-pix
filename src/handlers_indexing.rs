@@ -267,7 +267,6 @@ mod tests {
                 face_recognition: Arc::new(NoopFaceRecognition),
             },
             temp_dir.path().to_path_buf(),
-            "en".to_string(),
         );
 
         let routes = build_indexing_routes(scheduler.clone(), db_pool).recover(handle_rejection);

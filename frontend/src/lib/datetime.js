@@ -5,6 +5,10 @@
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const FORMATTERS = new Map();
+// Authored date voice: an abbreviated month keeps the contact-sheet register
+// in both locales (DE `4. Nov. 2026`, EN `Nov 4, 2026`) instead of CLDR's
+// numeric German medium date (`04.11.2026`).
+const DATE_FIELDS = Object.freeze({ year: 'numeric', month: 'short', day: 'numeric' });
 
 /**
  * Creating an `Intl.DateTimeFormat` is expensive; the grid asks for the same
@@ -59,7 +63,7 @@ function toCalendarDate(value) {
 export function formatDate(value, locale = 'en') {
   const date = toDate(value);
   if (!date) return '';
-  return getFormatter(locale, 'date', { dateStyle: 'medium' }).format(date);
+  return getFormatter(locale, 'date', DATE_FIELDS).format(date);
 }
 
 /**
@@ -85,8 +89,9 @@ export function formatDateTime(value, locale = 'en') {
   const date = toDate(value);
   if (!date) return '';
   return getFormatter(locale, 'date-time', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    ...DATE_FIELDS,
+    hour: locale === 'de' ? '2-digit' : 'numeric',
+    minute: '2-digit',
   }).format(date);
 }
 

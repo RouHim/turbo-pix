@@ -203,11 +203,10 @@ pub async fn get_collage_image(id: i64, db_pool: DbPool) -> Result<impl Reply, R
 pub async fn generate_collages_manual(
     db_pool: DbPool,
     data_path: PathBuf,
-    locale: String,
 ) -> Result<impl Reply, Rejection> {
     info!("Manual collage generation triggered");
 
-    match collage_generator::generate_collages(&db_pool, &data_path, &locale).await {
+    match collage_generator::generate_collages(&db_pool, &data_path).await {
         Ok(count) => {
             info!(
                 "Manual collage generation completed: {} collages created",
@@ -232,7 +231,6 @@ pub async fn generate_collages_manual(
 pub fn build_collage_routes(
     db_pool: DbPool,
     data_path: PathBuf,
-    locale: String,
     semantic_search: Arc<dyn SemanticSearch>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let list_pending = warp::path!("api" / "collages" / "pending")
@@ -247,11 +245,10 @@ pub fn build_collage_routes(
 
     let generate = {
         let data_path = data_path.clone();
-        let locale = locale.clone();
         warp::path!("api" / "collages" / "generate")
             .and(warp::post())
             .and(with_db(db_pool.clone()))
-            .map(move |db_pool| (db_pool, data_path.clone(), locale.clone()))
+            .map(move |db_pool| (db_pool, data_path.clone()))
             .untuple_one()
             .and_then(generate_collages_manual)
     };
@@ -318,8 +315,7 @@ mod tests {
         data_path: PathBuf,
         semantic_search: Arc<dyn SemanticSearch>,
     ) -> impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone {
-        build_collage_routes(db_pool, data_path, "en".to_string(), semantic_search)
-            .recover(handle_rejection)
+        build_collage_routes(db_pool, data_path, semantic_search).recover(handle_rejection)
     }
 
     /// Seed a pending collage backed by a real staging file; returns its id.

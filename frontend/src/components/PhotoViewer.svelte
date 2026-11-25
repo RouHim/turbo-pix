@@ -2878,7 +2878,8 @@
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     color: rgb(255 255 255 / 92%);
-    font-size: var(--font-xs);
+    font-size: var(--font-sm);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

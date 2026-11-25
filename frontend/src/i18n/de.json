@@ -186,6 +186,8 @@
       "edit_modal_title": "Foto-Metadaten bearbeiten",
       "edit_modal_title_video": "Video-Metadaten bearbeiten",
       "edit_date_label": "Aufnahmedatum",
+      "edit_date_preview": "App-Anzeige: {date}",
+      "edit_date_browser_hint": "Das Feld folgt dem Datumsformat deines Browsers.",
       "edit_latitude_label": "Breitengrad",
       "edit_longitude_label": "Längengrad",
       "edit_cancel": "Abbrechen",

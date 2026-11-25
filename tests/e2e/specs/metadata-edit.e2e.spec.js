@@ -187,6 +187,7 @@ test.describe('Metadata edit', () => {
       await openModal(page);
       originalLocalDate = await modalField(page, 'Date Taken').inputValue();
       expect(originalLocalDate).toBeTruthy();
+      await expect(page.locator('#edit-taken-at-preview')).toContainText('App displays:');
       await closeModal(page);
 
       // GIVEN the timeline the mounted TimelineSlider renders: a server-side

@@ -37,7 +37,7 @@
           onclick={() => onOpenPhoto(photo)}
         >
           <img src={getThumbnailUrl(photo, 'small')} alt="" loading="lazy" decoding="async" />
-          <span>
+          <span class="map-popup-date">
             {photo.taken_at
               ? formatDateTime(photo.taken_at, getLocale())
               : $t('ui.unknown', { default: 'Unknown' })}
@@ -101,5 +101,10 @@
     height: var(--space-12);
     border-radius: var(--radius-sm);
     object-fit: cover;
+  }
+
+  .map-popup-date {
+    font-size: var(--font-sm);
+    font-variant-numeric: tabular-nums;
   }
 </style>

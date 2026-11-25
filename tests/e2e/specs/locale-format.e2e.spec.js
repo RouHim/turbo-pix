@@ -28,12 +28,12 @@ test.describe('locale-driven date formatting', () => {
 
   test('renders German dates on cards and in the viewer', async ({ page }) => {
     const firstCard = page.locator(TestHelpers.selectors.photoCardAny).first();
-    await expect(firstCard.locator('.photo-card-meta')).toHaveText(/^\d{2}\.\d{2}\.\d{4}$/);
+    await expect(firstCard.locator('.photo-card-meta')).toHaveText(/^\d{1,2}\. \p{L}+\.? \d{4}$/u);
 
     await firstCard.click();
     await TestHelpers.verifyViewerOpen(page);
     await expect(page.locator('[data-viewer-date]')).toHaveText(
-      /^\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}$/
+      /^\d{1,2}\. \p{L}+\.? \d{4}, \d{2}:\d{2}$/u
     );
   });
 

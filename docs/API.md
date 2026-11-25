@@ -831,10 +831,9 @@ Body: `{ "hashes": ["…"] }` — a `DELETE` **with** a JSON body (the 1 MiB cap
 A collage is
 `{ "id": 7, "date": "2024-07-04", "file_path": "…", "thumbnail_path": "…|null", "photo_count": 5, "photo_hashes": ["…"], "accepted_at": "…|null", "rejected_at": "…|null", "created_at": "…" }`.
 
-The rendered image embeds the date label in the configured locale. The collage
-signature does not include the locale, so changing `TURBO_PIX_LOCALE` leaves
-already generated images untouched; clear the collage data to regenerate them
-with the new label.
+Collage images carry no baked date label; the Collages view renders the
+localized caption, so a locale change updates every visible date. Accepted
+collage images remain valid across locale changes.
 
 ### `GET /api/collages/pending`
 

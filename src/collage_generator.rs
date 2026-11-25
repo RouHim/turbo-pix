@@ -2,12 +2,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Locale, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
-use rusttype::{point, Font, Scale};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Row};
@@ -256,7 +255,6 @@ const MAX_PHOTOS_PER_COLLAGE: usize = 6;
 const COLLAGE_WIDTH: u32 = 3840;
 const COLLAGE_HEIGHT: u32 = 2160;
 const COLLAGE_PADDING: u32 = 60;
-const COLLAGE_HEADER_HEIGHT: u32 = 240;
 const COLLAGE_GUTTER: u32 = 20;
 const TEMPLATE_SCORE_TIE_THRESHOLD: f32 = 0.04;
 const FRAME_THICKNESS: u32 = 4;
@@ -327,13 +325,12 @@ impl CollageLayout {
         // Select the best template based on photo characteristics
         let template = select_best_template(photo_count, &photo_infos);
 
-        // Use padded content area to leave room for header and framing
+        // Use the padded canvas; the date lives in the UI caption, not in the JPEG.
         let content_width = COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2);
-        let content_height =
-            COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING * 2);
+        let content_height = COLLAGE_HEIGHT.saturating_sub(COLLAGE_PADDING * 2);
 
         let start_x = COLLAGE_PADDING;
-        let start_y = COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING;
+        let start_y = COLLAGE_PADDING;
 
         // Generate cells using the selected template
         let photo_cells =
@@ -687,7 +684,7 @@ fn score_template(template: LayoutTemplate, photo_infos: &[PhotoInfo]) -> f32 {
     let cells = generate_template_cells(
         template,
         COLLAGE_WIDTH.saturating_sub(COLLAGE_PADDING * 2),
-        COLLAGE_HEIGHT.saturating_sub(COLLAGE_HEADER_HEIGHT + COLLAGE_PADDING * 2),
+        COLLAGE_HEIGHT.saturating_sub(COLLAGE_PADDING * 2),
         0,
         0,
     );
@@ -875,82 +872,6 @@ fn stroke_rect(canvas: &mut RgbaImage, rect: &Rect, thickness: u32, color: Rgba<
     }
 }
 
-fn format_date_label(date_str: &str, locale: &str) -> String {
-    let date = match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        Ok(date) => date,
-        Err(_) => return date_str.to_string(),
-    };
-
-    let chrono_locale = match locale {
-        "de" => Locale::de_DE,
-        _ => Locale::en_US,
-    };
-    let format = if locale == "de" {
-        "%A, %-d. %B %Y"
-    } else {
-        "%A, %B %-d, %Y"
-    };
-
-    date.format_localized(format, chrono_locale).to_string()
-}
-
-fn load_font() -> Result<Font<'static>, Box<dyn std::error::Error>> {
-    let candidates: &[(&[u8], &str)] = &[
-        (
-            include_bytes!("../assets/fonts/Questrial-Regular.ttf"),
-            "Questrial Regular",
-        ),
-        (
-            include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
-            "JetBrains Mono Regular",
-        ),
-    ];
-
-    for (bytes, name) in candidates {
-        if let Some(font) = Font::try_from_bytes(bytes) {
-            info!("Loaded collage font: {}", name);
-            return Ok(font);
-        } else {
-            error!("Failed to parse collage font candidate: {}", name);
-        }
-    }
-
-    Err("No collage font could be loaded".into())
-}
-
-fn draw_text(
-    canvas: &mut RgbaImage,
-    text: &str,
-    font: &Font,
-    scale: Scale,
-    x: u32,
-    y: u32,
-    color: Rgba<u8>,
-) {
-    let v_metrics = font.v_metrics(scale);
-    let glyphs: Vec<_> = font
-        .layout(text, scale, point(0.0, v_metrics.ascent))
-        .collect();
-
-    for glyph in glyphs {
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            glyph.draw(|gx, gy, gv| {
-                let px = x as i32 + gx as i32 + bb.min.x;
-                let py = y as i32 + gy as i32 + bb.min.y;
-
-                if px < 0 || py < 0 || px >= canvas.width() as i32 || py >= canvas.height() as i32 {
-                    return;
-                }
-
-                let alpha = (gv * color[3] as f32).round() as u8;
-                let overlay = Rgba([color[0], color[1], color[2], alpha]);
-                let pixel = canvas.get_pixel_mut(px as u32, py as u32);
-                blend_pixel(pixel, &overlay);
-            });
-        }
-    }
-}
-
 /// Find photo clusters (dates with ≥10 photos) in the last 30 days.
 ///
 /// The dates live on the row (the derived copy the scan writes), and each is
@@ -998,25 +919,10 @@ async fn find_photo_clusters(
 fn create_collage_image(
     photos: &[&Photo],
     layout: &CollageLayout,
-    date_label: &str,
-    locale: &str,
 ) -> Result<RgbaImage, Box<dyn std::error::Error>> {
     // Unified clean background - single color, no gradients or panels
     let mut canvas: RgbaImage =
         ImageBuffer::from_pixel(COLLAGE_WIDTH, COLLAGE_HEIGHT, Rgba([248, 250, 252, 255]));
-
-    let font = load_font().map_err(|e| format!("Failed to load collage font: {}", e))?;
-
-    // Draw date label at top with padding
-    draw_text(
-        &mut canvas,
-        &format_date_label(date_label, locale),
-        &font,
-        Scale { x: 140.0, y: 140.0 },
-        COLLAGE_PADDING + 20,
-        COLLAGE_PADDING + 20,
-        Rgba([40, 50, 65, 255]),
-    );
 
     for (idx, photo) in photos.iter().take(layout.photo_count).enumerate() {
         let cell = &layout.photo_cells[idx];
@@ -1347,7 +1253,6 @@ fn generate_collage_thumbnail(
 pub async fn generate_collages(
     pool: &DbPool,
     data_path: &Path,
-    locale: &str,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     info!("Starting collage generation...");
 
@@ -1399,7 +1304,7 @@ pub async fn generate_collages(
             let layout = CollageLayout::calculate(chunk);
 
             // Create collage image
-            let collage_img = match create_collage_image(chunk, &layout, &date_str, locale) {
+            let collage_img = match create_collage_image(chunk, &layout) {
                 Ok(img) => img,
                 Err(e) => {
                     error!(
@@ -1710,26 +1615,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_format_date_label_matches_frontend_intl() {
-        assert_eq!(
-            format_date_label("2026-11-04", "en"),
-            "Wednesday, November 4, 2026"
-        );
-        assert_eq!(
-            format_date_label("2026-11-04", "de"),
-            "Mittwoch, 4. November 2026"
-        );
-        assert_eq!(
-            format_date_label("2026-11-24", "en"),
-            "Tuesday, November 24, 2026"
-        );
-        assert_eq!(
-            format_date_label("2026-11-24", "de"),
-            "Dienstag, 24. November 2026"
-        );
-    }
-
     fn write_test_image(path: &Path) {
         let img =
             DynamicImage::ImageRgba8(ImageBuffer::from_pixel(8, 8, Rgba([120, 80, 200, 255])));
@@ -1986,9 +1871,7 @@ mod tests {
         .await
         .unwrap();
 
-        let _ = generate_collages(&pool, temp_dir.path(), "en")
-            .await
-            .unwrap();
+        let _ = generate_collages(&pool, temp_dir.path()).await.unwrap();
 
         let remaining = Collage::list_pending(&pool).await.unwrap();
         assert_eq!(remaining.len(), 1);
@@ -2049,9 +1932,7 @@ mod tests {
             insert_photo(&pool, &photo_path, hash_seed, taken_at).await;
         }
 
-        let generated = generate_collages(&pool, temp_dir.path(), "en")
-            .await
-            .unwrap();
+        let generated = generate_collages(&pool, temp_dir.path()).await.unwrap();
         assert_eq!(generated, 2);
 
         let pending = Collage::list_pending(&pool).await.unwrap();
@@ -2063,9 +1944,7 @@ mod tests {
         reject_collage(&pool, collage_id).await.unwrap();
         assert!(!Path::new(&rejected_file_path).exists());
 
-        let regenerated = generate_collages(&pool, temp_dir.path(), "en")
-            .await
-            .unwrap();
+        let regenerated = generate_collages(&pool, temp_dir.path()).await.unwrap();
         assert_eq!(regenerated, 0);
 
         let pending_after = Collage::list_pending(&pool).await.unwrap();
@@ -2122,9 +2001,7 @@ mod tests {
         .await
         .unwrap();
 
-        let generated = generate_collages(&pool, temp_dir.path(), "en")
-            .await
-            .unwrap();
+        let generated = generate_collages(&pool, temp_dir.path()).await.unwrap();
 
         assert_eq!(generated, 1);
 

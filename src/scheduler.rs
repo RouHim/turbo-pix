@@ -263,7 +263,6 @@ pub struct PhotoScheduler {
     semantic_search: Arc<dyn SemanticSearch>,
     face_recognition: Arc<dyn FaceRecognition>,
     data_path: PathBuf,
-    locale: String,
     rescan_lock: Arc<Semaphore>,
     pub status: IndexingStatus,
 }
@@ -277,7 +276,6 @@ impl PhotoScheduler {
         cache_manager: CacheManager,
         pipelines: Pipelines,
         data_path: PathBuf,
-        locale: String,
     ) -> Self {
         let Pipelines {
             semantic_search,
@@ -304,7 +302,6 @@ impl PhotoScheduler {
             semantic_search,
             face_recognition,
             data_path,
-            locale,
             rescan_lock: Arc::new(Semaphore::new(1)),
             status: IndexingStatus::new(),
         }
@@ -642,9 +639,7 @@ impl PhotoScheduler {
         // Phase 4: Generate collages
         info!("Phase 4: Generating collages");
         self.status.set_phase("collages").await;
-        match collage_generator::generate_collages(&self.db_pool, &self.data_path, &self.locale)
-            .await
-        {
+        match collage_generator::generate_collages(&self.db_pool, &self.data_path).await {
             Ok(count) => info!("Phase 4 completed: {} collages generated", count),
             Err(e) => error!("Phase 4 (collage generation) failed: {}", e),
         }
@@ -734,7 +729,6 @@ mod tests {
                     face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
                 },
                 data_path,
-                "en".to_string(),
             );
 
             Self {
@@ -764,7 +758,6 @@ mod tests {
                     face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
                 },
                 data_path,
-                "en".to_string(),
             );
 
             Self {
@@ -1027,7 +1020,6 @@ mod tests {
                 face_recognition: Arc::new(crate::face_recognition::NoopFaceRecognition),
             },
             data_path,
-            "en".to_string(),
         );
 
         // Should handle errors gracefully

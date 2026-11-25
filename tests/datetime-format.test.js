@@ -13,14 +13,14 @@ test('formatDate renders a medium date per locale', () => {
   const value = new Date(2026, 10, 4, 13, 0);
 
   assert.equal(formatDate(value, 'en'), 'Nov 4, 2026');
-  assert.equal(formatDate(value, 'de'), '04.11.2026');
+  assert.equal(formatDate(value, 'de'), '4. Nov. 2026');
 });
 
 test('formatDateTime adds the short local time per locale', () => {
   const value = new Date(2026, 10, 4, 13, 0);
 
   assert.equal(formatDateTime(value, 'en'), 'Nov 4, 2026, 1:00 PM');
-  assert.equal(formatDateTime(value, 'de'), '04.11.2026, 13:00');
+  assert.equal(formatDateTime(value, 'de'), '4. Nov. 2026, 13:00');
 });
 
 test('formatWeekdayDate keeps a calendar date on its own UTC day', () => {

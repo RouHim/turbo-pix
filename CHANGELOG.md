@@ -1,3 +1,9 @@
+## [2.64.1](https://github.com/RouHim/turbo-pix/compare/2.64.0...2.64.1) (2026-11-25)
+
+### Bug Fixes
+
+* **container:** stop copying the removed assets dir ([6b66579](https://github.com/RouHim/turbo-pix/commit/6b66579708537c05195d3527b3c86952d0269afa)), closes [#116](https://github.com/RouHim/turbo-pix/issues/116)
+
 # [2.64.0](https://github.com/RouHim/turbo-pix/compare/2.63.1...2.64.0) (2026-11-25)
 
 ### Features

@@ -38,6 +38,16 @@ jobs:
       - name: Fetch static ONNX Runtime
         run: echo "ORT_LIB_PATH=$(./scripts/fetch-ort.sh --target x86_64-unknown-linux-gnu)" >> "$GITHUB_ENV"
 
+      # build.rs embeds assets/geodata.txt; clippy compiles the crate.
+      - name: Cache place dataset
+        uses: actions/cache@v4
+        with:
+          path: assets/geodata.txt
+          key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
+
+      - name: Fetch place dataset
+        run: ./scripts/fetch-geodata.sh
+
       - name: Check Rust format
         run: cargo fmt --all -- --check
 
@@ -89,6 +99,16 @@ jobs:
 
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # Before `cargo run`: build.rs embeds assets/geodata.txt and panics without it.
+      - name: Cache place dataset
+        uses: actions/cache@v4
+        with:
+          path: assets/geodata.txt
+          key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
+
+      - name: Fetch place dataset
+        run: ./scripts/fetch-geodata.sh
 
       - name: Download AI models
         env:
@@ -178,6 +198,15 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Cache place dataset
+        uses: actions/cache@v4
+        with:
+          path: assets/geodata.txt
+          key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
+
+      - name: Fetch place dataset
+        run: ./scripts/fetch-geodata.sh
+
       - name: Generate Rust coverage
         run: npm run coverage:rust
 
@@ -221,6 +250,15 @@ jobs:
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg sqlite3
+
+      - name: Cache place dataset
+        uses: actions/cache@v4
+        with:
+          path: assets/geodata.txt
+          key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
+
+      - name: Fetch place dataset
+        run: ./scripts/fetch-geodata.sh
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -333,6 +371,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Cache place dataset
+        uses: actions/cache@v4
+        with:
+          path: assets/geodata.txt
+          key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
+
+      - name: Fetch place dataset
+        run: ./scripts/fetch-geodata.sh
 
       - name: Build Alpine builder image
         run: podman build --platform ${{ matrix.platform }} -f container/rust-builder.Dockerfile -t turbo-pix-rust .

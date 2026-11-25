@@ -1,5 +1,5 @@
 <script>
-  import { t } from '../lib/i18n.js';
+  import { t, getLocale } from '../lib/i18n.js';
   import {
     formatDate,
     formatFileSize,
@@ -8,9 +8,17 @@
     isMetadataEditable,
     isVideoFile,
   } from '../lib/utils.js';
+  import { formatPlaceLabel } from '../lib/map.js';
   import Icon from './Icon.svelte';
+  import MiniMap from './MiniMap.svelte';
 
-  const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
+  const {
+    photo = null,
+    onEditMetadata = () => {},
+    onCloseSidebar = () => {},
+    onFilterByPlace = () => {},
+    onOpenMap = () => {},
+  } = $props();
 
   const showEditBtn = $derived(photo && !isCollagePhoto(photo) && isMetadataEditable(photo));
   const isVideo = $derived(photo ? isVideoFile(photo.filename) : false);
@@ -81,12 +89,6 @@
       ? `${camera.make} ${camera.model}`
       : $t('ui.unknown', { default: 'Unknown' })
   );
-  const locationText = $derived(
-    location.latitude != null && location.longitude != null
-      ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-      : $t('ui.no_location_data', { default: 'No location data' })
-  );
-
   const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
   // `flash_used` is a boolean, so its presence cannot be read as truthiness —
   // but the scanner now states every settings member explicitly and writes
@@ -105,7 +107,17 @@
       photo?.orientation ||
       settings.color_space
   );
-  const hasLocation = $derived(location.latitude != null || location.longitude != null);
+  const hasLocation = $derived(
+    location.latitude != null || location.longitude != null || Boolean(placeLabel)
+  );
+  const placeLabel = $derived(formatPlaceLabel(photo, getLocale()));
+  const hasCoordinates = $derived(location.latitude != null && location.longitude != null);
+  const placeFilterLabel = $derived(
+    $t('ui.metadata.place_filter', {
+      values: { place: placeLabel ?? '' },
+      default: 'Show all photos at {place}',
+    })
+  );
   // ONE message for the tooltip and the accessible name. A screen reader on a
   // disabled button announces the `aria-label`, not the `title`, so a
   // format-specific `title` beside a generic `aria-label` would hide the
@@ -174,10 +186,6 @@
     <div class="meta-item">
       <span class="meta-label">{$t('ui.camera', { default: 'Camera:' })}</span>
       <span id="photo-camera">{cameraText}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">{$t('ui.location', { default: 'Location:' })}</span>
-      <span id="photo-location">{locationText}</span>
     </div>
   </div>
 
@@ -345,6 +353,22 @@
         <h4 class="meta-section-title">
           {$t('ui.metadata.location_section', { default: 'Location' })}
         </h4>
+        {#if placeLabel}
+          <div class="meta-item">
+            <span class="meta-label">{$t('ui.metadata.place', { default: 'Place:' })}</span>
+            <button
+              type="button"
+              class="meta-place"
+              id="meta-place"
+              data-testid="meta-place"
+              title={placeFilterLabel}
+              aria-label={placeFilterLabel}
+              onclick={() => onFilterByPlace(location.place)}
+            >
+              {placeLabel}
+            </button>
+          </div>
+        {/if}
         <div class="meta-item">
           <span class="meta-label">{$t('ui.metadata.gps', { default: 'GPS:' })}</span><span
             id="meta-gps"
@@ -356,6 +380,9 @@
             )}</span
           >
         </div>
+        {#if hasCoordinates}
+          <MiniMap latitude={location.latitude} longitude={location.longitude} {onOpenMap} />
+        {/if}
       </div>
     {/if}
 
@@ -561,6 +588,46 @@
     min-width: 0;
     text-align: right;
     flex: 1;
+  }
+
+  /* The place name is a filter, not a value: a ghost button (surface fill,
+     hairline, 4px radius) is the design system's clickable primitive, and a
+     persistent border is the affordance a hover-only underline never gives a
+     touch user. */
+  .meta-place {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: var(--surface-color);
+    color: var(--primary-ink);
+    font: inherit;
+    font-size: var(--font-base);
+    font-weight: var(--font-medium);
+    text-align: right;
+    overflow-wrap: break-word;
+    min-width: 0;
+    flex: 1;
+    cursor: pointer;
+    transition: var(--transition-fast);
+  }
+
+  .meta-place:hover {
+    border-color: var(--primary-color);
+  }
+
+  .meta-place:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+
+  @media (pointer: coarse) {
+    .meta-place {
+      min-height: 44px;
+    }
+  }
+
+  #meta-gps {
+    font-variant-numeric: tabular-nums;
   }
 
   .btn-icon {

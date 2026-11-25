@@ -63,10 +63,65 @@ export function groupPhotosByLocation(photos) {
  */
 export function getLocationLabel(location) {
   for (const photo of location?.photos ?? []) {
-    const city = photo?.metadata?.location?.city;
-    if (typeof city === 'string' && city.trim()) return city.trim();
+    const place = photo?.metadata?.location?.place;
+    if (typeof place === 'string' && place.trim()) return place.trim();
   }
   return null;
+}
+
+/**
+ * Localized country name for an ISO-3166 alpha-2 code.
+ *
+ * Rendered by the browser's own region data, so the panel, the map and an
+ * exported label follow the UI language without a second copy of every country
+ * name in the translation files. Malformed codes, codes the runtime does not
+ * know (it answers every one of those with the same "unknown region" string)
+ * and runtimes without `Intl.DisplayNames` fall back to the code itself.
+ *
+ * @param {unknown} code
+ * @param {string} [locale]
+ * @returns {string | null}
+ */
+export function countryName(code, locale = 'en') {
+  const normalized = typeof code === 'string' ? code.trim().toUpperCase() : '';
+  if (!normalized) return null;
+  if (!/^[A-Z]{2}$/.test(normalized)) return normalized;
+  try {
+    const names = regionDisplayNames(locale);
+    const resolved = names.of(normalized);
+    if (!resolved || resolved === names.of('ZZ')) return normalized;
+    return resolved;
+  } catch {
+    return normalized;
+  }
+}
+
+/** One `Intl.DisplayNames` per locale; construction is the expensive part. */
+const regionNamesByLocale = new Map();
+
+function regionDisplayNames(locale) {
+  let names = regionNamesByLocale.get(locale);
+  if (!names) {
+    names = new Intl.DisplayNames([locale], { type: 'region' });
+    regionNamesByLocale.set(locale, names);
+  }
+  return names;
+}
+
+/**
+ * The panel label for a photo's place: the resolved `place`, with the country
+ * name appended when the dataset carries a `country_code`.
+ *
+ * @param {{ metadata?: { location?: object } } | null} photo
+ * @param {string} [locale]
+ * @returns {string | null}
+ */
+export function formatPlaceLabel(photo, locale = 'en') {
+  const location = photo?.metadata?.location;
+  const place = typeof location?.place === 'string' ? location.place.trim() : '';
+  if (!place) return null;
+  const country = countryName(location?.country_code, locale);
+  return country ? `${place}, ${country}` : place;
 }
 
 /**

@@ -236,8 +236,8 @@ test.describe('Map view', () => {
         const longitude = photo.metadata?.location?.longitude;
         return typeof latitude === 'number' && `${latitude},${longitude}` === locationKey;
       });
-      const city = match?.metadata?.location?.city;
-      if (typeof city === 'string' && city.trim()) return city.trim();
+      const place = match?.metadata?.location?.place;
+      if (typeof place === 'string' && place.trim()) return place.trim();
       const [latitude, longitude] = locationKey.split(',').map(Number);
       return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
     }, key);

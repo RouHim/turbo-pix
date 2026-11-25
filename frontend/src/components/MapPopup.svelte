@@ -11,10 +11,12 @@
 <div class="map-popup">
   <p class="map-popup-place" data-testid="map-popup-place">{place}</p>
   <p class="map-popup-count">
-    {$t('ui.photos_count', {
-      values: { count: location.photos.length },
-      default: '{count} photos',
-    })}
+    {location.photos.length === 1
+      ? $t('ui.photos_count_one', { default: '1 photo' })
+      : $t('ui.photos_count', {
+          values: { count: location.photos.length },
+          default: '{count} photos',
+        })}
   </p>
   <ul class="map-popup-list">
     {#each location.photos as photo (photo.hash_sha256)}
@@ -81,6 +83,14 @@
   .map-popup-item:hover,
   .map-popup-item:focus-visible {
     background: var(--surface-color);
+  }
+
+  /* Leaflet paints a white wrapper, so a one-line slate ring is the only focus
+     indicator that meets contrast in both themes (the UA's black ring reaches
+     1.05:1 on a dark tile). Inset so the scroll list cannot clip it. */
+  .map-popup-item:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
   }
 
   .map-popup-item img {

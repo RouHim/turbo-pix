@@ -11,7 +11,6 @@ use crate::cache_manager::CacheManager;
 use crate::collage_generator;
 use crate::db::DbPool;
 use crate::face_recognition::FaceRecognition;
-use crate::geo_location::NominatimClient;
 use crate::housekeeping_manager;
 use crate::indexer::PhotoProcessor;
 use crate::semantic_search::SemanticSearch;
@@ -265,7 +264,6 @@ pub struct PhotoScheduler {
     face_recognition: Arc<dyn FaceRecognition>,
     data_path: PathBuf,
     locale: String,
-    nominatim_url: String,
     rescan_lock: Arc<Semaphore>,
     pub status: IndexingStatus,
 }
@@ -280,7 +278,6 @@ impl PhotoScheduler {
         pipelines: Pipelines,
         data_path: PathBuf,
         locale: String,
-        nominatim_url: String,
     ) -> Self {
         let Pipelines {
             semantic_search,
@@ -308,7 +305,6 @@ impl PhotoScheduler {
             face_recognition,
             data_path,
             locale,
-            nominatim_url,
             rescan_lock: Arc::new(Semaphore::new(1)),
             status: IndexingStatus::new(),
         }
@@ -433,11 +429,12 @@ impl PhotoScheduler {
         handle
     }
 
-    async fn run_geo_resolution_phase(
-        db_pool: &DbPool,
-        nominatim_url: &str,
-        status: &IndexingStatus,
-    ) {
+    /// Resolves every photo still missing a place label.
+    ///
+    /// The lookup reads the embedded dataset in-process, so the whole phase is
+    /// CPU-bound: no network, no rate limiting, no per-row sleep. A row that
+    /// fails to store stays unresolved and is retried by the next cycle.
+    async fn run_geo_resolution_phase(db_pool: &DbPool, status: &IndexingStatus) {
         let photos = match crate::db::get_photos_needing_geo_resolution(db_pool).await {
             Ok(photos) => photos,
             Err(e) => {
@@ -451,23 +448,30 @@ impl PhotoScheduler {
             return;
         }
 
+        let Some(index) = crate::place_resolver::embedded_index() else {
+            error!("Embedded place dataset holds no valid row; geo resolution skipped");
+            status.phases.geo_resolution.add_errors(1);
+            return;
+        };
+
         let total = photos.len();
         info!("Geo resolution: {} photos to resolve", total);
         status.phases.geo_resolution.set_total(total as u64);
 
-        let mut client = NominatimClient::new(nominatim_url);
-        if let Err(e) = client
-            .resolve_batch(photos, db_pool, |current, total| {
-                status.phases.geo_resolution.set_processed(current as u64);
-                if current % 10 == 0 || current == total {
-                    info!("Geo resolved {}/{}", current, total);
-                }
-            })
-            .await
-        {
-            error!("Geo resolution failed: {}", e);
-            status.phases.geo_resolution.add_errors(1);
-            return;
+        for (current, (file_path, latitude, longitude)) in photos.into_iter().enumerate() {
+            let place = index.resolve(latitude, longitude);
+            if let Err(e) = crate::db::update_photo_place(db_pool, &file_path, place.as_ref()).await
+            {
+                warn!("Failed to store the place for {}: {}", file_path, e);
+                status.phases.geo_resolution.add_errors(1);
+            }
+            status
+                .phases
+                .geo_resolution
+                .set_processed(current as u64 + 1);
+            if (current + 1) % 500 == 0 || current + 1 == total {
+                info!("Geo resolved {}/{}", current + 1, total);
+            }
         }
 
         info!("Phase 3 completed: {} photos geo resolved", total);
@@ -633,7 +637,7 @@ impl PhotoScheduler {
         // Phase 3: Geo resolution
         info!("Phase 3: Resolving photo geo locations");
         self.status.set_phase("geo_resolution").await;
-        Self::run_geo_resolution_phase(&self.db_pool, &self.nominatim_url, &self.status).await;
+        Self::run_geo_resolution_phase(&self.db_pool, &self.status).await;
 
         // Phase 4: Generate collages
         info!("Phase 4: Generating collages");
@@ -731,7 +735,6 @@ mod tests {
                 },
                 data_path,
                 "en".to_string(),
-                "https://nominatim.openstreetmap.org".to_string(),
             );
 
             Self {
@@ -762,7 +765,6 @@ mod tests {
                 },
                 data_path,
                 "en".to_string(),
-                "https://nominatim.openstreetmap.org".to_string(),
             );
 
             Self {
@@ -1026,7 +1028,6 @@ mod tests {
             },
             data_path,
             "en".to_string(),
-            "https://nominatim.openstreetmap.org".to_string(),
         );
 
         // Should handle errors gracefully

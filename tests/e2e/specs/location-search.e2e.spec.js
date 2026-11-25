@@ -4,21 +4,21 @@ import { TestHelpers } from '../setup/test-helpers.js';
 const BASE_URL = `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`;
 
 test.describe('Location Search', () => {
-  let cityName = null;
+  let placeName = null;
 
   test.beforeAll(async () => {
     const response = await fetch(`${BASE_URL}/api/photos?limit=50`);
     if (response.ok) {
       const data = await response.json();
       const photos = data.photos || [];
-      const photoWithCity = photos.find(
-        (photo) => photo.filename?.startsWith('cluster_') && photo.metadata?.location?.city
+      const photoWithPlace = photos.find(
+        (photo) => photo.filename?.startsWith('cluster_') && photo.metadata?.location?.place
       );
-      if (photoWithCity) {
-        cityName = photoWithCity.metadata.location.city;
-        console.log(`Discovered city name from seeded photos: "${cityName}"`);
+      if (photoWithPlace) {
+        placeName = photoWithPlace.metadata.location.place;
+        console.log(`Discovered place name from seeded photos: "${placeName}"`);
       } else {
-        console.warn('No seeded photos have a city name — geo_resolution may not have completed');
+        console.warn('No seeded photos have a place name — geo_resolution may not have completed');
       }
     }
   });
@@ -29,7 +29,7 @@ test.describe('Location Search', () => {
     await TestHelpers.waitForSearchReady(page);
   });
 
-  test('API: seeded photos have city names after indexing', async ({ page }) => {
+  test('API: seeded photos have place names after indexing', async ({ page }) => {
     // GIVEN: Server running with geo_resolution complete
     // WHEN: Fetch /api/photos?limit=50
     const response = await page.request.get(`${BASE_URL}/api/photos?limit=50`);
@@ -38,19 +38,19 @@ test.describe('Location Search', () => {
     const data = await response.json();
     const photos = data.photos || [];
 
-    // THEN: At least one cluster_*.jpg has metadata.location.city that is non-null
-    const photosWithCity = photos.filter(
-      (photo) => photo.filename?.startsWith('cluster_') && photo.metadata?.location?.city
+    // THEN: At least one cluster_*.jpg has metadata.location.place that is non-null
+    const photosWithPlace = photos.filter(
+      (photo) => photo.filename?.startsWith('cluster_') && photo.metadata?.location?.place
     );
-    expect(photosWithCity.length).toBeGreaterThan(0);
+    expect(photosWithPlace.length).toBeGreaterThan(0);
   });
 
   test('UI: location: prefix search returns photos', async ({ page }) => {
-    // GIVEN: city name known from beforeAll (or skip if null)
-    test.skip(!cityName, 'No city name found in seeded photos — geo_resolution incomplete');
+    // GIVEN: place name known from beforeAll (or skip if null)
+    test.skip(!placeName, 'No place name found in seeded photos — geo_resolution incomplete');
 
-    // WHEN: User types `location:<city>` in search input and clicks search
-    await TestHelpers.performSearch(page, `location:${cityName}`);
+    // WHEN: User types `location:<place>` in search input and clicks search
+    await TestHelpers.performSearch(page, `location:${placeName}`);
 
     // THEN: At least one photo card appears in results
     await TestHelpers.waitForPhotosToLoad(page);

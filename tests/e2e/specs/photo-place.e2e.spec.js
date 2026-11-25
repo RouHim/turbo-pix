@@ -1,0 +1,229 @@
+import { test, expect } from '@playwright/test';
+import { TestHelpers } from '../setup/test-helpers.js';
+
+const BASE_URL = `http://localhost:${process.env.TURBO_PIX_E2E_PORT ?? '18473'}`;
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** A seeded photo whose coordinates resolved to a place name. */
+async function photoWithPlace(page) {
+  const response = await page.request.get(`${BASE_URL}/api/photos?limit=200`);
+  if (!response.ok()) return null;
+  const { photos } = await response.json();
+  return (
+    (photos || []).find(
+      (photo) =>
+        typeof photo.metadata?.location?.place === 'string' &&
+        photo.metadata.location.place.trim() &&
+        typeof photo.metadata?.location?.latitude === 'number'
+    ) ?? null
+  );
+}
+
+async function openMetadataPanel(page, hash) {
+  await TestHelpers.openViewer(page, hash);
+  await page.locator('.metadata-btn').click();
+  await page.locator('.viewer-sidebar.show').waitFor();
+}
+
+test.describe('Photo place and mini map', () => {
+  test.beforeEach(async ({ page }) => {
+    TestHelpers.setupConsoleMonitoring(page);
+    await TestHelpers.goto(page);
+    await TestHelpers.waitForPhotosToLoad(page);
+  });
+
+  test('the location section shows the resolved place with its country', async ({ page }) => {
+    // GIVEN: a photo whose coordinates resolved offline to a place
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+
+    // WHEN: the viewer's metadata panel is opened
+    await openMetadataPanel(page, photo.hash_sha256);
+
+    // THEN: the place name is listed in the Location section
+    const place = photo.metadata.location.place.trim();
+    const placeButton = page.locator('[data-testid="meta-place"]');
+    await expect(placeButton).toBeVisible();
+    await expect(placeButton).toContainText(place);
+
+    // AND: a resolved country is appended to it
+    const countryCode = photo.metadata.location.country_code;
+    if (countryCode) {
+      await expect(placeButton).toHaveText(new RegExp(`^${escapeRegExp(place)}, .+`));
+    }
+
+    // AND: the coordinates stay visible next to it
+    await expect(page.locator('#meta-gps')).toContainText(
+      photo.metadata.location.latitude.toFixed(6)
+    );
+  });
+
+  test('the mini map renders a marker and hands off to the focused map view', async ({ page }) => {
+    // GIVEN: the metadata panel of a located photo
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await openMetadataPanel(page, photo.hash_sha256);
+
+    // WHEN: the panel has scrolled the Location section into view
+    const miniMap = page.locator('[data-testid="mini-map"]');
+    await miniMap.scrollIntoViewIfNeeded();
+
+    // THEN: the map renders its tiles container, one marker and both credits
+    await expect(miniMap).toHaveClass(/leaflet-container/);
+    await expect(miniMap.locator('.mini-map-marker')).toHaveCount(1);
+    await expect(miniMap.locator('.leaflet-control-attribution')).toContainText(
+      'OpenStreetMap contributors'
+    );
+    await expect(miniMap.locator('.leaflet-control-attribution')).toContainText('GeoNames');
+
+    // WHEN: the user asks for the full map
+    await page.locator('[data-testid="mini-map-open"]').click();
+
+    // THEN: the app navigates to the focused map view
+    await expect(page).toHaveURL(new RegExp(`/map\\?.*focus=${photo.hash_sha256}`));
+    await expect(page.locator('#photo-viewer')).toBeHidden();
+
+    // AND: that photo's location popup is open, naming the place
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-testid="map-popup-place"]')).toContainText(
+      photo.metadata.location.place.trim()
+    );
+  });
+
+  test('the ?focus= handoff still opens the popup with reduced motion', async ({ page }) => {
+    // GIVEN: the OS reduce-motion preference, which makes every zoom step
+    // synchronous: the popup must open from the render of the result set, not
+    // from a chain of zoom retries climbing to the maximum zoom.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await openMetadataPanel(page, photo.hash_sha256);
+
+    // WHEN: the user asks for the full map from the mini map
+    await page.locator('[data-testid="mini-map-open"]').click();
+
+    // THEN: the handoff lands on the focused map view and its popup opens
+    await expect(page).toHaveURL(new RegExp(`/map\\?.*focus=${photo.hash_sha256}`));
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+    await expect(popup.locator('[data-testid="map-popup-place"]')).toContainText(
+      photo.metadata.location.place.trim()
+    );
+  });
+
+  test('a ?focus= handoff that also opens a photo keeps the popup closed', async ({ page }) => {
+    // GIVEN: a located photo and a URL that carries both the focus handoff and
+    // the photo (opening a photo from a map popup pushes `photo`, keeping `focus`)
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await TestHelpers.stubMapTiles(page);
+
+    // WHEN: that URL is loaded directly
+    await TestHelpers.goto(page, `/map?focus=${photo.hash_sha256}&photo=${photo.hash_sha256}`);
+
+    // THEN: the viewer opens over the centered map
+    await expect(page.locator('#photo-viewer')).toBeVisible();
+    await expect
+      .poll(async () => page.locator('[data-map-cluster], [data-map-location]').count(), {
+        timeout: 15000,
+      })
+      .toBeGreaterThan(0);
+
+    // AND: the pending focus popup never opens behind the modal viewer
+    await expect(page.locator('.leaflet-popup')).toBeHidden();
+  });
+
+  test('a handoff from an already-mounted map reopens the popup on its zoomed-in view', async ({
+    page,
+  }) => {
+    // GIVEN: the map view, mounted and zoomed in on a single location
+    await TestHelpers.stubMapTiles(page);
+    await TestHelpers.goto(page, '/map');
+    await expect
+      .poll(async () => page.locator('[data-map-cluster], [data-map-location]').count(), {
+        timeout: 15000,
+      })
+      .toBeGreaterThan(0);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if ((await page.locator('[data-map-location]').count()) > 0) break;
+      const cluster = page.locator('[data-map-cluster]').first();
+      if ((await cluster.count()) === 0) break;
+      await cluster.click();
+      await expect(page.locator('.leaflet-zoom-anim')).toHaveCount(0);
+    }
+    const marker = page.locator('[data-map-location]').first();
+    await expect(marker).toBeVisible();
+    await marker.click();
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toBeVisible();
+
+    // WHEN: the user opens the viewer from a popup thumbnail, so the map stays
+    // mounted at its zoomed-in view behind the modal
+    //
+    // Enter instead of click: the popup opens focus on its first thumbnail
+    // (MapView's `focusFirstPopupItem`), and a tall popup can be clipped by the
+    // map container on a short viewport, where the hit point belongs to the
+    // status bar above the map. The keyboard path is the same button activation
+    // and does not depend on that geometry.
+    const thumbnail = popup.locator('[data-map-popup-photo]').first();
+    const hash = await thumbnail.getAttribute('data-map-popup-photo');
+    test.skip(!hash, 'The location popup lists no photo');
+    await thumbnail.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#photo-viewer')).toBeVisible();
+
+    // AND: asks for the full map from the metadata panel's mini map
+    await page.locator('.metadata-btn').click();
+    await page.locator('.viewer-sidebar.show').waitFor();
+    await page.locator('[data-testid="mini-map-open"]').click();
+
+    // THEN: the handoff addresses that photo…
+    await expect(page).toHaveURL(new RegExp(`/map\\?.*focus=${hash}`));
+    await expect(page.locator('#photo-viewer')).toBeHidden();
+
+    // AND: the popup reopens on the mounted, zoomed-in map rather than being
+    // cancelled by a zoom retry that read the pre-handoff view
+    await expect(page.locator('.leaflet-popup')).toBeVisible();
+  });
+
+  test('activating the place name filters the grid by that place', async ({ page }) => {
+    // GIVEN: the metadata panel of a located photo
+    const photo = await photoWithPlace(page);
+    test.skip(!photo, 'No seeded photo resolved to a place name');
+    await openMetadataPanel(page, photo.hash_sha256);
+
+    // WHEN: the place name is activated
+    const placeButton = page.locator('[data-testid="meta-place"]');
+    await placeButton.scrollIntoViewIfNeeded();
+    await placeButton.click();
+
+    // THEN: the viewer closes and the grid shows the location: search
+    await expect(page.locator('#photo-viewer')).toBeHidden();
+    await expect(page).toHaveURL(/q=location%3A/);
+    await TestHelpers.waitForPhotosToLoad(page);
+    const cards = await TestHelpers.getPhotoCards(page);
+    expect(cards.length).toBeGreaterThan(0);
+  });
+
+  test('a photo without coordinates shows no location section', async ({ page }) => {
+    // GIVEN: a seeded photo the library has no coordinates or place for
+    const response = await page.request.get(`${BASE_URL}/api/photos?limit=200`);
+    expect(response.ok()).toBeTruthy();
+    const { photos } = await response.json();
+    const unlocated = (photos || []).find(
+      (photo) =>
+        photo.metadata?.location?.latitude == null &&
+        photo.metadata?.location?.longitude == null &&
+        !photo.metadata?.location?.place
+    );
+    test.skip(!unlocated, 'Every seeded photo carries coordinates');
+
+    // WHEN: its metadata panel is opened
+    await openMetadataPanel(page, unlocated.hash_sha256);
+
+    // THEN: no Location section is rendered at all
+    await expect(page.locator('#location-section')).toHaveCount(0);
+  });
+});

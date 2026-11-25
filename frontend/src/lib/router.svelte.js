@@ -15,6 +15,8 @@ const validSorts = ['date_desc', 'date_asc', 'name_asc', 'name_desc', 'size_desc
 const defaultState = {
   view: 'all',
   photo: null,
+  // Map view only: the photo whose location the map centers on and opens.
+  focus: null,
   query: null,
   sort: 'date_desc',
   year: null,
@@ -36,6 +38,7 @@ function parseUrl(url) {
   return normalizeState({
     view: pathView || 'all',
     photo: normalizeString(url.searchParams.get('photo')),
+    focus: normalizeString(url.searchParams.get('focus')),
     query: normalizeString(url.searchParams.get('q')),
     sort: url.searchParams.get('sort'),
     year: parsePositiveInteger(url.searchParams.get('year')),
@@ -63,9 +66,14 @@ function normalizeState(state) {
   // invisible ?album= scope from a deep link either.
   const album = view === 'people' ? null : parsePositiveInteger(state.album);
 
+  // The focus target only exists on the Map view; any other view must not
+  // inherit an invisible map scope from a deep link.
+  const focus = view === 'map' ? normalizeString(state.focus) : null;
+
   return {
     view,
     photo: normalizeString(state.photo),
+    focus,
     query: normalizeString(state.query),
     sort,
     year: dateFilter.year,
@@ -139,6 +147,10 @@ function buildUrl(state = {}) {
 
   if (normalizedState.photo) {
     url.searchParams.set('photo', normalizedState.photo);
+  }
+
+  if (normalizedState.focus) {
+    url.searchParams.set('focus', normalizedState.focus);
   }
 
   if (normalizedState.album !== null) {

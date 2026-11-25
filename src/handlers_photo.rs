@@ -242,7 +242,7 @@ pub async fn get_photo_file(
             photo.file_path
         );
 
-        let _raw_permit = crate::raw_processor::RAW_DECODE_LIMIT
+        let _raw_permit = crate::decode_limit::RAW_DECODE_LIMIT
             .acquire()
             .await
             .map_err(|e| {

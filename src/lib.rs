@@ -7,6 +7,7 @@ pub mod config;
 pub mod db;
 pub mod db_pool;
 pub mod db_types;
+pub mod decode_limit;
 pub mod exif_helpers;
 pub mod face_recognition;
 pub mod file_scanner;

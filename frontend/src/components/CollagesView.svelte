@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  import { t } from '../lib/i18n.js';
+  import { getLocale, t } from '../lib/i18n.js';
+  import { formatWeekdayDate } from '../lib/datetime.js';
   import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import Icon from './Icon.svelte';
   import { api } from '../lib/api.js';
@@ -11,7 +12,7 @@
     selectRange,
     pruneSelection,
   } from '../lib/state.svelte.js';
-  import { formatCollageDate, handleError } from '../lib/utils.js';
+  import { handleError } from '../lib/utils.js';
   import { longpress } from '../lib/longpress.js';
   import { createCardRangeSelection } from '../lib/selectionRangeController.js';
 
@@ -20,6 +21,8 @@
   let error = $state(false);
   let actionBusy = $state(false);
   let abortController = null;
+
+  const collageDateLabel = (collage) => formatWeekdayDate(collage.date, getLocale());
 
   function handleCollageAction(e) {
     const id = e.detail?.collageId;
@@ -133,7 +136,7 @@
       hash_sha256: collage.id,
       thumbnail_path: `/api/collages/${collage.id}/image`,
       path: `/api/collages/${collage.id}/image`,
-      filename: formatCollageDate(collage.date),
+      filename: collageDateLabel(collage),
       isCollage: true,
       collageId: collage.id,
       collageDate: collage.date,
@@ -278,8 +281,8 @@
             role="button"
             tabindex="0"
             aria-label={$t('ui.collage_for', {
-              default: `Collage for ${formatCollageDate(collage.date)}`,
-              values: { date: formatCollageDate(collage.date) },
+              default: `Collage for ${collageDateLabel(collage)}`,
+              values: { date: collageDateLabel(collage) },
             })}
             aria-pressed={selectionState.active ? selected : undefined}
             onclick={(e) => handleCardClick(e, collage)}
@@ -298,7 +301,7 @@
             <img
               class="photo-card-image"
               src={`/api/collages/${collage.id}/image`}
-              alt={formatCollageDate(collage.date)}
+              alt={collageDateLabel(collage)}
               loading="lazy"
               style="opacity: 1"
             />
@@ -306,8 +309,8 @@
           <div class="photo-card-overlay">
             <span class="photo-card-title">
               {$t('ui.collage_for', {
-                default: `Collage for ${formatCollageDate(collage.date)}`,
-                values: { date: formatCollageDate(collage.date) },
+                default: `Collage for ${collageDateLabel(collage)}`,
+                values: { date: collageDateLabel(collage) },
               })}
             </span>
             <span class="photo-card-meta">

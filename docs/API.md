@@ -148,7 +148,7 @@ Readiness: acquires one connection from the pool.
 Runtime configuration the frontend needs before it renders (locale, map tiles).
 
 - **Response `200`**: `{ "default_locale": "en", "tile_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png" }`
-  - `default_locale` ← `TURBO_PIX_LOCALE`; `tile_url` ← `TURBO_PIX_TILE_URL`.
+  - `default_locale` ← `TURBO_PIX_LOCALE`; it drives both UI language and date/time formatting. `tile_url` ← `TURBO_PIX_TILE_URL`.
 - Source: `src/handlers_config.rs`
 
 ## Photos
@@ -825,6 +825,11 @@ Body: `{ "hashes": ["…"] }` — a `DELETE` **with** a JSON body (the 1 MiB cap
 
 A collage is
 `{ "id": 7, "date": "2024-07-04", "file_path": "…", "thumbnail_path": "…|null", "photo_count": 5, "photo_hashes": ["…"], "accepted_at": "…|null", "rejected_at": "…|null", "created_at": "…" }`.
+
+The rendered image embeds the date label in the configured locale. The collage
+signature does not include the locale, so changing `TURBO_PIX_LOCALE` leaves
+already generated images untouched; clear the collage data to regenerate them
+with the new label.
 
 ### `GET /api/collages/pending`
 

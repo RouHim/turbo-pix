@@ -5,8 +5,8 @@
   import { api } from '../lib/api.js';
   import { addToast, appState, setTimelineCollapsed } from '../lib/state.svelte.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
   import { buildTimelineModel, formatPeriodName, formatSelectionLabel } from '../lib/timeline.js';
+  import { formatMonthName } from '../lib/datetime.js';
   import {
     filterEquals,
     filterFromSelection,
@@ -17,6 +17,7 @@
   import Icon from './Icon.svelte';
 
   const activeLocale = $derived($locale || 'en');
+  const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 
   let data = $state(null);
   let yearSelectEl = $state(null);
@@ -58,10 +59,7 @@
   );
 
   const labelText = $derived.by(() => {
-    const monthName = (month) => {
-      const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
-      return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
-    };
+    const monthName = (month) => formatMonthName(month, activeLocale);
     return formatSelectionLabel(selection, {
       allDates: $t('ui.all_dates', { locale: activeLocale, default: 'All Dates' }),
       monthName,
@@ -277,10 +275,8 @@
           onchange={handleDropdownChange}
         >
           <option value="">{$t('ui.all_months', { default: 'All Months' })}</option>
-          {#each APP_CONSTANTS.MONTH_KEYS as monthKey, i (i)}
-            <option value={String(i + 1)}
-              >{$t(`ui.months.${monthKey}`, { default: monthKey })}</option
-            >
+          {#each MONTHS as month (month)}
+            <option value={String(month)}>{formatMonthName(month, activeLocale)}</option>
           {/each}
         </select>
         <button

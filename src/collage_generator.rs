@@ -886,9 +886,9 @@ fn format_date_label(date_str: &str, locale: &str) -> String {
         _ => Locale::en_US,
     };
     let format = if locale == "de" {
-        "%A, %d. %B %Y"
+        "%A, %-d. %B %Y"
     } else {
-        "%A, %B %d, %Y"
+        "%A, %B %-d, %Y"
     };
 
     date.format_localized(format, chrono_locale).to_string()
@@ -1708,6 +1708,26 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn test_format_date_label_matches_frontend_intl() {
+        assert_eq!(
+            format_date_label("2026-11-04", "en"),
+            "Wednesday, November 4, 2026"
+        );
+        assert_eq!(
+            format_date_label("2026-11-04", "de"),
+            "Mittwoch, 4. November 2026"
+        );
+        assert_eq!(
+            format_date_label("2026-11-24", "en"),
+            "Tuesday, November 24, 2026"
+        );
+        assert_eq!(
+            format_date_label("2026-11-24", "de"),
+            "Dienstag, 24. November 2026"
+        );
     }
 
     fn write_test_image(path: &Path) {

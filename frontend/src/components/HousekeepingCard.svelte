@@ -1,7 +1,8 @@
 <script>
-  import { t } from '../lib/i18n.js';
+  import { getLocale, t } from '../lib/i18n.js';
   import Icon from './Icon.svelte';
-  import { formatDate, getThumbnailUrl } from '../lib/utils.js';
+  import { getThumbnailUrl } from '../lib/utils.js';
+  import { formatDateTime } from '../lib/datetime.js';
   import { toDataURL } from '../lib/blurhash.js';
   import { longpress } from '../lib/longpress.js';
 
@@ -121,7 +122,7 @@
       {photo.filename || $t('ui.photo', { default: 'Photo' })}
     </span>
     <span class="photo-card-meta">
-      <span>{formatDate(photo.taken_at || photo.date_modified)}</span>
+      <span>{formatDateTime(photo.taken_at || photo.date_modified, getLocale())}</span>
       {#if photo.housekeepingReason}
         <span class="housekeeping-reason">{photo.housekeepingReason}</span>
       {/if}

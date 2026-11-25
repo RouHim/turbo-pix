@@ -13,6 +13,7 @@
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import { normalizeDateFilter } from '../lib/timelineRoute.js';
   import { buildTimelineModel, formatPeriodName } from '../lib/timeline.js';
+  import { formatMonthName } from '../lib/datetime.js';
   import {
     anchorOffset,
     bottomTrim,
@@ -31,10 +32,7 @@
   const desktop = new MediaQuery(`(min-width: ${APP_CONSTANTS.MOBILE_BREAKPOINT + 1}px)`);
   const activeLocale = $derived($locale || 'en');
 
-  const monthName = (month) => {
-    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
-    return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
-  };
+  const monthName = (month) => formatMonthName(month, activeLocale);
 
   let density = $state(null);
   let densityLoading = false;

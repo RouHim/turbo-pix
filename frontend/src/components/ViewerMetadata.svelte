@@ -1,13 +1,13 @@
 <script>
-  import { t } from '../lib/i18n.js';
+  import { getLocale, t } from '../lib/i18n.js';
   import {
-    formatDate,
     formatFileSize,
     formatDuration,
     isCollagePhoto,
     isMetadataEditable,
     isVideoFile,
   } from '../lib/utils.js';
+  import { formatDateTime } from '../lib/datetime.js';
   import Icon from './Icon.svelte';
 
   const { photo = null, onEditMetadata = () => {}, onCloseSidebar = () => {} } = $props();
@@ -65,7 +65,9 @@
         : '-')
   );
   const dateText = $derived(
-    photo?.taken_at ? formatDate(photo.taken_at) : $t('ui.unknown', { default: 'Unknown' })
+    photo?.taken_at
+      ? formatDateTime(photo.taken_at, getLocale())
+      : $t('ui.unknown', { default: 'Unknown' })
   );
   const sizeText = $derived.by(() => {
     if (!photo) return $t('ui.unknown', { default: 'Unknown' });
@@ -218,7 +220,9 @@
         <span class="meta-label"
           >{$t('ui.metadata.date_modified', { default: 'Date Modified:' })}</span
         ><span id="meta-date-modified" style="opacity: {fieldOpacity(photo?.date_modified)}"
-          >{setField(photo?.date_modified ? formatDate(photo.date_modified) : null)}</span
+          >{setField(
+            photo?.date_modified ? formatDateTime(photo.date_modified, getLocale()) : null
+          )}</span
         >
       </div>
     </div>

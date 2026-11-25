@@ -1,6 +1,7 @@
 <script>
-  import { t } from '../lib/i18n.js';
-  import { formatDate, getThumbnailUrl } from '../lib/utils.js';
+  import { getLocale, t } from '../lib/i18n.js';
+  import { getThumbnailUrl } from '../lib/utils.js';
+  import { formatDateTime } from '../lib/datetime.js';
   import { formatCoordinates, getLocationLabel } from '../lib/map.js';
 
   const { location, onOpenPhoto } = $props();
@@ -26,7 +27,7 @@
           aria-label={$t('map.openPhoto', {
             values: {
               date: photo.taken_at
-                ? formatDate(photo.taken_at)
+                ? formatDateTime(photo.taken_at, getLocale())
                 : $t('ui.unknown', { default: 'Unknown' }),
             },
             default: 'Open photo from {date}',
@@ -35,7 +36,9 @@
         >
           <img src={getThumbnailUrl(photo, 'small')} alt="" loading="lazy" decoding="async" />
           <span>
-            {photo.taken_at ? formatDate(photo.taken_at) : $t('ui.unknown', { default: 'Unknown' })}
+            {photo.taken_at
+              ? formatDateTime(photo.taken_at, getLocale())
+              : $t('ui.unknown', { default: 'Unknown' })}
           </span>
         </button>
       </li>

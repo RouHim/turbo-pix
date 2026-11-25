@@ -148,29 +148,6 @@
     "no_location_data": "Keine Ortsdaten",
     "yes": "Ja",
     "no": "Nein",
-    "months": {
-      "january": "Januar",
-      "february": "Februar",
-      "march": "März",
-      "april": "April",
-      "may": "Mai",
-      "june": "Juni",
-      "july": "Juli",
-      "august": "August",
-      "september": "September",
-      "october": "Oktober",
-      "november": "November",
-      "december": "Dezember"
-    },
-    "weekdays": {
-      "sunday": "Sonntag",
-      "monday": "Montag",
-      "tuesday": "Dienstag",
-      "wednesday": "Mittwoch",
-      "thursday": "Donnerstag",
-      "friday": "Freitag",
-      "saturday": "Samstag"
-    },
     "metadata": {
       "file_information": "Dateiinformationen",
       "file_path": "Dateipfad:",

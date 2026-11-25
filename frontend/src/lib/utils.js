@@ -2,7 +2,7 @@
 import { addToast } from './state.svelte.js';
 import { APP_CONSTANTS } from './constants.js';
 import { logger } from './logger.js';
-import { t, translateError, getLocale } from './i18n.js';
+import { t, translateError } from './i18n.js';
 import { get } from 'svelte/store';
 
 // ── Format helpers ──────────────────────────────────────────────────────────
@@ -80,27 +80,6 @@ export function formatFileSize(bytes) {
 }
 
 /**
- * Format a date string into a localized readable format.
- * @param {string} dateString
- * @returns {string}
- */
-export function formatDate(dateString) {
-  try {
-    const date = new Date(dateString);
-    const locale = getLocale() || navigator.language || 'en';
-    return date.toLocaleDateString(locale, {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return get(t)('ui.unknown', { default: 'Unknown' });
-  }
-}
-
-/**
  * Format a duration in seconds to HH:MM:SS or MM:SS.
  * @param {number} seconds
  * @returns {string}
@@ -117,48 +96,6 @@ export function formatDuration(seconds) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
-}
-
-/**
- * Format a collage date string (YYYY-MM-DD) into a localized readable format.
- * @param {string} dateString - Date in YYYY-MM-DD format
- * @returns {string} Formatted date string
- */
-export function formatCollageDate(dateString) {
-  if (!dateString || typeof dateString !== 'string') {
-    return dateString;
-  }
-
-  const parts = dateString.split('-').map((value) => parseInt(value, 10));
-  if (parts.length !== 3 || parts.some((value) => Number.isNaN(value))) {
-    return dateString;
-  }
-
-  const [year, month, day] = parts;
-  const monthKey = APP_CONSTANTS?.MONTH_KEYS?.[month - 1];
-  if (!monthKey) {
-    return dateString;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  const weekdayKey = APP_CONSTANTS?.WEEKDAY_KEYS?.[date.getUTCDay()];
-  if (!weekdayKey) {
-    return dateString;
-  }
-
-  const monthName = get(t)(`ui.months.${monthKey}`, {
-    default: monthKey.charAt(0).toUpperCase() + monthKey.slice(1),
-  });
-  const weekdayName = get(t)(`ui.weekdays.${weekdayKey}`, {
-    default: weekdayKey.charAt(0).toUpperCase() + weekdayKey.slice(1),
-  });
-  const locale = getLocale() || 'en';
-
-  if (locale === 'de') {
-    return `${weekdayName}, ${day}. ${monthName} ${year}`;
-  }
-
-  return `${weekdayName}, ${monthName} ${day}, ${year}`;
 }
 
 // ── Toast notifications ─────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 <script>
   import { onMount, untrack } from 'svelte';
   import { get } from 'svelte/store';
-  import { getLocale, t } from '../lib/i18n.js';
+  import { getLocale, t, translateError } from '../lib/i18n.js';
   import { formatDate } from '../lib/datetime.js';
   import { api } from '../lib/api.js';
   import {
@@ -16,7 +16,7 @@
   } from '../lib/state.svelte.js';
   import { route, pushState } from '../lib/router.svelte.js';
   import { askConfirm } from '../lib/confirmDialog.svelte.js';
-  import { getThumbnailUrl, handleError } from '../lib/utils.js';
+  import { getThumbnailUrl } from '../lib/utils.js';
   import Icon from './Icon.svelte';
   import AlbumDialog from './AlbumDialog.svelte';
 
@@ -146,20 +146,34 @@
       default: 'Permanently delete album "{name}"? Photos are kept.',
       values: { name: item.name },
     });
-    if (!(await askConfirm(msg))) return;
-    try {
-      await api.deleteAlbum(item.id);
-      const idx = albums.findIndex((a) => a.id === item.id);
-      if (idx !== -1) albums.splice(idx, 1);
-      // Refetch so a loadAlbums that started before this delete committed
-      // cannot resurrect the deleted row with its stale snapshot.
-      loadAlbums();
-      addToast(get(t)('albums.deleted', { default: 'Album deleted' }), item.name, 'success', 3000);
-      if (route.album === item.id) {
-        pushState({ album: null, view: 'albums' });
-      }
-    } catch (error) {
-      handleError(error, 'delete album');
+    const confirmed = await askConfirm(msg, {
+      slide: {
+        onConfirm: async () => {
+          try {
+            await api.deleteAlbum(item.id);
+          } catch (error) {
+            const raw = error instanceof Error ? error.message : '';
+            const match = raw.match(/HTTP \d+: (.+)/);
+            // The open dialog owns the failure feedback; a toast would be
+            // painted behind the modal's top layer.
+            throw new Error(
+              translateError(match?.[1] || raw) ||
+                get(t)('ui.action_failed', { default: 'Action failed' }),
+              { cause: error }
+            );
+          }
+        },
+      },
+    });
+    if (!confirmed) return;
+    const idx = albums.findIndex((a) => a.id === item.id);
+    if (idx !== -1) albums.splice(idx, 1);
+    // Refetch so a loadAlbums that started before this delete committed
+    // cannot resurrect the deleted row with its stale snapshot.
+    loadAlbums();
+    addToast(get(t)('albums.deleted', { default: 'Album deleted' }), item.name, 'success', 3000);
+    if (route.album === item.id) {
+      pushState({ album: null, view: 'albums' });
     }
   }
 

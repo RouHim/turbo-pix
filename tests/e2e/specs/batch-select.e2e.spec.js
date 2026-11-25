@@ -170,8 +170,9 @@ test.describe('Batch select + actions', () => {
     await expect(page.locator(selectionBar)).toContainText('2 selected');
     const deleteResponse = TestHelpers.waitForApiCall(page, '/api/photos/batch/delete');
     await page.click('[data-action="batch-delete"]');
-    // The confirmation is the app's own dialog, not window.confirm().
-    await page.click('[data-testid="confirm-dialog-accept"]');
+    // The destructive accept is the app's own slide, not a button.
+    await expect(page.locator('[data-testid="confirm-dialog-accept"]')).toHaveCount(0);
+    await TestHelpers.slideToConfirm(page);
     await deleteResponse;
 
     // THEN: the cards disappear from the grid and the photos are permanently

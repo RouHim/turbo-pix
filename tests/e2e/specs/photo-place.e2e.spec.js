@@ -161,10 +161,17 @@ test.describe('Photo place and mini map', () => {
 
     // WHEN: the user opens the viewer from a popup thumbnail, so the map stays
     // mounted at its zoomed-in view behind the modal
+    //
+    // Enter instead of click: the popup opens focus on its first thumbnail
+    // (MapView's `focusFirstPopupItem`), and a tall popup can be clipped by the
+    // map container on a short viewport, where the hit point belongs to the
+    // status bar above the map. The keyboard path is the same button activation
+    // and does not depend on that geometry.
     const thumbnail = popup.locator('[data-map-popup-photo]').first();
     const hash = await thumbnail.getAttribute('data-map-popup-photo');
     test.skip(!hash, 'The location popup lists no photo');
-    await thumbnail.click();
+    await thumbnail.focus();
+    await page.keyboard.press('Enter');
     await expect(page.locator('#photo-viewer')).toBeVisible();
 
     // AND: asks for the full map from the metadata panel's mini map

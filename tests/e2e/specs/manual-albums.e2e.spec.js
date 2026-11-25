@@ -181,8 +181,9 @@ test.describe('Manual Albums', () => {
         response.ok()
     );
     await page.click('[data-testid="album-delete"]');
-    // The confirmation is the app's own dialog, not window.confirm().
-    await page.click('[data-testid="confirm-dialog-accept"]');
+    // The destructive accept is the app's own slide, not a button.
+    await expect(page.locator('[data-testid="confirm-dialog-accept"]')).toHaveCount(0);
+    await TestHelpers.slideToConfirm(page);
     await deleteResponse;
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
     const url = new URL(page.url());
@@ -219,8 +220,9 @@ test.describe('Manual Albums', () => {
         response.url().includes('/api/albums/') && response.request().method() === 'DELETE'
     );
     await page.click('[data-action="batch-delete-albums"]');
-    // The confirmation is the app's own dialog, not window.confirm().
-    await page.click('[data-testid="confirm-dialog-accept"]');
+    // The destructive accept is the app's own slide, not a button.
+    await expect(page.locator('[data-testid="confirm-dialog-accept"]')).toHaveCount(0);
+    await TestHelpers.slideToConfirm(page);
     await deleteResponse;
     await expect(page.locator('[data-testid="album-row"]')).toHaveCount(0);
 

@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { t } from '../lib/i18n.js';
+  import { t, translateError } from '../lib/i18n.js';
   import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import Icon from './Icon.svelte';
   import AlbumPicker from './AlbumPicker.svelte';
@@ -223,81 +223,101 @@
         default: 'Permanently delete {count} album(s)? Photos are kept.',
         values: { count: ids.length },
       });
-      if (!(await askConfirm(msg))) return;
-      selectionState.busy = 'deleteAlbums';
       const applied = [];
       const failed = [];
-      try {
-        for (const id of ids) {
-          try {
-            await api.deleteAlbum(id);
-            applied.push(String(id));
-          } catch (error) {
-            logger.error('Batch album delete failed', { component: 'SelectionBar' }, error);
-            failed.push(String(id));
-          }
-        }
-        // Optimistically splice batch-deleted rows (mirroring the
-        // single-delete path) so they vanish immediately; the refetch
-        // below reconciles with server truth.
-        const deleted = new Set(applied.map(String));
-        for (let i = albums.length - 1; i >= 0; i--) {
-          if (deleted.has(String(albums[i].id))) albums.splice(i, 1);
-        }
-        loadAlbums();
-        dropSelectedKeys(applied);
-        addToast(
-          $t('albums.batchDeleted', {
-            default: '{count} albums deleted',
-            values: { count: applied.length },
-          }),
-          '',
-          'success'
-        );
-        reportResult({ failed });
-      } finally {
-        selectionState.busy = null;
-        if (count === 0) exitSelectionMode();
+      const confirmed = await askConfirm(msg, {
+        slide: {
+          onConfirm: async () => {
+            selectionState.busy = 'deleteAlbums';
+            try {
+              for (const id of ids) {
+                try {
+                  await api.deleteAlbum(id);
+                  applied.push(String(id));
+                } catch (error) {
+                  logger.error('Batch album delete failed', { component: 'SelectionBar' }, error);
+                  failed.push(String(id));
+                }
+              }
+            } finally {
+              selectionState.busy = null;
+            }
+          },
+        },
+      });
+      if (!confirmed) return;
+      // Optimistically splice batch-deleted rows (mirroring the
+      // single-delete path) so they vanish immediately; the refetch
+      // below reconciles with server truth.
+      const deleted = new Set(applied.map(String));
+      for (let i = albums.length - 1; i >= 0; i--) {
+        if (deleted.has(String(albums[i].id))) albums.splice(i, 1);
       }
+      loadAlbums();
+      dropSelectedKeys(applied);
+      addToast(
+        $t('albums.batchDeleted', {
+          default: '{count} albums deleted',
+          values: { count: applied.length },
+        }),
+        '',
+        'success'
+      );
+      reportResult({ failed });
+      if (count === 0) exitSelectionMode();
       return;
     }
 
     if (actionId === 'delete') {
+      // Snapshot the target set: the dialog blocks grid interaction, but a
+      // route change can still clear the selection while the request runs.
+      const target = [...keys];
       const msg = $t('notifications.batchDeleteConfirm', {
         default: 'Permanently delete {count} photo(s)? This cannot be undone.',
-        values: { count },
+        values: { count: target.length },
       });
-      if (!(await askConfirm(msg))) return;
-      selectionState.busy = 'delete';
-      try {
-        const res = await api.batchDelete(keys);
-        // Shared deletion contract: every view splices its list on
-        // photoRemoved; the selection prunes itself from the applied set.
-        for (const hash of res.applied || []) {
-          window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash } }));
-        }
-        dropSelectedKeys(res.applied || []);
-        addToast(
-          $t('notifications.batchDeleted', {
-            default: '{count} photos deleted',
-            values: { count: res.applied?.length || 0 },
-          }),
-          '',
-          'success'
-        );
-        reportResult(res);
-      } catch (error) {
-        logger.error('Batch delete failed', { component: 'SelectionBar' }, error);
-        addToast(
-          $t('errors.batchActionFailed', { default: 'Batch action failed' }),
-          error?.message,
-          'error',
-          5000
-        );
-      } finally {
-        selectionState.busy = null;
-        if (count === 0) exitSelectionMode();
+      let result = null;
+      const confirmed = await askConfirm(msg, {
+        slide: {
+          onConfirm: async () => {
+            selectionState.busy = 'delete';
+            try {
+              result = await api.batchDelete(target);
+            } catch (error) {
+              logger.error('Batch delete failed', { component: 'SelectionBar' }, error);
+              const raw = error instanceof Error ? error.message : '';
+              const match = raw.match(/HTTP \d+: (.+)/);
+              // The open dialog owns the failure feedback; a toast would be
+              // painted behind the modal's top layer.
+              throw new Error(
+                translateError(match?.[1] || raw) ||
+                  $t('errors.batchActionFailed', { default: 'Batch action failed' }),
+                { cause: error }
+              );
+            } finally {
+              selectionState.busy = null;
+            }
+          },
+        },
+      });
+      if (!confirmed) return;
+      const res = result ?? { applied: [], failed: [] };
+      // Shared deletion contract: every view splices its list on
+      // photoRemoved; the selection prunes itself from the applied set.
+      for (const hash of res.applied || []) {
+        window.dispatchEvent(new CustomEvent('photoRemoved', { detail: { hash } }));
       }
+      dropSelectedKeys(res.applied || []);
+      addToast(
+        $t('notifications.batchDeleted', {
+          default: '{count} photos deleted',
+          values: { count: res.applied?.length || 0 },
+        }),
+        '',
+        'success'
+      );
+      reportResult(res);
+      if (count === 0) exitSelectionMode();
       return;
     }
 

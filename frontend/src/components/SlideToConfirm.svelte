@@ -184,6 +184,7 @@
     user-select: none;
     font-family: var(--font-body);
     color: var(--text-secondary);
+    transition: background-color var(--transition-fast);
   }
 
   .slide-confirm:focus-visible {
@@ -225,7 +226,6 @@
   .slide-confirm.armed,
   .slide-confirm.busy {
     background: var(--color-danger);
-    transition: background-color var(--transition-fast);
   }
 
   .slide-hint {

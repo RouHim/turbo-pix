@@ -76,6 +76,31 @@ test('forced reloads in flight share one request', async () => {
   assert.equal(await reloadB, payload);
 });
 
+test('invalidate drops the cache and a late answer cannot refill it', async () => {
+  let calls = 0;
+  const resolvers = [];
+  const request = () => {
+    calls += 1;
+    return new Promise((resolve) => resolvers.push(resolve));
+  };
+  const loadTimeline = createTimelineLoader(request);
+
+  const superseded = loadTimeline();
+  loadTimeline.invalidate();
+  const current = loadTimeline();
+  assert.equal(calls, 2, 'the invalidation forces a fresh read');
+
+  const staleData = { density: [{ year: 2020, month: 1, count: 1 }] };
+  const currentData = { density: [{ year: 2026, month: 2, count: 3 }] };
+  resolvers[0](staleData);
+  assert.equal(await superseded, staleData);
+  resolvers[1](currentData);
+  assert.equal(await current, currentData);
+
+  assert.equal(await loadTimeline(), currentData, 'the stale answer cannot refill the cache');
+  assert.equal(calls, 2);
+});
+
 test('a failed request is not cached and the next call retries', async () => {
   let calls = 0;
   const request = async () => {

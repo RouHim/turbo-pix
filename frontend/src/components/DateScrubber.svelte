@@ -36,7 +36,7 @@
   const monthName = (month) => formatMonthName(month, activeLocale);
 
   let density = $state(null);
-  let densityLoading = false;
+  let densityRequest = 0;
   let visibleMonth = $state(null);
   let targetMonth = $state(null);
   let scrollEl = $state(null);
@@ -210,11 +210,15 @@
   }
 
   async function fetchDensity(force = false) {
-    if (densityLoading) return;
-    densityLoading = true;
+    // A forced reload must not join the initial read; the loader starts a
+    // fresh request, so only the newest answer may update the rail.
+    const request = ++densityRequest;
     try {
-      density = await loadTimeline(force);
+      const next = await loadTimeline(force);
+      if (request !== densityRequest) return;
+      density = next;
     } catch (error) {
+      if (request !== densityRequest) return;
       console.warn('[date-scrubber] timeline density unavailable', error);
       addToast(
         $t('notifications.error', { default: 'Error' }),
@@ -222,8 +226,6 @@
         'error',
         4000
       );
-    } finally {
-      densityLoading = false;
     }
   }
 

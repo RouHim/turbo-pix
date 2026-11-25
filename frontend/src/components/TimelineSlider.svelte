@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
-  import { api } from '../lib/api.js';
+  import { loadTimeline } from '../lib/api.js';
   import { addToast, appState, setTimelineCollapsed } from '../lib/state.svelte.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { buildTimelineModel, formatPeriodName, formatSelectionLabel } from '../lib/timeline.js';
@@ -150,18 +150,20 @@
   };
 
   $effect(() => {
-    fetchTimelineData();
+    void fetchTimelineData();
     // A saved date edit moves a photo between buckets; the density is a
     // server-side aggregate, so the whole graph has to be re-read. Registering
     // is not a reactive read (the dependency set stays empty), and the teardown
-    // keeps a remount from stacking listeners.
-    window.addEventListener('photosReloadRequested', fetchTimelineData);
-    return () => window.removeEventListener('photosReloadRequested', fetchTimelineData);
+    // keeps a remount from stacking listeners. The loader joins the date
+    // scrubber's identical refetch into one request.
+    const handleReload = () => void fetchTimelineData(true);
+    window.addEventListener('photosReloadRequested', handleReload);
+    return () => window.removeEventListener('photosReloadRequested', handleReload);
   });
 
-  const fetchTimelineData = async () => {
+  const fetchTimelineData = async (force = false) => {
     try {
-      data = await api.request('/api/photos/timeline');
+      data = await loadTimeline(force);
       initError = false;
     } catch (error) {
       console.error('Failed to initialize timeline:', error);

@@ -1,6 +1,4 @@
-use std::collections::BTreeMap;
-
-use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -139,6 +137,20 @@ pub(crate) fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
                 .ok()
                 .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
         })
+}
+
+/// The `(year, month)` bucket of a derived capture date. Both accepted
+/// timestamp shapes start with `YYYY-MM`, so the prefix is the bucket and the
+/// lexicographic order is chronological; a value without that shape is skipped
+/// like an unparseable date.
+fn timeline_year_month(raw: &str) -> Option<(i32, i32)> {
+    let bytes = raw.as_bytes();
+    if bytes.len() < 7 || bytes[4] != b'-' {
+        return None;
+    }
+    let year = raw.get(0..4)?.parse().ok()?;
+    let month = raw.get(5..7)?.parse().ok()?;
+    (1..=12).contains(&month).then_some((year, month))
 }
 
 fn build_general_search_condition() -> &'static str {
@@ -1215,36 +1227,33 @@ impl Photo {
     pub async fn get_timeline_data(
         pool: &DbPool,
     ) -> Result<TimelineData, Box<dyn std::error::Error>> {
-        // One pass over the derived dates; an undated row contributes no bucket.
-        let rows: Vec<String> =
-            sqlx::query_scalar("SELECT taken_at FROM photos WHERE taken_at IS NOT NULL")
-                .fetch_all(pool)
-                .await?;
+        // The result needs one row per month, so aggregate in SQL: fetching one
+        // string per photo dominated this call (200k rows) for 60 output rows.
+        let buckets: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT substr(taken_at, 1, 7) AS year_month, COUNT(*)
+             FROM photos WHERE taken_at IS NOT NULL
+             GROUP BY year_month ORDER BY year_month",
+        )
+        .fetch_all(pool)
+        .await?;
 
-        let mut min_date: Option<DateTime<Utc>> = None;
-        let mut max_date: Option<DateTime<Utc>> = None;
-        let mut buckets: BTreeMap<(i32, i32), i64> = BTreeMap::new();
+        let (earliest, latest): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT MIN(taken_at), MAX(taken_at) FROM photos WHERE taken_at IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await?;
 
-        for raw in rows {
-            let Some(taken_at) = parse_datetime(&raw) else {
-                continue;
-            };
-            min_date = Some(min_date.map_or(taken_at, |current| current.min(taken_at)));
-            max_date = Some(max_date.map_or(taken_at, |current| current.max(taken_at)));
-            *buckets
-                .entry((taken_at.year(), taken_at.month() as i32))
-                .or_default() += 1;
-        }
-
-        // `BTreeMap<(year, month), _>` iterates ordered by year then month.
         let density = buckets
             .into_iter()
-            .map(|((year, month), count)| TimelineDensity { year, month, count })
+            .filter_map(|(year_month, count)| {
+                let (year, month) = timeline_year_month(&year_month)?;
+                Some(TimelineDensity { year, month, count })
+            })
             .collect();
 
         Ok(TimelineData {
-            min_date: min_date.map(|dt| dt.to_rfc3339()),
-            max_date: max_date.map(|dt| dt.to_rfc3339()),
+            min_date: earliest.and_then(|raw| parse_datetime(&raw).map(|dt| dt.to_rfc3339())),
+            max_date: latest.and_then(|raw| parse_datetime(&raw).map(|dt| dt.to_rfc3339())),
             density,
         })
     }

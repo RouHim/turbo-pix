@@ -6,7 +6,7 @@
   import { MediaQuery } from 'svelte/reactivity';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
-  import { api } from '../lib/api.js';
+  import { api, loadTimeline } from '../lib/api.js';
   import { appState, photoGridState, addToast } from '../lib/state.svelte.js';
   import { route } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
@@ -209,11 +209,11 @@
     }, remaining);
   }
 
-  async function fetchDensity() {
+  async function fetchDensity(force = false) {
     if (densityLoading) return;
     densityLoading = true;
     try {
-      density = await api.request('/api/photos/timeline');
+      density = await loadTimeline(force);
     } catch (error) {
       console.warn('[date-scrubber] timeline density unavailable', error);
       addToast(
@@ -471,7 +471,7 @@
     // be forgotten even when the rail is dormant (`enabled` folds in the
     // media query, which `scopeKey` does not cover).
     resetWindow();
-    void fetchDensity();
+    void fetchDensity(true);
   }
 
   $effect(() => {

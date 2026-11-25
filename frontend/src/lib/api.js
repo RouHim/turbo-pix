@@ -1,6 +1,7 @@
 // API client for TurboPix
 import { performance, storage } from './utils.js';
 import { logger } from './logger.js';
+import { createTimelineLoader } from './timelineCache.js';
 
 class TurboPixAPI {
   constructor(baseUrl = '') {
@@ -593,3 +594,9 @@ class TurboPixAPI {
 }
 
 export const api = new TurboPixAPI();
+
+/**
+ * One shared `/api/photos/timeline` read for the timeline slider and the date
+ * scrubber; see `timelineCache.js` for the dedupe rules.
+ */
+export const loadTimeline = createTimelineLoader((endpoint) => api.request(endpoint));

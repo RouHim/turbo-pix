@@ -19,6 +19,17 @@ fn main() {
         panic!("dist/index.html not found — run `npm run build` before `cargo build`");
     }
 
+    // The offline place dataset is embedded with `include_str!`
+    // (src/place_resolver.rs). Checking it here turns the compiler's missing-file
+    // error into an actionable one, the same way the dist check above does.
+    let geodata = Path::new(&manifest_dir).join("assets").join("geodata.txt");
+    if !geodata.exists() {
+        panic!(
+            "assets/geodata.txt not found — run `./scripts/fetch-geodata.sh` before `cargo build`"
+        );
+    }
+    println!("cargo:rerun-if-changed={}", geodata.display());
+
     // Stale-dist guard: if any frontend source is newer than the bundled
     // index.html, the embedded bundle is out of date. Emitting
     // rerun-if-changed for the sources makes cargo re-run this script

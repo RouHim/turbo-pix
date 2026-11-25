@@ -19,15 +19,18 @@
     isSemanticQuery,
     wrapLongitudeForView,
   } from '../lib/map.js';
+  import { MAP_MAX_ZOOM, mapAttributionHtml } from '../lib/mapAttribution.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
   import MapPopup from './MapPopup.svelte';
 
-  const MAX_ZOOM = 19;
   const CLUSTER_RADIUS = 60;
   const CLUSTER_MAX_ZOOM = 18;
   const INITIAL_CENTER = [20, 0];
   const INITIAL_ZOOM = 2;
   const FIT_MAX_ZOOM = 14;
+  // A focused photo gets street-level context: close enough to see where it was
+  // taken, wide enough to keep the neighbourhood readable.
+  const FOCUS_ZOOM = 15;
 
   // FR-018: the OS "reduce motion" preference disables every map transition.
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -42,11 +45,17 @@
   let tileLayer = null;
   let clusterLayer = null;
   let clusterIndex = null;
+  // The `locations` array the current index was built from: until it matches,
+  // the index still describes the previous result set.
+  let indexedLocations = null;
   let resizeObserver = null;
   let abortController = null;
   let loadToken = 0;
   let anyTileLoaded = false;
   let hasFittedOnce = false;
+  // Location key whose popup a `?focus=` handoff asked for, until its marker
+  // exists at the current zoom (a cluster can hide it for a few zoom steps).
+  let pendingFocusKey = null;
   // Location key of the open popup, and whether a marker re-render was asked
   // for while it was open (see renderClusters).
   let openPopupKey = null;
@@ -106,7 +115,10 @@
       const loaded = await fetchPhotoSet(route, signal);
       if (token !== loadToken) return;
       photos = loaded;
-      fitToLocationsOnce();
+      // A `?focus=` handoff owns the viewport; framing everything first would
+      // make the map sweep across the world before it reaches the photo. The
+      // focus effect applies it once the data is in.
+      if (!route.focus) fitToLocationsOnce();
     } catch (error) {
       if (error?.name === 'AbortError') return;
       if (token !== loadToken) return;
@@ -127,7 +139,8 @@
 
   function attributionHtml() {
     const label = get(t)('map.attributionLabel', { default: 'OpenStreetMap contributors' });
-    return `&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">${label}</a>`;
+    const places = get(t)('map.placeAttributionLabel', { default: 'Place data © GeoNames' });
+    return mapAttributionHtml(label, places);
   }
 
   /** Frames the current result set exactly once per mount (FR-016). */
@@ -142,6 +155,69 @@
       maxZoom: FIT_MAX_ZOOM,
       animate: !prefersReducedMotion,
     });
+  }
+
+  /**
+   * Applies a `?focus=<hash>` handoff from the viewer's mini map: centers the
+   * map on that photo's location and queues its popup. Returns false when the
+   * photo is not part of the plotted set, so the caller can frame everything
+   * instead of leaving the map at its initial world view.
+   *
+   * The popup must not be opened here: an animated `setView` only moves the map
+   * on the next animation frame, so `getZoom()`/`getCenter()` would still report
+   * the pre-handoff view and the retry's `setZoom` would cancel the queued move.
+   * The trailing `moveend` (or, for reduced motion, the synchronous move) lands
+   * in `renderClusters`, which calls `openPendingFocusPopup`.
+   */
+  function focusOnPhoto(hash) {
+    if (!map || !hash) return false;
+    const location = locations.find((entry) =>
+      entry.photos.some((photo) => photo.hash_sha256 === hash)
+    );
+    if (!location) return false;
+    hasFittedOnce = true;
+    pendingFocusKey = location.key;
+    map.setView([location.latitude, location.longitude], FOCUS_ZOOM, {
+      animate: !prefersReducedMotion,
+    });
+    return true;
+  }
+
+  /**
+   * Opens the popup the handoff asked for, once its marker exists.
+   *
+   * A location inside a cluster has no marker of its own; zooming in splits the
+   * cluster, and the next render (on `moveend`) calls back here. `MAP_MAX_ZOOM` is
+   * above the clustering ceiling, where every location is its own marker, so
+   * the retry always terminates.
+   */
+  function openPendingFocusPopup() {
+    if (!pendingFocusKey || !map) return;
+    // A URL can carry both `focus` and `photo` (a map popup's photo pushes `photo`
+    // while `buildUrl` keeps `focus`). The viewer is modal and already shows that
+    // photo, so the popup would open behind it and steal keyboard focus into a
+    // thumbnail. Centering still happened in `focusOnPhoto`; only the popup is skipped.
+    if (route.photo) {
+      pendingFocusKey = null;
+      return;
+    }
+    // The focus effect is created before the cluster effect, so on the flush that
+    // delivers the result set it runs while the index still describes the
+    // previous (empty) one: a marker lookup would miss and the zoom recursion
+    // would climb to MAP_MAX_ZOOM before the marker exists. The cluster effect
+    // calls back here once the index is current.
+    if (indexedLocations !== locations) return;
+    const marker = locationMarkers.get(pendingFocusKey);
+    if (marker) {
+      pendingFocusKey = null;
+      marker.openPopup();
+      return;
+    }
+    if (map.getZoom() >= MAP_MAX_ZOOM) {
+      pendingFocusKey = null;
+      return;
+    }
+    map.setZoom(map.getZoom() + 1, { animate: !prefersReducedMotion });
   }
 
   // ── Marker rendering ──────────────────────────────────────────────────────
@@ -294,7 +370,7 @@
   function expandCluster(clusterId, latlng) {
     if (!map || !clusterIndex) return;
     const zoom = clusterIndex.getClusterExpansionZoom(clusterId);
-    map.setView(latlng, Math.min(zoom, MAX_ZOOM), { animate: !prefersReducedMotion });
+    map.setView(latlng, Math.min(zoom, MAP_MAX_ZOOM), { animate: !prefersReducedMotion });
   }
 
   /** Pan/zoom redraws are the ones that must wait for an open popup to close. */
@@ -419,6 +495,8 @@
     } else if (focusedCluster) {
       map.getContainer().focus();
     }
+
+    openPendingFocusPopup();
   }
 
   function openViewer(photo) {
@@ -436,7 +514,7 @@
       zoom: INITIAL_ZOOM,
       zoomControl: true,
       attributionControl: true,
-      maxZoom: MAX_ZOOM,
+      maxZoom: MAP_MAX_ZOOM,
       // FR-018: reduced motion preference suppresses animated pan/zoom/fade.
       zoomAnimation: !prefersReducedMotion,
       fadeAnimation: !prefersReducedMotion,
@@ -448,7 +526,7 @@
     map.attributionControl.addAttribution(attributionHtml());
 
     if (appState.tileUrl) {
-      tileLayer = L.tileLayer(appState.tileUrl, { maxZoom: MAX_ZOOM });
+      tileLayer = L.tileLayer(appState.tileUrl, { maxZoom: MAP_MAX_ZOOM });
       tileLayer.on('tileerror', () => {
         if (!anyTileLoaded) tilesFailed = true;
       });
@@ -497,6 +575,7 @@
       tileLayer = null;
       clusterLayer = null;
       clusterIndex = null;
+      indexedLocations = null;
     };
   });
 
@@ -513,11 +592,30 @@
     untrack(() => loadPhotos());
   });
 
+  // `?focus=` applies once per hash, when the data for it is in: a later filter
+  // change must not yank the viewport back from wherever the user panned to.
+  let lastAppliedFocusHash = null;
+  $effect(() => {
+    const focusHash = route.focus;
+    const located = locations.length;
+    untrack(() => {
+      if (!focusHash || located === 0 || focusHash === lastAppliedFocusHash) return;
+      if (focusOnPhoto(focusHash)) {
+        lastAppliedFocusHash = focusHash;
+      } else {
+        // The focused photo is not part of the plotted set (filtered out or
+        // deleted): frame what is left instead of the initial world view.
+        fitToLocationsOnce();
+      }
+    });
+  });
+
   $effect(() => {
     // FR-006: cluster the unique coordinate locations; each point carries its
     // location's photo count so the index itself can aggregate photos, and the
     // index is rebuilt whenever the result set changes (markers follow
     // immediately).
+    const builtFrom = locations;
     clusterIndex = new Supercluster({
       radius: CLUSTER_RADIUS,
       maxZoom: CLUSTER_MAX_ZOOM,
@@ -526,12 +624,13 @@
         accumulated.photoCount += properties.photoCount;
       },
     }).load(
-      locations.map((location) => ({
+      builtFrom.map((location) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] },
         properties: { key: location.key, photoCount: location.photos.length },
       }))
     );
+    indexedLocations = builtFrom;
     untrack(() => renderClusters());
   });
 
@@ -711,6 +810,41 @@
   :global(.map-cluster-marker:focus-visible) {
     outline: 2px solid var(--primary-color);
     outline-offset: 3px;
+  }
+
+  /* Leaflet's popup ships a white wrapper and its own Helvetica stack. Both
+     break the design system, and the white wrapper makes the dark theme
+     illegible (ink on white, 1.16:1), so the popup takes the same tokens as
+     every paper surface. Scoped to the map canvas: the mini map has no popups. */
+  .map-canvas :global(.leaflet-popup-content-wrapper) {
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-medium);
+  }
+
+  .map-canvas :global(.leaflet-popup-tip) {
+    background: var(--surface-color);
+  }
+
+  .map-canvas :global(.leaflet-popup-content) {
+    margin: var(--space-3) var(--space-4);
+    font-family: inherit;
+    font-size: var(--font-base);
+    line-height: 1.5;
+  }
+
+  .map-canvas :global(.leaflet-popup-close-button) {
+    width: 32px;
+    height: 32px;
+    color: var(--text-secondary);
+  }
+
+  .map-canvas :global(.leaflet-popup-close-button:focus-visible) {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
   }
 
   /* Above every Leaflet pane (markers 600, popups 700) but below the control

@@ -63,6 +63,20 @@ export function formatDate(value, locale = 'en') {
 }
 
 /**
+ * Format an instant as a long localized date (no time), in the browser's time
+ * zone. Used by the current-date hint.
+ *
+ * @param {Date|string|number|null|undefined} value
+ * @param {string} locale
+ * @returns {string}
+ */
+export function formatLongDate(value, locale = 'en') {
+  const date = toDate(value);
+  if (!date) return '';
+  return getFormatter(locale, 'date-long', { dateStyle: 'long' }).format(date);
+}
+
+/**
  * @param {Date|string|number|null|undefined} value
  * @param {string} locale
  * @returns {string}

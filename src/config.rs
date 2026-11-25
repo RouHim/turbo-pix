@@ -25,7 +25,6 @@ pub struct Config {
     /// Per-transcode timeout in seconds. Default 300.
     pub transcode_timeout_secs: u64,
     pub locale: String,
-    pub nominatim_url: String,
     pub tile_url: String,
     /// Face detection/recognition is on by default, like CLIP. The kill
     /// switch skips the face phase and hides the People surface.
@@ -77,9 +76,6 @@ impl Config {
         let locale =
             parse_locale(env::var("TURBO_PIX_LOCALE").unwrap_or_else(|_| "en".to_string()));
 
-        let nominatim_url = env::var("TURBO_PIX_NOMINATIM_URL")
-            .unwrap_or_else(|_| "https://nominatim.openstreetmap.org".to_string());
-
         // Operator-configurable raster tile endpoint (FR-002). The default is
         // the public OSM service; self-hosted/alternative OSM-compatible
         // endpoints need this env var only — no code change or rebuild.
@@ -108,7 +104,6 @@ impl Config {
             cache,
             transcode_timeout_secs,
             locale,
-            nominatim_url,
             tile_url,
             face_recognition_enabled,
         })
@@ -247,38 +242,6 @@ mod tests {
                 env::set_var("TURBO_PIX_LOCALE", value);
             } else {
                 env::remove_var("TURBO_PIX_LOCALE");
-            }
-        });
-    }
-
-    #[test]
-    fn uses_default_nominatim_url_when_env_var_is_missing() {
-        with_env_lock(|| {
-            let original = env::var("TURBO_PIX_NOMINATIM_URL").ok();
-            env::remove_var("TURBO_PIX_NOMINATIM_URL");
-
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.nominatim_url, "https://nominatim.openstreetmap.org");
-
-            if let Some(value) = original {
-                env::set_var("TURBO_PIX_NOMINATIM_URL", value);
-            }
-        });
-    }
-
-    #[test]
-    fn reads_custom_nominatim_url_from_env() {
-        with_env_lock(|| {
-            let original = env::var("TURBO_PIX_NOMINATIM_URL").ok();
-            env::set_var("TURBO_PIX_NOMINATIM_URL", "http://my-nominatim:8080");
-
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.nominatim_url, "http://my-nominatim:8080");
-
-            if let Some(value) = original {
-                env::set_var("TURBO_PIX_NOMINATIM_URL", value);
-            } else {
-                env::remove_var("TURBO_PIX_NOMINATIM_URL");
             }
         });
     }

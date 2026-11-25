@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  countryName,
   fetchSemanticPhotoSet,
   formatCoordinates,
+  formatPlaceLabel,
   getLocationLabel,
   getPhotoCoordinates,
   groupPhotosByLocation,
@@ -34,7 +36,7 @@ test('getPhotoCoordinates rejects missing, non-numeric, and out-of-range values'
 });
 
 test('groupPhotosByLocation collapses identical coordinates and preserves order', () => {
-  const berlin = photo('a', 52.52, 13.405, { city: 'Berlin' });
+  const berlin = photo('a', 52.52, 13.405, { place: 'Berlin' });
   const berlin2 = photo('b', 52.52, 13.405);
   const munich = photo('c', 48.137, 11.575);
   const unlocated = { hash_sha256: 'd', metadata: {} };
@@ -50,12 +52,51 @@ test('groupPhotosByLocation collapses identical coordinates and preserves order'
   assert.equal(locations[1].key, '48.137,11.575');
 });
 
-test('getLocationLabel prefers the first resolved city and returns null otherwise', () => {
-  const locations = groupPhotosByLocation([photo('a', 1, 2), photo('b', 1, 2, { city: 'Berlin' })]);
-  assert.equal(getLocationLabel(locations[0]), 'Berlin');
+test('getLocationLabel prefers the first resolved place and returns null otherwise', () => {
+  const locations = groupPhotosByLocation([
+    photo('a', 1, 2),
+    photo('b', 1, 2, { place: 'Volksdorf, Hamburg' }),
+  ]);
+  assert.equal(getLocationLabel(locations[0]), 'Volksdorf, Hamburg');
 
-  const withoutCity = groupPhotosByLocation([photo('c', 3, 4)]);
-  assert.equal(getLocationLabel(withoutCity[0]), null);
+  const withoutPlace = groupPhotosByLocation([photo('c', 3, 4)]);
+  assert.equal(getLocationLabel(withoutPlace[0]), null);
+});
+
+test('countryName renders the region name in the requested language', () => {
+  assert.equal(countryName('DE', 'de'), 'Deutschland');
+  assert.equal(countryName('DE', 'en'), 'Germany');
+  assert.equal(countryName('dk', 'en'), 'Denmark');
+});
+
+test('countryName falls back to the code for unknown regions', () => {
+  assert.equal(countryName('ZZ', 'en'), 'ZZ');
+  assert.equal(countryName('ZZ', 'de'), 'ZZ');
+});
+
+test('countryName returns null without a code', () => {
+  assert.equal(countryName(null, 'en'), null);
+  assert.equal(countryName('', 'de'), null);
+  assert.equal(countryName('   ', 'en'), null);
+});
+
+test('formatPlaceLabel joins the place and its localized country', () => {
+  const located = photo('a', 52.52, 13.405, { place: 'Berlin', country_code: 'DE' });
+
+  assert.equal(formatPlaceLabel(located, 'en'), 'Berlin, Germany');
+  assert.equal(formatPlaceLabel(located, 'de'), 'Berlin, Deutschland');
+});
+
+test('formatPlaceLabel keeps the place alone without a country code', () => {
+  const located = photo('a', 52.52, 13.405, { place: 'Volksdorf, Hamburg' });
+
+  assert.equal(formatPlaceLabel(located, 'de'), 'Volksdorf, Hamburg');
+});
+
+test('formatPlaceLabel returns null without a resolved place', () => {
+  assert.equal(formatPlaceLabel(photo('a', 52.52, 13.405), 'en'), null);
+  assert.equal(formatPlaceLabel(photo('a', 52.52, 13.405, { place: '  ' }), 'en'), null);
+  assert.equal(formatPlaceLabel(null, 'en'), null);
 });
 
 test('formatCoordinates prints six decimals like the metadata panel', () => {

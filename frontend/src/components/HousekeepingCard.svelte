@@ -285,7 +285,7 @@
     padding: var(--space-5);
     /* Caption band clears the 56px action buttons; the overlay paints above
        the image (1) and below the open layer (3). */
-    padding-bottom: calc(var(--button-size) + var(--space-4));
+    padding-bottom: calc(56px + var(--space-4));
     z-index: 2;
     backdrop-filter: blur(1px);
     -webkit-backdrop-filter: blur(1px);

@@ -180,7 +180,12 @@ the top level and appear instead as `metadata.location.latitude` /
   "metadata": {
     "camera": { "make": "Canon", "model": "EOS R5" },
     "settings": { "iso": 100 },
-    "location": { "city": "Berlin", "latitude": 52.52, "longitude": 13.405 }
+    "location": {
+      "place": "Volksdorf, Hamburg",
+      "country_code": "DE",
+      "latitude": 53.651,
+      "longitude": 10.166
+    }
   },
   "file_modified": "2024-07-05T08:11:02Z",
   "date_indexed": "2024-07-05T08:11:05Z",
@@ -215,10 +220,10 @@ other listing (`src/db.rs::build_search_where`):
 - `type:video` / `type:image` → filters on `mime_type`.
 - `is_favorite:true` / `is_favorite:false` → filters on the favorite flag
   (`false` also matches `NULL`).
-- `location:<city…>` → absorbs following words until the next prefix token, then
-  matches `metadata.location.city`.
+- `location:<place…>` → absorbs following words until the next prefix token, then
+  matches `metadata.location.place`.
 - any other token → case-insensitive `LIKE %token%` over `filename`,
-  `metadata.camera.make`, `metadata.camera.model`, `metadata.location.city`.
+  `metadata.camera.make`, `metadata.camera.model`, `metadata.location.place`.
   `%`, `_` and `\` are escaped, so `IMG_2024` matches literally.
 
 Ordering is `"<column> <dir>, hash_sha256 <dir>"`, so pages are deterministic.

@@ -63,12 +63,12 @@ mod tests {
         let mut photo = create_test_photo("a.jpg".to_string(), "a".to_string());
         photo.taken_latitude = Some(52.52);
         photo.taken_longitude = Some(13.405);
-        photo.metadata = serde_json::json!({"location": {"city": "Berlin"}});
+        photo.metadata = serde_json::json!({"location": {"place": "Berlin"}});
 
         let reply = PhotoReply::from_row(photo);
         let value = serde_json::to_value(&reply).unwrap();
 
-        assert_eq!(value["metadata"]["location"]["city"], "Berlin");
+        assert_eq!(value["metadata"]["location"]["place"], "Berlin");
         assert_eq!(value["metadata"]["location"]["latitude"], 52.52);
         assert_eq!(value["metadata"]["location"]["longitude"], 13.405);
         // The flat columns are an implementation detail, never in the payload.
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn a_row_without_coordinates_keeps_its_metadata_untouched() {
         let mut photo = create_test_photo("b.jpg".to_string(), "b".to_string());
-        photo.metadata = serde_json::json!({"location": {"city": "Berlin"}});
+        photo.metadata = serde_json::json!({"location": {"place": "Berlin"}});
         let metadata = photo.metadata.clone();
 
         let reply = PhotoReply::from_row(photo);

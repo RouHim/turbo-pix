@@ -1,3 +1,28 @@
+# [2.62.0](https://github.com/RouHim/turbo-pix/compare/2.61.3...2.62.0) (2026-11-25)
+
+### Bug Fixes
+
+* **date-hint:** scope the pill to PhotoGrid routes ([1d1d59e](https://github.com/RouHim/turbo-pix/commit/1d1d59ee87c6e4ec917bde182310cccfd05da966))
+
+### Features
+
+* **ui:** show the current photo date while scrolling ([6be2889](https://github.com/RouHim/turbo-pix/commit/6be2889e1fae7b3b8632638125ec05343d6854ff))
+
+## [2.61.3](https://github.com/RouHim/turbo-pix/compare/2.61.2...2.61.3) (2026-11-25)
+
+## [2.61.2](https://github.com/RouHim/turbo-pix/compare/2.61.1...2.61.2) (2026-11-24)
+
+### Bug Fixes
+
+* **collages:** give mobile cards room for accept/reject controls ([44ad6bd](https://github.com/RouHim/turbo-pix/commit/44ad6bdc83c02a9ac6f6e50168ea01a68ef36777))
+* **collages:** hide selection-mode actions immediately ([744bc52](https://github.com/RouHim/turbo-pix/commit/744bc5250c6ab69340e66a45a438b399455cb4f6))
+
+## [2.61.1](https://github.com/RouHim/turbo-pix/compare/2.61.0...2.61.1) (2026-11-24)
+
+### Performance Improvements
+
+* **ort:** cut face and text inference latency ([#110](https://github.com/RouHim/turbo-pix/issues/110)) ([76f89d3](https://github.com/RouHim/turbo-pix/commit/76f89d3bedc238f70432c3ea16ef86c8c898b048))
+
 # [2.61.0](https://github.com/RouHim/turbo-pix/compare/2.60.1...2.61.0) (2026-11-24)
 
 ### Features

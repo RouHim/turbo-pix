@@ -352,9 +352,9 @@ test.describe('Metadata edit', () => {
     expect(reread.metadata?.location?.latitude).toBe(savedLatitude);
     expect(reread.metadata?.location?.longitude).toBe(savedLongitude);
 
-    // AND the viewer shows the file's values: the panel's six-decimal
-    // convention, and the form's own rendering of the file's coordinates.
-    await expect(page.locator('#photo-location')).toHaveText(
+    // AND the viewer shows the file's values: the Location section's
+    // six-decimal convention, and the form's own rendering of them.
+    await expect(page.locator('#meta-gps')).toHaveText(
       `${savedLatitude.toFixed(6)}, ${savedLongitude.toFixed(6)}`
     );
     await openViewerMetadata(page, photo.hash_sha256);

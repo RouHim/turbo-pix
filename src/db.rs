@@ -58,7 +58,7 @@ pub struct Photo {
 
     // === METADATA (JSON blob) ===
     /// Contains: camera{make,model,lens_make,lens_model}, settings{iso,aperture,...},
-    /// location{city,...}, video{codec,audio_codec,bitrate,frame_rate}. Stored
+    /// location{place,country_code,...}, video{codec,audio_codec,bitrate,frame_rate}. Stored
     /// documents hold no coordinates: [`stored_metadata`] strips the pair from
     /// every write, and [`crate::photo_reply::PhotoReply`] nests the row's
     /// derived pair into the response.
@@ -110,7 +110,7 @@ where
 ///
 /// Capture coordinates live in the photo's derived columns, so the two
 /// coordinate keys are stripped from `location` on every write. `location`
-/// itself is kept — city and any other key survive, and an emptied
+/// itself is kept — the place label and any other key survive, and an emptied
 /// `location` object is deliberately not collapsed (removing a key is not a
 /// reason to change the shape other code reads).
 fn stored_metadata(metadata: &serde_json::Value) -> String {
@@ -142,7 +142,7 @@ pub(crate) fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn build_general_search_condition() -> &'static str {
-    "(filename LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.make') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.model') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\')"
+    "(filename LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.make') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.camera.model') LIKE ? ESCAPE '\\' OR json_extract(metadata, '$.location.place') LIKE ? ESCAPE '\\')"
 }
 
 /// Escape LIKE wildcards (`%`, `_`) and the escape character itself so user
@@ -365,28 +365,28 @@ pub(crate) fn build_search_where(query: &SearchQuery) -> (String, Vec<String>) {
                 // Absorb following words until the next prefix token or
                 // end, so multi-word cities ("location:New York") keep
                 // working.
-                let mut city = token.strip_prefix("location:").unwrap_or("").to_string();
+                let mut place = token.strip_prefix("location:").unwrap_or("").to_string();
                 while i + 1 < tokens.len()
                     && !tokens[i + 1].starts_with("type:")
                     && !tokens[i + 1].starts_with("is_favorite:")
                     && !tokens[i + 1].starts_with("location:")
                 {
                     i += 1;
-                    city.push(' ');
-                    city.push_str(tokens[i]);
+                    place.push(' ');
+                    place.push_str(tokens[i]);
                 }
-                if city.trim().is_empty() {
-                    // Bare "location:" token — no city to match, skip it
-                    // (LIKE '%%' would match every row with a city).
+                if place.trim().is_empty() {
+                    // Bare "location:" token — no place to match, skip it
+                    // (LIKE '%%' would match every row with a place).
                 } else {
                     // Trim once: "location: New York" accumulates a leading
                     // space during absorption that would break the LIKE
                     // pattern ('% New York%' matches nothing).
-                    let city = city.trim();
+                    let place = place.trim();
                     where_clause.push_str(
-                        " AND json_extract(metadata, '$.location.city') LIKE ? ESCAPE '\\'",
+                        " AND json_extract(metadata, '$.location.place') LIKE ? ESCAPE '\\'",
                     );
-                    params.push(format!("%{}%", escape_like(city)));
+                    params.push(format!("%{}%", escape_like(place)));
                 }
             } else {
                 // General search across multiple fields (filename + JSON metadata)
@@ -591,7 +591,7 @@ impl Photo {
                 -- geocoded from the position it replaced.
                 metadata = CASE WHEN ? THEN json_patch(
                                     CASE WHEN json_type(metadata) = 'object' THEN metadata ELSE '{}' END,
-                                    '{"location":{"city":null}}')
+                                    '{"location":{"place":null,"country_code":null}}')
                                ELSE metadata END,
                 geo_location_resolved = CASE WHEN ? THEN 0 ELSE geo_location_resolved END,
                 file_size = COALESCE(?, file_size),
@@ -1094,7 +1094,7 @@ impl Photo {
                 -- RFC 7396 (SQLite `json_patch`), not a replacement: the scan's
                 -- document names the facts it owns and every other member the
                 -- row holds survives it — the resolved place name
-                -- (`$.location.city`) and the video probe record
+                -- (`$.location.place`, `$.location.country_code`) and the video probe record
                 -- (`$.video.capability_version`) among them. Replacing the
                 -- document wholesale dropped both on every pass, and every
                 -- resume re-upserts even the rows the unchanged-file fast path
@@ -1130,7 +1130,8 @@ impl Photo {
                                      CASE WHEN json_type(photos.metadata) = 'object'
                                           THEN photos.metadata
                                           ELSE '{}' END,
-                                     '$.camera', '$.settings', '$.video', '$.location.city'),
+                                     '$.camera', '$.settings', '$.video', '$.location.place',
+                                     '$.location.country_code'),
                                  excluded.metadata)
                     END,
                     -- Stored coordinate keys are legacy residue: the pair lives
@@ -1145,7 +1146,7 @@ impl Photo {
                 -- that makes the resolver look at the row again goes back to 0
                 -- with it: `get_photos_needing_geo_resolution` selects exactly
                 -- the rows with it clear, and a row left at 1 would keep no
-                -- name and never be handed to `geo_location::resolve_batch` —
+                -- name and never be handed to `place_resolver` —
                 -- losing the map label and the `location:` search hits for
                 -- good. An unchanged row keeps both the name the merge above
                 -- preserves and its flag, deliberately: its coordinates are
@@ -1431,17 +1432,24 @@ pub async fn mark_photo_geo_resolved(
     Ok(())
 }
 
-pub async fn update_photo_city(
+/// Stores the place label resolved for a photo and marks the row resolved.
+///
+/// `None` (nothing within range) still marks the row resolved: the next pass
+/// must not repeat the lookup for a photo that has no nameable place nearby.
+pub async fn update_photo_place(
     pool: &DbPool,
     file_path: &str,
-    city: Option<&str>,
+    place: Option<&crate::place_resolver::ResolvedPlace>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(city) = city {
-        sqlx::query("UPDATE photos SET metadata = json_set(metadata, '$.location.city', ?) WHERE file_path = ?")
-            .bind(city)
-            .bind(file_path)
-            .execute(pool)
-            .await?;
+    if let Some(place) = place {
+        sqlx::query(
+            "UPDATE photos SET metadata = json_set(metadata, '$.location.place', ?, '$.location.country_code', ?) WHERE file_path = ?",
+        )
+        .bind(&place.place)
+        .bind(place.country_code.as_deref())
+        .bind(file_path)
+        .execute(pool)
+        .await?;
     }
 
     mark_photo_geo_resolved(pool, file_path).await
@@ -1496,6 +1504,17 @@ pub(crate) mod tests {
         )
         .await?;
         Ok(listing.photos)
+    }
+
+    /// A resolved place label for the writer tests.
+    pub(crate) fn resolved_place(
+        place: &str,
+        country_code: &str,
+    ) -> crate::place_resolver::ResolvedPlace {
+        crate::place_resolver::ResolvedPlace {
+            place: place.to_string(),
+            country_code: Some(country_code.to_string()),
+        }
     }
 
     pub(crate) fn create_test_photo(filename: String, hash: String) -> Photo {
@@ -2104,14 +2123,14 @@ pub(crate) mod tests {
         );
     }
 
-    /// Coordinates are file facts too: `location` keeps its city (search and
+    /// Coordinates are file facts too: `location` keeps its place (search and
     /// the UI need it) but never the coordinate pair, on any write path.
     #[tokio::test]
     async fn test_db_writes_never_store_coordinates() {
         let pool = create_test_db_pool().await.unwrap();
         let mut photo = create_test_photo("coords.jpg".to_string(), "d".repeat(64));
         photo.metadata = json!({
-            "location": { "latitude": 48.1, "longitude": 11.5, "city": "Munich" }
+            "location": { "latitude": 48.1, "longitude": 11.5, "place": "Munich" }
         });
         photo.create(&pool).await.unwrap();
 
@@ -2124,7 +2143,7 @@ pub(crate) mod tests {
             stored["location"].get("longitude").is_none(),
             "create stored longitude: {stored}"
         );
-        assert_eq!(stored["location"]["city"], "Munich");
+        assert_eq!(stored["location"]["place"], "Munich");
 
         // The response shape (coordinates nested from the row's derived pair)
         // must not smuggle them back into the document on update.
@@ -2147,7 +2166,7 @@ pub(crate) mod tests {
             stored["location"].get("longitude").is_none(),
             "update stored longitude: {stored}"
         );
-        assert_eq!(stored["location"]["city"], "Munich");
+        assert_eq!(stored["location"]["place"], "Munich");
 
         // The scan path (`batch_write_photos` -> the UPSERT) is the other
         // production writer; it must sanitize too.
@@ -2164,7 +2183,7 @@ pub(crate) mod tests {
             stored["location"].get("longitude").is_none(),
             "upsert stored longitude: {stored}"
         );
-        assert_eq!(stored["location"]["city"], "Munich");
+        assert_eq!(stored["location"]["place"], "Munich");
     }
 
     /// The migration must clean existing rows, not just future writes: a
@@ -2218,7 +2237,7 @@ pub(crate) mod tests {
         .bind("2012-03-15T10:00:00Z")
         .bind(
             json!({
-                "location": { "latitude": 48.1, "longitude": 11.5, "city": "Munich" },
+                "location": { "latitude": 48.1, "longitude": 11.5, "place": "Munich" },
                 "camera": { "make": "Canon" }
             })
             .to_string(),
@@ -2271,7 +2290,7 @@ pub(crate) mod tests {
             metadata["location"].get("longitude").is_none(),
             "migration left longitude: {metadata}"
         );
-        assert_eq!(metadata["location"]["city"], "Munich");
+        assert_eq!(metadata["location"]["place"], "Munich");
         assert_eq!(metadata["camera"]["make"], "Canon");
     }
 
@@ -2483,7 +2502,7 @@ pub(crate) mod tests {
         // GIVEN: a photo row holding unrelated metadata
         let mut existing = create_test_photo("still_a_photo.jpg".to_string(), hash.clone());
         existing.metadata = json!({
-            "location": { "latitude": 48.2082, "longitude": 16.3737, "city": "Vienna" }
+            "location": { "latitude": 48.2082, "longitude": 16.3737, "place": "Vienna" }
         });
         existing.create(&pool).await.expect("create");
 
@@ -2514,7 +2533,7 @@ pub(crate) mod tests {
             stored.metadata
         );
         assert!(
-            stored.metadata["location"].get("city").is_none(),
+            stored.metadata["location"].get("place").is_none(),
             "the name described coordinates the changed file no longer has: {}",
             stored.metadata
         );
@@ -2544,7 +2563,7 @@ pub(crate) mod tests {
         let mut existing = create_test_photo("rescan.mp4".to_string(), hash.clone());
         existing.mime_type = Some("video/mp4".to_string());
         existing.metadata = json!({
-            "location": { "city": "Vienna" },
+            "location": { "place": "Vienna" },
             "video": { "codec": "h264", "capability_version": 1 }
         });
         existing.create(&pool).await.expect("create");
@@ -2584,7 +2603,7 @@ pub(crate) mod tests {
             .expect("read")
             .expect("row");
         assert_eq!(
-            stored.metadata["location"]["city"], "Vienna",
+            stored.metadata["location"]["place"], "Vienna",
             "the rescan dropped the resolved place name: {}",
             stored.metadata
         );
@@ -2638,7 +2657,7 @@ pub(crate) mod tests {
         let mut existing = create_test_photo("replaced.mp4".to_string(), hash.clone());
         existing.mime_type = Some("video/mp4".to_string());
         existing.metadata = json!({
-            "location": { "city": "Vienna" },
+            "location": { "place": "Vienna" },
             "video": { "codec": "h264", "capability_version": 1, "moov_at_start": false }
         });
         existing.create(&pool).await.expect("create");
@@ -2675,7 +2694,7 @@ pub(crate) mod tests {
             .expect("read")
             .expect("row");
         assert!(
-            stored.metadata["location"].get("city").is_none(),
+            stored.metadata["location"].get("place").is_none(),
             "the name described a position the changed file may not have: {}",
             stored.metadata
         );
@@ -2726,9 +2745,13 @@ pub(crate) mod tests {
         let hash = format!("{:0<64}", "hash-mirror");
         let photo = create_test_photo("mirror.mp4".to_string(), hash.clone());
         photo.create(&pool).await.expect("create");
-        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
-            .await
-            .expect("resolve");
+        update_photo_place(
+            &pool,
+            &photo.file_path,
+            Some(&crate::db::tests::resolved_place("Berlin", "DE")),
+        )
+        .await
+        .expect("resolve");
 
         // GIVEN: the row as the save read it, before the container was written
         let snapshot = Photo::find_by_hash(&pool, &hash)
@@ -2737,9 +2760,13 @@ pub(crate) mod tests {
             .expect("row");
 
         // WHEN: the resolver commits while the container is being written
-        update_photo_city(&pool, &photo.file_path, Some("Cologne"))
-            .await
-            .expect("resolve again");
+        update_photo_place(
+            &pool,
+            &photo.file_path,
+            Some(&crate::db::tests::resolved_place("Cologne", "DE")),
+        )
+        .await
+        .expect("resolve again");
 
         // THEN: the save's own member lands and that commit survives. The save
         // reports no move, exactly as the handler does for a date-only save, so
@@ -2760,7 +2787,7 @@ pub(crate) mod tests {
             .expect("read")
             .expect("row");
         assert_eq!(
-            stored.metadata["location"]["city"], "Cologne",
+            stored.metadata["location"]["place"], "Cologne",
             "the name committed after the row was read is not the save's to overwrite: {}",
             stored.metadata
         );
@@ -2783,9 +2810,13 @@ pub(crate) mod tests {
         let hash = format!("{:0<64}", "hash-rearm");
         let photo = create_test_photo("rearm.mp4".to_string(), hash.clone());
         photo.create(&pool).await.expect("create");
-        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
-            .await
-            .expect("resolve");
+        update_photo_place(
+            &pool,
+            &photo.file_path,
+            Some(&crate::db::tests::resolved_place("Berlin", "DE")),
+        )
+        .await
+        .expect("resolve");
         let fingerprint = (photo.file_size, photo.date_modified);
         // The file now carries the position the save wrote; coordinates live in
         // the index, which is what the resolver reads.
@@ -2813,7 +2844,7 @@ pub(crate) mod tests {
             .expect("read")
             .expect("row");
         assert!(
-            stored.metadata["location"]["city"].is_null(),
+            stored.metadata["location"]["place"].is_null(),
             "the name of the position the save replaced must not survive it: {}",
             stored.metadata
         );
@@ -2837,9 +2868,13 @@ pub(crate) mod tests {
         let hash = format!("{:0<64}", "hash-keep-name");
         let photo = create_test_photo("keep_name.mp4".to_string(), hash.clone());
         photo.create(&pool).await.expect("create");
-        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
-            .await
-            .expect("resolve");
+        update_photo_place(
+            &pool,
+            &photo.file_path,
+            Some(&crate::db::tests::resolved_place("Berlin", "DE")),
+        )
+        .await
+        .expect("resolve");
         let fingerprint = (photo.file_size, photo.date_modified);
 
         // WHEN: a save reports no move
@@ -2859,7 +2894,7 @@ pub(crate) mod tests {
             .await
             .expect("read")
             .expect("row");
-        assert_eq!(stored.metadata["location"]["city"], "Berlin");
+        assert_eq!(stored.metadata["location"]["place"], "Berlin");
         assert!(
             get_photos_needing_geo_resolution(&pool)
                 .await
@@ -3165,19 +3200,23 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_photo_city() {
+    async fn test_update_photo_place() {
         let pool = create_test_db_pool().await.unwrap();
         let mut photo = create_test_photo(
-            "city-update.jpg".to_string(),
-            "city-update-hash".to_string(),
+            "place-update.jpg".to_string(),
+            "place-update-hash".to_string(),
         );
         photo.taken_latitude = Some(52.52);
         photo.taken_longitude = Some(13.405);
 
         photo.create(&pool).await.unwrap();
-        update_photo_city(&pool, &photo.file_path, Some("Berlin"))
-            .await
-            .unwrap();
+        update_photo_place(
+            &pool,
+            &photo.file_path,
+            Some(&crate::db::tests::resolved_place("Berlin", "DE")),
+        )
+        .await
+        .unwrap();
 
         let metadata = read_photo_metadata(&pool, &photo.file_path).await;
         let resolved_value: i64 =
@@ -3187,7 +3226,8 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-        assert_eq!(metadata["location"]["city"], json!("Berlin"));
+        assert_eq!(metadata["location"]["place"], json!("Berlin"));
+        assert_eq!(metadata["location"]["country_code"], json!("DE"));
         assert_eq!(resolved_value, 1);
         // A labelled photo is no longer a geo-resolution candidate.
         assert!(get_photos_needing_geo_resolution(&pool)
@@ -3197,15 +3237,15 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_photo_city_null() {
+    async fn test_update_photo_place_null() {
         let pool = create_test_db_pool().await.unwrap();
         let photo = create_test_photo(
-            "city-update-null.jpg".to_string(),
-            "city-update-null-hash".to_string(),
+            "place-update-null.jpg".to_string(),
+            "place-update-null-hash".to_string(),
         );
 
         photo.create(&pool).await.unwrap();
-        update_photo_city(&pool, &photo.file_path, None)
+        update_photo_place(&pool, &photo.file_path, None)
             .await
             .unwrap();
 
@@ -3217,19 +3257,19 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-        assert_eq!(metadata["location"].get("city"), None);
+        assert_eq!(metadata["location"].get("place"), None);
         assert_eq!(resolved_value, 1);
     }
 
     #[tokio::test]
-    async fn test_search_photos_by_city() {
+    async fn test_search_photos_by_place() {
         let pool = create_test_db_pool().await.unwrap();
         let berlin_photo = create_test_photo_with_metadata(
             "berlin.jpg",
             "berlin-hash",
             json!({
                 "location": {
-                    "city": "Berlin"
+                    "place": "Berlin"
                 }
             }),
         );
@@ -3242,6 +3282,33 @@ pub(crate) mod tests {
         assert_eq!(total, 1);
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].file_path, berlin_photo.file_path);
+    }
+
+    #[tokio::test]
+    async fn test_location_search_matches_a_composed_district_label() {
+        let pool = create_test_db_pool().await.unwrap();
+        let photo = create_test_photo_with_metadata(
+            "volksdorf.jpg",
+            "volksdorf-hash",
+            json!({
+                "location": {
+                    "place": "Volksdorf, Hamburg",
+                    "country_code": "DE"
+                }
+            }),
+        );
+        photo.create(&pool).await.unwrap();
+
+        // The full composed label is one search phrase.
+        let query = create_search_query("location:Volksdorf, Hamburg");
+        let (photos, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(photos[0].file_path, photo.file_path);
+
+        // The district name alone matches the same row.
+        let query = create_search_query("location:Volksdorf");
+        let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
+        assert_eq!(total, 1);
     }
 
     fn date_filter_query(
@@ -3388,16 +3455,16 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_search_like_wildcards_literal_in_location() {
         let pool = create_test_db_pool().await.unwrap();
-        let city_photo = create_test_photo_with_metadata(
+        let cologne_photo = create_test_photo_with_metadata(
             "cologne.jpg",
             "cologne-hash",
             json!({
                 "location": {
-                    "city": "Cologne"
+                    "place": "Cologne"
                 }
             }),
         );
-        city_photo.create(&pool).await.unwrap();
+        cologne_photo.create(&pool).await.unwrap();
 
         // `_` in a location token must not widen to a single-char wildcard
         let query = create_search_query("location:Col_gne");
@@ -3407,14 +3474,14 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_general_includes_city() {
+    async fn test_search_general_includes_place() {
         let pool = create_test_db_pool().await.unwrap();
         let berlin_photo = create_test_photo_with_metadata(
             "berlin-general.jpg",
             "berlin-general-hash",
             json!({
                 "location": {
-                    "city": "Berlin"
+                    "place": "Berlin"
                 }
             }),
         );
@@ -3430,14 +3497,14 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_photos_by_city_no_match() {
+    async fn test_search_photos_by_place_no_match() {
         let pool = create_test_db_pool().await.unwrap();
         let berlin_photo = create_test_photo_with_metadata(
             "berlin-no-match.jpg",
             "berlin-no-match-hash",
             json!({
                 "location": {
-                    "city": "Berlin"
+                    "place": "Berlin"
                 }
             }),
         );
@@ -3497,7 +3564,7 @@ pub(crate) mod tests {
             "new-york-hash",
             json!({
                 "location": {
-                    "city": "New York"
+                    "place": "New York"
                 }
             }),
         );
@@ -3519,7 +3586,7 @@ pub(crate) mod tests {
             "ny-space-hash",
             json!({
                 "location": {
-                    "city": "New York"
+                    "place": "New York"
                 }
             }),
         );
@@ -3539,16 +3606,16 @@ pub(crate) mod tests {
     async fn test_search_bare_location_token_is_skipped() {
         let pool = create_test_db_pool().await.unwrap();
         let photo = create_test_photo_with_metadata(
-            "with-city.jpg",
-            "with-city-hash",
+            "with-place.jpg",
+            "with-place-hash",
             json!({
                 "location": {
-                    "city": "Berlin"
+                    "place": "Berlin"
                 }
             }),
         );
         photo.create(&pool).await.unwrap();
-        // A second photo with a city that does NOT match the general token:
+        // A second photo with a place that does NOT match the general token:
         // under the old LIKE '%%' behavior the bare location: token would
         // match BOTH rows (total 2); with the skip it contributes nothing.
         let other = create_test_photo_with_metadata(
@@ -3556,15 +3623,15 @@ pub(crate) mod tests {
             "other-hash",
             json!({
                 "location": {
-                    "city": "Hamburg"
+                    "place": "Hamburg"
                 }
             }),
         );
         other.create(&pool).await.unwrap();
 
         // A bare "location:" token must not filter (previously it emitted
-        // LIKE '%%' which matched every row with a city).
-        let query = create_search_query("with-city location:");
+        // LIKE '%%' which matched every row with a place).
+        let query = create_search_query("with-place location:");
         let (_, total) = search(&pool, &query, 50, 0, None, None).await.unwrap();
 
         assert_eq!(total, 1);
@@ -3578,7 +3645,7 @@ pub(crate) mod tests {
             "sunset-berlin-hash",
             json!({
                 "location": {
-                    "city": "Berlin"
+                    "place": "Berlin"
                 }
             }),
         );
@@ -3630,20 +3697,20 @@ pub(crate) mod tests {
         let mut ny_fav_photo = create_test_photo_with_metadata(
             "ny-fav.jpg",
             "ny-fav-hash",
-            json!({ "location": { "city": "New York" } }),
+            json!({ "location": { "place": "New York" } }),
         );
         ny_fav_photo.is_favorite = Some(true);
         ny_fav_photo.create(&pool).await.unwrap();
         let ny_plain_photo = create_test_photo_with_metadata(
             "ny-plain.jpg",
             "ny-plain-hash",
-            json!({ "location": { "city": "New York" } }),
+            json!({ "location": { "place": "New York" } }),
         );
         ny_plain_photo.create(&pool).await.unwrap();
         let mut berlin_fav_photo = create_test_photo_with_metadata(
             "berlin-fav.jpg",
             "berlin-fav-hash",
-            json!({ "location": { "city": "Berlin" } }),
+            json!({ "location": { "place": "Berlin" } }),
         );
         berlin_fav_photo.is_favorite = Some(true);
         berlin_fav_photo.create(&pool).await.unwrap();
@@ -3657,14 +3724,14 @@ pub(crate) mod tests {
         let mut ny_video_photo = create_test_photo_with_metadata(
             "ny-video.mp4",
             "ny-video-hash",
-            json!({ "location": { "city": "New York" } }),
+            json!({ "location": { "place": "New York" } }),
         );
         ny_video_photo.mime_type = Some("video/mp4".to_string());
         ny_video_photo.create(&pool).await.unwrap();
         let ny_image_photo = create_test_photo_with_metadata(
             "ny-image.jpg",
             "ny-image-hash",
-            json!({ "location": { "city": "New York" } }),
+            json!({ "location": { "place": "New York" } }),
         );
         ny_image_photo.create(&pool).await.unwrap();
 
@@ -3720,7 +3787,7 @@ pub(crate) mod tests {
             "2020-05-25T10:00:00Z",
         )
         .await;
-        berlin_2020.metadata = json!({ "location": { "city": "Berlin" } });
+        berlin_2020.metadata = json!({ "location": { "place": "Berlin" } });
         berlin_2020.update(&pool).await.unwrap();
 
         let mut berlin_2024 = create_photo_with_date(
@@ -3730,13 +3797,13 @@ pub(crate) mod tests {
             "2024-05-25T10:00:00Z",
         )
         .await;
-        berlin_2024.metadata = json!({ "location": { "city": "Berlin" } });
+        berlin_2024.metadata = json!({ "location": { "place": "Berlin" } });
         berlin_2024.update(&pool).await.unwrap();
 
         let mut rome =
             create_photo_with_date(&pool, &"3".repeat(64), "rome.jpg", "2020-05-25T10:00:00Z")
                 .await;
-        rome.metadata = json!({ "location": { "city": "Rome" } });
+        rome.metadata = json!({ "location": { "place": "Rome" } });
         rome.update(&pool).await.unwrap();
 
         let photos = list_all_filtered(

@@ -27,6 +27,7 @@
   import ToastContainer from './components/ToastContainer.svelte';
   import SelectionBar from './components/SelectionBar.svelte';
   import PhotoGrid from './components/PhotoGrid.svelte';
+  import DateHint from './components/DateHint.svelte';
   import CollagesView from './components/CollagesView.svelte';
   import AlbumsView from './components/AlbumsView.svelte';
   import HousekeepingView from './components/HousekeepingView.svelte';
@@ -212,6 +213,7 @@
     class:selection-mode={selectionState.active || selectionState.busy}
     class:sidebar-collapsed={appState.sidebarCollapsed}
   >
+    <DateHint />
     <div class="content-header">
       <h2 id="current-view-title">
         {#if route.query}

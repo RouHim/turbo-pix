@@ -652,7 +652,11 @@
   flex-direction: column;
   justify-content: flex-end;
   padding: var(--space-5);
-  padding-bottom: calc(var(--button-size) + var(--space-4));
+
+  /* The action buttons are 56px tall and float 8px above the card edge, so
+     the caption band must reserve 56px + breathing room — not --button-size
+     (44px), which let the photo count sit under the buttons. */
+  padding-bottom: calc(56px + var(--space-4));
   backdrop-filter: blur(1px);
   -webkit-backdrop-filter: blur(1px);
   z-index: 2;

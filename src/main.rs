@@ -365,7 +365,6 @@ async fn initialize_services(
         },
         data_path,
         config.locale.clone(),
-        config.nominatim_url.clone(),
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

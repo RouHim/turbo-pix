@@ -90,6 +90,7 @@
     "date_scrubber_jump_to": "Jump to {period}…",
     "date_scrubber_retry": "Retry",
     "date_scrubber_newest": "Back to newest",
+    "no_date": "No date",
     "timeline_reset": "Reset timeline",
     "timeline_no_photos_month": "No photos",
     "timeline_overview_label": "Timeline overview",
@@ -110,7 +111,6 @@
     "date": "Date:",
     "size": "Size:",
     "camera": "Camera:",
-    "location": "Location:",
     "close": "Close",
     "previous": "Previous",
     "next": "Next",
@@ -145,7 +145,6 @@
     "pending_collages": "Pending Collages",
     "collage_photos": "{count} photos",
     "unknown": "Unknown",
-    "no_location_data": "No location data",
     "yes": "Yes",
     "no": "No",
     "metadata": {
@@ -174,6 +173,9 @@
       "color_space": "Color Space:",
       "location_section": "Location",
       "gps": "GPS:",
+      "place": "Place:",
+      "place_filter": "Show all photos at {place}",
+      "show_on_map": "Show on map",
       "video_section": "Video Information",
       "duration": "Duration:",
       "video_codec": "Video Codec:",
@@ -260,7 +262,9 @@
     "markerLabel": "{count} photos at {place}",
     "clusterLabel": "{count} photos, activate to zoom in",
     "openPhoto": "Open photo from {date}",
-    "attributionLabel": "OpenStreetMap contributors"
+    "attributionLabel": "OpenStreetMap contributors",
+    "placeAttributionLabel": "Place data © GeoNames",
+    "placeAttributionShort": "© GeoNames"
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",

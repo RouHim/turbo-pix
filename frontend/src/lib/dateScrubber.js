@@ -13,6 +13,20 @@ export const monthOfPhoto = (photo) => {
   return month >= 1 && month <= MONTHS_PER_YEAR ? toMonthIndex(Number(match[1]), month) : null;
 };
 
+/**
+ * Index of the first card the user can see below the fixed header line, in DOM
+ * order. A bounded call also ignores cards that start below the viewport, as
+ * the date hint needs a photo that is actually on screen. Shared by the date
+ * rail and the current-date hint.
+ */
+export const firstVisibleCardIndex = (cards, headerLine, viewportBottom = Infinity) => {
+  for (let index = 0; index < cards.length; index += 1) {
+    const rect = cards[index].getBoundingClientRect();
+    if (rect.bottom > headerLine + 1 && rect.top < viewportBottom) return index;
+  }
+  return null;
+};
+
 export const monthCount = (model, index) => {
   if (index === null || index === undefined || model.length === 0) return 0;
   return model.counts[index - model.minIndex] ?? 0;

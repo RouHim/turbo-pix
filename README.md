@@ -143,8 +143,16 @@ TURBO_PIX_DATA_PATH=data \
 
 Open <http://localhost:18473>, or `http://<host>:18473` from another device.
 
-Building from source requires the frontend bundle first: `npm install && npm run build` (writes `dist/`). The face
-pipeline links a static ONNX Runtime archive, so fetch it and export its path before the Rust build:
+Building from source requires the frontend bundle first: `npm install && npm run build` (writes `dist/`). Place
+names are resolved offline from a GeoNames-derived dataset that `build.rs` embeds into the binary, so build it once
+(the script downloads the GeoNames dumps and reuses `assets/geodata.txt` afterwards):
+
+```shell
+./scripts/fetch-geodata.sh
+npm install && npm run build
+```
+
+The face pipeline links a static ONNX Runtime archive, so fetch it and export its path before the Rust build:
 
 ```shell
 eval "$(./scripts/fetch-ort.sh --export)"
@@ -167,7 +175,6 @@ All configuration is done via environment variables:
 | `TURBO_PIX_HOST`                   | Address to bind. Loopback by default; set `0.0.0.0` for LAN/Docker access                                                                                                                                                                            | `127.0.0.1`                                      | No                            |
 | `TURBO_PIX_ALLOWED_HOSTS`          | Comma-separated hostnames the `Host` header may carry (DNS-rebinding protection). Pinned automatically for loopback binds; required by `docker-compose.yml`, otherwise strongly recommended — a native binary only logs a startup warning            | _(loopback names)_                               | Yes for compose               |
 | `TURBO_PIX_LOCALE`                 | UI language and date/time format (`en`, `de`)                                                                                                                                                                                                        | `en`                                             | No                            |
-| `TURBO_PIX_NOMINATIM_URL`          | Base URL for the Nominatim geocoding service                                                                                                                                                                                                         | `https://nominatim.openstreetmap.org`            | No                            |
 | `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Seconds a `GET /api/photos/{hash}/video/stream` request waits for a free conversion slot before answering `503` + `Retry-After`                                                                                                                      | `20`                                             | No                            |
 | `TURBO_PIX_TILE_URL`               | Raster tile endpoint (`{z}/{x}/{y}` placeholders) used by the Map view                                                                                                                                                                               | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | No                            |
 | `TURBO_PIX_FACE_RECOGNITION`       | Enable face detection/recognition and the People view. `false`/`0`/`no`/`off` skips the phase and hides the People surface; existing data is retained                                                                                                | `true`                                           | No                            |
@@ -260,7 +267,9 @@ If you find TurboPix useful, consider [buying me a coffee](https://buymeacoffee.
 ## License
 
 The TurboPix source code is [MIT](LICENSE). The optional face models are licensed for non-commercial use only and are
-not covered by the MIT license; see [NOTICE](NOTICE).
+not covered by the MIT license; see [NOTICE](NOTICE). Place names are resolved offline from GeoNames `cities500` and
+`allCountries` (filtered to populated places including `PPLX` quarters) — © GeoNames,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), <https://www.geonames.org>.
 
 # Disclaimer
 

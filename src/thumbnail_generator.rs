@@ -479,7 +479,6 @@ mod tests {
             },
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
-            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
         };
@@ -739,7 +738,6 @@ mod tests {
             },
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
-            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
         };
@@ -800,7 +798,6 @@ mod tests {
             },
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
-            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
         };
@@ -898,7 +895,6 @@ mod tests {
             },
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
-            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
         };
@@ -1006,7 +1002,6 @@ mod tests {
             },
             transcode_timeout_secs: 300,
             locale: "en".to_string(),
-            nominatim_url: "https://nominatim.openstreetmap.org".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
         };

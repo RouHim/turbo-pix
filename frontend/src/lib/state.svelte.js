@@ -10,6 +10,11 @@ export const appState = $state({
   // Desktop-only fold of the timeline card; presentational, survives remounts.
   timelineCollapsed: readTimelineCollapsed(browserStorage()),
   mobileSearchOpen: false,
+  // Current-date hint: the rail caption pauses while it is visible, while the
+  // rail bubble and the top loading indicator pause the hint in return.
+  dateHintVisible: false,
+  dateRailBubbleVisible: false,
+  dateRailLoading: false,
   // Raster tile endpoint served by GET /api/config (TURBO_PIX_TILE_URL).
   // null = not configured → the map renders without a tile layer.
   tileUrl: null,

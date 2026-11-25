@@ -2,12 +2,12 @@
   // Date scrollbar controller: library density → filtered month model → a
   // bounded, bidirectionally growing listing window. The rail is navigation
   // only; the timeline lane remains the filter.
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { MediaQuery } from 'svelte/reactivity';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
-  import { photoGridState, addToast } from '../lib/state.svelte.js';
+  import { appState, photoGridState, addToast } from '../lib/state.svelte.js';
   import { route } from '../lib/router.svelte.js';
   import { APP_CONSTANTS } from '../lib/constants.js';
   import { routeToPhotoQuery } from '../lib/photoQuery.js';
@@ -18,6 +18,7 @@
     anchorOffset,
     bottomTrim,
     earlierPage,
+    firstVisibleCardIndex,
     monthOfPhoto,
     snapMonth,
     sliceDensity,
@@ -100,6 +101,20 @@
     `${route.view}:${route.query ?? ''}:${route.album ?? 0}:${route.sort}:${filter.year}:${filter.month}:${filter.to_year}:${filter.to_month}`
   );
 
+  // The top dot-wave and the date hint share the strip under the glass bar;
+  // the bubble owns it whenever the user is on the rail.
+  $effect(() => {
+    appState.dateRailLoading = earlierBusy;
+  });
+
+  onDestroy(() => {
+    appState.dateRailLoading = false;
+  });
+
+  function setRailBubbleVisible(visible) {
+    appState.dateRailBubbleVisible = visible;
+  }
+
   const headerLine = () =>
     Number.parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--header-height')
@@ -151,13 +166,9 @@
   /** The first card the user can see, by DOM order. */
   function firstVisibleCard() {
     if (!scrollEl) return null;
-    const top = headerLine();
     const cards = document.querySelectorAll('#photo-grid .photo-card');
-    for (let index = 0; index < cards.length; index += 1) {
-      const rect = cards[index].getBoundingClientRect();
-      if (rect.bottom > top + 1) return { index, id: cards[index].dataset.photoId };
-    }
-    return null;
+    const index = firstVisibleCardIndex(cards, headerLine());
+    return index === null ? null : { index, id: cards[index].dataset.photoId };
   }
 
   function measureVisibleMonth() {
@@ -557,6 +568,8 @@
     onScrubEnd={endScrub}
     onCancel={cancelScrub}
     onJump={settleOn}
+    captionPaused={appState.dateHintVisible}
+    onBubbleChange={setRailBubbleVisible}
   />
 {/if}
 

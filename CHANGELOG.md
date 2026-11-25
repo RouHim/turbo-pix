@@ -1,3 +1,12 @@
+## [2.63.1](https://github.com/RouHim/turbo-pix/compare/2.63.0...2.63.1) (2026-11-25)
+
+### Bug Fixes
+
+* **delete:** fade the flood out symmetrically ([da2f150](https://github.com/RouHim/turbo-pix/commit/da2f1507d9710eaeab8c1073197949a768791173))
+* **delete:** stop the slide trail reading as a square frame ([b95a914](https://github.com/RouHim/turbo-pix/commit/b95a914597b9662d704f2da147d197351ebb5c2c))
+* **delete:** stop the slide trail reading as a square frame ([#115](https://github.com/RouHim/turbo-pix/issues/115)) ([9b0f244](https://github.com/RouHim/turbo-pix/commit/9b0f24497a39225f18f2303ee45136d06777d548))
+* **delete:** surface failures and keyboard confirmation in the dialog ([51283c0](https://github.com/RouHim/turbo-pix/commit/51283c0bf747ddb8b750e150aabdb256d959747d))
+
 # [2.63.0](https://github.com/RouHim/turbo-pix/compare/2.62.0...2.63.0) (2026-11-25)
 
 ### Features

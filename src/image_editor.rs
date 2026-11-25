@@ -521,6 +521,118 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
+    #[test]
+    fn test_apply_orientation_values() {
+        use image::{GenericImageView, ImageBuffer, Rgb};
+
+        // Create a 4x4 test image with distinct corner pixels for verification
+        // Original layout (orientation 1):
+        //   R G    Red(255,0,0) at top-left (0,0)
+        //   B W    Green(0,255,0) at top-right (3,0)
+        //          Blue(0,0,255) at bottom-left (0,3)
+        //          White(255,255,255) at bottom-right (3,3)
+        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(4, 4);
+        img.put_pixel(0, 0, Rgb([255, 0, 0])); // Red at top-left
+        img.put_pixel(3, 0, Rgb([0, 255, 0])); // Green at top-right
+        img.put_pixel(0, 3, Rgb([0, 0, 255])); // Blue at bottom-left
+        img.put_pixel(3, 3, Rgb([255, 255, 255])); // White at bottom-right
+        let original = DynamicImage::ImageRgb8(img);
+
+        // Test orientation 1 (normal) - no transformation
+        let result = apply_orientation(original.clone(), Some(1));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 1: top-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 1: top-right should be Green"
+        );
+
+        // Test orientation 6 (rotate 90 CW)
+        // After rotate90(): R moves to top-right, G moves to bottom-right
+        let result = apply_orientation(original.clone(), Some(6));
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 6: top-right should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 6: bottom-right should be Green"
+        );
+
+        // Test orientation 8 (rotate 270 CW / 90 CCW)
+        // After rotate270(): R moves to bottom-left, G moves to top-left
+        let result = apply_orientation(original.clone(), Some(8));
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 8: bottom-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 8: top-left should be Green"
+        );
+
+        // Test orientation 5 (transpose = flip horizontal + rotate 270 CW / 90 CCW)
+        // According to EXIF spec: Row 0 is visual left, Column 0 is visual top
+        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
+        // Step 2 - rotate270(): (x,y) → (y, width-1-x) where width=4
+        //   Red(3,0) → (0,0), Green(0,0) → (0,3), Blue(3,3) → (3,0), White(0,3) → (3,3)
+        let result = apply_orientation(original.clone(), Some(5));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 5: top-left should be Red"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 0, 255, 255]),
+            "Orientation 5: top-right should be Blue"
+        );
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 5: bottom-left should be Green"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([255, 255, 255, 255]),
+            "Orientation 5: bottom-right should be White"
+        );
+
+        // Test orientation 7 (transverse = flip horizontal + rotate 90 CW)
+        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
+        // Step 2 - rotate90(): (x,y) → (height-1-y, x) where height=4
+        //   Red(3,0) → (3,3), Green(0,0) → (3,0), Blue(3,3) → (0,3), White(0,3) → (0,0)
+        let result = apply_orientation(original.clone(), Some(7));
+        assert_eq!(
+            result.get_pixel(0, 0),
+            image::Rgba([255, 255, 255, 255]),
+            "Orientation 7: top-left should be White"
+        );
+        assert_eq!(
+            result.get_pixel(3, 0),
+            image::Rgba([0, 255, 0, 255]),
+            "Orientation 7: top-right should be Green"
+        );
+        assert_eq!(
+            result.get_pixel(0, 3),
+            image::Rgba([0, 0, 255, 255]),
+            "Orientation 7: bottom-left should be Blue"
+        );
+        assert_eq!(
+            result.get_pixel(3, 3),
+            image::Rgba([255, 0, 0, 255]),
+            "Orientation 7: bottom-right should be Red"
+        );
+    }
+
     fn create_test_photo(temp_dir: &TempDir, filename: &str) -> (std::path::PathBuf, Photo) {
         let source_path = Path::new("test-data/IMG_9377.jpg");
         let dest_path = temp_dir.path().join(filename);

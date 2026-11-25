@@ -174,25 +174,37 @@ impl ThumbnailGenerator {
         let thumbnail_data = if self.is_video_file(photo) {
             self.generate_video_thumbnail(&photo_path, size, photo.orientation, format)
                 .await?
-        } else if raw_processor::is_raw_file(&photo_path) {
-            // Handle RAW files. The decode holds several full-resolution
-            // buffers per request, so concurrency is capped by the shared
-            // RAW_DECODE_LIMIT (same cap as get_photo_file's detail view).
-            let _raw_permit = raw_processor::RAW_DECODE_LIMIT
-                .acquire()
+        } else {
+            // A cold-cache grid fires one full-resolution decode per card, so
+            // run the CPU work on the blocking pool instead of occupying the
+            // runtime workers. The permit moves into the task: a client
+            // disconnect drops the awaiting future, and the decode must keep
+            // holding its slot until the blocking work actually ends.
+            let is_raw = raw_processor::is_raw_file(&photo_path);
+            let limit = if is_raw {
+                crate::decode_limit::RAW_DECODE_LIMIT.clone()
+            } else {
+                crate::decode_limit::THUMBNAIL_DECODE_LIMIT.clone()
+            };
+            let permit = limit
+                .acquire_owned()
                 .await
                 .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
-            let img = raw_processor::decode_raw_to_dynamic_image(&photo_path)
-                .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
-            let img = self.apply_orientation(img, photo.orientation);
-            let thumbnail = self.resize_image(img, size);
-            self.encode_image(thumbnail, format)?
-        } else {
-            // Standard image formats
-            let img = image::open(&photo_path)?;
-            let img = self.apply_orientation(img, photo.orientation);
-            let thumbnail = self.resize_image(img, size);
-            self.encode_image(thumbnail, format)?
+            let orientation = photo.orientation;
+            tokio::task::spawn_blocking(move || -> CacheResult<Vec<u8>> {
+                let _permit = permit;
+                let img = if is_raw {
+                    raw_processor::decode_raw_to_dynamic_image(&photo_path)
+                        .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?
+                } else {
+                    image::open(&photo_path)?
+                };
+                Self::encode_image(Self::render_thumbnail(img, orientation, size), format)
+            })
+            .await
+            .map_err(|e| {
+                CacheError::IoError(std::io::Error::other(format!("thumbnail task failed: {e}")))
+            })??
         };
 
         let cache_key = CacheKey::from_photo(photo, size, format)?;
@@ -202,17 +214,20 @@ impl ThumbnailGenerator {
         Ok(thumbnail_data)
     }
 
-    fn apply_orientation(&self, img: DynamicImage, orientation: Option<i32>) -> DynamicImage {
-        image_editor::apply_orientation(img, orientation)
-    }
-
-    fn resize_image(&self, img: DynamicImage, size: ThumbnailSize) -> DynamicImage {
+    /// Downsizes first and rotates the small image afterwards: EXIF
+    /// orientation is a pixel permutation, so it commutes with the
+    /// aspect-preserving `thumbnail()`, while rotating first would allocate a
+    /// second full-resolution buffer per request.
+    fn render_thumbnail(
+        img: DynamicImage,
+        orientation: Option<i32>,
+        size: ThumbnailSize,
+    ) -> DynamicImage {
         let target_size = size.to_pixels();
-
-        img.thumbnail(target_size, target_size)
+        image_editor::apply_orientation(img.thumbnail(target_size, target_size), orientation)
     }
 
-    fn encode_image(&self, img: DynamicImage, format: ThumbnailFormat) -> CacheResult<Vec<u8>> {
+    fn encode_image(img: DynamicImage, format: ThumbnailFormat) -> CacheResult<Vec<u8>> {
         let mut buffer = std::io::Cursor::new(Vec::new());
         let image_format = match format {
             ThumbnailFormat::Jpeg => ImageFormat::Jpeg,
@@ -266,16 +281,27 @@ impl ThumbnailGenerator {
         let _temp_guard = TempFrameGuard(temp_frame_path.clone());
         video_processor::extract_frame_at_time(video_path, frame_time, &temp_frame_path).await?;
 
-        // Load the extracted frame and create thumbnail
-        let img = image::open(&temp_frame_path).map_err(|e| {
-            CacheError::VideoProcessingError(format!("Failed to load extracted frame: {}", e))
-        })?;
-
-        let img = self.apply_orientation(img, orientation);
-        let thumbnail = self.resize_image(img, size);
-        let thumbnail_data = self.encode_image(thumbnail, format)?;
-
-        Ok(thumbnail_data)
+        // The extracted frame is full video resolution; keep its decode,
+        // downscale and encode off the runtime workers like every other
+        // thumbnail. The guard still owns the temp file until this function
+        // returns, after the blocking task has finished reading it.
+        let permit = crate::decode_limit::THUMBNAIL_DECODE_LIMIT
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| CacheError::IoError(std::io::Error::other(e.to_string())))?;
+        let frame_path = temp_frame_path;
+        tokio::task::spawn_blocking(move || -> CacheResult<Vec<u8>> {
+            let _permit = permit;
+            let img = image::open(&frame_path).map_err(|e| {
+                CacheError::VideoProcessingError(format!("Failed to load extracted frame: {}", e))
+            })?;
+            Self::encode_image(Self::render_thumbnail(img, orientation, size), format)
+        })
+        .await
+        .map_err(|e| {
+            CacheError::IoError(std::io::Error::other(format!("thumbnail task failed: {e}")))
+        })?
     }
 
     async fn save_to_disk_cache(&self, key: &CacheKey, data: &[u8]) -> CacheResult<()> {
@@ -581,6 +607,50 @@ mod tests {
             CacheKey::from_photo(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg).unwrap();
         let cache_path = generator.get_cache_path(&cache_key);
         assert!(cache_path.exists());
+    }
+
+    /// The row's EXIF orientation is applied to the generated pixels: for
+    /// orientation 6 (rotate 90° clockwise) the source's left half becomes the
+    /// top half and the dimensions swap.
+    #[tokio::test]
+    async fn test_thumbnail_applies_the_rows_exif_orientation() {
+        use image::{GenericImageView, Rgb, RgbImage};
+
+        let (config, temp_dir) = create_test_config();
+        let db_pool = create_in_memory_pool().await.unwrap();
+        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
+
+        let image_path = temp_dir.path().join("oriented.jpg");
+        let source: RgbImage = RgbImage::from_fn(40, 20, |x, _| {
+            if x < 20 {
+                Rgb([230, 20, 20])
+            } else {
+                Rgb([20, 20, 230])
+            }
+        });
+        source.save(&image_path).unwrap();
+
+        let mut photo = create_test_photo(&image_path.to_string_lossy());
+        photo.orientation = Some(6);
+
+        let bytes = generator
+            .get_or_generate(&photo, ThumbnailSize::Small, ThumbnailFormat::Jpeg)
+            .await
+            .unwrap();
+        let thumbnail = image::load_from_memory(&bytes).unwrap();
+
+        // The 40×20 source scales to 200×100 and the rotation swaps the axes.
+        assert_eq!(thumbnail.dimensions(), (100, 200));
+        let top = thumbnail.get_pixel(50, 50).0;
+        let bottom = thumbnail.get_pixel(50, 150).0;
+        assert!(
+            top[0] > 150 && top[2] < 100,
+            "the source's left half must become the top half, got {top:?}"
+        );
+        assert!(
+            bottom[2] > 150 && bottom[0] < 100,
+            "the source's right half must become the bottom half, got {bottom:?}"
+        );
     }
 
     #[tokio::test]
@@ -976,143 +1046,5 @@ mod tests {
 
         // Verify content is different (WebP and JPEG produce different bytes)
         assert_ne!(webp_data, jpeg_data, "WebP and JPEG data should differ");
-    }
-
-    #[tokio::test]
-    async fn test_apply_orientation_values() {
-        use image::{GenericImageView, ImageBuffer, Rgb};
-
-        // GIVEN: A thumbnail generator instance
-        let temp_dir = TempDir::new().unwrap();
-        let cache_path = temp_dir.path().join("cache");
-        let config = Config {
-            host: "127.0.0.1".to_string(),
-            allowed_hosts: vec![],
-            port: TEST_PORT,
-            photo_paths: vec![],
-            data_path: temp_dir.path().to_string_lossy().to_string(),
-            db_path: temp_dir
-                .path()
-                .join("database/turbo-pix.db")
-                .to_string_lossy()
-                .to_string(),
-            cache: CacheConfig {
-                thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
-                max_cache_size_mb: 1024,
-            },
-            transcode_timeout_secs: 300,
-            locale: "en".to_string(),
-            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
-            face_recognition_enabled: false,
-        };
-        let db_pool = create_in_memory_pool().await.unwrap();
-        let generator = ThumbnailGenerator::new(&config, db_pool).unwrap();
-
-        // Create a 4x4 test image with distinct corner pixels for verification
-        // Original layout (orientation 1):
-        //   R G    Red(255,0,0) at top-left (0,0)
-        //   B W    Green(0,255,0) at top-right (3,0)
-        //          Blue(0,0,255) at bottom-left (0,3)
-        //          White(255,255,255) at bottom-right (3,3)
-        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(4, 4);
-        img.put_pixel(0, 0, Rgb([255, 0, 0])); // Red at top-left
-        img.put_pixel(3, 0, Rgb([0, 255, 0])); // Green at top-right
-        img.put_pixel(0, 3, Rgb([0, 0, 255])); // Blue at bottom-left
-        img.put_pixel(3, 3, Rgb([255, 255, 255])); // White at bottom-right
-        let original = DynamicImage::ImageRgb8(img);
-
-        // Test orientation 1 (normal) - no transformation
-        let result = generator.apply_orientation(original.clone(), Some(1));
-        assert_eq!(
-            result.get_pixel(0, 0),
-            image::Rgba([255, 0, 0, 255]),
-            "Orientation 1: top-left should be Red"
-        );
-        assert_eq!(
-            result.get_pixel(3, 0),
-            image::Rgba([0, 255, 0, 255]),
-            "Orientation 1: top-right should be Green"
-        );
-
-        // Test orientation 6 (rotate 90 CW)
-        // After rotate90(): R moves to top-right, G moves to bottom-right
-        let result = generator.apply_orientation(original.clone(), Some(6));
-        assert_eq!(
-            result.get_pixel(3, 0),
-            image::Rgba([255, 0, 0, 255]),
-            "Orientation 6: top-right should be Red"
-        );
-        assert_eq!(
-            result.get_pixel(3, 3),
-            image::Rgba([0, 255, 0, 255]),
-            "Orientation 6: bottom-right should be Green"
-        );
-
-        // Test orientation 8 (rotate 270 CW / 90 CCW)
-        // After rotate270(): R moves to bottom-left, G moves to top-left
-        let result = generator.apply_orientation(original.clone(), Some(8));
-        assert_eq!(
-            result.get_pixel(0, 3),
-            image::Rgba([255, 0, 0, 255]),
-            "Orientation 8: bottom-left should be Red"
-        );
-        assert_eq!(
-            result.get_pixel(0, 0),
-            image::Rgba([0, 255, 0, 255]),
-            "Orientation 8: top-left should be Green"
-        );
-
-        // Test orientation 5 (transpose = flip horizontal + rotate 270 CW / 90 CCW)
-        // According to EXIF spec: Row 0 is visual left, Column 0 is visual top
-        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
-        // Step 2 - rotate270(): (x,y) → (y, width-1-x) where width=4
-        //   Red(3,0) → (0,0), Green(0,0) → (0,3), Blue(3,3) → (3,0), White(0,3) → (3,3)
-        let result = generator.apply_orientation(original.clone(), Some(5));
-        assert_eq!(
-            result.get_pixel(0, 0),
-            image::Rgba([255, 0, 0, 255]),
-            "Orientation 5: top-left should be Red"
-        );
-        assert_eq!(
-            result.get_pixel(3, 0),
-            image::Rgba([0, 0, 255, 255]),
-            "Orientation 5: top-right should be Blue"
-        );
-        assert_eq!(
-            result.get_pixel(0, 3),
-            image::Rgba([0, 255, 0, 255]),
-            "Orientation 5: bottom-left should be Green"
-        );
-        assert_eq!(
-            result.get_pixel(3, 3),
-            image::Rgba([255, 255, 255, 255]),
-            "Orientation 5: bottom-right should be White"
-        );
-
-        // Test orientation 7 (transverse = flip horizontal + rotate 90 CW)
-        // Step 1 - fliph(): Red(0,0) → (3,0), Green(3,0) → (0,0), Blue(0,3) → (3,3), White(3,3) → (0,3)
-        // Step 2 - rotate90(): (x,y) → (height-1-y, x) where height=4
-        //   Red(3,0) → (3,3), Green(0,0) → (3,0), Blue(3,3) → (0,3), White(0,3) → (0,0)
-        let result = generator.apply_orientation(original.clone(), Some(7));
-        assert_eq!(
-            result.get_pixel(0, 0),
-            image::Rgba([255, 255, 255, 255]),
-            "Orientation 7: top-left should be White"
-        );
-        assert_eq!(
-            result.get_pixel(3, 0),
-            image::Rgba([0, 255, 0, 255]),
-            "Orientation 7: top-right should be Green"
-        );
-        assert_eq!(
-            result.get_pixel(0, 3),
-            image::Rgba([0, 0, 255, 255]),
-            "Orientation 7: bottom-left should be Blue"
-        );
-        assert_eq!(
-            result.get_pixel(3, 3),
-            image::Rgba([255, 0, 0, 255]),
-            "Orientation 7: bottom-right should be Red"
-        );
     }
 }

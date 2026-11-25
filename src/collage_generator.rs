@@ -968,7 +968,7 @@ fn create_collage_image(
             // used): under concurrent collage-generation load, the photo is
             // skipped for this run rather than exhausting memory. Collage
             // generation retries nightly, so the degradation is temporary.
-            match raw_processor::RAW_DECODE_LIMIT.try_acquire() {
+            match crate::decode_limit::RAW_DECODE_LIMIT.try_acquire() {
                 Ok(permit) => {
                     let decoded =
                         raw_processor::decode_raw_to_dynamic_image(Path::new(&photo.file_path));

@@ -1,3 +1,9 @@
+# [2.65.0](https://github.com/RouHim/turbo-pix/compare/2.64.1...2.65.0) (2026-11-25)
+
+### Features
+
+* **frontend:** slide-to-confirm for batch photo and album deletes ([df259f5](https://github.com/RouHim/turbo-pix/commit/df259f5d2400b9bdde917f95def4fb1603f50585))
+
 ## [2.64.1](https://github.com/RouHim/turbo-pix/compare/2.64.0...2.64.1) (2026-11-25)
 
 ### Bug Fixes

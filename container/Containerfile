@@ -54,7 +54,9 @@ COPY .cargo ./.cargo
 COPY build.rs ./
 COPY src ./src
 COPY migrations ./migrations
-COPY assets ./assets
+# No `COPY assets`: the directory holds only the build-generated geodata file
+# (gitignored), so a fresh checkout has no `assets/` at all and the copy failed
+# the build. The next line recreates the directory.
 COPY --from=geodata /geodata.txt ./assets/geodata.txt
 COPY --from=frontend-build /app/dist ./dist
 COPY --from=ort /opt/ort /opt/ort

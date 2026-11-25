@@ -1,3 +1,9 @@
+# [2.63.0](https://github.com/RouHim/turbo-pix/compare/2.62.0...2.63.0) (2026-11-25)
+
+### Features
+
+* **place:** resolve place names offline and show them with a mini map ([#111](https://github.com/RouHim/turbo-pix/issues/111)) ([0e827bb](https://github.com/RouHim/turbo-pix/commit/0e827bb214732dca19da81e85cb47cbe75725115))
+
 # [2.62.0](https://github.com/RouHim/turbo-pix/compare/2.61.3...2.62.0) (2026-11-25)
 
 ### Bug Fixes

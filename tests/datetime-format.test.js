@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   formatDate,
   formatDateTime,
-  formatLongDate,
   formatMonthName,
   formatWeekdayDate,
 } from '../frontend/src/lib/datetime.js';
@@ -49,12 +48,4 @@ test('formatters reject missing, malformed and impossible values', () => {
   assert.equal(formatDateTime(undefined, 'de'), '');
   assert.equal(formatWeekdayDate('2026-02-30', 'en'), '');
   assert.equal(formatWeekdayDate('04.11.2026', 'de'), '');
-});
-
-test('formatLongDate renders the long date used by the date hint', () => {
-  const value = new Date(2024, 2, 14, 12, 0);
-
-  assert.equal(formatLongDate(value, 'de'), '14. März 2024');
-  assert.equal(formatLongDate(value, 'en'), 'March 14, 2024');
-  assert.equal(formatLongDate('not-a-date', 'en'), '');
 });

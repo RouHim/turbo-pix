@@ -110,9 +110,21 @@ jobs:
       - name: Fetch place dataset
         run: ./scripts/fetch-geodata.sh
 
+      # The CLIP weights (~600 MB) are otherwise re-downloaded on every run;
+      # clip.rs pins file names, revision and SHA-256, so hash it as the key.
+      - name: Cache CLIP models
+        uses: actions/cache@v4
+        with:
+          path: data/models/clip
+          key: clip-models-${{ hashFiles('src/clip.rs') }}
+
       - name: Download AI models
         env:
           TURBO_PIX_FACE_RECOGNITION: 'false'
+          RUST_LOG: info
+        # A stalled HuggingFace transfer would otherwise block the job for the
+        # whole hour without a single log line.
+        timeout-minutes: 20
         run: cargo run -- --download-models
 
       - name: Run tests
@@ -263,9 +275,18 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # Shared download cost with rust-tests: same key, same path.
+      - name: Cache CLIP models
+        uses: actions/cache@v4
+        with:
+          path: data/models/clip
+          key: clip-models-${{ hashFiles('src/clip.rs') }}
+
       - name: Download AI models
         env:
           TURBO_PIX_FACE_RECOGNITION: 'false'
+          RUST_LOG: info
+        timeout-minutes: 20
         run: cargo run -- --download-models
 
       - name: Run E2E tests

@@ -191,15 +191,23 @@
     outline-offset: 2px;
   }
 
+  /* The trail is as tall as the thumb so its right cap matches the circle
+     exactly; a full-height fill would peek out above and below it. The square
+     left edge is clipped by the track's own pill. At rest the fill is fully
+     transparent — a visible 0-progress slab reads as a square frame around the
+     round thumb. */
   .slide-fill {
     position: absolute;
-    inset: 0 auto 0 0;
+    top: var(--thumb-inset);
+    bottom: var(--thumb-inset);
+    left: 0;
     width: calc(
       var(--thumb-inset) + var(--thumb-size) + var(--progress) *
         (100% - var(--thumb-size) - 2 * var(--thumb-inset))
     );
+    border-radius: 0 var(--radius-full) var(--radius-full) 0;
     background: var(--color-danger);
-    opacity: 0.18;
+    opacity: var(--progress);
     pointer-events: none;
     transition:
       width var(--transition-fast),
@@ -207,12 +215,17 @@
   }
 
   .slide-confirm.dragging .slide-fill {
-    transition: opacity var(--transition-fast);
+    transition: none;
   }
 
-  .slide-confirm.armed .slide-fill,
-  .slide-confirm.busy .slide-fill {
-    opacity: 1;
+  /* At the far end the fill's opacity has already reached 1; flooding the
+     track closes the last inset pixels and makes the whole pill the release
+     signal. Busy is included because an external `pending` can arrive before
+     the thumb reaches the end, and the busy label is white. */
+  .slide-confirm.armed,
+  .slide-confirm.busy {
+    background: var(--color-danger);
+    transition: background-color var(--transition-fast);
   }
 
   .slide-hint {
@@ -265,8 +278,11 @@
     transition: none;
   }
 
-  .slide-confirm.armed .slide-thumb {
-    border: 2px solid var(--surface-color);
+  .slide-confirm.armed .slide-thumb,
+  .slide-confirm.busy .slide-thumb {
+    box-shadow:
+      0 0 0 2px white,
+      var(--shadow-medium);
   }
 
   .slide-confirm[aria-disabled='true'] .slide-thumb {

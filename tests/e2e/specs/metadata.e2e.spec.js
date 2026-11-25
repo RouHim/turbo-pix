@@ -36,8 +36,8 @@ test.describe('Metadata', () => {
     await page.locator('.metadata-btn').click();
     await page.locator('.viewer-sidebar.show').waitFor();
 
-    // THEN: Photo info rows (date/size/camera/location) are present
-    await expect(page.locator('.photo-meta .meta-item')).toHaveCount(4);
+    // THEN: Photo info rows (date/size/camera) are present
+    await expect(page.locator('.photo-meta .meta-item')).toHaveCount(3);
   });
 
   test('should display EXIF data when available', async ({ page }) => {

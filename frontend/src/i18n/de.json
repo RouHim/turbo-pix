@@ -110,7 +110,6 @@
     "date": "Datum:",
     "size": "Größe:",
     "camera": "Kamera:",
-    "location": "Ort:",
     "close": "Schließen",
     "previous": "Vorheriges",
     "next": "Nächstes",
@@ -145,7 +144,6 @@
     "pending_collages": "Ausstehende Collagen",
     "collage_photos": "{count} Fotos",
     "unknown": "Unbekannt",
-    "no_location_data": "Keine Ortsdaten",
     "yes": "Ja",
     "no": "Nein",
     "months": {

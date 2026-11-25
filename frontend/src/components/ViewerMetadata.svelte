@@ -89,12 +89,6 @@
       ? `${camera.make} ${camera.model}`
       : $t('ui.unknown', { default: 'Unknown' })
   );
-  const locationText = $derived(
-    location.latitude != null && location.longitude != null
-      ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-      : $t('ui.no_location_data', { default: 'No location data' })
-  );
-
   const hasCamera = $derived(camera.make || camera.model || camera.lens_make || camera.lens_model);
   // `flash_used` is a boolean, so its presence cannot be read as truthiness —
   // but the scanner now states every settings member explicitly and writes
@@ -192,10 +186,6 @@
     <div class="meta-item">
       <span class="meta-label">{$t('ui.camera', { default: 'Camera:' })}</span>
       <span id="photo-camera">{cameraText}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">{$t('ui.location', { default: 'Location:' })}</span>
-      <span id="photo-location">{locationText}</span>
     </div>
   </div>
 

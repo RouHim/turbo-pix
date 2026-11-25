@@ -44,9 +44,9 @@ test('isPhotoGridRoute matches the routes that render PhotoGrid', () => {
   assert.equal(isPhotoGridRoute({ view: 'people', query: 'legacy' }), true);
 });
 
-test('formatHintDate renders a long localized date and rejects missing values', () => {
-  assert.equal(formatHintDate('2024-03-14T12:00:00Z', 'de'), '14. März 2024');
-  assert.equal(formatHintDate('2024-03-14T12:00:00Z', 'en'), 'March 14, 2024');
+test('formatHintDate renders the authored date and rejects missing values', () => {
+  assert.equal(formatHintDate('2024-11-18T12:00:00', 'de'), '18. Nov. 2024');
+  assert.equal(formatHintDate('2024-11-18T12:00:00', 'en'), 'Nov 18, 2024');
   assert.equal(formatHintDate(null, 'de'), null);
   assert.equal(formatHintDate('not a date', 'de'), null);
 });

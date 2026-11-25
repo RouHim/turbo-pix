@@ -149,29 +149,6 @@
     "unknown": "Unbekannt",
     "yes": "Ja",
     "no": "Nein",
-    "months": {
-      "january": "Januar",
-      "february": "Februar",
-      "march": "März",
-      "april": "April",
-      "may": "Mai",
-      "june": "Juni",
-      "july": "Juli",
-      "august": "August",
-      "september": "September",
-      "october": "Oktober",
-      "november": "November",
-      "december": "Dezember"
-    },
-    "weekdays": {
-      "sunday": "Sonntag",
-      "monday": "Montag",
-      "tuesday": "Dienstag",
-      "wednesday": "Mittwoch",
-      "thursday": "Donnerstag",
-      "friday": "Freitag",
-      "saturday": "Samstag"
-    },
     "metadata": {
       "file_information": "Dateiinformationen",
       "file_path": "Dateipfad:",
@@ -211,6 +188,8 @@
       "edit_modal_title": "Foto-Metadaten bearbeiten",
       "edit_modal_title_video": "Video-Metadaten bearbeiten",
       "edit_date_label": "Aufnahmedatum",
+      "edit_date_preview": "App-Anzeige: {date}",
+      "edit_date_browser_hint": "Das Feld folgt dem Datumsformat deines Browsers.",
       "edit_latitude_label": "Breitengrad",
       "edit_longitude_label": "Längengrad",
       "edit_cancel": "Abbrechen",

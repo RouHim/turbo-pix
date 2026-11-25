@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { getLocale, t } from '../lib/i18n.js';
+  import { formatDate } from '../lib/datetime.js';
   import { api } from '../lib/api.js';
   import {
     addToast,
@@ -163,9 +164,7 @@
   }
 
   function formatUpdated(value) {
-    const time = new Date(value).getTime();
-    if (Number.isNaN(time)) return '';
-    return new Date(time).toLocaleDateString(getLocale(), { dateStyle: 'medium' });
+    return formatDate(value, getLocale());
   }
 </script>
 

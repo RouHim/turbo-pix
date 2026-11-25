@@ -29,6 +29,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 - Arrow functions: `() => {}` over `function() {}`
 - Template literals: `` `string ${var}` `` over `'string ' + var`
 - When adding visible text to the frontend, add them to the `i18n` translation system.
+- Date/time display goes through `frontend/src/lib/datetime.js` and follows `TURBO_PIX_LOCALE` (`en`/`de`); never hardcode month/weekday names or call `toLocale*` in a component. Calendar dates (`YYYY-MM-DD`) format in UTC so the day cannot shift.
 - When changing frontend files: run `npm run build` first, then `cargo build --bin turbo-pix` (build.rs embeds dist/ and panics if it is missing)
 
 **General:**

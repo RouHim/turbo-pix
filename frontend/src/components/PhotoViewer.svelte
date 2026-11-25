@@ -1,13 +1,12 @@
 <script>
   import { untrack } from 'svelte';
   import { get } from 'svelte/store';
-  import { t, translateError } from '../lib/i18n.js';
+  import { t, translateError, getLocale } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
   import { photoGridState } from '../lib/state.svelte.js';
   import { addToast } from '../lib/state.svelte.js';
   import {
-    formatDate,
     getPhotoUrl,
     getThumbnailUrl,
     getVideoUrl,
@@ -17,6 +16,7 @@
     showToast,
   } from '../lib/utils.js';
   import { videoCodecSupport } from '../lib/video/capabilities.js';
+  import { formatDateTime } from '../lib/datetime.js';
   import { logger } from '../lib/logger.js';
   import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import { createStreamPlayer, mseSupported } from '../lib/video/msePlayer.js';
@@ -190,7 +190,7 @@
   const captureDate = $derived.by(() => {
     const takenAt = currentPhoto?.taken_at;
     if (!takenAt) return '';
-    return Number.isNaN(new Date(takenAt).getTime()) ? '' : formatDate(takenAt);
+    return formatDateTime(takenAt, getLocale());
   });
 
   // ── Zoom helpers ───────────────────────────────────────────────────────────
@@ -2881,7 +2881,8 @@
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     color: rgb(255 255 255 / 92%);
-    font-size: var(--font-xs);
+    font-size: var(--font-sm);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

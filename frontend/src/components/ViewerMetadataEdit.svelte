@@ -2,7 +2,8 @@
   import { api } from '../lib/api.js';
   import { logger } from '../lib/logger.js';
   import { get } from 'svelte/store';
-  import { t } from '../lib/i18n.js';
+  import { getLocale, t } from '../lib/i18n.js';
+  import { formatDateTime } from '../lib/datetime.js';
   import { addToast } from '../lib/state.svelte.js';
   import { isMetadataEditable, isVideoFile } from '../lib/utils.js';
   import { METADATA_ERROR_KEYS } from '../lib/metadataErrors.js';
@@ -15,6 +16,7 @@
   let showModal = $state(false);
   let editTargetHash = $state(null);
   let takenAt = $state('');
+  const datePreview = $derived(takenAt ? formatDateTime(takenAt, getLocale()) : '');
   // The `taken_at` value `populateForm` installed for the photo the form was
   // opened on. `taken_at` goes into the payload only when the input differs
   // from it: a save must never restate a field the user did not touch (the
@@ -344,10 +346,26 @@
             id="edit-taken-at"
             name="taken_at"
             bind:value={takenAt}
+            aria-describedby={datePreview
+              ? 'edit-taken-at-preview edit-taken-at-browser-hint'
+              : 'edit-taken-at-browser-hint'}
             oninput={() => {
               errorMessage = '';
             }}
           />
+          {#if datePreview}
+            <p class="form-hint form-hint-date" id="edit-taken-at-preview">
+              {$t('ui.metadata.edit_date_preview', {
+                values: { date: datePreview },
+                default: 'App displays: {date}',
+              })}
+            </p>
+          {/if}
+          <p class="form-hint" id="edit-taken-at-browser-hint">
+            {$t('ui.metadata.edit_date_browser_hint', {
+              default: "The field follows your browser's date format.",
+            })}
+          </p>
         </div>
         <div class="form-group-row">
           <div class="form-group">
@@ -521,6 +539,18 @@
     outline: none;
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary-color) 12%, transparent);
+  }
+
+  .form-hint {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: var(--font-xs);
+    line-height: 1.4;
+  }
+
+  .form-hint-date {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
   }
 
   .error-message {

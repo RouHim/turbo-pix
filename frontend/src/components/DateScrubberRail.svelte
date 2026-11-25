@@ -5,7 +5,7 @@
   import { onDestroy, tick } from 'svelte';
   import { locale } from 'svelte-i18n';
   import { t } from '../lib/i18n.js';
-  import { APP_CONSTANTS } from '../lib/constants.js';
+  import { formatMonthName } from '../lib/datetime.js';
   import { formatPeriodName } from '../lib/timeline.js';
   import {
     decadeStarts,
@@ -56,16 +56,11 @@
     activeMonth === null || months.length === 0 ? 1 : Math.max(1, months.indexOf(activeMonth) + 1)
   );
 
-  const monthName = (month) => {
-    const monthKey = APP_CONSTANTS.MONTH_KEYS[month - 1];
-    return $t(`ui.months.${monthKey}`, { locale: activeLocale, default: monthKey });
-  };
+  const monthName = (month) => formatMonthName(month, activeLocale);
 
-  const shortMonth = $derived.by(() => {
-    if (activeMonth === null) return '';
-    const formatter = new Intl.DateTimeFormat(activeLocale, { month: 'short' });
-    return formatter.format(new Date(2000, activeMonth % 12, 1));
-  });
+  const shortMonth = $derived.by(() =>
+    activeMonth === null ? '' : formatMonthName((activeMonth % 12) + 1, activeLocale, true)
+  );
   const activeYear = $derived(activeMonth === null ? '' : String(Math.floor(activeMonth / 12)));
   /* The accessible name must start with the visible text (WCAG 2.5.3): the
      caption shows the month/year and means "back to newest". */

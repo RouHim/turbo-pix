@@ -8,42 +8,8 @@ register('de', () => Promise.resolve(de));
 
 const SUPPORTED = ['en', 'de'];
 
-function readSavedLocale() {
-  try {
-    const saved = localStorage.getItem('turbo-pix-locale');
-    return SUPPORTED.includes(saved) ? saved : null;
-  } catch {
-    return null;
-  }
-}
-
-function detectBrowserLocale() {
-  try {
-    const nav = navigator;
-    const candidates = [
-      nav.language,
-      ...(nav.languages || []),
-      nav.userLanguage,
-      nav.browserLanguage,
-      nav.systemLanguage,
-    ];
-    for (const lang of candidates) {
-      if (!lang) continue;
-      const code = String(lang).split('-')[0].toLowerCase();
-      if (SUPPORTED.includes(code)) return code;
-    }
-  } catch {
-    /* navigator unavailable */
-  }
-  return null;
-}
-
 export function initI18n(defaultLocale) {
-  const initial =
-    readSavedLocale() ||
-    (SUPPORTED.includes(defaultLocale) ? defaultLocale : null) ||
-    detectBrowserLocale() ||
-    'en';
+  const initial = SUPPORTED.includes(defaultLocale) ? defaultLocale : 'en';
   init({ fallbackLocale: 'en', initialLocale: initial });
   try {
     if (typeof document !== 'undefined') document.documentElement.lang = initial;

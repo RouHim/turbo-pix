@@ -5,6 +5,7 @@
   import { getThumbnailUrl, getPhotoUrl } from '../lib/utils.js';
   import { toDataURL } from '../lib/blurhash.js';
   import { t, getLocale } from '../lib/i18n.js';
+  import { formatDate } from '../lib/datetime.js';
   import Icon from './Icon.svelte';
   import { longpress } from '../lib/longpress.js';
 
@@ -33,9 +34,7 @@
   // file size and filename stay in the viewer's metadata panel.
   const dateLabel = $derived.by(() => {
     if (!photo?.taken_at) return '';
-    const date = new Date(photo.taken_at);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleDateString(getLocale(), { dateStyle: 'medium' });
+    return formatDate(photo.taken_at, getLocale());
   });
   const blurhashUrl = $derived.by(() => {
     if (photo?.blurhash) {

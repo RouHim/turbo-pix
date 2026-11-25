@@ -173,7 +173,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let collage_routes = build_collage_routes(
         db_pool.clone(),
         config.data_path.clone().into(),
-        config.locale.clone(),
         semantic_search,
     );
     let people_routes = build_people_routes(db_pool.clone(), cache_manager.clone());
@@ -364,7 +363,6 @@ async fn initialize_services(
             face_recognition,
         },
         data_path,
-        config.locale.clone(),
     );
     let _scheduler_handle = photo_scheduler.start();
     info!("Photo scheduler started");

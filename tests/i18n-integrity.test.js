@@ -19,7 +19,6 @@ const SRC_DIR = join(ROOT, 'frontend', 'src');
 const I18N_DIR = join(SRC_DIR, 'i18n');
 const EN_JSON = join(I18N_DIR, 'en.json');
 const DE_JSON = join(I18N_DIR, 'de.json');
-const CONSTANTS_JS = join(SRC_DIR, 'lib', 'constants.js');
 const INDEXING_ORBIT_SVELTE = join(SRC_DIR, 'components', 'IndexingOrbit.svelte');
 
 /** Recursively collect *.svelte and *.js files under dir, skipping i18n/. */
@@ -49,15 +48,6 @@ function flattenPaths(obj, prefix = '') {
   return paths;
 }
 
-/** Parse `const NAME = [ 'a', 'b', ... ];` out of a source file. */
-function parseArrayEnum(text, name) {
-  const marker = `const ${name} = [`;
-  const start = text.indexOf(marker);
-  assert.ok(start !== -1, `could not find \`${marker}\` for enum ${name}`);
-  const end = text.indexOf(']', start + marker.length);
-  return [...text.slice(start + marker.length, end).matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
-}
-
 /** Parse the `id:` fields of the PHASES array in IndexingOrbit.svelte. */
 function parsePhaseIds(text) {
   const marker = 'const PHASES = [';
@@ -79,23 +69,18 @@ test('i18n key integrity', () => {
   const enPaths = flattenPaths(en);
   const dePaths = flattenPaths(de);
 
-  const constantsText = readFileSync(CONSTANTS_JS, 'utf8');
   const orbitText = readFileSync(INDEXING_ORBIT_SVELTE, 'utf8');
 
   // Enumerations for `${…}` placeholders in template keys.
   const enums = {
     'phase.id': parsePhaseIds(orbitText),
-    monthKey: parseArrayEnum(constantsText, 'MONTH_KEYS'),
-    weekdayKey: parseArrayEnum(constantsText, 'WEEKDAY_KEYS'),
     period: true,
   };
 
-  // These counts are load-bearing: a parse regression (or a new phase/month/
-  // weekday added without the dictionaries being updated) must fail loudly
-  // instead of vacantly passing the existence check below.
+  // The phase count is load-bearing: a parse regression (or a new phase added
+  // without the dictionaries being updated) must fail loudly instead of
+  // vacantly passing the existence check below.
   assert.equal(enums['phase.id'].length, 7, 'PHASES parse drifted — expected 7 ids');
-  assert.equal(enums.monthKey.length, 12, 'MONTH_KEYS parse drifted — expected 12 keys');
-  assert.equal(enums.weekdayKey.length, 7, 'WEEKDAY_KEYS parse drifted — expected 7 keys');
 
   /** Record a key usage with its file:line. */
   const usages = [];
@@ -106,7 +91,7 @@ test('i18n key integrity', () => {
 
   // 2) Template keys: $t(`…`) and get(t)(`…`). The alternation is required:
   // a bare `$t(` pattern would also match the `t(` inside `get(t)(`, corrupting
-  // the captured template (e.g. `t)(ui.months.${monthKey}`).
+  // the captured template (e.g. `t)(ui.indexing_phase_${phase.id}`).
   const templatePattern = /\bget\(t\)\s*\(\s*`([^`]+)`|\$t\(\s*`([^`]+)`/g;
 
   const violations = [];

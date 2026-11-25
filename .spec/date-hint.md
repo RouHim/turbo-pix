@@ -17,7 +17,7 @@ A user scrolls through All Photos on desktop or mobile.
 **Acceptance**
 
 1. Given the view header is visible at the top, then the hint is hidden. Given the header's bottom crosses the 64px bar, then the pill fades in 8px below the bar. The 8px hysteresis keeps it from flickering at the threshold; scrolling back until the header is visible again hides it with the 0.3s exit.
-2. Given the hint is visible, then its text is the long localized date (`dateStyle: 'long'`) of the first card that starts below the header line and intersects the viewport. Scrolling to another day updates the text; multiple photos on the same day keep the same label.
+2. Given the hint is visible, then its text is the authored localized date (the same abbreviated-month shape as the grid caption) of the first card that starts below the header line and intersects the viewport. Scrolling to another day updates the text; multiple photos on the same day keep the same label.
 3. Given the topmost photo has no usable `taken_at`, then the hint reads "No date" / "Ohne Datum".
 4. Given the hint is visible, then its fixed layer sits 8px under the glass bar; its left edge follows the sidebar width, the collapsed sidebar and the mobile content edge, and its right edge honours the date rail's inset. It adds no layout and does not move with the grid's scroll.
 
@@ -52,7 +52,7 @@ A user scrolls through All Photos on desktop or mobile.
 
 - **FR-001**: The hint is a `position: fixed` layer inside the app shell, 8px below `--header-height`; its left follows `--sidebar-width`, the collapsed sidebar and the mobile edge, and its right follows `--date-rail-inset` while the rail shows. It is never a sticky child of `.main-content` (the container's top padding would offset it).
 - **FR-002**: Visibility uses the content header's bottom against the header line with an 8px hysteresis; the shared `firstVisibleCardIndex` helper bounds the card by the viewport.
-- **FR-003**: The label is the top visible card's `taken_at` in the active locale's long date format, with a localized no-date fallback.
+- **FR-003**: The label is the top visible card's `taken_at` in the active locale's authored date shape (abbreviated month), with a localized no-date fallback.
 - **FR-004**: The hint renders only for date sorts and only when `#photo-grid` has at least one card.
 - **FR-005**: The hint shares `appState.dateHintVisible` with the rail (caption pause) and reads `dateRailBubbleVisible` and `dateRailLoading`; the mobile drawer and search states also pause it.
 - **FR-006**: Route, date-filter, and listing changes re-measure; a route change hides the old label immediately.

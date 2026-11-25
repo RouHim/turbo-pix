@@ -1,6 +1,8 @@
 // Pure helpers for the current-date hint shown while the content header is out
 // of view. No Svelte or DOM imports; node --test only.
 
+import { formatDate } from './datetime.js';
+
 /**
  * Hysteresis around the fixed header line: the hint enters when the content
  * header reaches the line and leaves only after it is back below the band.
@@ -26,10 +28,8 @@ export function isPhotoGridRoute(route) {
   return false;
 }
 
-/** Long localized date of the top visible photo, or null when it has none. */
+/** Authored date of the top visible photo, or null when it has none. */
 export function formatHintDate(takenAt, locale = 'en') {
   if (!takenAt) return null;
-  const date = new Date(takenAt);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString(locale, { dateStyle: 'long' });
+  return formatDate(takenAt, locale) || null;
 }

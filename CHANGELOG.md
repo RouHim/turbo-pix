@@ -1,3 +1,13 @@
+# [2.62.0](https://github.com/RouHim/turbo-pix/compare/2.61.3...2.62.0) (2026-11-25)
+
+### Bug Fixes
+
+* **date-hint:** scope the pill to PhotoGrid routes ([1d1d59e](https://github.com/RouHim/turbo-pix/commit/1d1d59ee87c6e4ec917bde182310cccfd05da966))
+
+### Features
+
+* **ui:** show the current photo date while scrolling ([6be2889](https://github.com/RouHim/turbo-pix/commit/6be2889e1fae7b3b8632638125ec05343d6854ff))
+
 ## [2.61.3](https://github.com/RouHim/turbo-pix/compare/2.61.2...2.61.3) (2026-11-25)
 
 ## [2.61.2](https://github.com/RouHim/turbo-pix/compare/2.61.1...2.61.2) (2026-11-24)

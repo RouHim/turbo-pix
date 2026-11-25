@@ -177,14 +177,6 @@
     {#if !imageError}
       <picture>
         <source
-          type="image/webp"
-          srcset="{getThumbnailUrl(photo, 'small')}&format=webp 200w, {getThumbnailUrl(
-            photo,
-            'medium'
-          )}&format=webp 400w, {getThumbnailUrl(photo, 'large')}&format=webp 800w"
-          sizes="(max-width: 640px) 200px, (max-width: 1024px) 400px, 800px"
-        />
-        <source
           type="image/jpeg"
           srcset="{getThumbnailUrl(photo, 'small')}&format=jpeg 200w, {getThumbnailUrl(
             photo,

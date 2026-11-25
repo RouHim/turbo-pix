@@ -1,3 +1,10 @@
+# [2.64.0](https://github.com/RouHim/turbo-pix/compare/2.63.1...2.64.0) (2026-11-25)
+
+### Features
+
+* **i18n:** author date typography and drop baked collage labels ([53adc4f](https://github.com/RouHim/turbo-pix/commit/53adc4f7785a46ad30af730d2d7f5ddef2415b9b))
+* **i18n:** format dates and times from the configured locale ([d4bcde5](https://github.com/RouHim/turbo-pix/commit/d4bcde567323e7ed554c5371ace863b331962a0b))
+
 ## [2.63.1](https://github.com/RouHim/turbo-pix/compare/2.63.0...2.63.1) (2026-11-25)
 
 ### Bug Fixes

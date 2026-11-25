@@ -23,6 +23,7 @@
   let yearSelectEl = $state(null);
   let monthSelectEl = $state(null);
   let initError = $state(false);
+  let timelineRequest = 0;
   // Desktop-only fold; the mobile dropdown row has no toggle of its own.
   let detailsEl = $state(null);
   let collapseToggleEl = $state(null);
@@ -162,10 +163,16 @@
   });
 
   const fetchTimelineData = async (force = false) => {
+    // A forced reload starts a fresh read while the initial one may still be
+    // in flight; only the newest answer may replace the rendered graph.
+    const request = ++timelineRequest;
     try {
-      data = await loadTimeline(force);
+      const next = await loadTimeline(force);
+      if (request !== timelineRequest) return;
+      data = next;
       initError = false;
     } catch (error) {
+      if (request !== timelineRequest) return;
       console.error('Failed to initialize timeline:', error);
       addToast(
         $t('notifications.error', { default: 'Error' }),

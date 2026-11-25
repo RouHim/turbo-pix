@@ -600,3 +600,12 @@ export const api = new TurboPixAPI();
  * scrubber; see `timelineCache.js` for the dedupe rules.
  */
 export const loadTimeline = createTimelineLoader((endpoint) => api.request(endpoint));
+
+// Deletes and finished scans change the density while the photos view (and
+// with it both readers) may be unmounted; dropping the cache keeps the next
+// mount from counting a deleted photo until the page is reloaded.
+if (typeof window !== 'undefined') {
+  for (const event of ['photoRemoved', 'indexingCompleted', 'photosReloadRequested']) {
+    window.addEventListener(event, () => loadTimeline.invalidate());
+  }
+}

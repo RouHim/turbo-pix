@@ -285,7 +285,8 @@
     "clusterLabel": "{count} photos, activate to zoom in",
     "openPhoto": "Open photo from {date}",
     "attributionLabel": "OpenStreetMap contributors",
-    "placeAttributionLabel": "Place data © GeoNames"
+    "placeAttributionLabel": "Place data © GeoNames",
+    "placeAttributionShort": "© GeoNames"
   },
   "errors": {
     "error_loading_photos": "Error Loading Photos",

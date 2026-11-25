@@ -590,13 +590,15 @@
     flex: 1;
   }
 
-  /* The place name is a filter, not a label: it reads like the values around
-     it and underlines on hover/focus, so the affordance stays discoverable
-     without a second button. */
+  /* The place name is a filter, not a value: a ghost button (surface fill,
+     hairline, 4px radius) is the design system's clickable primitive, and a
+     persistent border is the affordance a hover-only underline never gives a
+     touch user. */
   .meta-place {
-    padding: 0;
-    border: none;
-    background: none;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-sm);
+    background: var(--surface-color);
     color: var(--primary-ink);
     font: inherit;
     font-size: var(--font-base);
@@ -606,21 +608,26 @@
     min-width: 0;
     flex: 1;
     cursor: pointer;
-    text-decoration: underline;
-    text-decoration-color: transparent;
-    text-underline-offset: 2px;
     transition: var(--transition-fast);
   }
 
   .meta-place:hover {
-    text-decoration-color: currentColor;
+    border-color: var(--primary-color);
   }
 
   .meta-place:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 2px;
-    border-radius: var(--radius-sm);
-    text-decoration-color: currentColor;
+  }
+
+  @media (pointer: coarse) {
+    .meta-place {
+      min-height: 44px;
+    }
+  }
+
+  #meta-gps {
+    font-variant-numeric: tabular-nums;
   }
 
   .btn-icon {

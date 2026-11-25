@@ -812,6 +812,41 @@
     outline-offset: 3px;
   }
 
+  /* Leaflet's popup ships a white wrapper and its own Helvetica stack. Both
+     break the design system, and the white wrapper makes the dark theme
+     illegible (ink on white, 1.16:1), so the popup takes the same tokens as
+     every paper surface. Scoped to the map canvas: the mini map has no popups. */
+  .map-canvas :global(.leaflet-popup-content-wrapper) {
+    border: 1px solid var(--divider-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-medium);
+  }
+
+  .map-canvas :global(.leaflet-popup-tip) {
+    background: var(--surface-color);
+  }
+
+  .map-canvas :global(.leaflet-popup-content) {
+    margin: var(--space-3) var(--space-4);
+    font-family: inherit;
+    font-size: var(--font-base);
+    line-height: 1.5;
+  }
+
+  .map-canvas :global(.leaflet-popup-close-button) {
+    width: 32px;
+    height: 32px;
+    color: var(--text-secondary);
+  }
+
+  .map-canvas :global(.leaflet-popup-close-button:focus-visible) {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
+  }
+
   /* Above every Leaflet pane (markers 600, popups 700) but below the control
      corners (1000), so the zoom control and the attribution stay reachable. */
   .map-overlay {

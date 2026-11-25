@@ -25,9 +25,7 @@
    */
   function attributionHtml() {
     const tiles = get(t)('map.attributionLabel', { default: 'OpenStreetMap contributors' });
-    const places = get(t)('map.placeAttributionLabel', {
-      default: 'Place data © GeoNames',
-    });
+    const places = get(t)('map.placeAttributionShort', { default: '© GeoNames' });
     return mapAttributionHtml(tiles, places);
   }
 
@@ -65,8 +63,10 @@
       markerZoomAnimation: !prefersReducedMotion,
     });
 
-    // Registered on the control itself, independently of the tile layer, so it
-    // stays visible when the endpoint is unreachable.
+    // No `Leaflet |` prefix: it carries Leaflet's promo link and a flag emoji,
+    // neither of which belongs in this chrome, and it alone forced the credit
+    // onto a second line inside a 160px preview.
+    map.attributionControl.setPrefix(false);
     map.attributionControl.addAttribution(attributionHtml());
 
     if (appState.tileUrl) {
@@ -131,6 +131,28 @@
     cursor: pointer;
   }
 
+  /* One line at 11px: the default control wraps to two lines and eats 21% of a
+     160px preview. Token ink keeps both links at AA on the translucent plate. */
+  .mini-map :global(.leaflet-control-attribution) {
+    padding: 2px 6px;
+    background: color-mix(in oklch, var(--surface-color) 88%, transparent);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .mini-map :global(.leaflet-control-attribution a) {
+    color: var(--primary-ink);
+  }
+
+  /* Dark mode turns the room's lights off (DESIGN.md); a daylight raster at
+     full brightness reads as a light box inside the paper-dark panel. The full
+     map keeps its brightness — it is the content, this preview is chrome. */
+  :global(html.dark-theme) .mini-map :global(.leaflet-tile-pane) {
+    filter: brightness(0.82) saturate(0.9);
+  }
+
   :global(.mini-map-marker) {
     width: 18px;
     height: 18px;
@@ -145,7 +167,7 @@
     align-items: center;
     align-self: flex-start;
     gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--divider-color);
     border-radius: var(--radius-sm);
     background: transparent;
@@ -153,6 +175,13 @@
     font: inherit;
     font-size: var(--font-sm);
     cursor: pointer;
+  }
+
+  /* The viewer is a touch surface too: 44px is the contract's target size. */
+  @media (pointer: coarse) {
+    .mini-map-open {
+      min-height: 44px;
+    }
   }
 
   .mini-map-open:hover {

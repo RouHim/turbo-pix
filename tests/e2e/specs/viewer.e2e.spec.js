@@ -275,6 +275,7 @@ test.describe('Photo Viewer', () => {
       const dialog = page.locator(DELETE_DIALOG);
       const slider = page.locator(DELETE_SLIDER);
       await expect(dialog).toBeVisible();
+      await expect(page.locator('#confirm-dialog-title')).toHaveText('Delete Photo');
 
       // THEN: The safe choice owns initial focus and Tab reaches the slider
       await expect(page.locator(DELETE_CANCEL)).toBeFocused();
@@ -312,6 +313,8 @@ test.describe('Photo Viewer', () => {
       // WHEN: End arms the slider and Enter confirms
       await page.keyboard.press('End');
       await expect(slider).toHaveAttribute('aria-valuenow', '100');
+      // THEN: the armed copy names the key that confirms, not 'release'
+      await expect(slider).toHaveAttribute('aria-valuetext', 'Press Enter to delete');
       await page.keyboard.press('Enter');
       deletePerformed = true;
 
@@ -416,10 +419,13 @@ test.describe('Photo Viewer', () => {
     await expect(dialog).toBeVisible();
     await TestHelpers.slideToConfirm(page);
 
-    // THEN: The failure keeps the dialog open, resets the slider and toasts
+    // THEN: The failure keeps the dialog open, resets the slider and explains
+    // itself inside the dialog (a toast would sit behind the modal top layer)
     await expect(dialog).toBeVisible();
     await expect(slider).toHaveAttribute('aria-valuenow', '0');
-    await expect(page.locator('.toast-error')).toContainText('Database error occurred');
+    await expect(page.locator('[data-testid="confirm-dialog-error"]')).toContainText(
+      'Database error occurred'
+    );
     await expect(page.locator(TestHelpers.selectors.photoCard(photoHash))).toHaveCount(1);
 
     // AND: Cancel still closes the dialog

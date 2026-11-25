@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { t } from '../lib/i18n.js';
+  import { t, translateError } from '../lib/i18n.js';
   import { askConfirm } from '../lib/confirmDialog.svelte.js';
   import { api } from '../lib/api.js';
+  import { logger } from '../lib/logger.js';
   import {
     addToast,
     indexingState,
@@ -154,14 +155,21 @@
         'Are you sure you want to permanently delete this photo? This action cannot be undone.',
     });
     const confirmed = await askConfirm(msg, {
+      title: $t('ui.delete_photo', { default: 'Delete Photo' }),
       slide: {
         onConfirm: async () => {
           busy = true;
           try {
             await api.deletePhoto(photo.hash_sha256);
           } catch (e) {
-            handleError(e, 'Delete photo');
-            throw e;
+            logger.error('Delete photo failed', e, { context: 'HousekeepingView' });
+            const raw = e instanceof Error ? e.message : '';
+            const match = raw.match(/HTTP \d+: (.+)/);
+            const failure =
+              translateError(match?.[1] || raw) ||
+              $t('notifications.deletionFailed', { default: 'Failed to delete photo' });
+            // The open dialog owns the failure feedback.
+            throw new Error(failure, { cause: e });
           } finally {
             busy = false;
           }

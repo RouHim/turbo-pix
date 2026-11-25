@@ -1,17 +1,37 @@
 <script>
   import Icon from './Icon.svelte';
 
-  const { label, armedLabel, busyLabel, ariaLabel, pending = false, onconfirm } = $props();
+  const {
+    label,
+    armedLabel,
+    keyboardArmedLabel = armedLabel,
+    busyLabel,
+    ariaLabel,
+    pending = false,
+    onconfirm,
+  } = $props();
 
   let trackEl = $state(null);
   let thumbEl = $state(null);
   let value = $state(0);
   let dragging = $state(false);
   let triggered = $state(false);
+  let modality = $state('pointer');
   let pointerId = null;
   let startX = 0;
   let startValue = 0;
   let travel = 1;
+
+  const KEYBOARD_KEYS = new Set([
+    'ArrowRight',
+    'ArrowUp',
+    'ArrowLeft',
+    'ArrowDown',
+    'Home',
+    'End',
+    'Enter',
+    ' ',
+  ]);
 
   const busy = $derived(pending || triggered);
   const armed = $derived(value >= 100);
@@ -21,9 +41,10 @@
     if (value === 0) return 'rest';
     return 'partial';
   });
+  const armedText = $derived(modality === 'keyboard' ? keyboardArmedLabel : armedLabel);
   const valueText = $derived.by(() => {
     if (phase === 'busy') return busyLabel;
-    if (phase === 'armed') return armedLabel;
+    if (phase === 'armed') return armedText;
     if (phase === 'rest') return label;
     return `${Math.round(value)} %`;
   });
@@ -33,6 +54,7 @@
     value = 0;
     triggered = false;
     dragging = false;
+    modality = 'pointer';
     pointerId = null;
   }
 
@@ -47,6 +69,7 @@
     event.preventDefault();
     pointerId = event.pointerId;
     dragging = true;
+    modality = 'pointer';
     startX = event.clientX;
     startValue = value;
     const inset = parseFloat(getComputedStyle(trackEl).getPropertyValue('--thumb-inset')) || 0;
@@ -94,6 +117,9 @@
 
   function onKeydown(event) {
     if (busy) return;
+    // The armed copy follows the input that armed the slider: a keyboard arm
+    // has no pointer to release, so it names Enter instead.
+    if (KEYBOARD_KEYS.has(event.key)) modality = 'keyboard';
 
     switch (event.key) {
       case 'ArrowRight':
@@ -161,7 +187,7 @@
     class:visible={phase === 'armed' || phase === 'busy'}
     aria-hidden="true"
   >
-    {phase === 'busy' ? busyLabel : armedLabel}
+    {phase === 'busy' ? busyLabel : armedText}
   </span>
   <span class="slide-thumb" bind:this={thumbEl} data-testid="confirm-dialog-slider-thumb">
     <Icon name="trash-2" width={18} height={18} />

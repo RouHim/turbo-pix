@@ -831,9 +831,10 @@ Body: `{ "hashes": ["…"] }` — a `DELETE` **with** a JSON body (the 1 MiB cap
 A collage is
 `{ "id": 7, "date": "2024-07-04", "file_path": "…", "thumbnail_path": "…|null", "photo_count": 5, "photo_hashes": ["…"], "accepted_at": "…|null", "rejected_at": "…|null", "created_at": "…" }`.
 
-Collage images carry no baked date label; the Collages view renders the
-localized caption, so a locale change updates every visible date. Accepted
-collage images remain valid across locale changes.
+Newly generated collage images carry no baked date label; the Collages view
+renders the localized caption, so a locale change updates every visible date.
+Images generated before this change keep their baked label until they are
+regenerated (clear the collage data to force it).
 
 ### `GET /api/collages/pending`
 

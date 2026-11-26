@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200">
-  <!-- Background -->
-  <rect width="600" height="200" fill="transparent"/>
+  <!-- Background: opaque so the light wordmark stays legible in both themes -->
+  <rect width="600" height="200" fill="#12161b"/>
 
   <!-- Centered group -->
   <g transform="translate(85, 50)">

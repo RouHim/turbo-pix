@@ -11,7 +11,7 @@ Development/personal project - breaking changes acceptable, database and cache c
 **Backend:** `cargo run` | `cargo test` | `cargo clippy` | `cargo fmt`  
 **Frontend:** `npm run build` (required before cargo build — embeds dist/) | `npm run lint` | `npm run format`  
 **Preview:** `./scripts/preview.sh` — builds `dist/`, fetches the place dataset and ONNX Runtime, then builds the binary  
-**Build prerequisites:** local Rust builds and E2E need `eval "$(./scripts/fetch-ort.sh --export)"` (README → Native execution → Installation) and `./scripts/fetch-geodata.sh` (writes `assets/geodata.txt`, which `build.rs` embeds and panics without).
+**Build prerequisites:** local Rust builds and E2E need `eval "$(./scripts/fetch-ort.sh --export)"` (DEVELOPMENT.md → Build from source) and `./scripts/fetch-geodata.sh` (writes `assets/geodata.txt`, which `build.rs` embeds and panics without).
 
 ## Code Style
 

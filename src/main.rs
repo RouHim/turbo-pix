@@ -71,38 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let port = config.port;
-    // The API is unauthenticated and exposes destructive endpoints; parse the
-    // bind host early so an invalid TURBO_PIX_HOST fails fast before any
-    // service is started.
-    let host: std::net::IpAddr = config
-        .host
-        .parse()
-        .map_err(|_| format!("Invalid TURBO_PIX_HOST: '{}'", config.host))?;
-
-    // Transcodes write into TRANSCODE_CACHE_DIR (handlers_video reads the env
-    // directly); default it under the app data path instead of the
-    // world-writable /tmp/turbo-pix so a local user cannot squat the path
-    // with a symlink.
-    if std::env::var("TRANSCODE_CACHE_DIR").is_err() {
-        std::env::set_var(
-            "TRANSCODE_CACHE_DIR",
-            format!("{}/cache/transcoded", config.data_path),
-        );
-    }
-    // Transcode timeout (video_processor reads the env directly); default it
-    // from config so a process-wide value is always visible to the status
-    // path. Respects an explicit operator override. The transcode pool size
-    // (TURBO_PIX_MAX_TRANSCODES) is intentionally NOT defaulted here: when
-    // unset, video_processor derives an nproc-scaled pool, and pinning a fixed
-    // default would silently defeat that dynamic sizing.
-    if std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").is_err() {
-        std::env::set_var(
-            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
-            config.transcode_timeout_secs.to_string(),
-        );
-    }
-
-    info!("Starting TurboPix server on Port {}", port);
+    // TurboPix is a LAN appliance: the unauthenticated API is served on every
+    // interface so phones and TVs reach it. Operators restrict reachability
+    // with a firewall or the container's port mapping, not with a bind knob.
+    let host = std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+    info!("Starting TurboPix server on {host}:{port}");
     info!("Photo paths: {:?}", config.photo_paths);
     warn_about_read_only_photo_paths(&config.photo_paths);
     info!("Data path: {}", config.data_path);
@@ -111,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Default locale: {}", config.locale);
 
     // Check if port is available before initializing services
-    if let Some(value) = check_port(&config.host, port) {
+    if let Some(value) = check_port(&host.to_string(), port) {
         return value;
     }
 
@@ -124,21 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // cache: a swept whole-file temp makes the running conversion's rename fail
     // and blocks that hash for the retry cooldown, and a swept moovfix temp
     // aborts a running `fix_moov_atom`.
-    let cache_dir = PathBuf::from(
-        std::env::var("TRANSCODE_CACHE_DIR")
-            .unwrap_or_else(|_| format!("{}/cache/transcoded", config.data_path)),
-    );
+    let transcode_cache = video_processor::TranscodeCache::from_data_path(&config.data_path);
     let sweep_photo_paths: Vec<PathBuf> = config.photo_paths.iter().map(PathBuf::from).collect();
-    video_processor::sweep_transcode_debris(&cache_dir, &sweep_photo_paths);
+    video_processor::sweep_transcode_debris(transcode_cache.root(), &sweep_photo_paths);
 
     // Decide the hardware H.264 encoder once, before any job runs. The probe is
     // a real encode rather than ffmpeg's encoder listing, which is what keeps a
-    // listed-but-unusable encoder from burning a conversion attempt later.
-    // Skipped when transcoding is disabled: nothing would ever ask for it. Also
+    // listed-but-unusable encoder from burning a conversion attempt later. Runs
     // after the port check: a doomed instance's encode is pure waste.
-    if video_processor::transcode_max_pool() > 0 {
-        video_encoder::init().await;
-    }
+    video_encoder::init().await;
 
     // Initialize services
     let (db_pool, thumbnail_generator, photo_scheduler, semantic_search, cache_manager) =

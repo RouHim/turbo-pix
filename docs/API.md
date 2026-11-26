@@ -12,9 +12,10 @@ pre-production and breaking changes are allowed (see `AGENTS.md`).
 - **Unauthenticated, LAN-only.** There is no login, no session, no API key. The
   server trusts every request that reaches it; do not expose it to an untrusted
   network or the public internet.
-- **Bind address.** `TURBO_PIX_HOST` (default `0.0.0.0`, all interfaces, so the
-  LAN can reach the server) and `TURBO_PIX_PORT` (default `18473`). Set
-  `TURBO_PIX_HOST=127.0.0.1` to restrict access to the machine itself.
+- **Bind address.** Fixed `0.0.0.0` (all interfaces, so the LAN can reach the
+  server); there is no bind-address override. `TURBO_PIX_PORT` (default
+  `18473`) is the only network knob. Restrict reachability with a firewall or
+  the container's port mapping.
 - **Same-origin filter.** The router wraps every route in
   `require_same_origin` (`src/warp_helpers.rs`):
   - A request **without** an `Origin` header passes — curl, scripts and
@@ -389,8 +390,8 @@ not media bytes —
 returned both when this request spawns the conversion and when one is already
 running for that hash. Poll `poll_url` and re-request the byte URL until the
 artifact exists (or the status reports `Failed`/`Timeout`). When the spawn is
-refused — worker pool saturated, or transcoding unavailable — the original is
-served instead with an `x-transcode-warning` (see below), so a client must tell a
+refused — worker pool saturated — the original is served instead with an
+`x-transcode-warning` (see below), so a client must tell a
 `202` JSON body from the byte response before treating it as media.
 
 **`x-transcode-warning`** is attached only when a conversion attempt actually
@@ -482,8 +483,7 @@ server down from the conversion the plan requires.
 | `200` | stream | Streaming |
 | `200` | empty, `content-length: 0`, `x-transcode-warning: empty` | 0-byte backing file |
 | `415` | `{ "error": "source has no playable stream" }` | Neither a mappable video nor an audio track: refused without spawning ffmpeg or taking a permit. Deliberately **not** `503` — the client's saturation path keys on `503`, so a `415` climbs one rung of its ladder instead of retrying the same offset forever. |
-| `503` + `Retry-After: 2` | `{ "error": "no conversion slot available" }` | Every transcode permit stayed taken for `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` (default 20 s) — the request waits for a slot rather than failing at once. Retry the same request; the viewer keeps its waiting notice visible. |
-| `503` + `Retry-After: 5` | `{ "error": "conversion disabled" }` | Transcoding is disabled (`TURBO_PIX_MAX_TRANSCODES=0`) |
+| `503` + `Retry-After: 2` | `{ "error": "no conversion slot available" }` | Every transcode permit stayed taken for the fixed 20 s queue wait — the request waits for a slot rather than failing at once. Retry the same request; the viewer keeps its waiting notice visible. |
 | `404` | error envelope | Unknown hash or missing backing file |
 | `500` | `{ "error": "conversion could not be started" }` | ffmpeg could not be spawned (the detail, including the configured path, stays in the server log) |
 

@@ -425,7 +425,7 @@ test.describe('On-the-fly streaming playback', () => {
       }
     );
     // Waiting is not a dead end: the escape hatch stays reachable while the
-    // pool is full (a permanently disabled pool would otherwise trap the user).
+    // pool is full.
     await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
 
     await page.waitForFunction(
@@ -450,44 +450,6 @@ test.describe('On-the-fly streaming playback', () => {
     const pacedRetryGapMs = streamRequestTimes[2] - streamRequestTimes[1];
     expect(pacedRetryGapMs, 'the retry must wait out Retry-After: 3').toBeGreaterThanOrEqual(2500);
     await expect(page.locator('.transcode-toast')).toHaveCount(0);
-  });
-
-  test('a permanently disabled conversion pool is named, not waited for', async ({ page }) => {
-    test.setTimeout(60_000);
-    const mkv = await findVideoByFilename(page, 'test_video_long.mkv');
-    // A disabled pool is only observable while the decisions say "stream": a
-    // cached artifact is served as a file, with no stream request to refuse.
-    await TestHelpers.clearCachedConversions(page, mkv.hash_sha256);
-    // The ladder is only reached after a failed attempt, and this container
-    // plays natively here: fail the original so the planned rung is what runs.
-    await TestHelpers.failOriginalAttempt(page, mkv.hash_sha256);
-
-    // The server's own answer for `TURBO_PIX_MAX_TRANSCODES=0`: the same 503 a
-    // saturated pool sends, with the refusal body that names the pool as
-    // disabled (src/handlers_video.rs, `StreamStartError::Disabled`). No slot
-    // will ever free, so waiting for one re-requests forever and leaves the
-    // notice naming a pool that does not exist. The refusal is a failure the
-    // viewer ends on: the ladder climbs its bounded rungs and the escape hatch
-    // is offered.
-    const requestedModes = [];
-    await page.route('**/video/stream*', async (route) => {
-      requestedModes.push(new URL(route.request().url()).searchParams.get('mode'));
-      await route.fulfill({
-        status: 503,
-        headers: { 'retry-after': '5', 'content-type': 'application/json' },
-        body: JSON.stringify({ error: 'conversion disabled' }),
-      });
-    });
-
-    await openVideo(page, mkv);
-    await expect(page.locator('.transcode-toast')).toContainText('Video conversion failed', {
-      timeout: 30_000,
-    });
-    await expect(page.locator('.transcode-toast [data-action="play-original"]')).toBeVisible();
-    // One request per rung of the ladder, and no more: a client that read this
-    // refusal as saturation would keep re-requesting the same mode for as long
-    // as the viewer stays open on the photo.
-    expect(requestedModes).toEqual(['remux', 'audio', 'transcode']);
   });
 
   test('a previously converted video starts without a blocking conversion', async ({ page }) => {

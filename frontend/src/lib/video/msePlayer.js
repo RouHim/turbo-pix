@@ -17,11 +17,6 @@ export function mseSupported(mime) {
  * conversion slot right now" — a saturated worker pool the viewer answers by
  * waiting and retrying — while anything else is a real playback failure.
  *
- * `permanent` marks the one `503` no retry can clear: the server's conversion
- * pool is disabled (`TURBO_PIX_MAX_TRANSCODES=0`), which it names in the
- * refusal body. Waiting for a slot that will never free is a lie the viewer
- * must not tell, so it keys on this instead of on the status alone.
- *
  * The refusal carries the server's `Retry-After` pacing hint when it sent one,
  * and deliberately nothing about the offset this run asked for: the viewer
  * keeps its own newest-intent offset and resumes the position the user picked,
@@ -30,14 +25,13 @@ export function mseSupported(mime) {
 export class StreamHttpError extends Error {
   /**
    * @param {number} status
-   * @param {{retryAfterMs?: number|null, permanent?: boolean}} [details]
+   * @param {{retryAfterMs?: number|null}} [details]
    */
-  constructor(status, { retryAfterMs = null, permanent = false } = {}) {
+  constructor(status, { retryAfterMs = null } = {}) {
     super(`stream HTTP ${status}`);
     this.name = 'StreamHttpError';
     this.status = status;
     this.retryAfterMs = retryAfterMs;
-    this.permanent = permanent;
   }
 }
 
@@ -55,30 +49,6 @@ function retryAfterMs(response) {
   const seconds = Number(String(raw).trim());
   if (!Number.isFinite(seconds) || seconds < 0) return null;
   return seconds * 1000;
-}
-
-/**
- * Whether a refusal is one no retry can clear.
- *
- * `503` covers two facts on the stream endpoint: the worker pool is *saturated*
- * (every worker busy — wait for a free slot, the `Retry-After` paces when) and
- * the pool is *disabled* (`TURBO_PIX_MAX_TRANSCODES=0`, no worker will ever
- * exist). Both answer the same status and both send a `Retry-After`, and the
- * body is the only carrier that tells them apart — the disabled arm names
- * itself there (`{"error": "conversion disabled"}`). Anything unreadable or
- * unrecognised counts as saturation, which is the answer the viewer already
- * had.
- *
- * @param {Response} response
- * @returns {Promise<boolean>}
- */
-async function refusesPermanently(response) {
-  try {
-    const body = await response.json();
-    return body?.error === 'conversion disabled';
-  } catch {
-    return false;
-  }
 }
 
 function once(target, event) {
@@ -186,7 +156,7 @@ export function createStreamPlayer(
   //
   // Not reading has a server-side consequence, and it is deliberate: the run's
   // pipe backs up, and `video_stream.rs`'s watchdog kills any run that hands
-  // out no chunk for `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` (default 300 s) — the
+  // out no chunk for 300 s — the
   // doc comment there names "a client that stopped reading so the pipe backs
   // up" as exactly this case. A viewer paused for longer than that therefore
   // loses its run: the body ends before the declared duration, which this
@@ -596,11 +566,8 @@ export function createStreamPlayer(
       // leave a half-built source behind for the viewer's retry to trip over.
       const response = await fetch(urlFor(seconds), { signal });
       if (!response.ok) {
-        // The refusal body is what tells a saturated pool from a disabled one
-        // (see `refusesPermanently`), and it is the only carrier that does.
         throw new StreamHttpError(response.status, {
           retryAfterMs: retryAfterMs(response),
-          permanent: await refusesPermanently(response),
         });
       }
       if (!response.body) {

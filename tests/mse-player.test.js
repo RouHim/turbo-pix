@@ -1037,40 +1037,10 @@ test('a run that has ended still gets its played-out media trimmed', async () =>
   player.destroy();
 });
 
-test('a permanently disabled conversion pool is not a slot wait', async () => {
-  const video = fakeVideo();
-  const errors = [];
-  // The server's own answer for `TURBO_PIX_MAX_TRANSCODES=0`: the same 503 and
-  // the same `Retry-After` a saturated pool sends, with the refusal body that
-  // names it as disabled (src/handlers_video.rs, `StreamStartError::Disabled`).
-  globalThis.fetch = () =>
-    Promise.resolve({
-      ok: false,
-      status: 503,
-      headers: new Headers({ 'retry-after': '5' }),
-      json: () => Promise.resolve({ error: 'conversion disabled' }),
-    });
-  const player = createPlayer(video, { onError: (error) => errors.push(error) });
-
-  await player.start(0);
-  await settle();
-
-  assert.equal(errors.length, 1, 'the refusal reaches the viewer');
-  assert.equal(errors[0].status, 503, 'it is still a 503 the viewer can read');
-  assert.equal(
-    errors[0].permanent,
-    true,
-    'no slot will ever free, so waiting for one must not be the answer'
-  );
-  assert.equal(errors[0].retryAfterMs, 5000, "the server's hint still survives");
-
-  player.destroy();
-});
-
 test('a saturated pool is still a wait the viewer paces', async () => {
   const video = fakeVideo();
   const errors = [];
-  // The other 503 the endpoint sends: workers are busy, a slot comes free.
+  // The 503 the endpoint sends: workers are busy, a slot comes free.
   globalThis.fetch = () =>
     Promise.resolve({
       ok: false,
@@ -1085,7 +1055,6 @@ test('a saturated pool is still a wait the viewer paces', async () => {
 
   assert.equal(errors.length, 1);
   assert.equal(errors[0].status, 503);
-  assert.equal(errors[0].permanent, false, 'a busy pool must keep its waiting notice');
   assert.equal(errors[0].retryAfterMs, 2000);
 
   player.destroy();

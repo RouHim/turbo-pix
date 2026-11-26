@@ -53,54 +53,131 @@ fn get_status_store() -> &'static Mutex<HashMap<String, TranscodeStatus>> {
     TRANSCODE_STATUS_STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Bounded worker pool for transcodes. Defaults to `min(max(nproc/2,1),4)`
-/// unless `TURBO_PIX_MAX_TRANSCODES` pins it (0 = transcoding disabled). This
-/// replaces the historical global `Semaphore::new(1)` so distinct HEVC/non-HEVC
-/// re-encodes can run concurrently instead of serializing behind one job.
+/// Whole-file conversion budget. Generous on purpose: the timeout is a single
+/// wall-clock budget shared with the hardware→software fallback, and a 4K clip
+/// on a weak NAS has no chance inside five minutes.
+pub const WHOLE_FILE_TIMEOUT_SECS: u64 = 900;
+
+/// Stall budget of the streaming watchdog. It is not a whole-run deadline: a
+/// healthy conversion may run far longer, but a run that hands out no bytes for
+/// this long is holding a conversion slot for nothing.
+pub const STREAM_STALL_TIMEOUT_SECS: u64 = 300;
+
+/// How long a stream request waits for a free conversion slot before answering
+/// 503 + Retry-After.
+pub const STREAM_QUEUE_WAIT_SECS: u64 = 20;
+
+/// Bounded worker pool for transcodes. Derived from the machine: distinct
+/// HEVC/non-HEVC re-encodes can run concurrently instead of serializing behind
+/// one job, while a small NAS still gets a single slot.
 pub fn transcode_semaphore() -> &'static Semaphore {
     TRANSCODE_SEMAPHORE.get_or_init(|| Semaphore::new(transcode_max_pool()))
 }
 
-/// Number of concurrent transcode jobs. Reads env each call so a runtime value
-/// is honored; the semaphore itself locks in the first value it saw via
+/// Number of concurrent transcode jobs: half the available cores, at least one
+/// and at most four. The semaphore itself locks in the first value it saw via
 /// [`transcode_semaphore`].
 pub fn transcode_max_pool() -> usize {
-    match std::env::var("TURBO_PIX_MAX_TRANSCODES") {
-        Ok(raw) => raw.trim().parse::<usize>().unwrap_or_else(|_| {
-            log::warn!(
-                "Invalid TURBO_PIX_MAX_TRANSCODES '{}', using default 2",
-                raw
-            );
-            2
-        }),
-        Err(_) => {
-            std::thread::available_parallelism().map_or(2, |n| (n.get().max(2) / 2).clamp(1, 4))
-        }
-    }
+    std::thread::available_parallelism().map_or(2, |n| derived_pool(n.get()))
 }
 
-/// Per-transcode timeout in seconds, from `TURBO_PIX_TRANSCODE_TIMEOUT_SECS`
-/// (default 300). Exposed to clients via the status endpoint so polling stops
-/// when the server would actually give up, not at an arbitrary client cap.
-pub fn transcode_timeout_secs() -> u64 {
-    match std::env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS") {
-        Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|_| {
-            log::warn!(
-                "Invalid TURBO_PIX_TRANSCODE_TIMEOUT_SECS '{}', using default 300",
-                raw
-            );
-            300
-        }),
-        Err(_) => 300,
+/// The pool formula on its own, so the scaling is testable without depending on
+/// the host's core count.
+pub fn derived_pool(available_parallelism: usize) -> usize {
+    (available_parallelism.max(2) / 2).clamp(1, 4)
+}
+
+pub fn whole_file_timeout_secs() -> u64 {
+    WHOLE_FILE_TIMEOUT_SECS
+}
+
+#[cfg(not(test))]
+pub fn stream_stall_timeout_secs() -> u64 {
+    STREAM_STALL_TIMEOUT_SECS
+}
+
+#[cfg(not(test))]
+pub fn stream_queue_wait_secs() -> u64 {
+    STREAM_QUEUE_WAIT_SECS
+}
+
+#[cfg(test)]
+pub fn stream_stall_timeout_secs() -> u64 {
+    test_limits::stream_stall_secs()
+}
+
+#[cfg(test)]
+pub fn stream_queue_wait_secs() -> u64 {
+    test_limits::queue_wait_secs()
+}
+
+/// Test-only overrides for the process-wide limits. Production reads the
+/// constants above; the watchdog and queue tests need a one-second stall and a
+/// zero-second wait, which no public knob expresses any more.
+#[cfg(test)]
+pub(crate) mod test_limits {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::tests::{acquire_test_env_lock, TestEnvLock};
+    use super::{STREAM_QUEUE_WAIT_SECS, STREAM_STALL_TIMEOUT_SECS};
+
+    static STREAM_STALL_SECS: AtomicU64 = AtomicU64::new(STREAM_STALL_TIMEOUT_SECS);
+    static QUEUE_WAIT_SECS: AtomicU64 = AtomicU64::new(STREAM_QUEUE_WAIT_SECS);
+
+    pub(crate) fn stream_stall_secs() -> u64 {
+        STREAM_STALL_SECS.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn queue_wait_secs() -> u64 {
+        QUEUE_WAIT_SECS.load(Ordering::Relaxed)
+    }
+
+    /// Overrides one limit for the lifetime of the guard and holds the shared
+    /// test lock, so no parallel test observes the shortened value.
+    pub(crate) struct TestLimitsGuard {
+        stream_stall_secs: u64,
+        queue_wait_secs: u64,
+        _lock: TestEnvLock,
+    }
+
+    impl TestLimitsGuard {
+        pub(crate) fn stream_stall(secs: u64) -> Self {
+            Self::set(Some(secs), None)
+        }
+
+        pub(crate) fn queue_wait(secs: u64) -> Self {
+            Self::set(None, Some(secs))
+        }
+
+        fn set(stream_stall_override: Option<u64>, queue_wait_override: Option<u64>) -> Self {
+            let lock = acquire_test_env_lock();
+            let previous = Self {
+                stream_stall_secs: stream_stall_secs(),
+                queue_wait_secs: queue_wait_secs(),
+                _lock: lock,
+            };
+            if let Some(value) = stream_stall_override {
+                STREAM_STALL_SECS.store(value, Ordering::Relaxed);
+            }
+            if let Some(value) = queue_wait_override {
+                QUEUE_WAIT_SECS.store(value, Ordering::Relaxed);
+            }
+            previous
+        }
+    }
+
+    impl Drop for TestLimitsGuard {
+        fn drop(&mut self) {
+            STREAM_STALL_SECS.store(self.stream_stall_secs, Ordering::Relaxed);
+            QUEUE_WAIT_SECS.store(self.queue_wait_secs, Ordering::Relaxed);
+        }
     }
 }
 
 // NOTE: no test-only reset hook is provided for TRANSCODE_SEMAPHORE. The
 // semaphore caches its size from the first transcode in the process; tests
-// that need pool semantics must use env values that are immune to that
-// (transcode_max_pool() is read fresh per call, so env parsing is testable;
-// the disabled path checks transcode_max_pool() == 0 before touching the
-// semaphore, so it is deterministic regardless of prior initialization).
+// that need pool semantics saturate it via `try_acquire` instead of trying to
+// resize it. `derived_pool()` is a pure function and is tested directly.
 
 // Lightweight semaphore for serve-time moov faststart remuxes. Deliberately
 // distinct from TRANSCODE_SEMAPHORE: a remux is a fast `-c copy` stream copy
@@ -119,11 +196,6 @@ fn get_remox_semaphore() -> &'static Semaphore {
 }
 
 pub async fn acquire_transcode_permit() -> CacheResult<SemaphorePermit<'static>> {
-    if transcode_max_pool() == 0 {
-        return Err(CacheError::VideoProcessingError(
-            "Transcoding is disabled (TURBO_PIX_MAX_TRANSCODES=0)".to_string(),
-        ));
-    }
     transcode_semaphore().acquire().await.map_err(|e| {
         CacheError::VideoProcessingError(format!("Failed to acquire transcode permit: {}", e))
     })
@@ -212,7 +284,7 @@ pub fn claim_transcode(hash: &str) -> TranscodeClaim {
     // A new claim is allowed only while fewer than `transcode_max_pool()`
     // hashes are already in flight. This mirrors the semaphore's concurrency
     // bound and keeps both the spawned-task count and the InProgress status
-    // map bounded. A full pool (including 0 = disabled) serves the original.
+    // map bounded. A full pool serves the original.
     let can_start = count_in_progress(&map) < transcode_max_pool();
 
     match map.get(hash) {
@@ -1077,7 +1149,7 @@ pub async fn convert_video_with_progress(
         output_path,
         conversion,
         codecs,
-        Duration::from_secs(transcode_timeout_secs()),
+        Duration::from_secs(whole_file_timeout_secs()),
         get_ffmpeg_path(),
         Some(on_progress),
         plan,
@@ -1604,16 +1676,23 @@ impl TranscodeCache {
         Self { root: root.into() }
     }
 
-    /// The one place the environment is read. `main` defaults the variable
-    /// from config, so this fallback only serves tests and embedded callers —
-    /// it derives the same `{DATA_PATH}/cache/transcoded` path the config
-    /// defaults produce, so both spellings cannot point at different trees.
+    /// The production cache root for a data path:
+    /// `{data_path}/cache/transcoded`. The cache has no separate root override,
+    /// so this is the only spelling of that layout.
+    pub fn from_data_path(data_path: &str) -> Self {
+        Self::new(format!("{}/cache/transcoded", data_path))
+    }
+
+    /// The one place the environment is read, for request paths that do not
+    /// carry a [`Config`](crate::config::Config).
     pub fn from_env() -> Self {
-        Self::new(std::env::var("TRANSCODE_CACHE_DIR").unwrap_or_else(|_| {
-            let data_path =
-                std::env::var("TURBO_PIX_DATA_PATH").unwrap_or_else(|_| "./data".to_string());
-            format!("{}/cache/transcoded", data_path)
-        }))
+        let data_path =
+            std::env::var("TURBO_PIX_DATA_PATH").unwrap_or_else(|_| "./data".to_string());
+        Self::from_data_path(&data_path)
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     fn namespace_dir(&self, namespace: &str) -> PathBuf {
@@ -1721,12 +1800,11 @@ const TRANSCODE_NAMESPACES: [&str; 3] = ["transcoded", "copied", "remux"];
 /// Resolves the directory of one transcode namespace beneath `cache_dir`.
 ///
 /// A cache dir whose last component already IS the namespace is the namespace
-/// itself: `main.rs` defaults `TRANSCODE_CACHE_DIR` to
-/// `{data_path}/cache/transcoded`, so the shipped configuration points
-/// straight at the `transcoded/` directory and joining a second `transcoded`
-/// names a path that never exists. Both the path builders and the two cleanup
-/// sweeps below resolve through here, so the layout they write and the layout
-/// they scan cannot drift apart again.
+/// itself: the cache root is fixed to `{DATA_PATH}/cache/transcoded`, so the
+/// shipped configuration points straight at the `transcoded/` directory and
+/// joining a second `transcoded` names a path that never exists. Both the path
+/// builders and the two cleanup sweeps below resolve through here, so the
+/// layout they write and the layout they scan cannot drift apart again.
 fn namespace_dir(cache_dir: &Path, ns: &str) -> PathBuf {
     if cache_dir.file_name().is_some_and(|n| n == ns) {
         cache_dir.to_path_buf()
@@ -2714,7 +2792,6 @@ pub(crate) mod tests {
             .to_string();
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,
@@ -2723,7 +2800,6 @@ pub(crate) mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
@@ -2901,27 +2977,28 @@ pub(crate) mod tests {
         std::fs::set_permissions(path, permissions).unwrap();
     }
 
-    #[tokio::test]
-    async fn test_transcode_disabled_rejects_permit() {
-        // TURBO_PIX_MAX_TRANSCODES=0 disables transcoding. acquire checks
-        // transcode_max_pool() == 0 BEFORE acquiring the (possibly already
-        // initialized) semaphore, so this is deterministic.
-        let _env = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
-        let err = acquire_transcode_permit().await.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("disabled"),
-            "expected disabled error, got: {}",
-            msg
-        );
+    #[test]
+    fn derived_pool_is_half_the_cores_clamped_to_one_and_four() {
+        assert_eq!(derived_pool(1), 1);
+        assert_eq!(derived_pool(2), 1);
+        assert_eq!(derived_pool(3), 1);
+        assert_eq!(derived_pool(4), 2);
+        assert_eq!(derived_pool(8), 4);
+        assert_eq!(derived_pool(64), 4);
     }
 
     #[test]
-    fn test_transcode_max_pool_parses_env() {
-        let _env = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "4");
-        assert_eq!(transcode_max_pool(), 4);
-        let _env2 = TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
-        assert_eq!(transcode_max_pool(), 0, "0 must mean disabled");
+    fn runtime_budgets_match_the_frozen_defaults() {
+        // The values are process-wide and some tests shorten them; hold the
+        // same lock those guards take so this reads the production defaults.
+        let _lock = acquire_test_env_lock();
+        assert_eq!(whole_file_timeout_secs(), 900);
+        assert_eq!(stream_stall_timeout_secs(), 300);
+        assert_eq!(stream_queue_wait_secs(), 20);
+        assert!(
+            stream_stall_timeout_secs() < whole_file_timeout_secs(),
+            "a stalled stream must free its slot long before a slow whole-file conversion gives up"
+        );
     }
 
     #[tokio::test]
@@ -4216,12 +4293,15 @@ pub(crate) mod tests {
         // GIVEN versioned artifacts plus a temp in every namespace, and another hash's files
         let _lock = acquire_test_env_lock();
         let temp = TempDir::new().unwrap();
-        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", temp.path().to_str().unwrap());
+        let data = temp.path().join("data");
+        let root = data.join("cache").join("transcoded");
+        std::fs::create_dir_all(&root).unwrap();
+        let _env = TestEnvGuard::set("TURBO_PIX_DATA_PATH", data.to_str().unwrap());
         let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let other = "2222222222222222222222222222222222222222222222222222222222222222";
         let mut doomed = Vec::new();
-        for ns in ["transcoded", "copied", "remux"] {
-            let dir = temp.path().join(ns);
+        let namespaces = [root.clone(), root.join("copied"), root.join("remux")];
+        for dir in namespaces {
             std::fs::create_dir_all(&dir).unwrap();
             for name in [
                 format!("{hash}_100_200.mp4"),
@@ -4233,10 +4313,7 @@ pub(crate) mod tests {
                 doomed.push(p);
             }
         }
-        let kept = temp
-            .path()
-            .join("transcoded")
-            .join(format!("{other}_100_200.mp4"));
+        let kept = root.join(format!("{other}_100_200.mp4"));
         std::fs::write(&kept, b"x").unwrap();
 
         // WHEN the hash's transcode cache is cleared
@@ -4247,21 +4324,22 @@ pub(crate) mod tests {
         assert!(kept.exists());
     }
 
-    /// The shipped layout: `main.rs` defaults `TRANSCODE_CACHE_DIR` to
-    /// `{data_path}/cache/transcoded`, so the cache root IS the `transcoded/`
-    /// namespace and the re-encode sits directly in it. A cleanup that joins
-    /// another `transcoded` scans a directory that never exists and silently
-    /// keeps the largest cache file of every deleted photo — which the
-    /// parent-rooted test above cannot see, because there the join is right.
+    /// The shipped layout: the cache root IS `{DATA_PATH}/cache/transcoded`,
+    /// i.e. the `transcoded/` namespace itself, and the re-encode sits directly
+    /// in it. A cleanup that joins another `transcoded` scans a directory that
+    /// never exists and silently keeps the largest cache file of every deleted
+    /// photo.
     #[tokio::test]
     async fn clear_transcode_cache_for_hash_scans_the_production_cache_root() {
-        // GIVEN `$TRANSCODE_CACHE_DIR` pointing at the `transcoded/` directory
-        // itself, with `copied/` and `remux/` below it, and another hash's file
+        // GIVEN `TURBO_PIX_DATA_PATH` with the cache root being the
+        // `transcoded/` directory itself, `copied/` and `remux/` below it, and
+        // another hash's file
         let _lock = acquire_test_env_lock();
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("transcoded");
+        let data = temp.path().join("data");
+        let root = data.join("cache").join("transcoded");
         std::fs::create_dir_all(&root).unwrap();
-        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", root.to_str().unwrap());
+        let _env = TestEnvGuard::set("TURBO_PIX_DATA_PATH", data.to_str().unwrap());
         let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let other = "2222222222222222222222222222222222222222222222222222222222222222";
         let mut doomed = vec![
@@ -4296,7 +4374,10 @@ pub(crate) mod tests {
         // three namespaces, plus a neighbour whose name extends one of them
         let _lock = acquire_test_env_lock();
         let temp = TempDir::new().unwrap();
-        let _env = TestEnvGuard::set("TRANSCODE_CACHE_DIR", temp.path().to_str().unwrap());
+        let data = temp.path().join("data");
+        let root = data.join("cache").join("transcoded");
+        std::fs::create_dir_all(&root).unwrap();
+        let _env = TestEnvGuard::set("TURBO_PIX_DATA_PATH", data.to_str().unwrap());
         let doomed_hashes = [
             format!("{:0<64}", "a"),
             format!("{:0<64}", "b"),
@@ -4304,8 +4385,8 @@ pub(crate) mod tests {
         ];
         let neighbour = format!("{:0<64}", "a1");
         let mut doomed = Vec::new();
-        for ns in ["transcoded", "copied", "remux"] {
-            let dir = temp.path().join(ns);
+        let namespaces = [root.clone(), root.join("copied"), root.join("remux")];
+        for dir in namespaces {
             std::fs::create_dir_all(&dir).unwrap();
             for hash in &doomed_hashes {
                 for name in [
@@ -4320,12 +4401,8 @@ pub(crate) mod tests {
             }
         }
         let kept = [
-            temp.path()
-                .join("transcoded")
-                .join(format!("{neighbour}_100_200.mp4")),
-            temp.path()
-                .join("remux")
-                .join(format!("{neighbour}_300_400.mp4")),
+            root.join(format!("{neighbour}_100_200.mp4")),
+            root.join("remux").join(format!("{neighbour}_300_400.mp4")),
         ];
         kept.iter().for_each(|p| std::fs::write(p, b"x").unwrap());
 
@@ -4397,7 +4474,7 @@ pub(crate) mod tests {
     /// invariant breaks after the first in-place edit.
     #[test]
     fn purge_old_transcode_versions_scans_the_production_cache_root() {
-        // GIVEN `$TRANSCODE_CACHE_DIR` itself as the transcoded namespace, with
+        // GIVEN the cache root itself as the transcoded namespace, with
         // `copied/` and `remux/` below it, plus another hash's file
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("transcoded");

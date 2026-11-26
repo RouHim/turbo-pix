@@ -7,6 +7,9 @@ const TEST_DATA_DIR = 'test-e2e-data';
 
 // Conversion-cache namespaces; must match the server's TRANSCODE_NAMESPACES.
 const CACHE_NAMESPACES = ['transcoded', 'copied', 'remux'];
+// The cache always lives under the data path; the root itself is the
+// `transcoded` namespace, so only the siblings are joined below it.
+const TRANSCODE_CACHE_ROOT = path.join(TEST_DATA_DIR, 'cache', 'transcoded');
 
 // A cache entry is either a finished artifact (`{hash}_{size}_{mtime}.mp4`) or
 // a conversion still in flight (`.mp4.tmp` of a whole-file job, `.{pid}.{seq}.tmp`
@@ -607,7 +610,10 @@ export class TestHelpers {
   static async conversionCacheEntries(hash) {
     const perNamespace = await Promise.all(
       CACHE_NAMESPACES.map(async (namespace) => {
-        const dir = path.join(TEST_DATA_DIR, 'transcode-cache', namespace);
+        const dir =
+          namespace === 'transcoded'
+            ? TRANSCODE_CACHE_ROOT
+            : path.join(TRANSCODE_CACHE_ROOT, namespace);
         const entries = await readdir(dir).catch((cause) => {
           if (cause.code === 'ENOENT') return [];
           throw new Error(

@@ -6,19 +6,18 @@ pub struct CacheConfig {
     pub max_cache_size_mb: u64,
 }
 
+/// Fixed thumbnail-cache ceiling. It used to be operator-configurable, but the
+/// eviction only sees files touched in the current session, so a larger value
+/// bought little beyond disk usage; 2 GiB covers tens of thousands of thumbnails.
+pub const THUMBNAIL_CACHE_LIMIT_MB: u64 = 2048;
+
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Bind address. Defaults to all interfaces: TurboPix is meant to be
-    /// served to the LAN, and the API has no login. Operators who want to
-    /// restrict reachability set TURBO_PIX_HOST (e.g. `127.0.0.1`).
-    pub host: String,
     pub port: u16,
     pub photo_paths: Vec<String>,
     pub data_path: String,
     pub db_path: String,
     pub cache: CacheConfig,
-    /// Per-transcode timeout in seconds. Default 300.
-    pub transcode_timeout_secs: u64,
     pub locale: String,
     pub tile_url: String,
     /// Face detection/recognition is on by default, like CLIP. The kill
@@ -32,15 +31,9 @@ impl Config {
         let db_path = format!("{}/database/turbo-pix.db", data_path);
         let thumbnail_cache_path = format!("{}/cache/thumbnails", data_path);
 
-        let max_cache_size_mb = env::var("TURBO_PIX_MAX_CACHE_SIZE_MB")
-            .unwrap_or_else(|_| "1024".to_string())
-            .parse()?;
-
         let port = env::var("TURBO_PIX_PORT")
             .unwrap_or_else(|_| "18473".to_string())
             .parse()?;
-
-        let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
         let photo_paths = env::var("TURBO_PIX_PHOTO_PATHS")
             .unwrap_or_else(|_| "./photos".to_string())
@@ -57,26 +50,20 @@ impl Config {
         let tile_url = env::var("TURBO_PIX_TILE_URL")
             .unwrap_or_else(|_| "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string());
 
-        let transcode_timeout_secs = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS")
-            .unwrap_or_else(|_| "300".to_string())
-            .parse()?;
-
         let face_recognition_enabled =
             parse_bool_env(env::var("TURBO_PIX_FACE_RECOGNITION").ok().as_deref(), true);
 
         let cache = CacheConfig {
             thumbnail_cache_path,
-            max_cache_size_mb,
+            max_cache_size_mb: THUMBNAIL_CACHE_LIMIT_MB,
         };
 
         Ok(Config {
-            host,
             port,
             photo_paths,
             data_path,
             db_path,
             cache,
-            transcode_timeout_secs,
             locale,
             tile_url,
             face_recognition_enabled,
@@ -115,38 +102,6 @@ mod tests {
         let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
         let _guard = lock.lock().unwrap();
         f()
-    }
-
-    #[test]
-    fn binds_all_interfaces_by_default() {
-        with_env_lock(|| {
-            let original = env::var("TURBO_PIX_HOST").ok();
-            env::remove_var("TURBO_PIX_HOST");
-
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.host, "0.0.0.0");
-
-            if let Some(value) = original {
-                env::set_var("TURBO_PIX_HOST", value);
-            }
-        });
-    }
-
-    #[test]
-    fn reads_custom_host_from_env() {
-        with_env_lock(|| {
-            let original = env::var("TURBO_PIX_HOST").ok();
-            env::set_var("TURBO_PIX_HOST", "127.0.0.1");
-
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.host, "127.0.0.1");
-
-            if let Some(value) = original {
-                env::set_var("TURBO_PIX_HOST", value);
-            } else {
-                env::remove_var("TURBO_PIX_HOST");
-            }
-        });
     }
 
     #[test]
@@ -212,32 +167,34 @@ mod tests {
     }
 
     #[test]
-    fn reads_transcode_timeout_default() {
+    fn ignores_removed_tuning_env_vars_and_fixes_the_cache_ceiling() {
         with_env_lock(|| {
-            let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
-            env::remove_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS");
+            let removed = [
+                ("TURBO_PIX_HOST", "not-an-ip"),
+                ("TURBO_PIX_MAX_CACHE_SIZE_MB", "not-a-number"),
+                ("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "not-a-number"),
+                ("TURBO_PIX_MAX_TRANSCODES", "0"),
+                ("TURBO_PIX_STREAM_QUEUE_WAIT_SECS", "not-a-number"),
+                ("TRANSCODE_CACHE_DIR", "/tmp/must-not-be-read"),
+            ];
+            let originals: Vec<_> = removed
+                .iter()
+                .map(|(key, _)| (*key, env::var(key).ok()))
+                .collect();
+            for (key, value) in removed {
+                env::set_var(key, value);
+            }
 
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.transcode_timeout_secs, 300);
-
-            env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "420");
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.transcode_timeout_secs, 420);
-
-            restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
-        });
-    }
-
-    #[test]
-    fn rejects_invalid_transcode_timeout_env() {
-        with_env_lock(|| {
-            let orig_timeout = env::var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS").ok();
-            env::set_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", "also-bad");
-            assert!(
-                Config::from_env().is_err(),
-                "invalid transcode_timeout_secs must error"
+            let config = Config::from_env()
+                .expect("removed variables must not make configuration parsing fail");
+            assert_eq!(
+                config.cache.max_cache_size_mb, 2048,
+                "the thumbnail cache ceiling is fixed, not read from the environment"
             );
-            restore_env_var("TURBO_PIX_TRANSCODE_TIMEOUT_SECS", orig_timeout);
+
+            for (key, value) in originals {
+                restore_env_var(key, value);
+            }
         });
     }
 

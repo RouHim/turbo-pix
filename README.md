@@ -113,20 +113,19 @@ TurboPix is configured with environment variables.
 | `TURBO_PIX_PHOTO_PATHS`            | Comma-separated folders to scan                                                                | `./photos`                                       | `/photos,/mnt/videos`                            |
 | `TURBO_PIX_DATA_PATH`              | Database, thumbnails, transcode cache and models                                               | `./data`                                         | `/data`                                          |
 | `TURBO_PIX_PORT`                   | HTTP port                                                                                      | `18473`                                          | `8080`                                           |
-| `TURBO_PIX_HOST`                   | Bind address; all interfaces by default so the LAN can reach it                                | `0.0.0.0`                                        | `127.0.0.1`                                      |
 | `TURBO_PIX_LOCALE`                 | UI language and date format (`en` or `de`)                                                     | `en`                                             | `de`                                             |
 | `TURBO_PIX_FACE_RECOGNITION`       | Face detection and the People view; existing data is kept when disabled                        | `true`                                           | `false`                                          |
-| `TURBO_PIX_MAX_CACHE_SIZE_MB`      | Thumbnail cache limit in megabytes                                                             | `1024`                                           | `4096`                                           |
-| `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` | Per-conversion ffmpeg timeout in seconds                                                       | `300`                                            | `600`                                            |
-| `TURBO_PIX_MAX_TRANSCODES`         | Concurrent video conversions; `0` disables transcoding                                         | `_(nproc-derived)_`                              | `2`                                              |
-| `TURBO_PIX_STREAM_QUEUE_WAIT_SECS` | Wait for a conversion slot before answering `503` with `Retry-After`                           | `20`                                             | `60`                                             |
 | `TURBO_PIX_TILE_URL`               | Raster tile endpoint for the map                                                               | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | `https://tiles.example.com/{z}/{x}/{y}.png`      |
 | `FFMPEG_PATH`                      | ffmpeg binary                                                                                  | `ffmpeg`                                         | `/usr/bin/ffmpeg`                                |
 | `FFPROBE_PATH`                     | ffprobe binary                                                                                 | `ffprobe`                                        | `/usr/bin/ffprobe`                               |
-| `TRANSCODE_CACHE_DIR`              | Root of the whole-file transcode cache                                                         | `{DATA_PATH}/cache/transcoded`                   | `/mnt/scratch/transcoded`                        |
 | `RUST_LOG`                         | Log level                                                                                      | `error` native, `info` container                 | `debug`                                          |
 
 `RUST_LOG` defaults to `error` in a native run and `info` in the container image and compose file.
+
+There is no bind-address knob: the server listens on `0.0.0.0` so the LAN can reach it. Restrict reachability with a
+firewall or the container's port mapping. Transcode concurrency (half the cores, 1–4), the 900 s whole-file and 300 s
+stream-stall timeouts, the 20 s conversion-slot wait and the 2 GiB thumbnail-cache ceiling are fixed defaults; the
+transcode cache always lives at `{DATA_PATH}/cache/transcoded`.
 
 ## Limitations
 

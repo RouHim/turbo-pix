@@ -39,14 +39,14 @@ Rouven (Firefox) opens one of the 2,090 HEVC videos. Firefox has no HEVC decoder
 **Acceptance**
 1. Given an HEVC video and a client that does not support HEVC, When the viewer opens it, Then the server claims the transcode slot and returns 202 + `poll_url` exactly as today, and the UI shows "Converting… N%".
 2. Given the transcode is running, When the UI polls `/video/status`, Then the response includes a monotonic `percent` (or, when unknown, the same "in progress" state without decrementing), a stable `started_at`, and never reports `Failed`/`Timeout` while ffmpeg is alive.
-3. Given the transcode takes longer than 5 minutes, When the UI polls, Then it **does not** give up at 5 minutes; it keeps polling while the server state remains `InProgress`, up to the server's actual transcode deadline (300s) + a bounded grace period, and only then reports timeout.
+3. Given the transcode takes longer than 5 minutes, When the UI polls, Then it **does not** give up at 5 minutes; it keeps polling while the server state remains `InProgress`, up to the server's actual transcode deadline (900s) + a bounded grace period, and only then reports timeout.
 4. Given the transcode completes, When the UI next polls, Then it reads `Completed`, swaps the `<video>` source to the cached H.264 file, and the video plays.
 
 ### Scenario 4 — Concurrent transcodes, not one-at-a-time (P1)
 Opening several HEVC videos in a row today queues them behind `Semaphore::new(1)`, so a single long job makes everything after it appear frozen.
 
 **Acceptance**
-1. Given N HEVC videos requested near-simultaneously, When each opens, Then up to `min(available_parallelism/2, 4)` distinct ffmpeg jobs run concurrently (configurable via `TURBO_PIX_MAX_TRANSCODES`, default `2`), and the rest wait in the queue rather than spawning duplicates.
+1. Given N HEVC videos requested near-simultaneously, When each opens, Then up to `min(available_parallelism/2, 4)` distinct ffmpeg jobs run concurrently (at least one), and the rest wait in the queue rather than spawning duplicates.
 2. Given two requests for the **same** hash, When both arrive during transcode, Then only one ffmpeg job runs and the second gets the 202/poll response (existing claim logic preserved).
 
 ### Scenario 5 — Non-HEVC-but-unsupported codecs get transcoded (P2)
@@ -105,8 +105,8 @@ where `browser_playable_codecs(bd)` for the Web target set (Jellyfin codec table
 6. Audio-only or unrecognized-but-valid video → attempt transcode; if ffmpeg cannot decode, warning + fall back to original bytes.
 
 ### Transcode worker pool
-- Replace the global `Semaphore::new(1)` with `Semaphore::new(min(available_parallelism()/2, 4))`, configurable via `TURBO_PIX_MAX_TRANSCODES` (default `2`). The claim/status store stays in-memory and keyed by hash (unchanged semantics), so duplicate-same-hash prevention is preserved at the claim layer, while the semaphore now bounds concurrent **distinct** jobs instead of serializing everything.
-- Timeout stays 300s per job (unchanged), but the failure distinction stays `Failed` vs `Timeout`, and the retry cooldown (15 min) stays.
+- Replace the global `Semaphore::new(1)` with `Semaphore::new(min(available_parallelism()/2, 4))`, clamped to at least one permit and derived from the machine. The claim/status store stays in-memory and keyed by hash (unchanged semantics), so duplicate-same-hash prevention is preserved at the claim layer, while the semaphore now bounds concurrent **distinct** jobs instead of serializing everything.
+- The whole-file conversion budget is 900s per job; the streaming watchdog keeps its 300s stall budget. The failure distinction stays `Failed` vs `Timeout`, and the retry cooldown (15 min) stays.
 - Record per-job `percent` by running ffmpeg with `-progress pipe:1` and parsing `out_time_ms`/`total_size` against duration; when impossible (no duration), `percent: null` + state `InProgress` (the UI treats unknown as "running").
 
 ### Status endpoint shape (`get_video_status`)
@@ -131,10 +131,10 @@ In `frontend/src/lib/utils.js`, replace the `videoCodecSupport` heuristics with 
   1. Ask `GET /api/photos/{hash}/video?decision` (or reuse the existing `?metadata=true` style) for the server's recommended path. Response: `{ action: "direct"|"remux"|"transcode"|"empty"|"error", url, reason }`.
   2. `direct` → set `<video>` src to the original URL.
   3. `remux` → set src to the remux URL (fast, likely already cached).
-  4. `transcode` → the existing `tryStartTranscode` → `pollTranscodeStatus`, but polling now driven by `status.percent` and bounded by the server's real deadline (300s) + grace, not a fixed 5 minutes.
+  4. `transcode` → the existing `tryStartTranscode` → `pollTranscodeStatus`, but polling now driven by `status.percent` and bounded by the server's real deadline (900s) + grace, not a fixed 5 minutes.
   5. `empty` → show the localized "file empty / still syncing" message, no spinner.
   6. `error` → show the localized reason.
-- `pollTranscodeStatus`: keep the same stale-photo bailouts (memory entry: check hash before each await), but replace `MAX_POLL_DURATION = 5*60*1000` with a server-driven deadline. Read `percent` out of each poll to update the "Converting… N%" message; on `Failed`/`Timeout` show reason; **never** self-abort while state is `InProgress` and elapsed < 300s + 30s grace.
+- `pollTranscodeStatus`: keep the same stale-photo bailouts (memory entry: check hash before each await), but replace `MAX_POLL_DURATION = 5*60*1000` with a server-driven deadline. Read `percent` out of each poll to update the "Converting… N%" message; on `Failed`/`Timeout` show reason; **never** self-abort while state is `InProgress` and elapsed < 900s + 30s grace.
 - `setVideoSource`: on `error` for a video that *was* transcoded, if the user had chosen "Play original anyway", do not re-enter the transcode decision.
 
 ### Escape hatch UI
@@ -163,8 +163,7 @@ Existing keys reused: `video.transcoding.started`, `video.transcoding.failed`, `
 - E2E: open a 0-byte `.pending-*`-style fixture, assert the "file empty / still syncing" message and that no transcode is attempted.
 
 ## Configuration
-- New: `TURBO_PIX_MAX_TRANSCODES` (default `2`; bounds the worker pool `Semaphore`. `0` = no transcode permits → all transcodes immediately return "transcoding unavailable" (202-with-reason, never a silent infinite wait); `1` = exactly one job at a time, the historical behavior. Distinct from the claim-layer dedupe which is always on.)
-- New: `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` (default `300`; replaces the hardcoded 300s).
+No environment variables: the worker pool is derived from the machine (half the cores, 1–4), the whole-file budget is 900s, the stream-stall watchdog 300s, and the queue wait 20s.
 
 ## Risks / Trade-offs
 - **Backward compatibility**: The `?transcode=true` param stays supported and behaves as today (server decides via the same path); the new decision endpoint is additive. Existing clients that only send `?transcode=true` still work.

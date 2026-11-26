@@ -99,7 +99,6 @@ mod tests {
 
     fn test_config(temp_dir: &TempDir) -> Config {
         Config {
-            host: "127.0.0.1".to_string(),
             port: 8080,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -116,7 +115,6 @@ mod tests {
                     .to_string(),
                 max_cache_size_mb: 1024,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,

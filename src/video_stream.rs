@@ -24,12 +24,9 @@ use tokio::task::JoinHandle;
 
 use crate::video_encoder::{self, HwPlan, SOFTWARE_ENCODER};
 use crate::video_processor::{
-    acquire_transcode_permit, format_binary_error, get_ffmpeg_path, transcode_timeout_secs,
+    acquire_transcode_permit, format_binary_error, get_ffmpeg_path, stream_queue_wait_secs,
+    stream_stall_timeout_secs,
 };
-
-/// Seconds a stream request waits for a conversion slot before answering
-/// 503 + Retry-After.
-pub const STREAM_QUEUE_WAIT_SECS_DEFAULT: u64 = 20;
 
 /// Longest `start` still counted as a run from the head of the source.
 ///
@@ -84,20 +81,6 @@ impl StreamMode {
             "transcode" => Some(Self::Transcode),
             _ => None,
         }
-    }
-}
-
-/// How long a stream request waits for a conversion slot before answering
-/// 503 + Retry-After (the client keeps its waiting state visible and retries).
-/// Slots are `TURBO_PIX_MAX_TRANSCODES` permits, so waiters can never become
-/// unbounded ffmpeg processes.
-pub fn stream_queue_wait_secs() -> u64 {
-    match std::env::var("TURBO_PIX_STREAM_QUEUE_WAIT_SECS") {
-        Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|_| {
-            log::warn!("Invalid TURBO_PIX_STREAM_QUEUE_WAIT_SECS '{raw}', using default");
-            STREAM_QUEUE_WAIT_SECS_DEFAULT
-        }),
-        Err(_) => STREAM_QUEUE_WAIT_SECS_DEFAULT,
     }
 }
 
@@ -411,8 +394,6 @@ impl AsyncRead for ProgressReader {
 pub enum StreamStartError {
     /// No conversion slot within the queue wait.
     Busy,
-    /// `TURBO_PIX_MAX_TRANSCODES=0`.
-    Disabled,
     Spawn(String),
 }
 
@@ -470,7 +451,7 @@ pub async fn start_stream_with_plan(
     .await
     {
         Ok(Ok(permit)) => permit,
-        Ok(Err(_disabled)) => return Err(StreamStartError::Disabled),
+        Ok(Err(error)) => return Err(StreamStartError::Spawn(error.to_string())),
         Err(_) => return Err(StreamStartError::Busy),
     };
 
@@ -627,7 +608,7 @@ async fn drain_stderr(task: JoinHandle<String>) -> Option<String> {
 /// legitimately runs far past the configured timeout, and ending it there
 /// truncated every such video mid-playback (the client reports "the delivered
 /// stream ended early", and re-opening re-converts from scratch every time). A
-/// run that produces no output for `TURBO_PIX_TRANSCODE_TIMEOUT_SECS` — a stuck
+/// run that produces no output for `STREAM_STALL_TIMEOUT_SECS` (300 s) — a stuck
 /// encoder, a source ffmpeg cannot get past, or a client that stopped reading so
 /// the pipe backs up — is killed, which is what keeps it from pinning a
 /// conversion slot forever. Dropping the response body closes stdout, which
@@ -644,7 +625,7 @@ pub async fn supervise(
         buf
     });
 
-    let stall = Duration::from_secs(transcode_timeout_secs());
+    let stall = Duration::from_secs(stream_stall_timeout_secs());
     let status = loop {
         // Re-arming the wait every poll is safe: `Child::wait` keeps the
         // process's exit future inside the handle, so a cancelled wait resumes
@@ -1302,10 +1283,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_stream_that_keeps_producing_output_survives_the_timeout() {
-        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
-            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
-            "1",
-        );
+        let _timeout = crate::video_processor::test_limits::TestLimitsGuard::stream_stall(1);
         // ~3 s of output at 4 chunks/s: three times the configured cap, which a
         // wall-clock deadline would kill mid-stream.
         let mut child = fake_stream(
@@ -1345,10 +1323,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_stream_that_goes_silent_past_the_timeout_is_killed() {
-        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
-            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
-            "1",
-        );
+        let _timeout = crate::video_processor::test_limits::TestLimitsGuard::stream_stall(1);
         // Nothing on stdout and nobody reading it: a stuck encoder (or a client
         // that stopped reading) must still be bounded by the configured timeout.
         // `exec` so the sleep IS the child: through a shell that forks, the
@@ -1376,10 +1351,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_killed_run_returns_even_when_its_pipe_outlives_it() {
-        let _timeout = crate::video_processor::tests::TestEnvGuard::set(
-            "TURBO_PIX_TRANSCODE_TIMEOUT_SECS",
-            "1",
-        );
+        let _timeout = crate::video_processor::test_limits::TestLimitsGuard::stream_stall(1);
         // The shell stays alive (`wait`) while a forked descendant holds the
         // stderr write end: killing the child closes nothing, so a run whose
         // answer waited for the pipe's EOF would report the stall only once the
@@ -1405,14 +1377,7 @@ mod tests {
         // The queue wait is what turns a saturated pool into a bounded answer:
         // with every permit held and a zero wait, N attempts must all come back
         // Busy — no encoder spawned, no permit consumed, pool unchanged.
-        let _wait = crate::video_processor::tests::TestEnvGuard::set(
-            "TURBO_PIX_STREAM_QUEUE_WAIT_SECS",
-            "0",
-        );
-        // Keep the pool out of the "transcoding disabled" path (a different,
-        // equally bounded answer) whatever the ambient environment holds.
-        let _pool =
-            crate::video_processor::tests::TestEnvGuard::set("TURBO_PIX_MAX_TRANSCODES", "2");
+        let _wait = crate::video_processor::test_limits::TestLimitsGuard::queue_wait(0);
 
         let semaphore = crate::video_processor::transcode_semaphore();
         let capacity = semaphore.available_permits();

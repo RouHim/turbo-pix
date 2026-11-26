@@ -59,9 +59,8 @@ npm run format:check
 `TURBO_PIX_DATA_PATH` defaults to `./data` and contains:
 
 - `database/turbo-pix.db`: the SQLite database
-- `cache/thumbnails/`: the thumbnail cache, capped by `TURBO_PIX_MAX_CACHE_SIZE_MB`
-- `cache/transcoded/`: the whole-file transcode cache (`TRANSCODE_CACHE_DIR` overrides it, with `copied/` and `remux/`
-  namespaces)
+- `cache/thumbnails/`: the thumbnail cache, capped at 2 GiB
+- `cache/transcoded/`: the whole-file transcode cache, with `copied/` and `remux/` namespaces
 - `cache/faces/{file_hash}/{face_id}.jpg`: face crops, one directory per photo
 - `cache/xet/`: the hf-xet chunk cache for model downloads (`HF_XET_CACHE` overrides it)
 

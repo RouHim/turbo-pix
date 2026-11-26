@@ -1130,8 +1130,8 @@
   /**
    * How long a refused (503) stream run waits before retrying when the server
    * sent no `Retry-After`. A saturated pool does not answer immediately: the
-   * endpoint can hold the request for its whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS`
-   * (20 s by default) before it refuses, and that hold is shown as the viewer's
+   * endpoint can hold the request for its whole 20 s queue wait before it
+   * refuses, and that hold is shown as the viewer's
    * preparing notice — a request the server is merely holding is never announced
    * as a queue wait, which only a refusal earns, and this retry then keeps that
    * queued wording up. This delay paces only the retry that follows the refusal;
@@ -1312,19 +1312,11 @@
    * where the same rung is replayed at the viewer's position before the ladder
    * is touched (see `onStreamError`).
    *
-   * A `503` the player marked `permanent` is one of those real ones, not a
-   * wait: it is the server's own answer for a conversion pool that is disabled
-   * (`TURBO_PIX_MAX_TRANSCODES=0`), where no slot will ever free. Waiting for
-   * one would re-request forever and leave the viewer on a notice that names a
-   * pool which does not exist (see `refusesPermanently` in msePlayer). It takes
-   * the error path instead: the ladder runs its bounded rungs and the notice
-   * ends on the conversion failure, with the escape hatch as the way out.
-   *
    * `attemptedMode` is the mode the failed run actually asked for, and the
    * retry stays on it: a refusal says nothing about the mode.
    */
   function handleStreamFailure(photo, decision, attemptedMode, error) {
-    if (error?.status !== 503 || error?.permanent) {
+    if (error?.status !== 503) {
       onStreamError(photo, decision, attemptedMode, error);
       return;
     }
@@ -1339,8 +1331,8 @@
       if (!isOpen || currentPhoto?.hash_sha256 !== photoHash) return;
       // Resume the newest position the user asked for, not the offset this run
       // was refused at: a seek can land while the run is still in flight (the
-      // server may hold it for the whole `TURBO_PIX_STREAM_QUEUE_WAIT_SECS`,
-      // 20 s by default) and that seek is newer than the refused offset. Both
+      // server may hold it for the whole 20 s queue wait) and that seek is
+      // newer than the refused offset. Both
       // signals that carry it — the run's own `onRunStart` and every user seek
       // through `onUserSeek` — also disarm this retry, so the offset recorded
       // here is still the user's newest move when it fires: any later move

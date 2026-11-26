@@ -735,8 +735,8 @@ async fn serve_whole_file_transcode(
                 Ok(Box::new(response))
             }
             TranscodeClaim::PoolSaturated => {
-                // The worker pool is at its concurrent-claim cap (or transcoding is disabled):
-                // serve the original instead of queueing an unbounded spawned task.
+                // The worker pool is at its concurrent-claim cap: serve the
+                // original instead of queueing an unbounded spawned task.
                 log::warn!(
                     "Transcode pool saturated; serving original: {}",
                     photo.filename
@@ -907,14 +907,14 @@ fn spawn_whole_file_transcode(
 /// What gets cached is what the run itself produced, so the artifact is never
 /// weaker than the stream it replaces:
 /// - `StreamTranscode` (the client cannot decode the source video) → the
-///   whole-file H.264 + AAC conversion in `{TRANSCODE_CACHE_DIR}/transcoded/`.
+///   whole-file H.264 + AAC conversion directly in `{DATA_PATH}/cache/transcoded/`.
 /// - `StreamAudio` (the client decodes the video, not the audio) → the same
 ///   file with the video track *copied* and only the audio converted, in
-///   `{TRANSCODE_CACHE_DIR}/copied/`. The copy keeps the source video codec, so
+///   `{DATA_PATH}/cache/transcoded/copied/`. The copy keeps the source video codec, so
 ///   it lives in its own namespace: a client that planned a full transcode must
 ///   never be served it (see [`whole_file_kind`]).
 /// - `StreamRemux` (container/layout only) → the lossless faststart sidecar
-///   under `{TRANSCODE_CACHE_DIR}/remux/`, i.e. exactly the path the playback
+///   under `{DATA_PATH}/cache/transcoded/remux/`, i.e. exactly the path the playback
 ///   decision reuses for a moov-at-end source. A re-encode here would degrade
 ///   video the client already plays.
 ///
@@ -1033,7 +1033,7 @@ pub async fn get_video_status(photo_hash: String) -> Result<impl Reply, Rejectio
     // giving up, so the polling client can align its timeout with the server's
     // instead of inventing one. Absent when the deadline is unknowable.
     let deadline_ms = status.started_at.map(|started| {
-        let timeout_secs = crate::video_processor::transcode_timeout_secs();
+        let timeout_secs = crate::video_processor::whole_file_timeout_secs();
         let elapsed_ms = (Utc::now() - started).num_milliseconds().max(0) as u64;
         timeout_secs.saturating_mul(1000).saturating_sub(elapsed_ms)
     });
@@ -1192,17 +1192,6 @@ pub async fn stream_video(
                 response,
                 "retry-after",
                 "2",
-            )));
-        }
-        Err(StreamStartError::Disabled) => {
-            let response = warp::reply::with_status(
-                warp::reply::json(&json!({ "error": "conversion disabled" })),
-                StatusCode::SERVICE_UNAVAILABLE,
-            );
-            return Ok(Box::new(warp::reply::with_header(
-                response,
-                "retry-after",
-                "5",
             )));
         }
         Err(StreamStartError::Spawn(message)) => {
@@ -1376,6 +1365,12 @@ mod tests {
         make_executable(path);
     }
 
+    /// The conversion cache always lives under the data path now, so tests that
+    /// pin `TURBO_PIX_DATA_PATH` to the temp dir expect their artifacts here.
+    fn cache_root(temp_dir: &TempDir) -> std::path::PathBuf {
+        temp_dir.path().join("cache/transcoded")
+    }
+
     #[tokio::test]
     async fn test_video_metadata_payload_carries_the_files_date() {
         let db_pool = create_in_memory_pool().await.expect("failed to create db");
@@ -1485,7 +1480,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let mut headers = HeaderMap::new();
         headers.insert("range", HeaderValue::from_static("bytes=0-100"));
@@ -1533,7 +1528,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let mut headers = HeaderMap::new();
         headers.insert("range", HeaderValue::from_static("bytes=0-10"));
@@ -1829,7 +1824,7 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let decision = decision_for(&db_pool, hash, "opus").await;
         assert_eq!(decision["action"], "stream");
@@ -1900,14 +1895,14 @@ mod tests {
         )
         .await;
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -1967,7 +1962,7 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // A video-less source: its whole-file escape hatch re-encodes audio
         // under a video map that selects nothing, yet the conversion names the
@@ -1989,7 +1984,7 @@ mod tests {
             &TranscodeCache::from_env(),
         );
         let audio_artifact = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             audio_only,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2040,11 +2035,11 @@ mod tests {
             },
             &TranscodeCache::from_env(),
         );
-        // The fill resolves its cache root from `TRANSCODE_CACHE_DIR`, which
+        // The fill resolves its cache root from `TURBO_PIX_DATA_PATH`, which
         // this test pinned to the FIRST temp dir, so the artifact lands there
         // even though the positive control's fixture lives in the second one.
         let video_artifact = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             with_video,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2082,7 +2077,7 @@ mod tests {
         .await;
 
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // Nothing cached yet: the decision streams, it never waits on a
         // conversion (FR-010).
@@ -2098,7 +2093,7 @@ mod tests {
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2141,7 +2136,7 @@ mod tests {
         .await;
 
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // A cache-filling run of an earlier (conservative) client already
         // produced the whole-file H.264 + AAC re-encode of this source version.
@@ -2150,7 +2145,7 @@ mod tests {
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2207,7 +2202,7 @@ mod tests {
         .await;
 
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let decision = decision_for(&db_pool, hash, "h264-8,aac").await;
         assert_eq!(decision["action"], "stream");
@@ -2219,7 +2214,7 @@ mod tests {
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
+        let sidecar = TranscodeCache::new(cache_root(&temp_dir)).remux_path(
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2290,7 +2285,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'h264\\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let mut headers = HeaderMap::new();
         headers.insert("range", HeaderValue::from_static("bytes=0-1023"));
@@ -2353,7 +2348,7 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = get_video_file(
             hash.to_string(),
@@ -2416,7 +2411,7 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = get_video_file(
             hash.to_string(),
@@ -2495,7 +2490,7 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = get_video_file(
             hash.to_string(),
@@ -2569,7 +2564,7 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = stream_video(
             hash.to_string(),
@@ -2635,7 +2630,7 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = stream_video(
             hash.to_string(),
@@ -2775,10 +2770,10 @@ mod tests {
         let deadline_ms = json["deadline_ms"]
             .as_u64()
             .expect("deadline_ms must be present");
-        // Default timeout 300s, minus the (tiny) elapsed time since started_at.
+        // Whole-file budget 900s, minus the (tiny) elapsed time since started_at.
         assert!(
-            deadline_ms > 250_000 && deadline_ms <= 300_000,
-            "deadline_ms should be ~300s minus elapsed, got {}",
+            deadline_ms > 850_000 && deadline_ms <= 900_000,
+            "deadline_ms should be ~900s minus elapsed, got {}",
             deadline_ms
         );
 
@@ -2839,7 +2834,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // Cache the transcode under the VERSIONED name (size + mtime are
         // folded in, so the handler's lookup and this write must agree).
@@ -2848,7 +2843,7 @@ mod tests {
             .expect("find failed")
             .expect("photo should exist");
         let transcoded_path = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2932,14 +2927,14 @@ mod tests {
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -2992,14 +2987,14 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3080,7 +3075,7 @@ mod tests {
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = stream_video(
             hash.to_string(),
@@ -3102,7 +3097,7 @@ mod tests {
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_copied_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3113,7 +3108,7 @@ mod tests {
             "converted"
         );
         let transcoded = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3209,7 +3204,7 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = stream_video(
             hash.to_string(),
@@ -3232,7 +3227,7 @@ mod tests {
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
+        let sidecar = TranscodeCache::new(cache_root(&temp_dir)).remux_path(
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3248,7 +3243,7 @@ mod tests {
             "faststart-sidecar"
         );
         let transcoded = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3303,20 +3298,20 @@ mod tests {
         )
         .await;
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let copied = get_copied_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
         );
         let transcoded = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3455,20 +3450,20 @@ mod tests {
         )
         .await;
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let copied = get_copied_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
         );
         let transcoded = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3878,14 +3873,14 @@ mod tests {
         .await;
 
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, &hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let transcoded_path = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             &hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -3975,13 +3970,13 @@ mod tests {
         .await;
 
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, &hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
-        let sidecar = TranscodeCache::new(temp_dir.path()).remux_path(
+        let sidecar = TranscodeCache::new(cache_root(&temp_dir)).remux_path(
             &hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -4090,7 +4085,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // A previous transcode attempt failed after the temp+rename change, so
         // no file exists at the cache path -- only a leftover temp sibling
@@ -4100,7 +4095,7 @@ mod tests {
             .expect("find failed")
             .expect("photo should exist");
         let transcoded_path = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             &hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -4177,7 +4172,7 @@ mod tests {
         create_script(&ffprobe_script, "#!/usr/bin/env sh\nprintf 'hevc\n'\n");
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         // A transcode spawned by a previous request is already running and no
         // output file exists yet.
@@ -4227,8 +4222,13 @@ mod tests {
             .expect("post-epoch")
             .as_millis() as i64;
         assert!(
-            !get_transcoded_path_versioned(temp_dir.path(), &hash, meta.len() as i64, mtime_ms)
-                .exists(),
+            !get_transcoded_path_versioned(
+                &cache_root(&temp_dir),
+                &hash,
+                meta.len() as i64,
+                mtime_ms
+            )
+            .exists(),
             "no transcode output should exist"
         );
 
@@ -4310,7 +4310,7 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         for hint in [
             Some("remux".to_string()),
@@ -4441,7 +4441,7 @@ mod tests {
         );
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let response = stream_video(
             hash.to_string(),
@@ -4503,14 +4503,14 @@ mod tests {
         let _ffmpeg_guard = EnvVarGuard::set("FFMPEG_PATH", ffmpeg_script.to_str().unwrap());
         let _ffprobe_guard = EnvVarGuard::set("FFPROBE_PATH", ffprobe_script.to_str().unwrap());
         let _cache_guard =
-            EnvVarGuard::set("TRANSCODE_CACHE_DIR", temp_dir.path().to_str().unwrap());
+            EnvVarGuard::set("TURBO_PIX_DATA_PATH", temp_dir.path().to_str().unwrap());
 
         let photo = Photo::find_by_hash(&db_pool, hash)
             .await
             .expect("find failed")
             .expect("photo should exist");
         let cached = get_transcoded_path_versioned(
-            temp_dir.path(),
+            &cache_root(&temp_dir),
             hash,
             photo.file_size,
             photo.date_modified.timestamp_millis(),
@@ -4575,11 +4575,10 @@ mod tests {
         let hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
         setup_test_video(&db_pool, &temp_dir, hash).await;
 
-        let _wait_guard = EnvVarGuard::set("TURBO_PIX_STREAM_QUEUE_WAIT_SECS", "0");
+        let _wait_guard = crate::video_processor::test_limits::TestLimitsGuard::queue_wait(0);
 
-        // Hold every permit so the request cannot be served. This must not rely
-        // on TURBO_PIX_MAX_TRANSCODES: the semaphore is a OnceLock sized by the
-        // first caller in the process.
+        // Hold every permit so the request cannot be served; the semaphore is a
+        // OnceLock sized by the first caller in the process.
         let held = saturate_transcode_pool().await;
 
         let response = stream_video(
@@ -4599,51 +4598,5 @@ mod tests {
         assert_eq!(response.headers()["retry-after"], "2");
 
         drop(held);
-    }
-
-    /// The body the client's disabled-pool detection keys on. `msePlayer`'s
-    /// `refusesPermanently` reads a 503 whose JSON names the disabled pool, and
-    /// `PhotoViewer` then ends on the ladder's failure notice instead of
-    /// re-requesting a slot that can never free; the wording is what tells it
-    /// apart from the saturation refusal above, which the viewer keeps waiting
-    /// out. Nothing else pins the status or the text, so a silent change to
-    /// either would turn a disabled pool back into an endless wait.
-    #[tokio::test]
-    async fn stream_endpoint_names_a_disabled_pool_instead_of_waiting_for_it() {
-        let db_pool = create_in_memory_pool().await.expect("db");
-        let temp_dir = TempDir::new().unwrap();
-        let hash = "cd".repeat(32);
-        setup_test_video(&db_pool, &temp_dir, &hash).await;
-
-        // `acquire_transcode_permit` reads the variable per call and returns
-        // before the semaphore is touched, so the pool is disabled for this
-        // request only and nothing process-wide is locked in. The guard's own
-        // lock keeps the variable off every other test in this binary.
-        let _disabled = EnvVarGuard::set("TURBO_PIX_MAX_TRANSCODES", "0");
-
-        let response = stream_video(
-            hash.clone(),
-            StreamQuery {
-                start: Some(0.0),
-                mode: Some("transcode".to_string()),
-                client: None,
-            },
-            HeaderMap::new(),
-            db_pool,
-        )
-        .await
-        .expect("disabled reply")
-        .into_response();
-
-        assert_eq!(
-            response.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "a disabled pool is a refusal, not a run"
-        );
-        assert_eq!(response.headers()["retry-after"], "5");
-        let body = collect_response_body(response).await;
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("the refusal body is JSON");
-        assert_eq!(parsed["error"], "conversion disabled");
     }
 }

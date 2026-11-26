@@ -493,7 +493,6 @@ mod tests {
             .to_string();
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,
@@ -502,7 +501,6 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1024,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
@@ -791,7 +789,6 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -804,7 +801,6 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
@@ -850,7 +846,6 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -863,7 +858,6 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 1,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,
@@ -946,7 +940,6 @@ mod tests {
         let cache_path = temp_dir.path().join("cache");
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
             port: TEST_PORT,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),
@@ -959,7 +952,6 @@ mod tests {
                 thumbnail_cache_path: cache_path.join("thumbnails").to_string_lossy().to_string(),
                 max_cache_size_mb: 2,
             },
-            transcode_timeout_secs: 300,
             locale: "en".to_string(),
             tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
             face_recognition_enabled: false,

@@ -306,7 +306,7 @@ test.describe('clearCachedConversions', () => {
   test('outlasts a conversion that publishes after the wipe', async () => {
     await withThrowawayDataDir(async () => {
       const hash = 'f'.repeat(64);
-      const namespace = path.join('test-e2e-data', 'transcode-cache', 'transcoded');
+      const namespace = path.join('test-e2e-data', 'cache', 'transcoded');
       await mkdir(namespace, { recursive: true });
       const artifact = path.join(namespace, `${hash}_4096_1700000000000.mp4`);
 
@@ -397,7 +397,7 @@ test.describe('clearCachedConversions', () => {
     await withThrowawayDataDir(async () => {
       // The namespace exists but holds nothing for the hash: the probe's 404
       // and the empty listing agree that the cache is idle.
-      await mkdir(path.join('test-e2e-data', 'transcode-cache', 'transcoded'), { recursive: true });
+      await mkdir(path.join('test-e2e-data', 'cache', 'transcoded'), { recursive: true });
       let probes = 0;
       const page = {
         request: {
@@ -433,7 +433,7 @@ test.describe('clearCachedConversions', () => {
     };
 
     await withThrowawayDataDir(async () => {
-      const namespace = path.join('test-e2e-data', 'transcode-cache', 'copied');
+      const namespace = path.join('test-e2e-data', 'cache', 'transcoded', 'copied');
       await mkdir(path.dirname(namespace), { recursive: true });
       await writeFile(namespace, 'a file where a cache namespace is expected');
 
@@ -465,7 +465,7 @@ test.describe('clearCachedConversions', () => {
     await withThrowawayDataDir(async () => {
       // No data directory at all: every namespace of the cache answers ENOENT.
       expect(
-        existsSync(path.join('test-e2e-data', 'transcode-cache')),
+        existsSync(path.join('test-e2e-data', 'cache', 'transcoded')),
         'the throwaway data directory must not hold a cache'
       ).toBe(false);
 

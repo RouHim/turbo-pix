@@ -821,11 +821,6 @@ async function startServer() {
     // suite. The People UI has its own mocked spec, and the Rust API tests
     // cover the real people/face endpoints.
     TURBO_PIX_FACE_RECOGNITION: 'false',
-    // Dedicated per-run transcode cache inside the wiped test dir: the
-    // default /tmp/turbo-pix survives between runs, so a previously
-    // transcoded HEVC file would short-circuit the transcode flow and the
-    // HEVC spec would never see the transcode toast (its whole point).
-    TRANSCODE_CACHE_DIR: path.join(TEST_DATA_DIR, 'transcode-cache'),
     // The request log dominated the Playwright output; warnings/errors still
     // reach a failing run. Set RUST_LOG=info to opt back in while debugging.
     RUST_LOG: process.env.RUST_LOG ?? 'warn',

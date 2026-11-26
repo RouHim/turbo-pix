@@ -8,15 +8,10 @@ pub struct CacheConfig {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Bind address. Defaults to loopback: the API is unauthenticated and
-    /// exposes destructive operations, so it must not listen on all
-    /// interfaces unless the operator explicitly opts in (Docker sets
-    /// TURBO_PIX_HOST=0.0.0.0).
+    /// Bind address. Defaults to all interfaces: TurboPix is meant to be
+    /// served to the LAN, and the API has no login. Operators who want to
+    /// restrict reachability set TURBO_PIX_HOST (e.g. `127.0.0.1`).
     pub host: String,
-    /// Comma-separated hostnames the Host header may carry (DNS-rebinding
-    /// hardening, see require_same_origin). Empty = accept any hostname that
-    /// matches the Origin (default, suitable for personal LAN use).
-    pub allowed_hosts: Vec<String>,
     pub port: u16,
     pub photo_paths: Vec<String>,
     pub data_path: String,
@@ -45,27 +40,7 @@ impl Config {
             .unwrap_or_else(|_| "18473".to_string())
             .parse()?;
 
-        let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-
-        // DNS-rebinding hardening (see require_same_origin): when no explicit
-        // allowlist is configured, pin the Host header to loopback names for
-        // loopback binds. Non-loopback binds (0.0.0.0 for LAN/Docker) must
-        // set TURBO_PIX_ALLOWED_HOSTS explicitly — otherwise every LAN host
-        // would be rejected.
-        let allowed_hosts = if let Ok(raw) = env::var("TURBO_PIX_ALLOWED_HOSTS") {
-            raw.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        } else if host == "127.0.0.1" || host == "::1" || host == "localhost" {
-            vec![
-                "127.0.0.1".to_string(),
-                "localhost".to_string(),
-                "::1".to_string(),
-            ]
-        } else {
-            Vec::new()
-        };
+        let host = env::var("TURBO_PIX_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
         let photo_paths = env::var("TURBO_PIX_PHOTO_PATHS")
             .unwrap_or_else(|_| "./photos".to_string())
@@ -96,7 +71,6 @@ impl Config {
 
         Ok(Config {
             host,
-            allowed_hosts,
             port,
             photo_paths,
             data_path,
@@ -144,23 +118,16 @@ mod tests {
     }
 
     #[test]
-    fn uses_loopback_host_by_default() {
+    fn binds_all_interfaces_by_default() {
         with_env_lock(|| {
             let original = env::var("TURBO_PIX_HOST").ok();
-            let original_allowed = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
             env::remove_var("TURBO_PIX_HOST");
-            env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
 
             let config = Config::from_env().unwrap();
-            assert_eq!(config.host, "127.0.0.1");
-            // Loopback binds default the DNS-rebinding Host pin ON.
-            assert_eq!(config.allowed_hosts, vec!["127.0.0.1", "localhost", "::1"]);
+            assert_eq!(config.host, "0.0.0.0");
 
             if let Some(value) = original {
                 env::set_var("TURBO_PIX_HOST", value);
-            }
-            if let Some(value) = original_allowed {
-                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
             }
         });
     }
@@ -169,45 +136,15 @@ mod tests {
     fn reads_custom_host_from_env() {
         with_env_lock(|| {
             let original = env::var("TURBO_PIX_HOST").ok();
-            let original_allowed = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
-            env::set_var("TURBO_PIX_HOST", "0.0.0.0");
-            env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
+            env::set_var("TURBO_PIX_HOST", "127.0.0.1");
 
             let config = Config::from_env().unwrap();
-            assert_eq!(config.host, "0.0.0.0");
-            // Non-loopback binds leave the pin OFF (operator opt-in).
-            assert!(config.allowed_hosts.is_empty());
+            assert_eq!(config.host, "127.0.0.1");
 
             if let Some(value) = original {
                 env::set_var("TURBO_PIX_HOST", value);
             } else {
                 env::remove_var("TURBO_PIX_HOST");
-            }
-            if let Some(value) = original_allowed {
-                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
-            }
-        });
-    }
-
-    #[test]
-    fn parses_allowed_hosts_from_env() {
-        with_env_lock(|| {
-            let original = env::var("TURBO_PIX_ALLOWED_HOSTS").ok();
-            env::set_var(
-                "TURBO_PIX_ALLOWED_HOSTS",
-                "photos.example.com,  LAN-PIX  ,,photos.example.com",
-            );
-
-            let config = Config::from_env().unwrap();
-            assert_eq!(
-                config.allowed_hosts,
-                vec!["photos.example.com", "LAN-PIX", "photos.example.com"]
-            );
-
-            if let Some(value) = original {
-                env::set_var("TURBO_PIX_ALLOWED_HOSTS", value);
-            } else {
-                env::remove_var("TURBO_PIX_ALLOWED_HOSTS");
             }
         });
     }

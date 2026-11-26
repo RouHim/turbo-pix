@@ -102,19 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Non-loopback binds with an empty allowlist have NO DNS-rebinding
-    // protection (origin==host is trivially satisfiable); warn instead of
-    // silently shipping a hardened-but-disabled posture.
-    if !host.is_loopback() && config.allowed_hosts.is_empty() {
-        log::warn!(
-            "Binding non-loopback host {} without TURBO_PIX_ALLOWED_HOSTS — \
-             the Host header is not pinned, so a DNS-rebinding page could \
-             issue requests as same-origin. Set TURBO_PIX_ALLOWED_HOSTS to \
-             the hostnames you access TurboPix from (e.g. my-pix.lan).",
-            host
-        );
-    }
-
     info!("Starting TurboPix server on Port {}", port);
     info!("Photo paths: {:?}", config.photo_paths);
     warn_about_read_only_photo_paths(&config.photo_paths);
@@ -191,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // routes in build_photo_routes — warp's content_length_limit requires a
     // Content-Length header on every request, so it cannot be global
     // middleware (plain GETs would 411).
-    let routes = require_same_origin(&config.allowed_hosts)
+    let routes = require_same_origin()
         .and(
             health_routes
                 .or(photo_routes)

@@ -54,13 +54,14 @@ you trigger, such as a metadata edit, a rotation or a deletion.
 docker run -p 18473:18473 \
   -v /path/to/pictures:/photos \
   -v ./data:/data \
-  -e TURBO_PIX_ALLOWED_HOSTS=localhost,192.168.0.36 \
   rouhim/turbo-pix
 ```
 
-Open <http://localhost:18473>. Replace `192.168.0.36` with the address other devices use to reach the host. The photo
-mount must be writable because metadata edits, rotation and deletion write into the library; a read-only mount answers
-those actions with `403`.
+Open <http://localhost:18473>. The photo mount must be writable because metadata edits, rotation and deletion write
+into the library; a read-only mount answers those actions with `403`.
+
+TurboPix binds `0.0.0.0` by default so it is reachable from your LAN, and it has no login: anyone who can reach port
+18473 can browse and permanently delete photos. Keep it on a trusted network and never publish it to the internet.
 
 ### Prerequisites
 
@@ -74,8 +75,6 @@ The native binary needs Linux on `x86_64` or `aarch64`, with ffmpeg and ffprobe 
 services:
   turbo-pix:
     image: rouhim/turbo-pix
-    environment:
-      TURBO_PIX_ALLOWED_HOSTS: localhost,192.168.0.36
     volumes:
       - /path/to/pictures:/photos
       - ./data:/data
@@ -101,9 +100,6 @@ TURBO_PIX_DATA_PATH=./data \
 ./turbo-pix
 ```
 
-A native run listens on `127.0.0.1` only. Set `TURBO_PIX_HOST=0.0.0.0` and `TURBO_PIX_ALLOWED_HOSTS` to reach it from
-other devices.
-
 The first start downloads the CLIP and face models, about 870 MB, into the data directory and indexes the library.
 Later starts only process new or changed files. To fetch the models first, run `./turbo-pix --download-models`, or in
 Docker `docker run --rm -v ./data:/data rouhim/turbo-pix --download-models`.
@@ -117,8 +113,7 @@ TurboPix is configured with environment variables.
 | `TURBO_PIX_PHOTO_PATHS`            | Comma-separated folders to scan                                                                | `./photos`                                       | `/photos,/mnt/videos`                            |
 | `TURBO_PIX_DATA_PATH`              | Database, thumbnails, transcode cache and models                                               | `./data`                                         | `/data`                                          |
 | `TURBO_PIX_PORT`                   | HTTP port                                                                                      | `18473`                                          | `8080`                                           |
-| `TURBO_PIX_HOST`                   | Bind address                                                                                   | `127.0.0.1`                                      | `0.0.0.0`                                        |
-| `TURBO_PIX_ALLOWED_HOSTS`          | Hostnames the `Host` header may carry for browser requests with an `Origin` header              | `_(loopback names)_`                             | `localhost,192.168.0.36`                         |
+| `TURBO_PIX_HOST`                   | Bind address; all interfaces by default so the LAN can reach it                                | `0.0.0.0`                                        | `127.0.0.1`                                      |
 | `TURBO_PIX_LOCALE`                 | UI language and date format (`en` or `de`)                                                     | `en`                                             | `de`                                             |
 | `TURBO_PIX_FACE_RECOGNITION`       | Face detection and the People view; existing data is kept when disabled                        | `true`                                           | `false`                                          |
 | `TURBO_PIX_MAX_CACHE_SIZE_MB`      | Thumbnail cache limit in megabytes                                                             | `1024`                                           | `4096`                                           |
@@ -130,11 +125,6 @@ TurboPix is configured with environment variables.
 | `FFPROBE_PATH`                     | ffprobe binary                                                                                 | `ffprobe`                                        | `/usr/bin/ffprobe`                               |
 | `TRANSCODE_CACHE_DIR`              | Root of the whole-file transcode cache                                                         | `{DATA_PATH}/cache/transcoded`                   | `/mnt/scratch/transcoded`                        |
 | `RUST_LOG`                         | Log level                                                                                      | `error` native, `info` container                 | `debug`                                          |
-
-`TURBO_PIX_ALLOWED_HOSTS` pins the `Host` header for requests that carry an `Origin` header. List every hostname or IP
-you use. A host that is not on the list makes browser actions fail with `403` while pages keep loading. A loopback bind
-pins `127.0.0.1`, `localhost` and `::1` automatically; a non-loopback bind without the variable logs a warning. The
-repository's `docker-compose.yml` requires the variable.
 
 `RUST_LOG` defaults to `error` in a native run and `info` in the container image and compose file.
 

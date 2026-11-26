@@ -229,43 +229,29 @@ fn header_hostname(value: &str) -> Option<String> {
 /// - The comparison is hostname-only so the Vite dev-server proxy
 ///   (`Origin: http://localhost:5173`, `Host: localhost:18473`) still works.
 /// - `Origin: null` (sandboxed contexts) is always rejected.
-/// - When `allowed_hosts` is non-empty (TURBO_PIX_ALLOWED_HOSTS), the Host
-///   header itself must match one of them: DNS-rebinding attacks make
-///   Origin == Host trivially satisfiable by pointing the attacker's own
-///   domain at the server, so hostname equality alone is not a CSRF proof.
-pub fn require_same_origin(
-    allowed_hosts: &[String],
-) -> impl Filter<Extract = (), Error = Rejection> + Clone {
-    let allowed_hosts: Vec<String> = allowed_hosts
-        .iter()
-        .map(|h| h.trim().to_lowercase())
-        .filter(|h| !h.is_empty())
-        .collect();
+/// - There is no Host allowlist: a DNS-rebinding page reaches the server
+///   under its own hostname, so `Origin == Host` holds and this filter does
+///   not defend against rebinding (see docs/API.md).
+pub fn require_same_origin() -> impl Filter<Extract = (), Error = Rejection> + Clone {
     warp::header::optional::<String>("origin")
         .and(warp::header::optional::<String>("host"))
-        .and_then(move |origin: Option<String>, host: Option<String>| {
-            let allowed_hosts = allowed_hosts.clone();
-            async move {
-                let Some(origin) = origin else {
-                    return Ok(());
-                };
-                if origin == "null" {
-                    return Err(reject::custom(CrossOriginRequest));
-                }
-                let Some(origin_host) = header_hostname(&origin) else {
-                    return Err(reject::custom(CrossOriginRequest));
-                };
-                let Some(host_host) = host.and_then(|h| header_hostname(&h)) else {
-                    return Err(reject::custom(CrossOriginRequest));
-                };
-                if host_host != origin_host {
-                    return Err(reject::custom(CrossOriginRequest));
-                }
-                if !allowed_hosts.is_empty() && !allowed_hosts.contains(&host_host) {
-                    return Err(reject::custom(CrossOriginRequest));
-                }
-                Ok(())
+        .and_then(|origin: Option<String>, host: Option<String>| async move {
+            let Some(origin) = origin else {
+                return Ok(());
+            };
+            if origin == "null" {
+                return Err(reject::custom(CrossOriginRequest));
             }
+            let Some(origin_host) = header_hostname(&origin) else {
+                return Err(reject::custom(CrossOriginRequest));
+            };
+            let Some(host_host) = host.and_then(|h| header_hostname(&h)) else {
+                return Err(reject::custom(CrossOriginRequest));
+            };
+            if host_host != origin_host {
+                return Err(reject::custom(CrossOriginRequest));
+            }
+            Ok(())
         })
         .untuple_one()
 }
@@ -276,15 +262,7 @@ mod tests {
 
     fn test_routes(
     ) -> impl Filter<Extract = impl warp::Reply, Error = std::convert::Infallible> + Clone {
-        require_same_origin(&[])
-            .and(warp::any().map(|| "ok"))
-            .recover(handle_rejection)
-    }
-
-    fn test_routes_with_allowed(
-        hosts: &[String],
-    ) -> impl Filter<Extract = impl warp::Reply, Error = std::convert::Infallible> + Clone {
-        require_same_origin(hosts)
+        require_same_origin()
             .and(warp::any().map(|| "ok"))
             .recover(handle_rejection)
     }
@@ -369,26 +347,5 @@ mod tests {
             .reply(&routes)
             .await;
         assert_eq!(resp.status(), 403);
-    }
-
-    #[tokio::test]
-    async fn allowed_hosts_pins_the_host_header() {
-        let routes = test_routes_with_allowed(&["photos.example.com".to_string()]);
-        // Host not in the allowlist → rejected even though Origin == Host
-        let resp = warp::test::request()
-            .path("/")
-            .header("origin", "http://attacker.com")
-            .header("host", "attacker.com")
-            .reply(&routes)
-            .await;
-        assert_eq!(resp.status(), 403);
-        // Allowed hostname (with port) passes
-        let resp = warp::test::request()
-            .path("/")
-            .header("origin", "http://photos.example.com:18473")
-            .header("host", "photos.example.com:18473")
-            .reply(&routes)
-            .await;
-        assert_eq!(resp.status(), 200);
     }
 }

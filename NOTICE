@@ -22,4 +22,9 @@ Third-party components distributed with, or downloaded by, TurboPix:
 - CLIP ViT-B/32 (https://huggingface.co/openai/clip-vit-base-patch32), MIT
   License.
 
+- Place names from GeoNames (https://www.geonames.org), built from the
+  cities500 and allCountries dumps and filtered to populated places. The
+  dataset is licensed under CC BY 4.0
+  (https://creativecommons.org/licenses/by/4.0/).
+
 See the upstream projects for the complete license texts and attribution.

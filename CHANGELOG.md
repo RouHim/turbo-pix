@@ -1,3 +1,14 @@
+## [2.65.2](https://github.com/RouHim/turbo-pix/compare/2.65.1...2.65.2) (2026-11-26)
+
+### Bug Fixes
+
+* **timeline:** drop superseded reads before they render ([c0b6c6b](https://github.com/RouHim/turbo-pix/commit/c0b6c6b6c3604be606cdcf3d7bcfdb56e8ea3ed0))
+
+### Performance Improvements
+
+* **static:** validate embedded assets with an ETag ([bbd006b](https://github.com/RouHim/turbo-pix/commit/bbd006b7608b4e92bcedb17f3a63096e9862e352))
+* **timeline:** aggregate in SQL and share one read ([94b0aaa](https://github.com/RouHim/turbo-pix/commit/94b0aaac89283f4fecf88106c9269fa0cf7653f6))
+
 ## [2.65.1](https://github.com/RouHim/turbo-pix/compare/2.65.0...2.65.1) (2026-11-26)
 
 ### Performance Improvements

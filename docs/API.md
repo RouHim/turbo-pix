@@ -12,9 +12,10 @@ pre-production and breaking changes are allowed (see `AGENTS.md`).
 - **Unauthenticated, LAN-only.** There is no login, no session, no API key. The
   server trusts every request that reaches it; do not expose it to an untrusted
   network or the public internet.
-- **Bind address.** `TURBO_PIX_HOST` (default `127.0.0.1`) and `TURBO_PIX_PORT`
-  (default `18473`).
-- **Host pinning (DNS-rebinding hardening).** The router wraps every route in
+- **Bind address.** `TURBO_PIX_HOST` (default `0.0.0.0`, all interfaces, so the
+  LAN can reach the server) and `TURBO_PIX_PORT` (default `18473`). Set
+  `TURBO_PIX_HOST=127.0.0.1` to restrict access to the machine itself.
+- **Same-origin filter.** The router wraps every route in
   `require_same_origin` (`src/warp_helpers.rs`):
   - A request **without** an `Origin` header passes — curl, scripts and
     same-origin navigations are unaffected.
@@ -22,17 +23,12 @@ pre-production and breaking changes are allowed (see `AGENTS.md`).
     `Host` header's hostname (hostname-only, so the Vite dev proxy on
     `localhost:5173` → `localhost:18473` still works).
   - `Origin: null` is always rejected.
-  - When `TURBO_PIX_ALLOWED_HOSTS` is set (comma-separated), the `Host` header
-    must additionally match one of those names. Without an explicit list, a
-    loopback bind pins `Host` to `127.0.0.1`, `localhost` and `::1`; a
-    non-loopback bind (`0.0.0.0` for LAN/Docker) leaves the list **empty**, and
-    an empty list applies no `Host` check at all — a request is then accepted
-    whenever its `Origin` hostname matches whatever `Host` name it carries.
-    That is the DNS-rebinding exposure: a rebinding page reaches the server
-    under its own hostname, which is both `Origin` and `Host`. A LAN bind
-    therefore **should** set `TURBO_PIX_ALLOWED_HOSTS`; while it is missing the
-    server only logs a startup warning (`src/config.rs`, `src/warp_helpers.rs`,
-    `src/main.rs`).
+- **DNS-rebinding exposure.** There is no `Host` allowlist. A rebinding page
+  reaches the server under its own hostname, which is both `Origin` and `Host`,
+  so the same-origin filter does not stop it: a malicious page the user visits
+  can read the API and issue state-changing requests while the server is
+  reachable from their browser. The posture is a trusted LAN; do not publish
+  the port beyond it.
 - **No CORS allowance.** There is no `Access-Control-Allow-*` response at all;
   cross-origin browser reads are refused, not allowed with a wildcard.
 
@@ -94,7 +90,7 @@ Statuses any route can answer, before its handler runs:
 |---|---|
 | `400` | Query string cannot be deserialized (`Invalid query parameters`) |
 | `400` | JSON body cannot be deserialized (`Invalid request body`) |
-| `403` | Cross-origin / `null` origin / `Host` not in `TURBO_PIX_ALLOWED_HOSTS` (`Cross-origin request rejected`) |
+| `403` | Cross-origin / `null` origin / `Origin` hostname differs from `Host` (`Cross-origin request rejected`) |
 | `405` | Path matched, method did not (`Method not allowed`) |
 | `411` | JSON route with a chunked or `Content-Length`-less body (`Content-Length required`) |
 | `413` | Body larger than 1 MiB (`Payload too large`) |

@@ -13,8 +13,4 @@ services:
       - ${TURBO_PIX_PHOTO_PATH:-./photos}:/photos
     environment:
       - RUST_LOG=info
-      - TURBO_PIX_HOST=0.0.0.0
-      # Required for a non-loopback bind: without it the Host header is not
-      # pinned and a DNS-rebinding page could reach this unauthenticated API.
-      - TURBO_PIX_ALLOWED_HOSTS=${TURBO_PIX_ALLOWED_HOSTS:?set this to the hostname/IP you reach TurboPix on, e.g. 192.168.0.36}
     restart: unless-stopped

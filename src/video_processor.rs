@@ -2715,7 +2715,6 @@ pub(crate) mod tests {
 
         let config = Config {
             host: "127.0.0.1".to_string(),
-            allowed_hosts: vec![],
             port: TEST_PORT,
             photo_paths: vec![],
             data_path,

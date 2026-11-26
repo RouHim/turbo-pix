@@ -100,7 +100,6 @@ mod tests {
     fn test_config(temp_dir: &TempDir) -> Config {
         Config {
             host: "127.0.0.1".to_string(),
-            allowed_hosts: vec![],
             port: 8080,
             photo_paths: vec![],
             data_path: temp_dir.path().to_string_lossy().to_string(),

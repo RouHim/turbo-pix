@@ -1,3 +1,11 @@
+## [2.65.1](https://github.com/RouHim/turbo-pix/compare/2.65.0...2.65.1) (2026-11-26)
+
+### Performance Improvements
+
+* **db:** index the client-selectable photo sort columns ([9cba184](https://github.com/RouHim/turbo-pix/commit/9cba184c2ef5e66ed5f5024a6869e0c0d1188c93))
+* **grid:** serve JPEG thumbnails instead of lossless WebP ([b343115](https://github.com/RouHim/turbo-pix/commit/b343115e23b3ac4c2e64cea9e3c8a32ad10365f8))
+* **thumbnails:** decode off the runtime and rotate after resizing ([b52ed6a](https://github.com/RouHim/turbo-pix/commit/b52ed6a27b78d72290639e7641778e85d35b8cd2))
+
 # [2.65.0](https://github.com/RouHim/turbo-pix/compare/2.64.1...2.65.0) (2026-11-25)
 
 ### Features

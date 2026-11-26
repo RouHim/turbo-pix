@@ -1,3 +1,9 @@
+# [2.66.0](https://github.com/RouHim/turbo-pix/compare/2.65.2...2.66.0) (2026-11-26)
+
+### Features
+
+* **server:** bind all interfaces and drop allowed-hosts pinning ([eada92c](https://github.com/RouHim/turbo-pix/commit/eada92c3243a44b0805a807bead8493ffc3dcee6))
+
 ## [2.65.2](https://github.com/RouHim/turbo-pix/compare/2.65.1...2.65.2) (2026-11-26)
 
 ### Bug Fixes

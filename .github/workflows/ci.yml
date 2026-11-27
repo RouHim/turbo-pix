@@ -40,7 +40,7 @@ jobs:
 
       # build.rs embeds assets/geodata.txt; clippy compiles the crate.
       - name: Cache place dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: assets/geodata.txt
           key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
@@ -102,7 +102,7 @@ jobs:
 
       # Before `cargo run`: build.rs embeds assets/geodata.txt and panics without it.
       - name: Cache place dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: assets/geodata.txt
           key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
@@ -113,7 +113,7 @@ jobs:
       # The CLIP weights (~600 MB) are otherwise re-downloaded on every run;
       # clip.rs pins file names, revision and SHA-256, so hash it as the key.
       - name: Cache CLIP models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: data/models/clip
           key: clip-models-${{ hashFiles('src/clip.rs') }}
@@ -211,7 +211,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Cache place dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: assets/geodata.txt
           key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
@@ -264,7 +264,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg sqlite3
 
       - name: Cache place dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: assets/geodata.txt
           key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}
@@ -277,7 +277,7 @@ jobs:
 
       # Shared download cost with rust-tests: same key, same path.
       - name: Cache CLIP models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: data/models/clip
           key: clip-models-${{ hashFiles('src/clip.rs') }}
@@ -394,7 +394,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Cache place dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: assets/geodata.txt
           key: geodata-${{ hashFiles('scripts/fetch-geodata.sh') }}

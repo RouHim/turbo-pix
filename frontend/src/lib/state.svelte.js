@@ -135,17 +135,6 @@ export function pruneSelection(keys) {
   }
 }
 
-export const savedSearches = $state([]);
-
-export async function loadSavedSearches() {
-  try {
-    const data = await api.getSavedSearches();
-    savedSearches.splice(0, savedSearches.length, ...(data?.saved_searches || []));
-  } catch (error) {
-    console.error('Failed to load saved searches', error);
-  }
-}
-
 export const people = $state([]);
 /** The merge that can still be undone; `null` once consumed or replaced. */
 export const peopleMerge = $state({ slot: null });

@@ -2,7 +2,6 @@
   import alertCircle from 'feather-icons/dist/icons/alert-circle.svg?raw';
   import alertTriangle from 'feather-icons/dist/icons/alert-triangle.svg?raw';
   import archive from 'feather-icons/dist/icons/archive.svg?raw';
-  import bookmark from 'feather-icons/dist/icons/bookmark.svg?raw';
   import calendar from 'feather-icons/dist/icons/calendar.svg?raw';
   import camera from 'feather-icons/dist/icons/camera.svg?raw';
   import check from 'feather-icons/dist/icons/check.svg?raw';
@@ -47,7 +46,6 @@
     'alert-circle': alertCircle,
     'alert-triangle': alertTriangle,
     archive,
-    bookmark,
     calendar,
     camera,
     check,

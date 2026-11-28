@@ -24,7 +24,7 @@ Self-hosted on the operator's own machine and reached over the LAN; no cloud ser
 
 ## Capabilities and Constraints
 
-- Browsing: photo/video grid, timeline (density over time), map (OSM tiles, clustered), favorites, manual albums, collages, saved searches, batch selection, housekeeping for duplicate candidates, viewer with metadata display and explicit in-place metadata editing.
+- Browsing: photo/video grid, timeline (density over time), map (OSM tiles, clustered), favorites, manual albums, collages, batch selection, housekeeping for duplicate candidates, viewer with metadata display and explicit in-place metadata editing.
 - Semantic search over CLIP embeddings; nightly scans keep the index fresh.
 - Images: JPEG/PNG/GIF/WebP/BMP/TIFF plus common RAW formats. Videos: MP4/MOV/AVI/MKV/WebM/M4V.
 - Confirmed constraint: LAN-only, no authentication — a conscious architectural boundary; TurboPix must never be exposed publicly.

@@ -39,7 +39,7 @@ you trigger, such as a metadata edit, a rotation or a deletion.
 - Plot geotagged photos on a map, clustered by place, with a mini map in the viewer.
 - Group detected faces into people and filter the grid by person.
 - Inspect camera settings, capture date and GPS coordinates in the viewer.
-- Mark favorites, create albums, and save searches.
+- Mark favorites and create albums.
 - Select many items to favorite, export, delete or add to an album.
 - Build collages from any day in the last 30 days that holds at least ten photos, then accept or reject them.
 - Review duplicates and other issues in Housekeeping.

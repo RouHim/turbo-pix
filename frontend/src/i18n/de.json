@@ -311,17 +311,6 @@
     "batchRejected": "{count} Collagen abgelehnt",
     "batchFailed": "{count} Elemente fehlgeschlagen"
   },
-  "savedSearches": {
-    "sectionTitle": "Gespeicherte Suchen",
-    "save": "Suche speichern",
-    "saved": "Suche gespeichert",
-    "saveFailed": "Suche konnte nicht gespeichert werden",
-    "alreadySaved": "Suche bereits gespeichert",
-    "defaultName": "Gespeicherte Suche",
-    "rename": "Umbenennen",
-    "delete": "Löschen",
-    "errorNameRequired": "Name darf nicht leer sein"
-  },
   "albums": {
     "sectionTitle": "Alben",
     "newAlbum": "Neues Album",

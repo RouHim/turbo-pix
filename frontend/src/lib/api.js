@@ -432,27 +432,6 @@ class TurboPixAPI {
     });
   }
 
-  // Saved searches
-  async getSavedSearches() {
-    return this.request('/api/saved-searches');
-  }
-
-  async createSavedSearch(payload) {
-    // Uses _json: the duplicate case (409) must surface the existing entry.
-    return this._json('/api/saved-searches', 'POST', payload);
-  }
-
-  async renameSavedSearch(id, name) {
-    return this.request(`/api/saved-searches/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ name }),
-    });
-  }
-
-  async deleteSavedSearch(id) {
-    return this.request(`/api/saved-searches/${id}`, { method: 'DELETE' });
-  }
-
   // Manual albums
   async getAlbums() {
     return this.request('/api/albums');
@@ -565,31 +544,6 @@ class TurboPixAPI {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
-  }
-
-  /** Like request() but resolves parsed JSON and rejects with an Error carrying `.status` and `.data`. */
-  async _json(endpoint, method, payload) {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method,
-      headers: this.defaultHeaders,
-      body: JSON.stringify(payload),
-    });
-    const text = await response.text();
-    let data = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
-    if (!response.ok) {
-      const error = new Error(data?.error || `HTTP ${response.status}`);
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-    return data;
   }
 }
 

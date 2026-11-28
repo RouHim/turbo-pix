@@ -890,49 +890,6 @@ Body: `{ "ids": [1, 2] }`
 - **Statuses**: `200`; `400`; `411`/`413`/`415`; `500`.
 - Source: `src/handlers_collage.rs` (`batch_reject_collages`)
 
-## Saved searches
-
-A saved search is
-`{ "id": 1, "name": "Berlin 2024", "query": "…|null", "view": "all", "sort": "date_desc", "year": 2024, "month": null, "to_year": null, "to_month": null, "created_at": "…" }`.
-
-- `view` must be one of `all`, `favorites`, `videos`, `collages`, `housekeeping`.
-- `sort` must be one of `date_desc`, `date_asc`, `name_asc`, `name_desc`,
-  `size_desc`, `size_asc`.
-- Names are trimmed, non-empty, ≤200 **bytes** of UTF-8 (the same byte-based
-  check the album routes use, so multi-byte characters count for more than one).
-
-### `GET /api/saved-searches`
-
-- **Response `200`**: `{ "saved_searches": [ … ] }`
-- Source: `src/handlers_saved_searches.rs` (`list_saved_searches`)
-
-### `POST /api/saved-searches`
-
-Body: `{ "name": "…", "view": "all", "sort": "date_desc", "query": "…", "year": 2024, "month": null, "to_year": null, "to_month": null }`
-(`name`, `view`, `sort` required; the rest optional).
-
-- **Response `201`**: the created saved search.
-- **`409`**: `{ "error": "already_saved", "saved_search": { … } }` when an
-  identical search already exists — the existing row is returned so the client can
-  highlight it instead of duplicating.
-- **Statuses**: `201`; `400` (bad name, view, sort, or date filter); `409`;
-  `411`/`413`/`415`; `500`.
-- Source: `src/handlers_saved_searches.rs` (`create_saved_search`)
-
-### `PATCH /api/saved-searches/{id}`
-
-Body: `{ "name": "…" }`
-
-- **Response `200`**: the renamed saved search.
-- **Statuses**: `200`; `400`; `404`; `500`.
-- Source: `src/handlers_saved_searches.rs` (`rename_saved_search`)
-
-### `DELETE /api/saved-searches/{id}`
-
-- **Response `204`**: no body.
-- **Statuses**: `204`; `404`; `500`.
-- Source: `src/handlers_saved_searches.rs` (`delete_saved_search`)
-
 ## Housekeeping
 
 Candidates are photos the housekeeping phase flagged (blurry, duplicates, …).
@@ -1017,10 +974,6 @@ the binary (`src/handlers_static.rs`):
 | DELETE | `/api/collages/{id}/reject` | `src/handlers_collage.rs` |
 | POST | `/api/collages/batch-accept` | `src/handlers_collage.rs` |
 | POST | `/api/collages/batch-reject` | `src/handlers_collage.rs` |
-| GET | `/api/saved-searches` | `src/handlers_saved_searches.rs` |
-| POST | `/api/saved-searches` | `src/handlers_saved_searches.rs` |
-| PATCH | `/api/saved-searches/{id}` | `src/handlers_saved_searches.rs` |
-| DELETE | `/api/saved-searches/{id}` | `src/handlers_saved_searches.rs` |
 | GET | `/api/housekeeping/candidates` | `src/handlers_housekeeping.rs` |
 | POST | `/api/housekeeping/candidates/batch-remove` | `src/handlers_housekeeping.rs` |
 | DELETE | `/api/housekeeping/candidates/{hash}` | `src/handlers_housekeeping.rs` |

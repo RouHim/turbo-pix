@@ -1,6 +1,6 @@
 // Route ⇄ selection mapping for the timeline filter. The route carries the
-// start bound in `year`/`month` (today's params, so existing links and saved
-// searches keep working) and the end bound in `to_year`/`to_month`.
+// start bound in `year`/`month` (today's params, so existing links keep
+// working) and the end bound in `to_year`/`to_month`.
 import { clampSelectionToModel, fromMonthIndex, toMonthIndex } from './timeline.js';
 
 export const EMPTY_DATE_FILTER = { year: null, month: null, to_year: null, to_month: null };

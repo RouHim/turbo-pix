@@ -311,17 +311,6 @@
     "batchRejected": "{count} collages rejected",
     "batchFailed": "{count} items failed"
   },
-  "savedSearches": {
-    "sectionTitle": "Saved searches",
-    "save": "Save search",
-    "saved": "Search saved",
-    "saveFailed": "Could not save search",
-    "alreadySaved": "Search already saved",
-    "defaultName": "Saved search",
-    "rename": "Rename",
-    "delete": "Delete",
-    "errorNameRequired": "Name cannot be empty"
-  },
   "albums": {
     "sectionTitle": "Albums",
     "newAlbum": "New album",

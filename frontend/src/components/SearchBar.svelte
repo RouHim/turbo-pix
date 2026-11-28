@@ -4,7 +4,7 @@
   import { t } from '../lib/i18n.js';
   import { api } from '../lib/api.js';
   import { route, pushState, replaceState } from '../lib/router.svelte.js';
-  import { appState, addToast, photoGridState, savedSearches } from '../lib/state.svelte.js';
+  import { appState, photoGridState } from '../lib/state.svelte.js';
   import { isPrefixQuery } from '../lib/query.js';
   import Icon from './Icon.svelte';
 
@@ -17,73 +17,6 @@
   let focused = $state(false);
   let currentQuery = $state('');
   let searchTimer = null;
-
-  // Save control is offered for searchable views (all/favorites/videos)
-  // whenever the state is not the fully-default one (FR-001).
-  const canSave = $derived(
-    ['all', 'favorites', 'videos'].includes(route.view) &&
-      !(
-        route.view === 'all' &&
-        !route.query &&
-        route.sort === 'date_desc' &&
-        !route.year &&
-        !route.month &&
-        !route.to_year &&
-        !route.to_month
-      )
-  );
-
-  function buildDefaultName() {
-    const yearPart = route.year
-      ? ` ${route.year}${route.month ? '-' + String(route.month).padStart(2, '0') : ''}`
-      : '';
-    const endPart = route.to_year
-      ? `..${route.to_year}${route.to_month ? '-' + String(route.to_month).padStart(2, '0') : ''}`
-      : '';
-    return (
-      ((route.query ?? '') + yearPart + endPart).trim() ||
-      get(t)('savedSearches.defaultName', { default: 'Saved search' })
-    );
-  }
-
-  async function saveCurrentSearch() {
-    if (!canSave) return;
-    try {
-      const created = await api.createSavedSearch({
-        name: buildDefaultName(),
-        query: route.query,
-        view: route.view,
-        sort: route.sort,
-        year: route.year,
-        month: route.month,
-        to_year: route.to_year,
-        to_month: route.to_month,
-      });
-      savedSearches.unshift(created); // newest-first: fresh row has the max id
-      addToast(
-        get(t)('savedSearches.saved', { default: 'Search saved' }),
-        created.name,
-        'success',
-        3000
-      );
-    } catch (error) {
-      if (error?.status === 409 && error?.data?.saved_search) {
-        addToast(
-          get(t)('savedSearches.alreadySaved', { default: 'Search already saved' }),
-          error.data.saved_search.name,
-          'info',
-          4000
-        );
-        return;
-      }
-      addToast(
-        get(t)('savedSearches.saveFailed', { default: 'Could not save search' }),
-        '',
-        'error',
-        4000
-      );
-    }
-  }
 
   // Sync query input + grid state from route on popstate / initial load.
   // Re-running the pipeline routes prefix queries (type:/location:/is_favorite:)
@@ -377,20 +310,6 @@
     {$t('ui.search', { default: 'Search' })}
   </button>
 
-  {#if canSave}
-    <button
-      type="button"
-      id="save-search-btn"
-      class="save-search-btn"
-      title={$t('savedSearches.save', { default: 'Save search' })}
-      aria-label={$t('savedSearches.save', { default: 'Save search' })}
-      onclick={saveCurrentSearch}
-      data-testid="save-search-btn"
-    >
-      <Icon name="bookmark" width={16} height={16} />
-    </button>
-  {/if}
-
   <!-- One dropdown surface, stacked without overlap: the hint rides above the
        suggestion list while the query is empty (two translucent panels at the
        same offset were unreadable). -->
@@ -502,29 +421,6 @@
   }
 
   .search-btn:focus-visible {
-    outline: 2px solid var(--primary-color);
-    outline-offset: 2px;
-  }
-
-  .save-search-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--button-size);
-    height: var(--button-size);
-    margin-left: var(--space-2);
-    border: none;
-    background: transparent;
-    color: var(--text-primary);
-    cursor: pointer;
-    border-radius: var(--radius-md);
-  }
-
-  .save-search-btn:hover {
-    background: var(--background-secondary);
-  }
-
-  .save-search-btn:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 2px;
   }
